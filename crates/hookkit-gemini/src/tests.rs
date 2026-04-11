@@ -115,7 +115,7 @@ fn parse_unknown_event() {
     let v = serde_json::json!({
         "sessionId": "test",
         "cwd": "/tmp",
-        "hookEventName": "BeforeModel"
+        "hookEventName": "FutureUnknownEvent"
     });
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, GeminiHookInput::Unknown { .. }));
@@ -185,4 +185,126 @@ fn output_no_nulls_for_omitted_fields() {
         !json.contains("null"),
         "JSON should not contain null values"
     );
+}
+
+// ---- Phase 5: Model-layer tests ----
+
+#[test]
+fn parse_before_model() {
+    let v = serde_json::json!({
+        "sessionId": "gem-1",
+        "cwd": "/tmp",
+        "hookEventName": "BeforeModel",
+        "llmRequest": {
+            "model": "gemini-pro",
+            "messages": [{"role": "user", "content": "hello"}],
+            "temperature": 0.7
+        }
+    });
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, GeminiHookInput::BeforeModel(_)));
+    if let GeminiHookInput::BeforeModel(ev) = input {
+        let req = ev.typed_llm_request().unwrap().unwrap();
+        assert_eq!(req.model.as_deref(), Some("gemini-pro"));
+        assert_eq!(req.temperature, Some(0.7));
+    }
+}
+
+#[test]
+fn parse_after_model() {
+    let v = serde_json::json!({
+        "sessionId": "gem-1",
+        "cwd": "/tmp",
+        "hookEventName": "AfterModel",
+        "llmResponse": {
+            "content": "Hello! How can I help?",
+            "finishReason": "stop"
+        }
+    });
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, GeminiHookInput::AfterModel(_)));
+    if let GeminiHookInput::AfterModel(ev) = input {
+        let resp = ev.typed_llm_response().unwrap().unwrap();
+        assert_eq!(resp.finish_reason.as_deref(), Some("stop"));
+    }
+}
+
+#[test]
+fn parse_before_tool_selection() {
+    let v = serde_json::json!({
+        "sessionId": "gem-1",
+        "cwd": "/tmp",
+        "hookEventName": "BeforeToolSelection",
+        "availableTools": [
+            {"name": "shell"},
+            {"name": "write_file"}
+        ]
+    });
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, GeminiHookInput::BeforeToolSelection(_)));
+    if let GeminiHookInput::BeforeToolSelection(ev) = input {
+        assert_eq!(ev.available_tools.as_ref().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn before_model_is_now_parsed_not_unknown() {
+    let v = serde_json::json!({
+        "sessionId": "test",
+        "cwd": "/tmp",
+        "hookEventName": "BeforeModel"
+    });
+    let input = input::parse(&v).expect("should parse");
+    // Was Unknown in Phase 1, now first-class
+    assert!(!matches!(input, GeminiHookInput::Unknown { .. }));
+    assert!(matches!(input, GeminiHookInput::BeforeModel(_)));
+}
+
+#[test]
+fn output_override_model_request() {
+    let out = OutputEnvelope::override_model_request(serde_json::json!({
+        "model": "gemini-ultra",
+        "temperature": 0.1
+    }));
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        json["hookSpecificOutput"]["llmRequest"]["model"],
+        "gemini-ultra"
+    );
+}
+
+#[test]
+fn output_synthetic_model_response() {
+    let out = OutputEnvelope::synthetic_model_response(serde_json::json!({
+        "content": "cached response"
+    }));
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        json["hookSpecificOutput"]["llmResponse"]["content"],
+        "cached response"
+    );
+}
+
+#[test]
+fn output_replace_model_response() {
+    let out = OutputEnvelope::replace_model_response(serde_json::json!({
+        "content": "modified response",
+        "finishReason": "stop"
+    }));
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        json["hookSpecificOutput"]["llmResponse"]["content"],
+        "modified response"
+    );
+}
+
+#[test]
+fn output_filter_tools() {
+    let out = OutputEnvelope::filter_tools(vec!["shell".to_string(), "read_file".to_string()]);
+    let json = serde_json::to_value(&out).unwrap();
+    let tools = json["hookSpecificOutput"]["allowedTools"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tools.len(), 2);
+    assert_eq!(tools[0], "shell");
 }

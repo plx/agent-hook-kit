@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 /// Top-level parsed Gemini hook input.
 #[derive(Debug, Clone)]
 pub enum GeminiHookInput {
+    // Phase 1 events
     SessionStart(SessionStart),
     SessionEnd(SessionEnd),
     BeforeAgent(BeforeAgent),
@@ -13,6 +14,10 @@ pub enum GeminiHookInput {
     AfterTool(AfterTool),
     Notification(Notification),
     PreCompress(PreCompress),
+    // Phase 5: Model-layer events
+    BeforeModel(BeforeModel),
+    AfterModel(AfterModel),
+    BeforeToolSelection(BeforeToolSelection),
     Unknown { event_name: String, raw: RawPayload },
 }
 
@@ -157,6 +162,87 @@ pub struct PreCompress {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 5: Model-layer types
+// ---------------------------------------------------------------------------
+
+/// Typed LLM request for model-layer hooks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Typed LLM response for model-layer hooks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<serde_json::Value>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeforeModel {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_request: Option<serde_json::Value>,
+}
+
+impl BeforeModel {
+    /// Parse the LLM request into a typed struct.
+    pub fn typed_llm_request(&self) -> Option<Result<LlmRequest, serde_json::Error>> {
+        self.llm_request
+            .as_ref()
+            .map(|v| serde_json::from_value(v.clone()))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AfterModel {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_request: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_response: Option<serde_json::Value>,
+}
+
+impl AfterModel {
+    /// Parse the LLM response into a typed struct.
+    pub fn typed_llm_response(&self) -> Option<Result<LlmResponse, serde_json::Error>> {
+        self.llm_response
+            .as_ref()
+            .map(|v| serde_json::from_value(v.clone()))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeforeToolSelection {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_tools: Option<Vec<serde_json::Value>>,
+}
+
+// ---------------------------------------------------------------------------
 // Parser dispatch
 // ---------------------------------------------------------------------------
 
@@ -196,6 +282,16 @@ pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<GeminiHookInput>
             serde_json::from_value(value.clone()).map_err(mk_err)?,
         )),
         "PreCompress" => Ok(GeminiHookInput::PreCompress(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        // Phase 5: Model-layer events
+        "BeforeModel" => Ok(GeminiHookInput::BeforeModel(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "AfterModel" => Ok(GeminiHookInput::AfterModel(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "BeforeToolSelection" => Ok(GeminiHookInput::BeforeToolSelection(
             serde_json::from_value(value.clone()).map_err(mk_err)?,
         )),
         _ => Ok(GeminiHookInput::Unknown {

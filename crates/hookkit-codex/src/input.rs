@@ -85,9 +85,56 @@ impl Default for CodexFeatureSet {
     }
 }
 
+/// Known Codex versions for capability gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexVersion {
+    /// Initial experimental release.
+    V0_1,
+    /// Hypothetical future version with expanded tool support.
+    V0_2,
+}
+
 impl CodexFeatureSet {
+    /// Feature set for the current documented Codex behavior.
     pub fn current() -> Self {
-        Self::default()
+        Self::for_version(CodexVersion::V0_1)
+    }
+
+    /// Feature set for a specific Codex version.
+    pub fn for_version(version: CodexVersion) -> Self {
+        match version {
+            CodexVersion::V0_1 => Self {
+                bash_only_tool_hooks: true,
+                pretool_allow_supported: false,
+                updated_input_supported: false,
+                additional_context_supported: false,
+            },
+            CodexVersion::V0_2 => Self {
+                bash_only_tool_hooks: false,
+                pretool_allow_supported: true,
+                updated_input_supported: false,
+                additional_context_supported: true,
+            },
+        }
+    }
+
+    /// Check if a capability is supported, returning an error if not.
+    pub fn require(&self, capability: &'static str) -> hookkit_core::Result<()> {
+        let supported = match capability {
+            "pretool_allow" => self.pretool_allow_supported,
+            "updated_input" => self.updated_input_supported,
+            "additional_context" => self.additional_context_supported,
+            _ => false,
+        };
+        if supported {
+            Ok(())
+        } else {
+            Err(hookkit_core::HookkitError::UnsupportedCapability {
+                harness: hookkit_core::Harness::Codex,
+                event: hookkit_core::HookEventKey::Other(capability.to_string()),
+                capability,
+            })
+        }
     }
 }
 

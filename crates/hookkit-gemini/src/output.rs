@@ -97,4 +97,50 @@ impl OutputEnvelope {
             ..Default::default()
         }
     }
+
+    // --- BeforeModel ---
+
+    /// Override the model request in BeforeModel.
+    pub fn override_model_request(request: serde_json::Value) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "llmRequest": request
+            })),
+            ..Default::default()
+        }
+    }
+
+    /// Provide a synthetic model response in BeforeModel (skip the actual model call).
+    pub fn synthetic_model_response(response: serde_json::Value) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "llmResponse": response
+            })),
+            ..Default::default()
+        }
+    }
+
+    // --- AfterModel ---
+
+    /// Replace the model response in AfterModel.
+    pub fn replace_model_response(response: serde_json::Value) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "llmResponse": response
+            })),
+            ..Default::default()
+        }
+    }
+
+    // --- BeforeToolSelection ---
+
+    /// Filter the available tools in BeforeToolSelection.
+    pub fn filter_tools(tool_names: Vec<String>) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "allowedTools": tool_names
+            })),
+            ..Default::default()
+        }
+    }
 }
