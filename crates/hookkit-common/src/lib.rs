@@ -4,4 +4,13 @@
 //! equivalent events across Claude, Codex, and Gemini, while preserving
 //! lossless access to the underlying native types.
 
-// Placeholder — will be populated in Phase 2.
+pub mod input;
+pub mod message;
+pub mod output;
+
+pub use input::CommonHookInput;
+pub use message::{NoticeLevel, UserNotice};
+pub use output::CommonHookOutput;
+
+#[cfg(test)]
+mod tests;
