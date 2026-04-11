@@ -1,0 +1,14 @@
+{
+  "sessionId": "abc-123-def",
+  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "cwd": "/home/user/project",
+  "hookEventName": "PermissionDenied",
+  "toolName": "Bash",
+  "toolInput": {
+    "command": "rm -rf /"
+  },
+  "permissionDecision": {
+    "decision": "deny",
+    "reason": "destructive command blocked"
+  }
+}

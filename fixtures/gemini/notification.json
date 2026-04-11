@@ -1,0 +1,6 @@
+{
+  "sessionId": "gemini-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "Notification",
+  "message": "Context approaching limit"
+}

@@ -1,0 +1,11 @@
+{
+  "sessionId": "abc-123-def",
+  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "cwd": "/home/user/project",
+  "hookEventName": "PostToolUseFailure",
+  "toolName": "Bash",
+  "toolInput": {
+    "command": "cargo build"
+  },
+  "error": "process exited with code 101"
+}

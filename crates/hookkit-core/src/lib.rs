@@ -2,6 +2,7 @@
 
 mod error;
 mod harness;
+pub mod json_helpers;
 mod raw;
 
 pub use error::HookkitError;

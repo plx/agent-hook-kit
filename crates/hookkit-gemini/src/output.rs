@@ -12,6 +12,9 @@ pub enum GeminiHookOutput {
 }
 
 /// The JSON envelope written to stdout for Gemini hooks.
+///
+/// Gemini has dedicated output semantics for different event types.
+/// The builders below help construct valid combinations.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputEnvelope {
@@ -32,7 +35,9 @@ impl OutputEnvelope {
         Self::default()
     }
 
-    /// Build a deny response for BeforeTool.
+    // --- BeforeTool ---
+
+    /// Deny a BeforeTool request.
     pub fn deny(reason: impl Into<String>) -> Self {
         Self {
             decision: Some("deny".to_string()),
@@ -41,7 +46,41 @@ impl OutputEnvelope {
         }
     }
 
-    /// Build an AfterAgent retry response.
+    /// Rewrite the tool input for a BeforeTool event.
+    pub fn rewrite_tool_input(new_input: serde_json::Value) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "tool_input": new_input
+            })),
+            ..Default::default()
+        }
+    }
+
+    // --- AfterTool ---
+
+    /// Replace the tool result for an AfterTool event.
+    pub fn replace_tool_result(result: serde_json::Value) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "tool_response": result
+            })),
+            ..Default::default()
+        }
+    }
+
+    /// Append context after a tool call.
+    pub fn with_context(message: impl Into<String>) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "additionalContext": message.into()
+            })),
+            ..Default::default()
+        }
+    }
+
+    // --- AfterAgent ---
+
+    /// Request a retry from AfterAgent.
     pub fn retry(reason: impl Into<String>) -> Self {
         Self {
             decision: Some("retry".to_string()),
@@ -50,12 +89,11 @@ impl OutputEnvelope {
         }
     }
 
-    /// Build a BeforeTool rewrite — rewrite the tool input.
-    pub fn rewrite_tool_input(new_input: serde_json::Value) -> Self {
+    /// Stop the agent from AfterAgent.
+    pub fn stop(reason: impl Into<String>) -> Self {
         Self {
-            hook_specific_output: Some(serde_json::json!({
-                "tool_input": new_input
-            })),
+            decision: Some("stop".to_string()),
+            reason: Some(reason.into()),
             ..Default::default()
         }
     }

@@ -1,5 +1,6 @@
 use hookkit_core::RawPayload;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Top-level parsed Gemini hook input.
 #[derive(Debug, Clone)]
@@ -23,8 +24,47 @@ pub struct CommonFields {
     pub cwd: String,
     pub hook_event_name: String,
     #[serde(flatten)]
-    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
+
+// ---------------------------------------------------------------------------
+// Tool-related types
+// ---------------------------------------------------------------------------
+
+/// Typed tool inputs for well-known Gemini tools.
+#[derive(Debug, Clone)]
+pub enum GeminiToolInput {
+    Shell(ShellToolInput),
+    Unknown {
+        tool_name: String,
+        raw: serde_json::Value,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellToolInput {
+    pub command: Vec<String>,
+}
+
+/// Attempt to parse a Gemini tool input.
+pub fn parse_tool_input(tool_name: &str, value: &serde_json::Value) -> GeminiToolInput {
+    match tool_name {
+        "shell" => serde_json::from_value(value.clone())
+            .map(GeminiToolInput::Shell)
+            .unwrap_or_else(|_| GeminiToolInput::Unknown {
+                tool_name: tool_name.to_string(),
+                raw: value.clone(),
+            }),
+        _ => GeminiToolInput::Unknown {
+            tool_name: tool_name.to_string(),
+            raw: value.clone(),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event types
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +109,15 @@ pub struct BeforeTool {
     pub tool_input: Option<serde_json::Value>,
 }
 
+impl BeforeTool {
+    /// Parse the tool input into a typed variant if possible.
+    pub fn typed_tool_input(&self) -> Option<GeminiToolInput> {
+        let name = self.tool_name.as_deref()?;
+        let input = self.tool_input.as_ref()?;
+        Some(parse_tool_input(name, input))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AfterTool {
@@ -80,6 +129,15 @@ pub struct AfterTool {
     pub tool_input: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_response: Option<serde_json::Value>,
+}
+
+impl AfterTool {
+    /// Parse the tool input into a typed variant if possible.
+    pub fn typed_tool_input(&self) -> Option<GeminiToolInput> {
+        let name = self.tool_name.as_deref()?;
+        let input = self.tool_input.as_ref()?;
+        Some(parse_tool_input(name, input))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +156,10 @@ pub struct PreCompress {
     pub common: CommonFields,
 }
 
+// ---------------------------------------------------------------------------
+// Parser dispatch
+// ---------------------------------------------------------------------------
+
 /// Parse a Gemini hook input from a JSON value.
 pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<GeminiHookInput> {
     let event_name = value
@@ -105,87 +167,37 @@ pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<GeminiHookInput>
         .and_then(|v| v.as_str())
         .ok_or(hookkit_core::HookkitError::MissingHookEventName)?;
 
+    let mk_err = |e: serde_json::Error| hookkit_core::HookkitError::ParseFailure {
+        harness: hookkit_core::Harness::Gemini,
+        event_name: event_name.to_string(),
+        source: e,
+    };
+
     match event_name {
-        "SessionStart" => {
-            let ev: SessionStart = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Gemini,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(GeminiHookInput::SessionStart(ev))
-        }
-        "SessionEnd" => {
-            let ev: SessionEnd = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Gemini,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(GeminiHookInput::SessionEnd(ev))
-        }
-        "BeforeAgent" => {
-            let ev: BeforeAgent = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Gemini,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(GeminiHookInput::BeforeAgent(ev))
-        }
-        "AfterAgent" => {
-            let ev: AfterAgent = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Gemini,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(GeminiHookInput::AfterAgent(ev))
-        }
-        "BeforeTool" => {
-            let ev: BeforeTool = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Gemini,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(GeminiHookInput::BeforeTool(ev))
-        }
-        "AfterTool" => {
-            let ev: AfterTool = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Gemini,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(GeminiHookInput::AfterTool(ev))
-        }
-        "Notification" => {
-            let ev: Notification = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Gemini,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(GeminiHookInput::Notification(ev))
-        }
-        "PreCompress" => {
-            let ev: PreCompress = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Gemini,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(GeminiHookInput::PreCompress(ev))
-        }
+        "SessionStart" => Ok(GeminiHookInput::SessionStart(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "SessionEnd" => Ok(GeminiHookInput::SessionEnd(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "BeforeAgent" => Ok(GeminiHookInput::BeforeAgent(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "AfterAgent" => Ok(GeminiHookInput::AfterAgent(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "BeforeTool" => Ok(GeminiHookInput::BeforeTool(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "AfterTool" => Ok(GeminiHookInput::AfterTool(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "Notification" => Ok(GeminiHookInput::Notification(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "PreCompress" => Ok(GeminiHookInput::PreCompress(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
         _ => Ok(GeminiHookInput::Unknown {
             event_name: event_name.to_string(),
             raw: RawPayload::from(value.clone()),

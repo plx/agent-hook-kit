@@ -1,5 +1,5 @@
-use crate::input::{self, CodexHookInput};
-use crate::output::OutputEnvelope;
+use crate::input::{self, CodexFeatureSet, CodexHookInput, CodexToolInput};
+use crate::output::{self, OutputEnvelope};
 
 fn load_fixture(name: &str) -> serde_json::Value {
     let path = format!(
@@ -10,6 +10,8 @@ fn load_fixture(name: &str) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("failed to read fixture {path}: {e}"));
     serde_json::from_str(&data).expect("fixture is not valid JSON")
 }
+
+// ---- Parse tests ----
 
 #[test]
 fn parse_session_start() {
@@ -28,6 +30,11 @@ fn parse_pre_tool_use() {
     assert!(matches!(input, CodexHookInput::PreToolUse(_)));
     if let CodexHookInput::PreToolUse(ev) = input {
         assert_eq!(ev.tool_name.as_deref(), Some("Bash"));
+        let typed = ev.typed_tool_input().unwrap();
+        assert!(matches!(typed, CodexToolInput::Bash(_)));
+        if let CodexToolInput::Bash(bash) = typed {
+            assert_eq!(bash.command, "git push --force origin main");
+        }
     }
 }
 
@@ -72,6 +79,19 @@ fn parse_unknown_event() {
     assert!(matches!(input, CodexHookInput::Unknown { .. }));
 }
 
+// ---- Feature set tests ----
+
+#[test]
+fn feature_set_defaults() {
+    let fs = CodexFeatureSet::current();
+    assert!(fs.bash_only_tool_hooks);
+    assert!(!fs.pretool_allow_supported);
+    assert!(!fs.updated_input_supported);
+    assert!(!fs.additional_context_supported);
+}
+
+// ---- Output tests ----
+
 #[test]
 fn output_deny() {
     let out = OutputEnvelope::deny("force push not allowed");
@@ -93,4 +113,38 @@ fn output_stop_continue() {
     let json = serde_json::to_value(&out).unwrap();
     assert_eq!(json["decision"], "block");
     assert_eq!(json["reason"], "not done yet");
+}
+
+// ---- Unsupported capability tests ----
+
+#[test]
+fn unsupported_allow_error() {
+    let err = output::unsupported_allow();
+    let msg = format!("{err}");
+    assert!(msg.contains("Codex"));
+    assert!(msg.contains("allow"));
+}
+
+#[test]
+fn unsupported_updated_input_error() {
+    let err = output::unsupported_updated_input();
+    let msg = format!("{err}");
+    assert!(msg.contains("updatedInput"));
+}
+
+#[test]
+fn unsupported_additional_context_error() {
+    let err = output::unsupported_additional_context();
+    let msg = format!("{err}");
+    assert!(msg.contains("additionalContext"));
+}
+
+#[test]
+fn output_no_nulls_for_omitted_fields() {
+    let out = OutputEnvelope::deny("test");
+    let json = serde_json::to_string(&out).unwrap();
+    assert!(
+        !json.contains("null"),
+        "JSON should not contain null values"
+    );
 }

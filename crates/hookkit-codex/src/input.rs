@@ -1,5 +1,6 @@
 use hookkit_core::RawPayload;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Top-level parsed Codex hook input.
 #[derive(Debug, Clone)]
@@ -20,8 +21,79 @@ pub struct CommonFields {
     pub cwd: String,
     pub hook_event_name: String,
     #[serde(flatten)]
-    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
+
+// ---------------------------------------------------------------------------
+// Tool input types — Codex currently centers on Bash
+// ---------------------------------------------------------------------------
+
+/// Typed tool inputs for Codex tools.
+#[derive(Debug, Clone)]
+pub enum CodexToolInput {
+    Bash(BashToolInput),
+    Unknown {
+        tool_name: String,
+        raw: serde_json::Value,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BashToolInput {
+    pub command: String,
+}
+
+/// Attempt to parse a Codex tool input.
+pub fn parse_tool_input(tool_name: &str, value: &serde_json::Value) -> CodexToolInput {
+    match tool_name {
+        "Bash" => serde_json::from_value(value.clone())
+            .map(CodexToolInput::Bash)
+            .unwrap_or_else(|_| CodexToolInput::Unknown {
+                tool_name: tool_name.to_string(),
+                raw: value.clone(),
+            }),
+        _ => CodexToolInput::Unknown {
+            tool_name: tool_name.to_string(),
+            raw: value.clone(),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Codex feature set / capability gating
+// ---------------------------------------------------------------------------
+
+/// Tracks which capabilities the current Codex version supports.
+///
+/// Default reflects the current documented behavior (limited surface).
+#[derive(Debug, Clone)]
+pub struct CodexFeatureSet {
+    pub bash_only_tool_hooks: bool,
+    pub pretool_allow_supported: bool,
+    pub updated_input_supported: bool,
+    pub additional_context_supported: bool,
+}
+
+impl Default for CodexFeatureSet {
+    fn default() -> Self {
+        Self {
+            bash_only_tool_hooks: true,
+            pretool_allow_supported: false,
+            updated_input_supported: false,
+            additional_context_supported: false,
+        }
+    }
+}
+
+impl CodexFeatureSet {
+    pub fn current() -> Self {
+        Self::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event types
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +113,15 @@ pub struct PreToolUse {
     pub tool_input: Option<serde_json::Value>,
 }
 
+impl PreToolUse {
+    /// Parse the tool input into a typed variant if possible.
+    pub fn typed_tool_input(&self) -> Option<CodexToolInput> {
+        let name = self.tool_name.as_deref()?;
+        let input = self.tool_input.as_ref()?;
+        Some(parse_tool_input(name, input))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostToolUse {
@@ -52,6 +133,15 @@ pub struct PostToolUse {
     pub tool_input: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_result: Option<serde_json::Value>,
+}
+
+impl PostToolUse {
+    /// Parse the tool input into a typed variant if possible.
+    pub fn typed_tool_input(&self) -> Option<CodexToolInput> {
+        let name = self.tool_name.as_deref()?;
+        let input = self.tool_input.as_ref()?;
+        Some(parse_tool_input(name, input))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +164,10 @@ pub struct Stop {
     pub last_assistant_message: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Parser dispatch
+// ---------------------------------------------------------------------------
+
 /// Parse a Codex hook input from a JSON value.
 pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<CodexHookInput> {
     let event_name = value
@@ -81,57 +175,28 @@ pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<CodexHookInput> 
         .and_then(|v| v.as_str())
         .ok_or(hookkit_core::HookkitError::MissingHookEventName)?;
 
+    let mk_err = |e: serde_json::Error| hookkit_core::HookkitError::ParseFailure {
+        harness: hookkit_core::Harness::Codex,
+        event_name: event_name.to_string(),
+        source: e,
+    };
+
     match event_name {
-        "SessionStart" => {
-            let ev: SessionStart = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Codex,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(CodexHookInput::SessionStart(ev))
-        }
-        "PreToolUse" => {
-            let ev: PreToolUse = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Codex,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(CodexHookInput::PreToolUse(ev))
-        }
-        "PostToolUse" => {
-            let ev: PostToolUse = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Codex,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(CodexHookInput::PostToolUse(ev))
-        }
-        "UserPromptSubmit" => {
-            let ev: UserPromptSubmit = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Codex,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(CodexHookInput::UserPromptSubmit(ev))
-        }
-        "Stop" => {
-            let ev: Stop = serde_json::from_value(value.clone()).map_err(|e| {
-                hookkit_core::HookkitError::ParseFailure {
-                    harness: hookkit_core::Harness::Codex,
-                    event_name: event_name.to_string(),
-                    source: e,
-                }
-            })?;
-            Ok(CodexHookInput::Stop(ev))
-        }
+        "SessionStart" => Ok(CodexHookInput::SessionStart(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "PreToolUse" => Ok(CodexHookInput::PreToolUse(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "PostToolUse" => Ok(CodexHookInput::PostToolUse(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "UserPromptSubmit" => Ok(CodexHookInput::UserPromptSubmit(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "Stop" => Ok(CodexHookInput::Stop(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
         _ => Ok(CodexHookInput::Unknown {
             event_name: event_name.to_string(),
             raw: RawPayload::from(value.clone()),
