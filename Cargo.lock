@@ -12,6 +12,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-sessionstart-context"
+version = "0.1.0"
+dependencies = [
+ "hookkit-claude",
+ "hookkit-core",
+ "hookkit-runtime",
+ "serde_json",
+]
+
+[[package]]
+name = "codex-bash-guard"
+version = "0.1.0"
+dependencies = [
+ "hookkit-codex",
+ "hookkit-core",
+ "hookkit-runtime",
+ "serde_json",
+]
+
+[[package]]
+name = "gemini-beforetool-policy"
+version = "0.1.0"
+dependencies = [
+ "hookkit-core",
+ "hookkit-gemini",
+ "hookkit-runtime",
+ "serde_json",
+]
+
+[[package]]
 name = "hookkit-claude"
 version = "0.1.0"
 dependencies = [
@@ -148,6 +178,19 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "shared-posttool-autofix"
+version = "0.1.0"
+dependencies = [
+ "hookkit-claude",
+ "hookkit-codex",
+ "hookkit-common",
+ "hookkit-core",
+ "hookkit-gemini",
+ "hookkit-runtime",
+ "serde_json",
 ]
 
 [[package]]

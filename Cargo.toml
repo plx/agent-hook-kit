@@ -7,6 +7,10 @@ members = [
     "crates/hookkit-codex",
     "crates/hookkit-gemini",
     "crates/hookkit-common",
+    "examples/codex-bash-guard",
+    "examples/gemini-beforetool-policy",
+    "examples/claude-sessionstart-context",
+    "examples/shared-posttool-autofix",
 ]
 
 [workspace.package]

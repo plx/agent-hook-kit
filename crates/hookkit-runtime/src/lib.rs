@@ -1,5 +1,7 @@
 //! I/O and execution plumbing for hookkit hook executables.
 
+pub mod artifacts;
+pub mod logging;
 mod validate;
 
 #[cfg(test)]

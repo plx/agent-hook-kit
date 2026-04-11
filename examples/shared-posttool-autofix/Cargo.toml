@@ -1,0 +1,19 @@
+[package]
+name = "shared-posttool-autofix"
+description = "Example: cross-harness post-tool autofix using common wrappers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "shared-posttool-autofix"
+path = "src/main.rs"
+
+[dependencies]
+hookkit-core = { workspace = true }
+hookkit-claude = { workspace = true }
+hookkit-codex = { workspace = true }
+hookkit-gemini = { workspace = true }
+hookkit-common = { workspace = true }
+hookkit-runtime = { workspace = true }
+serde_json = { workspace = true }
