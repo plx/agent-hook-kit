@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 /// Top-level parsed Claude hook input.
 #[derive(Debug, Clone)]
 pub enum ClaudeHookInput {
+    // Phase 1 events
     SessionStart(SessionStart),
     UserPromptSubmit(UserPromptSubmit),
     PreToolUse(PreToolUse),
@@ -14,6 +15,24 @@ pub enum ClaudeHookInput {
     Stop(Stop),
     Notification(Notification),
     SessionEnd(SessionEnd),
+    // Phase 4 events
+    PermissionRequest(PermissionRequest),
+    SubagentStart(SubagentStart),
+    SubagentStop(SubagentStop),
+    TaskCreated(TaskCreated),
+    TaskCompleted(TaskCompleted),
+    TeammateIdle(TeammateIdle),
+    ConfigChange(ConfigChange),
+    CwdChanged(CwdChanged),
+    FileChanged(FileChanged),
+    PreCompact(PreCompact),
+    PostCompact(PostCompact),
+    InstructionsLoaded(InstructionsLoaded),
+    WorktreeCreate(WorktreeCreate),
+    WorktreeRemove(WorktreeRemove),
+    Elicitation(Elicitation),
+    ElicitationResult(ElicitationResult),
+    StopFailure(StopFailure),
     Unknown { event_name: String, raw: RawPayload },
 }
 
@@ -200,6 +219,177 @@ pub struct SessionEnd {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 4: Advanced Claude events
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequest {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_input: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_decision: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentStart {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentStop {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCreated {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCompleted {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeammateIdle {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teammate_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigChange {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_value: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CwdChanged {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChanged {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreCompact {
+    #[serde(flatten)]
+    pub common: CommonFields,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostCompact {
+    #[serde(flatten)]
+    pub common: CommonFields,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstructionsLoaded {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeCreate {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeRemove {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Elicitation {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationResult {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopFailure {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Parser dispatch
 // ---------------------------------------------------------------------------
 
@@ -242,6 +432,58 @@ pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<ClaudeHookInput>
             serde_json::from_value(value.clone()).map_err(mk_err)?,
         )),
         "SessionEnd" => Ok(ClaudeHookInput::SessionEnd(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        // Phase 4 events
+        "PermissionRequest" => Ok(ClaudeHookInput::PermissionRequest(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "SubagentStart" => Ok(ClaudeHookInput::SubagentStart(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "SubagentStop" => Ok(ClaudeHookInput::SubagentStop(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "TaskCreated" => Ok(ClaudeHookInput::TaskCreated(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "TaskCompleted" => Ok(ClaudeHookInput::TaskCompleted(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "TeammateIdle" => Ok(ClaudeHookInput::TeammateIdle(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "ConfigChange" => Ok(ClaudeHookInput::ConfigChange(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "CwdChanged" => Ok(ClaudeHookInput::CwdChanged(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "FileChanged" => Ok(ClaudeHookInput::FileChanged(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "PreCompact" => Ok(ClaudeHookInput::PreCompact(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "PostCompact" => Ok(ClaudeHookInput::PostCompact(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "InstructionsLoaded" => Ok(ClaudeHookInput::InstructionsLoaded(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "WorktreeCreate" => Ok(ClaudeHookInput::WorktreeCreate(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "WorktreeRemove" => Ok(ClaudeHookInput::WorktreeRemove(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "Elicitation" => Ok(ClaudeHookInput::Elicitation(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "ElicitationResult" => Ok(ClaudeHookInput::ElicitationResult(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "StopFailure" => Ok(ClaudeHookInput::StopFailure(
             serde_json::from_value(value.clone()).map_err(mk_err)?,
         )),
         _ => Ok(ClaudeHookInput::Unknown {

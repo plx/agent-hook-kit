@@ -308,3 +308,219 @@ fn output_no_nulls_for_omitted_fields() {
         "JSON should not contain null values"
     );
 }
+
+// ---- Phase 4: Advanced Claude event tests ----
+
+fn mk_json(event_name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "sessionId": "test-session",
+        "cwd": "/tmp",
+        "hookEventName": event_name
+    })
+}
+
+fn mk_json_with(event_name: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut v = mk_json(event_name);
+    if let (Some(base), Some(ext)) = (v.as_object_mut(), extra.as_object()) {
+        for (k, val) in ext {
+            base.insert(k.clone(), val.clone());
+        }
+    }
+    v
+}
+
+#[test]
+fn parse_permission_request() {
+    let v = mk_json_with(
+        "PermissionRequest",
+        serde_json::json!({"toolName": "Bash", "toolInput": {"command": "ls"}}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::PermissionRequest(_)));
+}
+
+#[test]
+fn parse_subagent_start() {
+    let v = mk_json_with(
+        "SubagentStart",
+        serde_json::json!({"subagentId": "agent-1", "subagentType": "coder"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::SubagentStart(_)));
+}
+
+#[test]
+fn parse_subagent_stop() {
+    let v = mk_json_with("SubagentStop", serde_json::json!({"subagentId": "agent-1"}));
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::SubagentStop(_)));
+}
+
+#[test]
+fn parse_task_created() {
+    let v = mk_json_with(
+        "TaskCreated",
+        serde_json::json!({"taskId": "t-1", "taskDescription": "fix the bug"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::TaskCreated(_)));
+}
+
+#[test]
+fn parse_task_completed() {
+    let v = mk_json_with("TaskCompleted", serde_json::json!({"taskId": "t-1"}));
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::TaskCompleted(_)));
+}
+
+#[test]
+fn parse_teammate_idle() {
+    let v = mk_json_with(
+        "TeammateIdle",
+        serde_json::json!({"teammateId": "teammate-1"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::TeammateIdle(_)));
+}
+
+#[test]
+fn parse_config_change() {
+    let v = mk_json_with(
+        "ConfigChange",
+        serde_json::json!({"configKey": "model", "configValue": "opus"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::ConfigChange(_)));
+}
+
+#[test]
+fn parse_cwd_changed() {
+    let v = mk_json_with(
+        "CwdChanged",
+        serde_json::json!({"oldCwd": "/old", "newCwd": "/new"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::CwdChanged(_)));
+}
+
+#[test]
+fn parse_file_changed() {
+    let v = mk_json_with(
+        "FileChanged",
+        serde_json::json!({"filePath": "/tmp/test.rs", "changeType": "modified"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::FileChanged(_)));
+}
+
+#[test]
+fn parse_pre_compact() {
+    let v = mk_json("PreCompact");
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::PreCompact(_)));
+}
+
+#[test]
+fn parse_post_compact() {
+    let v = mk_json("PostCompact");
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::PostCompact(_)));
+}
+
+#[test]
+fn parse_instructions_loaded() {
+    let v = mk_json_with(
+        "InstructionsLoaded",
+        serde_json::json!({"instructionsSource": "CLAUDE.md"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::InstructionsLoaded(_)));
+}
+
+#[test]
+fn parse_worktree_create() {
+    let v = mk_json_with(
+        "WorktreeCreate",
+        serde_json::json!({"worktreePath": "/tmp/worktree-1", "branch": "feature-x"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::WorktreeCreate(_)));
+}
+
+#[test]
+fn parse_worktree_remove() {
+    let v = mk_json_with(
+        "WorktreeRemove",
+        serde_json::json!({"worktreePath": "/tmp/worktree-1"}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::WorktreeRemove(_)));
+}
+
+#[test]
+fn parse_elicitation() {
+    let v = mk_json_with(
+        "Elicitation",
+        serde_json::json!({"question": "Which option?", "options": ["a", "b"]}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::Elicitation(_)));
+    if let ClaudeHookInput::Elicitation(ev) = input {
+        assert_eq!(ev.question.as_deref(), Some("Which option?"));
+        assert_eq!(ev.options.as_ref().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn parse_elicitation_result() {
+    let v = mk_json_with(
+        "ElicitationResult",
+        serde_json::json!({"result": {"choice": "a"}}),
+    );
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::ElicitationResult(_)));
+}
+
+#[test]
+fn parse_stop_failure() {
+    let v = mk_json_with("StopFailure", serde_json::json!({"error": "timed out"}));
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::StopFailure(_)));
+}
+
+// ---- Phase 4 output tests ----
+
+#[test]
+fn output_permission_approve() {
+    let out = OutputEnvelope::permission_approve();
+    let json = serde_json::to_value(&out).unwrap();
+    let perm = &json["hookSpecificOutput"]["permissionDecision"];
+    assert_eq!(perm["decision"], "allow");
+}
+
+#[test]
+fn output_permission_deny() {
+    let out = OutputEnvelope::permission_deny("too dangerous");
+    let json = serde_json::to_value(&out).unwrap();
+    let perm = &json["hookSpecificOutput"]["permissionDecision"];
+    assert_eq!(perm["decision"], "deny");
+    assert_eq!(perm["reason"], "too dangerous");
+}
+
+#[test]
+fn output_worktree_path() {
+    let out = OutputEnvelope::worktree_path("/tmp/worktree-1");
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        json["hookSpecificOutput"]["worktreePath"],
+        "/tmp/worktree-1"
+    );
+}
+
+#[test]
+fn output_watch_paths() {
+    let out = OutputEnvelope::watch_paths(vec!["/tmp/src".to_string(), "/tmp/tests".to_string()]);
+    let json = serde_json::to_value(&out).unwrap();
+    let paths = json["hookSpecificOutput"]["watchPaths"].as_array().unwrap();
+    assert_eq!(paths.len(), 2);
+}

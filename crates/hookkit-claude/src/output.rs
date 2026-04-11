@@ -150,6 +150,57 @@ impl OutputEnvelope {
         }
     }
 
+    // --- PermissionRequest: decision ---
+
+    /// Approve a permission request.
+    pub fn permission_approve() -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "permissionDecision": {
+                    "decision": "allow"
+                }
+            })),
+            ..Default::default()
+        }
+    }
+
+    /// Deny a permission request.
+    pub fn permission_deny(reason: impl Into<String>) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "permissionDecision": {
+                    "decision": "deny",
+                    "reason": reason.into()
+                }
+            })),
+            ..Default::default()
+        }
+    }
+
+    // --- WorktreeCreate: path return ---
+
+    /// Return a worktree path for WorktreeCreate.
+    pub fn worktree_path(path: impl Into<String>) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "worktreePath": path.into()
+            })),
+            ..Default::default()
+        }
+    }
+
+    // --- FileChanged: watch paths ---
+
+    /// Set dynamic watch paths for FileChanged.
+    pub fn watch_paths(paths: Vec<String>) -> Self {
+        Self {
+            hook_specific_output: Some(serde_json::json!({
+                "watchPaths": paths
+            })),
+            ..Default::default()
+        }
+    }
+
     // --- Fluent setters ---
 
     pub fn with_system_message(mut self, msg: impl Into<String>) -> Self {
