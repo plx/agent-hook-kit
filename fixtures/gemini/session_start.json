@@ -1,0 +1,5 @@
+{
+  "sessionId": "gemini-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "SessionStart"
+}

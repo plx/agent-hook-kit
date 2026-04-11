@@ -1,0 +1,9 @@
+{
+  "sessionId": "gemini-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "BeforeTool",
+  "toolName": "shell",
+  "toolInput": {
+    "command": ["rm", "-rf", "/"]
+  }
+}

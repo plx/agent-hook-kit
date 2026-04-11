@@ -1,0 +1,9 @@
+{
+  "sessionId": "codex-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "PreToolUse",
+  "toolName": "Bash",
+  "toolInput": {
+    "command": "git push --force origin main"
+  }
+}

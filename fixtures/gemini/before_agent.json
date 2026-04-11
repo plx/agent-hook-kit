@@ -1,0 +1,6 @@
+{
+  "sessionId": "gemini-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "BeforeAgent",
+  "userPrompt": "Update the README with new API docs"
+}

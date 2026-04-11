@@ -1,0 +1,14 @@
+{
+  "sessionId": "abc-123-def",
+  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "cwd": "/home/user/project",
+  "hookEventName": "PostToolUse",
+  "toolName": "Write",
+  "toolInput": {
+    "file_path": "/home/user/project/src/main.rs",
+    "content": "fn main() { println!(\"hello\"); }"
+  },
+  "toolResult": {
+    "success": true
+  }
+}

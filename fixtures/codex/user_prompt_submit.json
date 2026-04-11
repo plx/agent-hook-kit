@@ -1,0 +1,6 @@
+{
+  "sessionId": "codex-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "UserPromptSubmit",
+  "userPrompt": "Refactor the database module"
+}

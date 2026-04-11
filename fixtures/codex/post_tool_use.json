@@ -1,0 +1,14 @@
+{
+  "sessionId": "codex-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "PostToolUse",
+  "toolName": "Bash",
+  "toolInput": {
+    "command": "cargo fmt"
+  },
+  "toolResult": {
+    "stdout": "",
+    "stderr": "",
+    "exitCode": 0
+  }
+}

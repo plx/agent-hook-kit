@@ -1,0 +1,13 @@
+{
+  "sessionId": "gemini-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "AfterTool",
+  "toolName": "shell",
+  "toolInput": {
+    "command": ["cargo", "fmt"]
+  },
+  "toolResponse": {
+    "stdout": "",
+    "exitCode": 0
+  }
+}

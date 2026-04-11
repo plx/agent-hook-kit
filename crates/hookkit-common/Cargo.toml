@@ -1,0 +1,14 @@
+[package]
+name = "hookkit-common"
+description = "Cross-harness wrapper enums and semantic helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hookkit-core = { workspace = true }
+hookkit-claude = { workspace = true }
+hookkit-codex = { workspace = true }
+hookkit-gemini = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
