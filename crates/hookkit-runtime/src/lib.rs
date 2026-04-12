@@ -29,6 +29,50 @@ pub struct RuntimeContext {
     pub cwd: String,
 }
 
+impl RuntimeContext {
+    pub fn hook_event_name(&self) -> Option<&str> {
+        self.raw_input
+            .get("hookEventName")
+            .or_else(|| self.raw_input.get("hook_event_name"))
+            .and_then(|v| v.as_str())
+    }
+
+    pub fn session_id(&self) -> Option<&str> {
+        self.raw_input
+            .get("sessionId")
+            .or_else(|| self.raw_input.get("session_id"))
+            .and_then(|v| v.as_str())
+    }
+
+    pub fn turn_id(&self) -> Option<&str> {
+        self.raw_input
+            .get("turnId")
+            .or_else(|| self.raw_input.get("turn_id"))
+            .and_then(|v| v.as_str())
+    }
+
+    pub fn tool_use_id(&self) -> Option<&str> {
+        self.raw_input
+            .get("toolUseId")
+            .or_else(|| self.raw_input.get("tool_use_id"))
+            .and_then(|v| v.as_str())
+    }
+
+    pub fn artifact_key(&self, label: impl Into<String>) -> artifacts::ArtifactKey {
+        let mut key = artifacts::ArtifactKey::new(
+            self.session_id().unwrap_or("unknown-session"),
+            label.into(),
+        );
+        if let Some(turn_id) = self.turn_id() {
+            key = key.with_turn(turn_id);
+        }
+        if let Some(tool_use_id) = self.tool_use_id() {
+            key = key.with_tool_use(tool_use_id);
+        }
+        key
+    }
+}
+
 /// Unified native input across harnesses.
 #[derive(Debug, Clone)]
 pub enum NativeHookInput {
@@ -156,6 +200,104 @@ fn validate_native_output(input: &NativeHookInput, output: &NativeHookOutput) ->
             event,
             message: "handler returned Gemini output for a different input harness".to_string(),
         }),
+    }
+}
+
+fn hook_event_key_name(key: &HookEventKey) -> String {
+    match key {
+        HookEventKey::SessionStart => "SessionStart".to_string(),
+        HookEventKey::SessionEnd => "SessionEnd".to_string(),
+        HookEventKey::PromptSubmit => "PromptSubmit".to_string(),
+        HookEventKey::PreToolUse => "PreToolUse".to_string(),
+        HookEventKey::PostToolUse => "PostToolUse".to_string(),
+        HookEventKey::PostToolUseFailure => "PostToolUseFailure".to_string(),
+        HookEventKey::Stop => "Stop".to_string(),
+        HookEventKey::Notification => "Notification".to_string(),
+        HookEventKey::PermissionRequest => "PermissionRequest".to_string(),
+        HookEventKey::PermissionDenied => "PermissionDenied".to_string(),
+        HookEventKey::BeforeModel => "BeforeModel".to_string(),
+        HookEventKey::AfterModel => "AfterModel".to_string(),
+        HookEventKey::BeforeToolSelection => "BeforeToolSelection".to_string(),
+        HookEventKey::PreCompress => "PreCompress".to_string(),
+        HookEventKey::Other(name) => name.clone(),
+    }
+}
+
+fn parsed_value(input: &NativeHookInput) -> serde_json::Value {
+    match input {
+        NativeHookInput::Claude(ev) => match ev {
+            ClaudeHookInput::SessionStart(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::UserPromptSubmit(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::PreToolUse(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::PostToolUse(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::PostToolUseFailure(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::PermissionDenied(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::Stop(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::Notification(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::SessionEnd(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::PermissionRequest(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::SubagentStart(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::SubagentStop(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::TaskCreated(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::TaskCompleted(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::TeammateIdle(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::ConfigChange(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::CwdChanged(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::FileChanged(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::PreCompact(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::PostCompact(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::InstructionsLoaded(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::WorktreeCreate(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::WorktreeRemove(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::Elicitation(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::ElicitationResult(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::StopFailure(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::Unknown { raw, .. } => raw.as_value().clone(),
+        },
+        NativeHookInput::Codex(ev) => match ev {
+            CodexHookInput::SessionStart(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            CodexHookInput::PreToolUse(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            CodexHookInput::PostToolUse(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            CodexHookInput::UserPromptSubmit(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            CodexHookInput::Stop(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            CodexHookInput::Unknown { raw, .. } => raw.as_value().clone(),
+        },
+        NativeHookInput::Gemini(ev) => match ev {
+            GeminiHookInput::SessionStart(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::SessionEnd(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::BeforeAgent(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::AfterAgent(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::BeforeTool(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::AfterTool(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::Notification(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::PreCompress(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::BeforeModel(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::AfterModel(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::BeforeToolSelection(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::Unknown { raw, .. } => raw.as_value().clone(),
+        },
+    }
+}
+
+fn format_dump_parsed(input: &NativeHookInput) -> String {
+    let payload = serde_json::json!({
+        "hookkitDebug": "dump-parsed",
+        "harness": input_harness(input).to_string(),
+        "event": hook_event_key_name(&hook_event_key(input)),
+        "parsed": parsed_value(input),
+    });
+    serde_json::to_string(&payload).unwrap_or_else(|_| {
+        "{\"hookkitDebug\":\"dump-parsed\",\"error\":\"serialization-failed\"}".to_string()
+    })
+}
+
+fn dump_parsed_enabled() -> bool {
+    std::env::args().any(|arg| arg == "--dump-parsed")
+}
+
+fn maybe_dump_parsed(input: &NativeHookInput) {
+    if dump_parsed_enabled() {
+        eprintln!("{}", format_dump_parsed(input));
     }
 }
 
@@ -422,6 +564,7 @@ where
         cwd,
     };
 
+    maybe_dump_parsed(&input);
     let input_for_validation = input.clone();
     match handler(input, &ctx) {
         Ok(output) => {
@@ -464,6 +607,7 @@ where
     };
 
     let native_for_validation = native_input.clone();
+    maybe_dump_parsed(&native_input);
 
     let cwd = raw_input
         .get("cwd")
@@ -695,5 +839,43 @@ mod tests {
             gemini_post,
             NativeHookOutput::Gemini(GeminiHookOutput::Empty)
         ));
+    }
+
+    #[test]
+    fn runtime_context_key_helpers() {
+        let raw = serde_json::json!({
+            "sessionId": "sess-42",
+            "turnId": "turn-7",
+            "toolUseId": "tool-9",
+            "hookEventName": "PostToolUse",
+        });
+        let ctx = RuntimeContext {
+            harness: Harness::Claude,
+            raw_input: raw,
+            stdin_bytes: Vec::new(),
+            cwd: "/tmp".to_string(),
+        };
+        assert_eq!(ctx.session_id(), Some("sess-42"));
+        assert_eq!(ctx.turn_id(), Some("turn-7"));
+        assert_eq!(ctx.tool_use_id(), Some("tool-9"));
+        assert_eq!(ctx.hook_event_name(), Some("PostToolUse"));
+
+        let key = ctx.artifact_key("diag");
+        assert_eq!(key.session_id, "sess-42");
+        assert_eq!(key.turn_id.as_deref(), Some("turn-7"));
+        assert_eq!(key.tool_use_id.as_deref(), Some("tool-9"));
+        assert_eq!(key.label, "diag");
+    }
+
+    #[test]
+    fn format_dump_parsed_contains_harness_event_and_payload() {
+        let bytes = load_fixture("codex", "pre_tool_use.json");
+        let (_, input) = parse_native(Harness::Codex, &bytes).unwrap();
+        let line = format_dump_parsed(&input);
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["hookkitDebug"], "dump-parsed");
+        assert_eq!(v["harness"], "Codex");
+        assert_eq!(v["event"], "PreToolUse");
+        assert_eq!(v["parsed"]["hookEventName"], "PreToolUse");
     }
 }
