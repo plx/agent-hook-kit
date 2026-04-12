@@ -9,6 +9,12 @@ mod golden_tests;
 
 use hookkit_claude::{ClaudeHookInput, ClaudeHookOutput};
 use hookkit_codex::{CodexHookInput, CodexHookOutput};
+use hookkit_common::input::{
+    CommonHookInput, CommonNotificationInput, CommonPostToolUseInput, CommonPreToolUseInput,
+    CommonPreCompressInput, CommonPromptSubmitInput, CommonSessionEndInput, CommonSessionStartInput,
+    CommonStopInput,
+};
+use hookkit_common::output::CommonHookOutput;
 use hookkit_core::{Harness, HookEventKey, HookkitError};
 use hookkit_gemini::{GeminiHookInput, GeminiHookOutput};
 use std::io::Read;
@@ -153,6 +159,123 @@ fn validate_native_output(input: &NativeHookInput, output: &NativeHookOutput) ->
     }
 }
 
+fn empty_output_for_harness(harness: Harness) -> NativeHookOutput {
+    match harness {
+        Harness::Claude => NativeHookOutput::Claude(ClaudeHookOutput::Empty),
+        Harness::Codex => NativeHookOutput::Codex(CodexHookOutput::Empty),
+        Harness::Gemini => NativeHookOutput::Gemini(GeminiHookOutput::Empty),
+    }
+}
+
+fn native_to_common(input: NativeHookInput) -> hookkit_core::Result<CommonHookInput> {
+    let harness = input_harness(&input);
+    let event = hook_event_key(&input);
+
+    match input {
+        NativeHookInput::Claude(ev) => match ev {
+            ClaudeHookInput::SessionStart(ev) => {
+                Ok(CommonHookInput::SessionStart(CommonSessionStartInput::Claude(ev)))
+            }
+            ClaudeHookInput::UserPromptSubmit(ev) => {
+                Ok(CommonHookInput::PromptSubmit(CommonPromptSubmitInput::Claude(ev)))
+            }
+            ClaudeHookInput::PreToolUse(ev) => {
+                Ok(CommonHookInput::PreToolUse(CommonPreToolUseInput::Claude(ev)))
+            }
+            ClaudeHookInput::PostToolUse(ev) => {
+                Ok(CommonHookInput::PostToolUse(CommonPostToolUseInput::Claude(ev)))
+            }
+            ClaudeHookInput::Stop(ev) => Ok(CommonHookInput::Stop(CommonStopInput::Claude(ev))),
+            ClaudeHookInput::Notification(ev) => Ok(CommonHookInput::Notification(
+                CommonNotificationInput::Claude(ev),
+            )),
+            ClaudeHookInput::SessionEnd(ev) => Ok(CommonHookInput::SessionEnd(
+                CommonSessionEndInput::Claude(ev),
+            )),
+            _ => Err(HookkitError::UnsupportedCapability {
+                harness,
+                event,
+                capability: "common-wrapper conversion for this event is not yet implemented",
+            }),
+        },
+        NativeHookInput::Codex(ev) => match ev {
+            CodexHookInput::SessionStart(ev) => {
+                Ok(CommonHookInput::SessionStart(CommonSessionStartInput::Codex(ev)))
+            }
+            CodexHookInput::UserPromptSubmit(ev) => {
+                Ok(CommonHookInput::PromptSubmit(CommonPromptSubmitInput::Codex(ev)))
+            }
+            CodexHookInput::PreToolUse(ev) => {
+                Ok(CommonHookInput::PreToolUse(CommonPreToolUseInput::Codex(ev)))
+            }
+            CodexHookInput::PostToolUse(ev) => {
+                Ok(CommonHookInput::PostToolUse(CommonPostToolUseInput::Codex(ev)))
+            }
+            CodexHookInput::Stop(ev) => Ok(CommonHookInput::Stop(CommonStopInput::Codex(ev))),
+            _ => Err(HookkitError::UnsupportedCapability {
+                harness,
+                event,
+                capability: "common-wrapper conversion for this event is not yet implemented",
+            }),
+        },
+        NativeHookInput::Gemini(ev) => match ev {
+            GeminiHookInput::SessionStart(ev) => {
+                Ok(CommonHookInput::SessionStart(CommonSessionStartInput::Gemini(ev)))
+            }
+            GeminiHookInput::BeforeAgent(ev) => {
+                Ok(CommonHookInput::PromptSubmit(CommonPromptSubmitInput::Gemini(ev)))
+            }
+            GeminiHookInput::BeforeTool(ev) => {
+                Ok(CommonHookInput::PreToolUse(CommonPreToolUseInput::Gemini(ev)))
+            }
+            GeminiHookInput::AfterTool(ev) => {
+                Ok(CommonHookInput::PostToolUse(CommonPostToolUseInput::Gemini(ev)))
+            }
+            GeminiHookInput::AfterAgent(ev) => Ok(CommonHookInput::Stop(CommonStopInput::Gemini(ev))),
+            GeminiHookInput::Notification(ev) => Ok(CommonHookInput::Notification(
+                CommonNotificationInput::Gemini(ev),
+            )),
+            GeminiHookInput::SessionEnd(ev) => Ok(CommonHookInput::SessionEnd(
+                CommonSessionEndInput::Gemini(ev),
+            )),
+            GeminiHookInput::PreCompress(ev) => Ok(CommonHookInput::PreCompress(
+                CommonPreCompressInput::Gemini(ev),
+            )),
+            _ => Err(HookkitError::UnsupportedCapability {
+                harness,
+                event,
+                capability: "common-wrapper conversion for this event is not yet implemented",
+            }),
+        },
+    }
+}
+
+fn common_to_native(harness: Harness, output: CommonHookOutput) -> hookkit_core::Result<NativeHookOutput> {
+    match output {
+        CommonHookOutput::Empty => Ok(empty_output_for_harness(harness)),
+        CommonHookOutput::PostToolUse(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),
+            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini())),
+        },
+        CommonHookOutput::PreToolUse(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),
+            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini())),
+        },
+        CommonHookOutput::PromptSubmit(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),
+            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex())),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini())),
+        },
+        CommonHookOutput::Stop(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),
+            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex())),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini())),
+        },
+    }
+}
+
 /// Read stdin into bytes.
 fn read_stdin() -> hookkit_core::Result<Vec<u8>> {
     let mut buf = Vec::new();
@@ -286,18 +409,78 @@ where
 
 /// Placeholder for the common (cross-harness) runtime.
 ///
-/// Will be fully implemented in Phase 2 when hookkit-common is populated.
-/// For now, this delegates through the native path.
+/// Parses native input, converts to `CommonHookInput`, invokes the common
+/// handler, converts `CommonHookOutput` back to the target native output,
+/// validates emission rules, then writes stdout/stderr/exit code.
 pub fn run_common<F>(harness: Harness, handler: F) -> std::process::ExitCode
 where
-    F: FnOnce(NativeHookInput, &RuntimeContext) -> hookkit_core::Result<NativeHookOutput>,
+    F: FnOnce(CommonHookInput, &RuntimeContext) -> hookkit_core::Result<CommonHookOutput>,
 {
-    run_native(harness, handler)
+    let bytes = match read_stdin() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("hookkit: failed to read stdin: {e}");
+            return std::process::ExitCode::from(1);
+        }
+    };
+
+    let (raw_input, native_input) = match parse_native(harness, &bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("hookkit: failed to parse input: {e}");
+            return std::process::ExitCode::from(1);
+        }
+    };
+
+    let native_for_validation = native_input.clone();
+
+    let cwd = raw_input
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .unwrap_or(".")
+        .to_string();
+
+    let ctx = RuntimeContext {
+        harness,
+        raw_input,
+        stdin_bytes: bytes,
+        cwd,
+    };
+
+    let common_input = match native_to_common(native_input) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("hookkit: failed to convert to common input: {e}");
+            return std::process::ExitCode::from(1);
+        }
+    };
+
+    match handler(common_input, &ctx) {
+        Ok(common_output) => {
+            let native_output = match common_to_native(harness, common_output) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("hookkit: failed to convert common output: {e}");
+                    return std::process::ExitCode::from(1);
+                }
+            };
+            if let Err(e) = validate_native_output(&native_for_validation, &native_output) {
+                eprintln!("hookkit: output validation failed: {e}");
+                return std::process::ExitCode::from(1);
+            }
+            emit_output(native_output)
+        }
+        Err(e) => {
+            eprintln!("hookkit: handler error: {e}");
+            std::process::ExitCode::from(1)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hookkit_common::output::{CommonPostToolUseOutput, CommonPromptSubmitOutput};
 
     fn load_fixture(harness: &str, name: &str) -> Vec<u8> {
         let path = format!(
@@ -379,5 +562,107 @@ mod tests {
         } else {
             panic!("expected Gemini BeforeTool");
         }
+    }
+
+    #[test]
+    fn native_to_common_prompt_submit_is_supported_for_all_harnesses() {
+        let claude = serde_json::from_slice::<serde_json::Value>(&load_fixture(
+            "claude",
+            "user_prompt_submit.json",
+        ))
+        .unwrap();
+        let codex = serde_json::from_slice::<serde_json::Value>(&load_fixture(
+            "codex",
+            "user_prompt_submit.json",
+        ))
+        .unwrap();
+        let gemini =
+            serde_json::from_slice::<serde_json::Value>(&load_fixture("gemini", "before_agent.json"))
+                .unwrap();
+
+        let c = native_to_common(NativeHookInput::Claude(
+            hookkit_claude::input::parse(&claude).unwrap(),
+        ))
+        .unwrap();
+        let x = native_to_common(NativeHookInput::Codex(
+            hookkit_codex::input::parse(&codex).unwrap(),
+        ))
+        .unwrap();
+        let g = native_to_common(NativeHookInput::Gemini(
+            hookkit_gemini::input::parse(&gemini).unwrap(),
+        ))
+        .unwrap();
+
+        assert!(matches!(c, CommonHookInput::PromptSubmit(_)));
+        assert!(matches!(x, CommonHookInput::PromptSubmit(_)));
+        assert!(matches!(g, CommonHookInput::PromptSubmit(_)));
+    }
+
+    #[test]
+    fn native_to_common_post_tool_is_supported_for_all_harnesses() {
+        let claude =
+            serde_json::from_slice::<serde_json::Value>(&load_fixture("claude", "post_tool_use.json"))
+                .unwrap();
+        let codex =
+            serde_json::from_slice::<serde_json::Value>(&load_fixture("codex", "post_tool_use.json"))
+                .unwrap();
+        let gemini =
+            serde_json::from_slice::<serde_json::Value>(&load_fixture("gemini", "after_tool.json"))
+                .unwrap();
+
+        let c = native_to_common(NativeHookInput::Claude(
+            hookkit_claude::input::parse(&claude).unwrap(),
+        ))
+        .unwrap();
+        let x = native_to_common(NativeHookInput::Codex(
+            hookkit_codex::input::parse(&codex).unwrap(),
+        ))
+        .unwrap();
+        let g = native_to_common(NativeHookInput::Gemini(
+            hookkit_gemini::input::parse(&gemini).unwrap(),
+        ))
+        .unwrap();
+
+        assert!(matches!(c, CommonHookInput::PostToolUse(_)));
+        assert!(matches!(x, CommonHookInput::PostToolUse(_)));
+        assert!(matches!(g, CommonHookInput::PostToolUse(_)));
+    }
+
+    #[test]
+    fn common_output_conversion_prompt_submit_and_post_tool() {
+        let prompt = CommonHookOutput::PromptSubmit(CommonPromptSubmitOutput::allow());
+        let post = CommonHookOutput::PostToolUse(CommonPostToolUseOutput::new());
+
+        let claude_prompt = common_to_native(Harness::Claude, prompt.clone()).unwrap();
+        let codex_prompt = common_to_native(Harness::Codex, prompt.clone()).unwrap();
+        let gemini_prompt = common_to_native(Harness::Gemini, prompt).unwrap();
+        assert!(matches!(
+            claude_prompt,
+            NativeHookOutput::Claude(ClaudeHookOutput::Empty)
+        ));
+        assert!(matches!(
+            codex_prompt,
+            NativeHookOutput::Codex(CodexHookOutput::Empty)
+        ));
+        assert!(matches!(
+            gemini_prompt,
+            NativeHookOutput::Gemini(GeminiHookOutput::Empty)
+        ));
+
+        let claude_post = common_to_native(Harness::Claude, post.clone()).unwrap();
+        let codex_post = common_to_native(Harness::Codex, post.clone()).unwrap();
+        let gemini_post = common_to_native(Harness::Gemini, post).unwrap();
+        assert!(matches!(
+            claude_post,
+            NativeHookOutput::Claude(ClaudeHookOutput::Empty)
+        ));
+        assert!(matches!(
+            codex_post,
+            NativeHookOutput::Codex(CodexHookOutput::Empty)
+        ));
+        assert!(matches!(
+            gemini_post,
+            NativeHookOutput::Gemini(GeminiHookOutput::Empty)
+        ));
     }
 }
