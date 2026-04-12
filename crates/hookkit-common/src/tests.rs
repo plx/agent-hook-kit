@@ -115,6 +115,63 @@ fn from_gemini_before_agent() {
     assert!(matches!(common, CommonHookInput::PromptSubmit(_)));
 }
 
+#[test]
+fn from_claude_notification() {
+    let ev = claude::Notification {
+        common: claude::CommonFields {
+            session_id: "s1".to_string(),
+            transcript_path: None,
+            cwd: "/tmp".to_string(),
+            hook_event_name: "Notification".to_string(),
+            extra: Default::default(),
+        },
+        message: Some("build done".to_string()),
+        level: Some("info".to_string()),
+    };
+    let common: CommonHookInput = ev.into();
+    assert!(matches!(common, CommonHookInput::Notification(_)));
+}
+
+#[test]
+fn from_gemini_session_end() {
+    let ev = gemini::SessionEnd {
+        common: gemini::CommonFields {
+            session_id: "g1".to_string(),
+            cwd: "/tmp".to_string(),
+            hook_event_name: "SessionEnd".to_string(),
+            extra: Default::default(),
+        },
+    };
+    let common: CommonHookInput = ev.into();
+    assert!(matches!(common, CommonHookInput::SessionEnd(_)));
+}
+
+#[test]
+fn from_pre_compress_variants() {
+    let c = claude::PreCompact {
+        common: claude::CommonFields {
+            session_id: "c1".to_string(),
+            transcript_path: None,
+            cwd: "/tmp".to_string(),
+            hook_event_name: "PreCompact".to_string(),
+            extra: Default::default(),
+        },
+    };
+    let g = gemini::PreCompress {
+        common: gemini::CommonFields {
+            session_id: "g1".to_string(),
+            cwd: "/tmp".to_string(),
+            hook_event_name: "PreCompress".to_string(),
+            extra: Default::default(),
+        },
+    };
+
+    let cc: CommonHookInput = c.into();
+    let gg: CommonHookInput = g.into();
+    assert!(matches!(cc, CommonHookInput::PreCompress(_)));
+    assert!(matches!(gg, CommonHookInput::PreCompress(_)));
+}
+
 // ---- Output conversion tests ----
 
 #[test]

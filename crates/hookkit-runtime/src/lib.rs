@@ -192,6 +192,9 @@ fn native_to_common(input: NativeHookInput) -> hookkit_core::Result<CommonHookIn
             ClaudeHookInput::SessionEnd(ev) => Ok(CommonHookInput::SessionEnd(
                 CommonSessionEndInput::Claude(ev),
             )),
+            ClaudeHookInput::PreCompact(ev) => Ok(CommonHookInput::PreCompress(
+                CommonPreCompressInput::Claude(ev),
+            )),
             _ => Err(HookkitError::UnsupportedCapability {
                 harness,
                 event,

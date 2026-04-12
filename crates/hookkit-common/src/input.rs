@@ -370,13 +370,29 @@ impl CommonSessionEndInput {
 
 #[derive(Debug, Clone)]
 pub enum CommonPreCompressInput {
+    Claude(claude::PreCompact),
     Gemini(gemini::PreCompress),
 }
 
 impl CommonPreCompressInput {
     pub fn session_id(&self) -> &str {
         match self {
+            Self::Claude(ev) => &ev.common.session_id,
             Self::Gemini(ev) => &ev.common.session_id,
+        }
+    }
+
+    pub fn as_claude(&self) -> Option<&claude::PreCompact> {
+        match self {
+            Self::Claude(ev) => Some(ev),
+            _ => None,
+        }
+    }
+
+    pub fn as_gemini(&self) -> Option<&gemini::PreCompress> {
+        match self {
+            Self::Gemini(ev) => Some(ev),
+            _ => None,
         }
     }
 }
@@ -472,5 +488,41 @@ impl From<codex::Stop> for CommonHookInput {
 impl From<gemini::AfterAgent> for CommonHookInput {
     fn from(ev: gemini::AfterAgent) -> Self {
         CommonHookInput::Stop(CommonStopInput::Gemini(ev))
+    }
+}
+
+impl From<claude::Notification> for CommonHookInput {
+    fn from(ev: claude::Notification) -> Self {
+        CommonHookInput::Notification(CommonNotificationInput::Claude(ev))
+    }
+}
+
+impl From<gemini::Notification> for CommonHookInput {
+    fn from(ev: gemini::Notification) -> Self {
+        CommonHookInput::Notification(CommonNotificationInput::Gemini(ev))
+    }
+}
+
+impl From<claude::SessionEnd> for CommonHookInput {
+    fn from(ev: claude::SessionEnd) -> Self {
+        CommonHookInput::SessionEnd(CommonSessionEndInput::Claude(ev))
+    }
+}
+
+impl From<gemini::SessionEnd> for CommonHookInput {
+    fn from(ev: gemini::SessionEnd) -> Self {
+        CommonHookInput::SessionEnd(CommonSessionEndInput::Gemini(ev))
+    }
+}
+
+impl From<claude::PreCompact> for CommonHookInput {
+    fn from(ev: claude::PreCompact) -> Self {
+        CommonHookInput::PreCompress(CommonPreCompressInput::Claude(ev))
+    }
+}
+
+impl From<gemini::PreCompress> for CommonHookInput {
+    fn from(ev: gemini::PreCompress) -> Self {
+        CommonHookInput::PreCompress(CommonPreCompressInput::Gemini(ev))
     }
 }
