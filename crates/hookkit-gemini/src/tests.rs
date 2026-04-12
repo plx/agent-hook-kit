@@ -24,6 +24,17 @@ fn parse_session_start() {
 }
 
 #[test]
+fn parse_with_snake_case_event_name_alias() {
+    let v = serde_json::json!({
+        "sessionId": "gemini-sess-001",
+        "cwd": "/tmp",
+        "hook_event_name": "SessionStart"
+    });
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, GeminiHookInput::SessionStart(_)));
+}
+
+#[test]
 fn parse_before_agent() {
     let v = load_fixture("before_agent.json");
     let input = input::parse(&v).expect("should parse");

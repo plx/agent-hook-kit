@@ -25,8 +25,10 @@ pub enum GeminiHookInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonFields {
+    #[serde(alias = "session_id")]
     pub session_id: String,
     pub cwd: String,
+    #[serde(alias = "hook_event_name")]
     pub hook_event_name: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -250,6 +252,7 @@ pub struct BeforeToolSelection {
 pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<GeminiHookInput> {
     let event_name = value
         .get("hookEventName")
+        .or_else(|| value.get("hook_event_name"))
         .and_then(|v| v.as_str())
         .ok_or(hookkit_core::HookkitError::MissingHookEventName)?;
 

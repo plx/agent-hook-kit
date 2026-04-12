@@ -55,7 +55,7 @@ fn handle_post_tool(
         return Ok(CommonHookOutput::empty());
     }
 
-    let outcome = run_autofix_pipeline(post_tool.raw_tool_input(), &ctx.cwd);
+    let outcome = run_autofix_pipeline(post_tool.raw_tool_input(), ctx.cwd.as_str());
 
     match outcome {
         AutofixOutcome::Clean => Ok(CommonHookOutput::empty()),

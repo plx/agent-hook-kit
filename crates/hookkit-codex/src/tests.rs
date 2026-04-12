@@ -24,6 +24,17 @@ fn parse_session_start() {
 }
 
 #[test]
+fn parse_with_snake_case_event_name_alias() {
+    let v = serde_json::json!({
+        "sessionId": "codex-sess-001",
+        "cwd": "/tmp",
+        "hook_event_name": "SessionStart"
+    });
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, CodexHookInput::SessionStart(_)));
+}
+
+#[test]
 fn parse_pre_tool_use() {
     let v = load_fixture("pre_tool_use.json");
     let input = input::parse(&v).expect("should parse");

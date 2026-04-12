@@ -26,7 +26,7 @@ pub struct RuntimeContext {
     pub harness: Harness,
     pub raw_input: serde_json::Value,
     pub stdin_bytes: Vec<u8>,
-    pub cwd: String,
+    pub cwd: hookkit_core::Utf8PathBuf,
 }
 
 impl RuntimeContext {
@@ -561,7 +561,7 @@ where
         harness,
         raw_input,
         stdin_bytes: bytes,
-        cwd,
+        cwd: hookkit_core::Utf8PathBuf::from(cwd),
     };
 
     maybe_dump_parsed(&input);
@@ -619,7 +619,7 @@ where
         harness,
         raw_input,
         stdin_bytes: bytes,
-        cwd,
+        cwd: hookkit_core::Utf8PathBuf::from(cwd),
     };
 
     let common_input = match native_to_common(native_input) {
@@ -853,7 +853,7 @@ mod tests {
             harness: Harness::Claude,
             raw_input: raw,
             stdin_bytes: Vec::new(),
-            cwd: "/tmp".to_string(),
+            cwd: hookkit_core::Utf8PathBuf::from("/tmp"),
         };
         assert_eq!(ctx.session_id(), Some("sess-42"));
         assert_eq!(ctx.turn_id(), Some("turn-7"));

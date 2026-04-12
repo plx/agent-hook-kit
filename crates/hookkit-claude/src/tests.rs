@@ -26,6 +26,17 @@ fn parse_session_start() {
 }
 
 #[test]
+fn parse_with_snake_case_event_name_alias() {
+    let v = serde_json::json!({
+        "sessionId": "abc-123-def",
+        "cwd": "/home/user/project",
+        "hook_event_name": "SessionStart"
+    });
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::SessionStart(_)));
+}
+
+#[test]
 fn parse_user_prompt_submit() {
     let v = load_fixture("user_prompt_submit.json");
     let input = input::parse(&v).expect("should parse");

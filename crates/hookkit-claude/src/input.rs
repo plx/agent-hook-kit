@@ -40,10 +40,13 @@ pub enum ClaudeHookInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonFields {
+    #[serde(alias = "session_id")]
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "transcript_path")]
     pub transcript_path: Option<String>,
     pub cwd: String,
+    #[serde(alias = "hook_event_name")]
     pub hook_event_name: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -397,6 +400,7 @@ pub struct StopFailure {
 pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<ClaudeHookInput> {
     let event_name = value
         .get("hookEventName")
+        .or_else(|| value.get("hook_event_name"))
         .and_then(|v| v.as_str())
         .ok_or(hookkit_core::HookkitError::MissingHookEventName)?;
 
