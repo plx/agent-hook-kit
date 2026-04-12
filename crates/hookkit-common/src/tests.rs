@@ -179,7 +179,7 @@ fn post_tool_output_to_claude_with_context() {
     let out = CommonPostToolUseOutput::new()
         .with_agent_context("formatted file.rs")
         .with_agent_context("no lint errors");
-    let claude = out.to_claude();
+    let claude = out.to_claude().unwrap();
     assert!(matches!(claude, hookkit_claude::ClaudeHookOutput::Json(_)));
 }
 
@@ -193,11 +193,11 @@ fn post_tool_output_to_codex_with_context_fails() {
 #[test]
 fn post_tool_output_empty() {
     let out = CommonPostToolUseOutput::new();
-    let claude = out.to_claude();
+    let claude = out.to_claude().unwrap();
     assert!(matches!(claude, hookkit_claude::ClaudeHookOutput::Empty));
     let codex = out.to_codex().unwrap();
     assert!(matches!(codex, hookkit_codex::CodexHookOutput::Empty));
-    let gemini = out.to_gemini();
+    let gemini = out.to_gemini().unwrap();
     assert!(matches!(gemini, hookkit_gemini::GeminiHookOutput::Empty));
 }
 
@@ -251,6 +251,33 @@ fn prompt_block_to_all_harnesses() {
     ));
     let gemini = out.to_gemini();
     assert!(matches!(gemini, hookkit_gemini::GeminiHookOutput::Json(_)));
+}
+
+#[test]
+fn post_tool_user_notice_is_not_silently_dropped() {
+    let out = CommonPostToolUseOutput::new().with_notice(UserNotice::info("done"));
+    assert!(out.to_claude().is_err());
+    assert!(out.to_codex().is_err());
+    assert!(out.to_gemini().is_err());
+}
+
+#[test]
+fn session_start_output_supported_and_unsupported_paths() {
+    let with_context = CommonSessionStartOutput::new().with_agent_context("repo has rustfmt");
+    assert!(with_context.to_claude().is_ok());
+    assert!(with_context.to_codex().is_err());
+    assert!(with_context.to_gemini().is_err());
+}
+
+#[test]
+fn notification_and_session_end_outputs_exist_and_error_explicitly() {
+    let note = CommonNotificationOutput::new().with_notice(UserNotice::warning("heads up"));
+    assert!(note.to_claude().is_err());
+    assert!(note.to_gemini().is_err());
+
+    let end = CommonSessionEndOutput::new().with_notice(UserNotice::info("bye"));
+    assert!(end.to_claude().is_err());
+    assert!(end.to_gemini().is_err());
 }
 
 // ---- Message helper tests ----

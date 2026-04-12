@@ -256,10 +256,38 @@ fn native_to_common(input: NativeHookInput) -> hookkit_core::Result<CommonHookIn
 fn common_to_native(harness: Harness, output: CommonHookOutput) -> hookkit_core::Result<NativeHookOutput> {
     match output {
         CommonHookOutput::Empty => Ok(empty_output_for_harness(harness)),
-        CommonHookOutput::PostToolUse(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),
+        CommonHookOutput::SessionStart(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
             Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini())),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+        },
+        CommonHookOutput::Notification(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
+            Harness::Codex => Err(HookkitError::UnsupportedCapability {
+                harness: Harness::Codex,
+                event: HookEventKey::Notification,
+                capability: "notification output conversion (not supported by Codex)",
+            }),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+        },
+        CommonHookOutput::SessionEnd(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
+            Harness::Codex => Err(HookkitError::UnsupportedCapability {
+                harness: Harness::Codex,
+                event: HookEventKey::SessionEnd,
+                capability: "session_end output conversion (not supported by Codex)",
+            }),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+        },
+        CommonHookOutput::PreCompress(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
+            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+        },
+        CommonHookOutput::PostToolUse(out) => match harness {
+            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
+            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
+            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
         },
         CommonHookOutput::PreToolUse(out) => match harness {
             Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),

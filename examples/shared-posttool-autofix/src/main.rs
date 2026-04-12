@@ -66,11 +66,11 @@ fn handle(
 
     // Convert to the target harness output
     match harness {
-        Harness::Claude => Ok(NativeHookOutput::Claude(output.to_claude())),
+        Harness::Claude => Ok(NativeHookOutput::Claude(output.to_claude()?)),
         Harness::Codex => {
             // Codex doesn't support context injection — stay quiet
             Ok(NativeHookOutput::Codex(CodexHookOutput::Empty))
         }
-        Harness::Gemini => Ok(NativeHookOutput::Gemini(output.to_gemini())),
+        Harness::Gemini => Ok(NativeHookOutput::Gemini(output.to_gemini()?)),
     }
 }
