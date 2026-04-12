@@ -155,9 +155,7 @@ impl CommonPromptSubmitOutput {
     pub fn to_codex(&self) -> CodexHookOutput {
         match self {
             Self::Allow => CodexHookOutput::Empty,
-            Self::Block { reason } => CodexHookOutput::BlockingDeny {
-                stderr: reason.clone(),
-            },
+            Self::Block { reason } => CodexHookOutput::Json(CodexEnvelope::deny(reason)),
         }
     }
 
@@ -203,9 +201,7 @@ impl CommonPreToolUseOutput {
                 // Codex does not support allow — it fails open
                 Err(hookkit_codex::output::unsupported_allow())
             }
-            Self::Deny { reason } => Ok(CodexHookOutput::BlockingDeny {
-                stderr: reason.clone(),
-            }),
+            Self::Deny { reason } => Ok(CodexHookOutput::Json(CodexEnvelope::deny(reason))),
         }
     }
 

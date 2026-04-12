@@ -209,12 +209,9 @@ fn pre_tool_deny_to_all_harnesses() {
     let claude = out.to_claude();
     assert!(matches!(claude, hookkit_claude::ClaudeHookOutput::Json(_)));
 
-    // Codex: stderr block
+    // Codex: JSON deny
     let codex = out.to_codex().unwrap();
-    assert!(matches!(
-        codex,
-        hookkit_codex::CodexHookOutput::BlockingDeny { .. }
-    ));
+    assert!(matches!(codex, hookkit_codex::CodexHookOutput::Json(_)));
 
     // Gemini: JSON deny
     let gemini = out.to_gemini();
@@ -245,10 +242,7 @@ fn prompt_block_to_all_harnesses() {
     let claude = out.to_claude();
     assert!(matches!(claude, hookkit_claude::ClaudeHookOutput::Json(_)));
     let codex = out.to_codex();
-    assert!(matches!(
-        codex,
-        hookkit_codex::CodexHookOutput::BlockingDeny { .. }
-    ));
+    assert!(matches!(codex, hookkit_codex::CodexHookOutput::Json(_)));
     let gemini = out.to_gemini();
     assert!(matches!(gemini, hookkit_gemini::GeminiHookOutput::Json(_)));
 }

@@ -1,4 +1,5 @@
 use hookkit_codex::input::CodexToolInput;
+use hookkit_codex::output::OutputEnvelope;
 use hookkit_codex::{CodexHookInput, CodexHookOutput};
 use hookkit_core::Harness;
 use hookkit_runtime::{NativeHookInput, NativeHookOutput, RuntimeContext};
@@ -30,10 +31,11 @@ fn handle(input: NativeHookInput, _ctx: &RuntimeContext) -> hookkit_core::Result
             if let Some(CodexToolInput::Bash(bash)) = ev.typed_tool_input() {
                 for pattern in DENY_PATTERNS {
                     if bash.command.contains(pattern) {
-                        eprintln!("[codex-bash-guard] blocked: {}", bash.command);
-                        return Ok(NativeHookOutput::Codex(CodexHookOutput::BlockingDeny {
-                            stderr: format!("Denied: command matches blocked pattern '{pattern}'"),
-                        }));
+                        return Ok(NativeHookOutput::Codex(CodexHookOutput::Json(
+                            OutputEnvelope::deny(format!(
+                                "Denied: command matches blocked pattern '{pattern}'"
+                            )),
+                        )));
                     }
                 }
             }

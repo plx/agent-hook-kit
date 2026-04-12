@@ -76,13 +76,11 @@ fn codex_bash_guard_allows_safe_command() {
 fn codex_bash_guard_denies_force_push() {
     let fixture = fixture_bytes("codex", "pre_tool_use.json");
     let output = run_example("codex-bash-guard", &fixture, &[]);
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "should exit 2 for force push"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Denied"), "stderr should contain denial");
+    assert!(output.status.success(), "deny should use JSON output on stdout");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    assert_eq!(json["decision"], "deny");
+    assert!(json["reason"].as_str().unwrap().contains("Denied"));
 }
 
 #[test]
