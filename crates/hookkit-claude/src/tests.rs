@@ -1,5 +1,9 @@
 use crate::input::{self, ClaudeHookInput, ClaudeToolInput};
-use crate::output::OutputEnvelope;
+use crate::output::{
+    ClaudeEventOutput, ClaudeFileChangedOutput, ClaudePermissionDeniedOutput,
+    ClaudePostToolUseOutput, ClaudePreToolUseOutput, ClaudePromptSubmitOutput,
+    ClaudeSessionStartOutput, ClaudeStopOutput, ClaudeWorktreeCreateOutput, OutputEnvelope,
+};
 
 fn load_fixture(name: &str) -> serde_json::Value {
     let path = format!(
@@ -534,4 +538,112 @@ fn output_watch_paths() {
     let json = serde_json::to_value(&out).unwrap();
     let paths = json["hookSpecificOutput"]["watchPaths"].as_array().unwrap();
     assert_eq!(paths.len(), 2);
+}
+
+#[test]
+fn output_session_start_event_scoped() {
+    let out: OutputEnvelope = ClaudeSessionStartOutput::new()
+        .with_context("session prep context")
+        .with_system_message("custom system")
+        .with_suppress_output(true)
+        .into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        json["hookSpecificOutput"]["additionalContext"],
+        "session prep context"
+    );
+    assert_eq!(json["systemMessage"], "custom system");
+    assert_eq!(json["suppressOutput"], true);
+}
+
+#[test]
+fn output_prompt_submit_event_scoped() {
+    let allow: OutputEnvelope = ClaudePromptSubmitOutput::allow().into();
+    let allow_json = serde_json::to_value(&allow).unwrap();
+    assert_eq!(allow_json["decision"], "allow");
+
+    let block: OutputEnvelope = ClaudePromptSubmitOutput::block("insufficient context").into();
+    let block_json = serde_json::to_value(&block).unwrap();
+    assert_eq!(block_json["decision"], "block");
+    assert_eq!(block_json["reason"], "insufficient context");
+}
+
+#[test]
+fn output_pre_tool_use_event_scoped() {
+    let allow: OutputEnvelope = ClaudePreToolUseOutput::allow().into();
+    let allow_json = serde_json::to_value(&allow).unwrap();
+    assert_eq!(
+        allow_json["hookSpecificOutput"]["permissionDecision"]["decision"],
+        "allow"
+    );
+
+    let deny: OutputEnvelope = ClaudePreToolUseOutput::deny("dangerous").into();
+    let deny_json = serde_json::to_value(&deny).unwrap();
+    let deny_decision = &deny_json["hookSpecificOutput"]["permissionDecision"];
+    assert_eq!(deny_decision["decision"], "deny");
+    assert_eq!(deny_decision["reason"], "dangerous");
+
+    let ask: OutputEnvelope = ClaudePreToolUseOutput::ask("need approval").into();
+    let ask_json = serde_json::to_value(&ask).unwrap();
+    let ask_decision = &ask_json["hookSpecificOutput"]["permissionDecision"];
+    assert_eq!(ask_decision["decision"], "ask");
+    assert_eq!(ask_decision["reason"], "need approval");
+}
+
+#[test]
+fn output_post_tool_use_event_scoped() {
+    let out: OutputEnvelope = ClaudePostToolUseOutput::new()
+        .with_context("lint completed")
+        .into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        json["hookSpecificOutput"]["additionalContext"],
+        "lint completed"
+    );
+}
+
+#[test]
+fn output_permission_denied_event_scoped() {
+    let out: OutputEnvelope = ClaudePermissionDeniedOutput::retry().into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["retry"], true);
+}
+
+#[test]
+fn output_stop_event_scoped() {
+    let allow: OutputEnvelope = ClaudeStopOutput::allow_stop().into();
+    let allow_json = serde_json::to_value(&allow).unwrap();
+    assert_eq!(allow_json, serde_json::json!({}));
+
+    let cont: OutputEnvelope = ClaudeStopOutput::continue_session("still working").into();
+    let cont_json = serde_json::to_value(&cont).unwrap();
+    assert_eq!(cont_json["decision"], "block");
+    assert_eq!(cont_json["reason"], "still working");
+}
+
+#[test]
+fn output_worktree_create_event_scoped() {
+    let out: OutputEnvelope = ClaudeWorktreeCreateOutput::new("/tmp/wt-2").into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["worktreePath"], "/tmp/wt-2");
+}
+
+#[test]
+fn output_file_changed_event_scoped() {
+    let out: OutputEnvelope =
+        ClaudeFileChangedOutput::new(vec!["/tmp/a".to_string(), "/tmp/b".to_string()]).into();
+    let json = serde_json::to_value(&out).unwrap();
+    let paths = json["hookSpecificOutput"]["watchPaths"].as_array().unwrap();
+    assert_eq!(paths.len(), 2);
+    assert_eq!(paths[0], "/tmp/a");
+    assert_eq!(paths[1], "/tmp/b");
+}
+
+#[test]
+fn output_event_enum_dispatch() {
+    let out: OutputEnvelope =
+        ClaudeEventOutput::Stop(ClaudeStopOutput::continue_session("wait")).into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["decision"], "block");
+    assert_eq!(json["reason"], "wait");
 }
