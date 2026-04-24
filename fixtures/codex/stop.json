@@ -1,0 +1,7 @@
+{
+  "sessionId": "codex-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "Stop",
+  "stopReason": "end_turn",
+  "lastAssistantMessage": "Refactoring complete."
+}

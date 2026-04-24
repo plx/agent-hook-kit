@@ -1,0 +1,8 @@
+{
+  "sessionId": "abc-123-def",
+  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "cwd": "/home/user/project",
+  "hookEventName": "Notification",
+  "message": "Task completed successfully",
+  "level": "info"
+}

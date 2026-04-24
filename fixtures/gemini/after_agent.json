@@ -1,0 +1,6 @@
+{
+  "sessionId": "gemini-sess-001",
+  "cwd": "/home/user/project",
+  "hookEventName": "AfterAgent",
+  "agentResponse": "I've updated the README with the new API documentation."
+}
