@@ -655,7 +655,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hookkit_common::output::{CommonPostToolUseOutput, CommonPromptSubmitOutput};
+    use hookkit_common::output::{
+        CommonPostToolUseOutput, CommonPromptSubmitOutput, CommonStopOutput,
+    };
 
     fn load_fixture(harness: &str, name: &str) -> Vec<u8> {
         let path = format!(
@@ -839,6 +841,31 @@ mod tests {
             gemini_post,
             NativeHookOutput::Gemini(GeminiHookOutput::Empty)
         ));
+    }
+
+    #[test]
+    fn codex_stop_empty_stdout_fails_native_validation() {
+        let bytes = load_fixture("codex", "stop.json");
+        let (_, input) = parse_native(Harness::Codex, &bytes).unwrap();
+        let output = NativeHookOutput::Codex(CodexHookOutput::Empty);
+        assert!(validate_native_output(&input, &output).is_err());
+    }
+
+    #[test]
+    fn codex_stop_allow_common_output_validates_as_json() {
+        let bytes = load_fixture("codex", "stop.json");
+        let (_, input) = parse_native(Harness::Codex, &bytes).unwrap();
+        let output = common_to_native(
+            Harness::Codex,
+            CommonHookOutput::Stop(CommonStopOutput::allow_stop()),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            output,
+            NativeHookOutput::Codex(CodexHookOutput::Json(_))
+        ));
+        assert!(validate_native_output(&input, &output).is_ok());
     }
 
     #[test]

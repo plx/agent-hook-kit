@@ -54,6 +54,14 @@ impl OutputEnvelope {
             ..Default::default()
         }
     }
+
+    /// Allow a Stop event to complete while satisfying Codex's JSON-on-success requirement.
+    pub fn stop_allow() -> Self {
+        Self {
+            continue_session: Some(false),
+            ..Default::default()
+        }
+    }
 }
 
 /// Attempt to build a Codex output that uses an unsupported capability.

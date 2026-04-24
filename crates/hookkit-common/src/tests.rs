@@ -237,6 +237,17 @@ fn stop_continue_to_all_harnesses() {
 }
 
 #[test]
+fn stop_allow_to_codex_uses_required_json() {
+    let out = CommonStopOutput::allow_stop();
+    let codex = out.to_codex();
+    let hookkit_codex::CodexHookOutput::Json(envelope) = codex else {
+        panic!("Codex Stop allow must emit JSON, not empty stdout");
+    };
+    let json = serde_json::to_value(&envelope).unwrap();
+    assert_eq!(json["continue"], false);
+}
+
+#[test]
 fn prompt_block_to_all_harnesses() {
     let out = CommonPromptSubmitOutput::block("banned prompt");
     let claude = out.to_claude();

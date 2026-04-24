@@ -23,7 +23,7 @@ fn require_reason(
     let Some(decision) = decision else {
         return Ok(());
     };
-    if reason.is_some() {
+    if reason.is_some() || !decision_requires_reason(decision) {
         return Ok(());
     }
     Err(invalid(
@@ -31,6 +31,10 @@ fn require_reason(
         event,
         format!("decision '{decision}' requires a reason"),
     ))
+}
+
+fn decision_requires_reason(decision: &str) -> bool {
+    matches!(decision, "ask" | "block" | "deny" | "retry" | "stop")
 }
 
 fn is_absolute(path: &str) -> bool {
@@ -240,6 +244,12 @@ mod tests {
     }
 
     #[test]
+    fn claude_allow_without_reason_ok() {
+        let env = ClaudeEnvelope::allow();
+        assert!(validate_claude(&HookEventKey::PromptSubmit, &env).is_ok());
+    }
+
+    #[test]
     fn claude_conflicting_decision_and_permission() {
         let env = ClaudeEnvelope {
             decision: Some("allow".to_string()),
@@ -265,6 +275,14 @@ mod tests {
             &env
         )
         .is_err());
+    }
+
+    #[test]
+    fn claude_watch_paths_require_absolute_entries() {
+        let env = ClaudeEnvelope::watch_paths(vec!["/tmp/ok".to_string(), "relative".to_string()]);
+        assert!(
+            validate_claude(&HookEventKey::Other("FileChanged".to_string()), &env).is_err()
+        );
     }
 
     #[test]
@@ -319,6 +337,12 @@ mod tests {
     fn gemini_before_tool_selection_rejects_decision() {
         let env = GeminiEnvelope::deny("not allowed");
         assert!(validate_gemini(&HookEventKey::BeforeToolSelection, &env).is_err());
+    }
+
+    #[test]
+    fn gemini_before_tool_selection_allows_filter_tools() {
+        let env = GeminiEnvelope::filter_tools(vec!["shell".to_string()]);
+        assert!(validate_gemini(&HookEventKey::BeforeToolSelection, &env).is_ok());
     }
 
     #[test]

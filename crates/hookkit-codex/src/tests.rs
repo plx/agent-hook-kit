@@ -149,6 +149,13 @@ fn output_stop_continue() {
     assert_eq!(json["reason"], "not done yet");
 }
 
+#[test]
+fn output_stop_allow() {
+    let out = OutputEnvelope::stop_allow();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["continue"], false);
+}
+
 // ---- Unsupported capability tests ----
 
 #[test]

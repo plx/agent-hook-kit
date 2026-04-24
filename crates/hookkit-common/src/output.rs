@@ -436,7 +436,7 @@ impl CommonStopOutput {
 
     pub fn to_codex(&self) -> CodexHookOutput {
         match self {
-            Self::AllowStop => CodexHookOutput::Empty,
+            Self::AllowStop => CodexHookOutput::Json(CodexEnvelope::stop_allow()),
             Self::ContinueSession { reason } => {
                 CodexHookOutput::Json(CodexEnvelope::stop_continue(reason))
             }
