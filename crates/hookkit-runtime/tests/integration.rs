@@ -76,7 +76,10 @@ fn codex_bash_guard_allows_safe_command() {
 fn codex_bash_guard_denies_force_push() {
     let fixture = fixture_bytes("codex", "pre_tool_use.json");
     let output = run_example("codex-bash-guard", &fixture, &[]);
-    assert!(output.status.success(), "deny should use JSON output on stdout");
+    assert!(
+        output.status.success(),
+        "deny should use JSON output on stdout"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
     assert_eq!(json["decision"], "deny");
@@ -131,9 +134,11 @@ fn claude_context_injects_on_session_start() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
-    assert!(json["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .is_some());
+    assert!(
+        json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .is_some()
+    );
     assert!(json["systemMessage"].as_str().is_some());
 }
 
@@ -226,7 +231,10 @@ fn shared_autofix_codex_manual_mode_stays_model_quiet() {
     );
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.trim().is_empty(), "codex manual mode should stay stdout-quiet");
+    assert!(
+        stdout.trim().is_empty(),
+        "codex manual mode should stay stdout-quiet"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Diagnostics:"));
 }

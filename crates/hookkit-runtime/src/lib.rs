@@ -10,8 +10,8 @@ mod golden_tests;
 use hookkit_claude::{ClaudeHookInput, ClaudeHookOutput};
 use hookkit_codex::{CodexHookInput, CodexHookOutput};
 use hookkit_common::input::{
-    CommonHookInput, CommonNotificationInput, CommonPostToolUseInput, CommonPreToolUseInput,
-    CommonPreCompressInput, CommonPromptSubmitInput, CommonSessionEndInput, CommonSessionStartInput,
+    CommonHookInput, CommonNotificationInput, CommonPostToolUseInput, CommonPreCompressInput,
+    CommonPreToolUseInput, CommonPromptSubmitInput, CommonSessionEndInput, CommonSessionStartInput,
     CommonStopInput,
 };
 use hookkit_common::output::CommonHookOutput;
@@ -156,7 +156,10 @@ fn input_harness(input: &NativeHookInput) -> Harness {
     }
 }
 
-fn validate_native_output(input: &NativeHookInput, output: &NativeHookOutput) -> hookkit_core::Result<()> {
+fn validate_native_output(
+    input: &NativeHookInput,
+    output: &NativeHookOutput,
+) -> hookkit_core::Result<()> {
     let harness = input_harness(input);
     let event = hook_event_key(input);
 
@@ -226,54 +229,134 @@ fn hook_event_key_name(key: &HookEventKey) -> String {
 fn parsed_value(input: &NativeHookInput) -> serde_json::Value {
     match input {
         NativeHookInput::Claude(ev) => match ev {
-            ClaudeHookInput::SessionStart(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::UserPromptSubmit(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::PreToolUse(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::PostToolUse(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::PostToolUseFailure(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::PermissionDenied(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::SessionStart(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::UserPromptSubmit(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PreToolUse(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PostToolUse(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PostToolUseFailure(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PermissionDenied(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
             ClaudeHookInput::Stop(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::Notification(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::SessionEnd(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::PermissionRequest(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::SubagentStart(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::SubagentStop(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::TaskCreated(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::TaskCompleted(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::TeammateIdle(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::ConfigChange(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::CwdChanged(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::FileChanged(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::PreCompact(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::PostCompact(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::InstructionsLoaded(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::WorktreeCreate(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::WorktreeRemove(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::Elicitation(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::ElicitationResult(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            ClaudeHookInput::StopFailure(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::Notification(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::SessionEnd(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PermissionRequest(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::SubagentStart(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::SubagentStop(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::TaskCreated(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::TaskCompleted(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::TeammateIdle(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::ConfigChange(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::CwdChanged(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::FileChanged(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PreCompact(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PostCompact(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::InstructionsLoaded(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::WorktreeCreate(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::WorktreeRemove(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::Elicitation(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::ElicitationResult(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::StopFailure(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
             ClaudeHookInput::Unknown { raw, .. } => raw.as_value().clone(),
         },
         NativeHookInput::Codex(ev) => match ev {
-            CodexHookInput::SessionStart(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            CodexHookInput::PreToolUse(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            CodexHookInput::PostToolUse(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            CodexHookInput::UserPromptSubmit(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            CodexHookInput::SessionStart(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            CodexHookInput::PreToolUse(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            CodexHookInput::PostToolUse(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            CodexHookInput::UserPromptSubmit(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
             CodexHookInput::Stop(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
             CodexHookInput::Unknown { raw, .. } => raw.as_value().clone(),
         },
         NativeHookInput::Gemini(ev) => match ev {
-            GeminiHookInput::SessionStart(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::SessionEnd(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::BeforeAgent(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::AfterAgent(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::BeforeTool(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::AfterTool(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::Notification(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::PreCompress(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::BeforeModel(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::AfterModel(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            GeminiHookInput::BeforeToolSelection(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            GeminiHookInput::SessionStart(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::SessionEnd(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::BeforeAgent(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::AfterAgent(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::BeforeTool(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::AfterTool(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::Notification(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::PreCompress(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::BeforeModel(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::AfterModel(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            GeminiHookInput::BeforeToolSelection(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
             GeminiHookInput::Unknown { raw, .. } => raw.as_value().clone(),
         },
     }
@@ -315,18 +398,18 @@ fn native_to_common(input: NativeHookInput) -> hookkit_core::Result<CommonHookIn
 
     match input {
         NativeHookInput::Claude(ev) => match ev {
-            ClaudeHookInput::SessionStart(ev) => {
-                Ok(CommonHookInput::SessionStart(CommonSessionStartInput::Claude(ev)))
-            }
-            ClaudeHookInput::UserPromptSubmit(ev) => {
-                Ok(CommonHookInput::PromptSubmit(CommonPromptSubmitInput::Claude(ev)))
-            }
-            ClaudeHookInput::PreToolUse(ev) => {
-                Ok(CommonHookInput::PreToolUse(CommonPreToolUseInput::Claude(ev)))
-            }
-            ClaudeHookInput::PostToolUse(ev) => {
-                Ok(CommonHookInput::PostToolUse(CommonPostToolUseInput::Claude(ev)))
-            }
+            ClaudeHookInput::SessionStart(ev) => Ok(CommonHookInput::SessionStart(
+                CommonSessionStartInput::Claude(ev),
+            )),
+            ClaudeHookInput::UserPromptSubmit(ev) => Ok(CommonHookInput::PromptSubmit(
+                CommonPromptSubmitInput::Claude(ev),
+            )),
+            ClaudeHookInput::PreToolUse(ev) => Ok(CommonHookInput::PreToolUse(
+                CommonPreToolUseInput::Claude(ev),
+            )),
+            ClaudeHookInput::PostToolUse(ev) => Ok(CommonHookInput::PostToolUse(
+                CommonPostToolUseInput::Claude(ev),
+            )),
             ClaudeHookInput::Stop(ev) => Ok(CommonHookInput::Stop(CommonStopInput::Claude(ev))),
             ClaudeHookInput::Notification(ev) => Ok(CommonHookInput::Notification(
                 CommonNotificationInput::Claude(ev),
@@ -344,18 +427,18 @@ fn native_to_common(input: NativeHookInput) -> hookkit_core::Result<CommonHookIn
             }),
         },
         NativeHookInput::Codex(ev) => match ev {
-            CodexHookInput::SessionStart(ev) => {
-                Ok(CommonHookInput::SessionStart(CommonSessionStartInput::Codex(ev)))
-            }
-            CodexHookInput::UserPromptSubmit(ev) => {
-                Ok(CommonHookInput::PromptSubmit(CommonPromptSubmitInput::Codex(ev)))
-            }
-            CodexHookInput::PreToolUse(ev) => {
-                Ok(CommonHookInput::PreToolUse(CommonPreToolUseInput::Codex(ev)))
-            }
-            CodexHookInput::PostToolUse(ev) => {
-                Ok(CommonHookInput::PostToolUse(CommonPostToolUseInput::Codex(ev)))
-            }
+            CodexHookInput::SessionStart(ev) => Ok(CommonHookInput::SessionStart(
+                CommonSessionStartInput::Codex(ev),
+            )),
+            CodexHookInput::UserPromptSubmit(ev) => Ok(CommonHookInput::PromptSubmit(
+                CommonPromptSubmitInput::Codex(ev),
+            )),
+            CodexHookInput::PreToolUse(ev) => Ok(CommonHookInput::PreToolUse(
+                CommonPreToolUseInput::Codex(ev),
+            )),
+            CodexHookInput::PostToolUse(ev) => Ok(CommonHookInput::PostToolUse(
+                CommonPostToolUseInput::Codex(ev),
+            )),
             CodexHookInput::Stop(ev) => Ok(CommonHookInput::Stop(CommonStopInput::Codex(ev))),
             _ => Err(HookkitError::UnsupportedCapability {
                 harness,
@@ -364,19 +447,21 @@ fn native_to_common(input: NativeHookInput) -> hookkit_core::Result<CommonHookIn
             }),
         },
         NativeHookInput::Gemini(ev) => match ev {
-            GeminiHookInput::SessionStart(ev) => {
-                Ok(CommonHookInput::SessionStart(CommonSessionStartInput::Gemini(ev)))
+            GeminiHookInput::SessionStart(ev) => Ok(CommonHookInput::SessionStart(
+                CommonSessionStartInput::Gemini(ev),
+            )),
+            GeminiHookInput::BeforeAgent(ev) => Ok(CommonHookInput::PromptSubmit(
+                CommonPromptSubmitInput::Gemini(ev),
+            )),
+            GeminiHookInput::BeforeTool(ev) => Ok(CommonHookInput::PreToolUse(
+                CommonPreToolUseInput::Gemini(ev),
+            )),
+            GeminiHookInput::AfterTool(ev) => Ok(CommonHookInput::PostToolUse(
+                CommonPostToolUseInput::Gemini(ev),
+            )),
+            GeminiHookInput::AfterAgent(ev) => {
+                Ok(CommonHookInput::Stop(CommonStopInput::Gemini(ev)))
             }
-            GeminiHookInput::BeforeAgent(ev) => {
-                Ok(CommonHookInput::PromptSubmit(CommonPromptSubmitInput::Gemini(ev)))
-            }
-            GeminiHookInput::BeforeTool(ev) => {
-                Ok(CommonHookInput::PreToolUse(CommonPreToolUseInput::Gemini(ev)))
-            }
-            GeminiHookInput::AfterTool(ev) => {
-                Ok(CommonHookInput::PostToolUse(CommonPostToolUseInput::Gemini(ev)))
-            }
-            GeminiHookInput::AfterAgent(ev) => Ok(CommonHookInput::Stop(CommonStopInput::Gemini(ev))),
             GeminiHookInput::Notification(ev) => Ok(CommonHookInput::Notification(
                 CommonNotificationInput::Gemini(ev),
             )),
@@ -395,7 +480,10 @@ fn native_to_common(input: NativeHookInput) -> hookkit_core::Result<CommonHookIn
     }
 }
 
-fn common_to_native(harness: Harness, output: CommonHookOutput) -> hookkit_core::Result<NativeHookOutput> {
+fn common_to_native(
+    harness: Harness,
+    output: CommonHookOutput,
+) -> hookkit_core::Result<NativeHookOutput> {
     match output {
         CommonHookOutput::Empty => Ok(empty_output_for_harness(harness)),
         CommonHookOutput::SessionStart(out) => match harness {
@@ -753,9 +841,11 @@ mod tests {
             "user_prompt_submit.json",
         ))
         .unwrap();
-        let gemini =
-            serde_json::from_slice::<serde_json::Value>(&load_fixture("gemini", "before_agent.json"))
-                .unwrap();
+        let gemini = serde_json::from_slice::<serde_json::Value>(&load_fixture(
+            "gemini",
+            "before_agent.json",
+        ))
+        .unwrap();
 
         let c = native_to_common(NativeHookInput::Claude(
             hookkit_claude::input::parse(&claude).unwrap(),
@@ -777,12 +867,16 @@ mod tests {
 
     #[test]
     fn native_to_common_post_tool_is_supported_for_all_harnesses() {
-        let claude =
-            serde_json::from_slice::<serde_json::Value>(&load_fixture("claude", "post_tool_use.json"))
-                .unwrap();
-        let codex =
-            serde_json::from_slice::<serde_json::Value>(&load_fixture("codex", "post_tool_use.json"))
-                .unwrap();
+        let claude = serde_json::from_slice::<serde_json::Value>(&load_fixture(
+            "claude",
+            "post_tool_use.json",
+        ))
+        .unwrap();
+        let codex = serde_json::from_slice::<serde_json::Value>(&load_fixture(
+            "codex",
+            "post_tool_use.json",
+        ))
+        .unwrap();
         let gemini =
             serde_json::from_slice::<serde_json::Value>(&load_fixture("gemini", "after_tool.json"))
                 .unwrap();

@@ -42,7 +42,10 @@ fn is_absolute(path: &str) -> bool {
 }
 
 /// Validate a Claude output envelope.
-pub fn validate_claude(event: &HookEventKey, envelope: &ClaudeEnvelope) -> Result<(), HookkitError> {
+pub fn validate_claude(
+    event: &HookEventKey,
+    envelope: &ClaudeEnvelope,
+) -> Result<(), HookkitError> {
     // Block requires a reason
     require_reason(
         Harness::Claude,
@@ -93,59 +96,57 @@ pub fn validate_claude(event: &HookEventKey, envelope: &ClaudeEnvelope) -> Resul
     }
 
     // Cannot have both top-level decision and hookSpecificOutput.permissionDecision
-    if envelope.decision.is_some() {
-        if let Some(hso) = &envelope.hook_specific_output {
-            if hso.get("permissionDecision").is_some() {
-                return Err(invalid(
-                    Harness::Claude,
-                    event,
-                    "cannot set both top-level decision and hookSpecificOutput.permissionDecision",
-                ));
-            }
-        }
+    if envelope.decision.is_some()
+        && envelope
+            .hook_specific_output
+            .as_ref()
+            .is_some_and(|hso| hso.get("permissionDecision").is_some())
+    {
+        return Err(invalid(
+            Harness::Claude,
+            event,
+            "cannot set both top-level decision and hookSpecificOutput.permissionDecision",
+        ));
     }
 
-    if matches!(event, HookEventKey::Other(name) if name == "WorktreeCreate") {
-        if let Some(path) = envelope
+    if matches!(event, HookEventKey::Other(name) if name == "WorktreeCreate")
+        && let Some(path) = envelope
             .hook_specific_output
             .as_ref()
             .and_then(|hso| hso.get("worktreePath"))
             .and_then(|v| v.as_str())
-        {
-            if !is_absolute(path) {
-                return Err(invalid(
-                    Harness::Claude,
-                    event,
-                    "worktreePath must be an absolute path",
-                ));
-            }
-        }
+        && !is_absolute(path)
+    {
+        return Err(invalid(
+            Harness::Claude,
+            event,
+            "worktreePath must be an absolute path",
+        ));
     }
 
-    if matches!(event, HookEventKey::Other(name) if name == "FileChanged")
-        || matches!(event, HookEventKey::PreToolUse | HookEventKey::PostToolUse)
-    {
-        if let Some(paths) = envelope
+    let supports_watch_paths = matches!(event, HookEventKey::Other(name) if name == "FileChanged")
+        || matches!(event, HookEventKey::PreToolUse | HookEventKey::PostToolUse);
+    if supports_watch_paths
+        && let Some(paths) = envelope
             .hook_specific_output
             .as_ref()
             .and_then(|hso| hso.get("watchPaths"))
             .and_then(|v| v.as_array())
-        {
-            for p in paths {
-                let Some(path) = p.as_str() else {
-                    return Err(invalid(
-                        Harness::Claude,
-                        event,
-                        "watchPaths entries must be strings",
-                    ));
-                };
-                if !is_absolute(path) {
-                    return Err(invalid(
-                        Harness::Claude,
-                        event,
-                        "watchPaths entries must be absolute paths",
-                    ));
-                }
+    {
+        for p in paths {
+            let Some(path) = p.as_str() else {
+                return Err(invalid(
+                    Harness::Claude,
+                    event,
+                    "watchPaths entries must be strings",
+                ));
+            };
+            if !is_absolute(path) {
+                return Err(invalid(
+                    Harness::Claude,
+                    event,
+                    "watchPaths entries must be absolute paths",
+                ));
             }
         }
     }
@@ -182,7 +183,10 @@ pub fn validate_codex(event: &HookEventKey, envelope: &CodexEnvelope) -> Result<
 }
 
 /// Validate a Gemini output envelope.
-pub fn validate_gemini(event: &HookEventKey, envelope: &GeminiEnvelope) -> Result<(), HookkitError> {
+pub fn validate_gemini(
+    event: &HookEventKey,
+    envelope: &GeminiEnvelope,
+) -> Result<(), HookkitError> {
     // Deny requires a reason
     require_reason(
         Harness::Gemini,
@@ -204,20 +208,18 @@ pub fn validate_gemini(event: &HookEventKey, envelope: &GeminiEnvelope) -> Resul
         ));
     }
 
-    if matches!(event, HookEventKey::PreToolUse) {
-        if let Some(tool_input) = envelope
+    if matches!(event, HookEventKey::PreToolUse)
+        && let Some(tool_input) = envelope
             .hook_specific_output
             .as_ref()
             .and_then(|hso| hso.get("tool_input"))
-        {
-            if !tool_input.is_object() {
-                return Err(invalid(
-                    Harness::Gemini,
-                    event,
-                    "hookSpecificOutput.tool_input must be a JSON object",
-                ));
-            }
-        }
+        && !tool_input.is_object()
+    {
+        return Err(invalid(
+            Harness::Gemini,
+            event,
+            "hookSpecificOutput.tool_input must be a JSON object",
+        ));
     }
 
     Ok(())
@@ -270,19 +272,13 @@ mod tests {
     #[test]
     fn claude_worktree_path_requires_absolute() {
         let env = ClaudeEnvelope::worktree_path("relative/path");
-        assert!(validate_claude(
-            &HookEventKey::Other("WorktreeCreate".to_string()),
-            &env
-        )
-        .is_err());
+        assert!(validate_claude(&HookEventKey::Other("WorktreeCreate".to_string()), &env).is_err());
     }
 
     #[test]
     fn claude_watch_paths_require_absolute_entries() {
         let env = ClaudeEnvelope::watch_paths(vec!["/tmp/ok".to_string(), "relative".to_string()]);
-        assert!(
-            validate_claude(&HookEventKey::Other("FileChanged".to_string()), &env).is_err()
-        );
+        assert!(validate_claude(&HookEventKey::Other("FileChanged".to_string()), &env).is_err());
     }
 
     #[test]

@@ -1,16 +1,21 @@
 use hookkit_common::input::{CommonHookInput, CommonPostToolUseInput};
 use hookkit_common::output::{CommonHookOutput, CommonPostToolUseOutput};
 use hookkit_core::Harness;
-use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
 use hookkit_runtime::RuntimeContext;
+use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
 use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug)]
 enum AutofixOutcome {
     Clean,
-    AutoFixed { summary: String },
-    ManualActionRequired { summary: String, diagnostics: String },
+    AutoFixed {
+        summary: String,
+    },
+    ManualActionRequired {
+        summary: String,
+        diagnostics: String,
+    },
 }
 
 #[derive(Debug)]
@@ -114,21 +119,25 @@ fn run_autofix_pipeline(tool_input: Option<&serde_json::Value>, cwd: &str) -> Au
         return AutofixOutcome::Clean;
     }
 
-    let specs: Vec<(&'static str, &'static str, &'static [&'static str])> = if root
-        .join("Cargo.toml")
-        .exists()
-    {
-        vec![
-            ("formatter", "cargo", &["fmt", "--all"]),
-            (
-                "linter-autofix",
-                "cargo",
-                &["clippy", "--all-targets", "--fix", "--allow-dirty", "--allow-staged"],
-            ),
-        ]
-    } else {
-        Vec::new()
-    };
+    let specs: Vec<(&'static str, &'static str, &'static [&'static str])> =
+        if root.join("Cargo.toml").exists() {
+            vec![
+                ("formatter", "cargo", &["fmt", "--all"]),
+                (
+                    "linter-autofix",
+                    "cargo",
+                    &[
+                        "clippy",
+                        "--all-targets",
+                        "--fix",
+                        "--allow-dirty",
+                        "--allow-staged",
+                    ],
+                ),
+            ]
+        } else {
+            Vec::new()
+        };
 
     if specs.is_empty() {
         return AutofixOutcome::Clean;

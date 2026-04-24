@@ -6,11 +6,7 @@ use hookkit_codex::output::{CodexHookOutput, OutputEnvelope as CodexEnvelope};
 use hookkit_core::{Harness, HookEventKey, HookkitError};
 use hookkit_gemini::output::{GeminiHookOutput, OutputEnvelope as GeminiEnvelope};
 
-fn unsupported(
-    harness: Harness,
-    event: HookEventKey,
-    capability: &'static str,
-) -> HookkitError {
+fn unsupported(harness: Harness, event: HookEventKey, capability: &'static str) -> HookkitError {
     HookkitError::UnsupportedCapability {
         harness,
         event,
