@@ -142,7 +142,10 @@ impl From<ClaudeSessionStartOutput> for OutputEnvelope {
         let mut env = OutputEnvelope::new();
         if let Some(ctx) = value.additional_context {
             let mut fields = serde_json::Map::new();
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
             env.hook_specific_output = Some(hook_specific_output("SessionStart", fields));
         }
         env.system_message = value.system_message;
@@ -203,7 +206,10 @@ impl From<ClaudePromptSubmitOutput> for OutputEnvelope {
 
         let mut fields = serde_json::Map::new();
         if let Some(ctx) = value.additional_context {
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
         }
         if let Some(title) = value.session_title {
             fields.insert("sessionTitle".to_string(), serde_json::Value::String(title));
@@ -262,7 +268,10 @@ impl From<ClaudePromptExpansionOutput> for OutputEnvelope {
         let mut env = maybe_block(value.block_reason);
         if let Some(ctx) = value.additional_context {
             let mut fields = serde_json::Map::new();
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
             env.hook_specific_output = Some(hook_specific_output("UserPromptExpansion", fields));
         }
         env.system_message = value.system_message;
@@ -363,7 +372,10 @@ impl From<ClaudePreToolUseOutput> for OutputEnvelope {
             fields.insert("updatedInput".to_string(), updated_input);
         }
         if let Some(ctx) = value.additional_context {
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
         }
         OutputEnvelope {
             hook_specific_output: Some(hook_specific_output("PreToolUse", fields)),
@@ -500,7 +512,10 @@ impl From<ClaudePostToolUseOutput> for OutputEnvelope {
         let mut env = maybe_block(value.block_reason);
         let mut fields = serde_json::Map::new();
         if let Some(ctx) = value.additional_context {
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
         }
         if let Some(output) = value.updated_mcp_tool_output {
             fields.insert("updatedMCPToolOutput".to_string(), output);
@@ -541,7 +556,10 @@ impl From<ClaudePostToolUseFailureOutput> for OutputEnvelope {
         let mut env = maybe_block(value.block_reason);
         if let Some(ctx) = value.additional_context {
             let mut fields = serde_json::Map::new();
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
             env.hook_specific_output = Some(hook_specific_output("PostToolUseFailure", fields));
         }
         env
@@ -577,7 +595,10 @@ impl From<ClaudePostToolBatchOutput> for OutputEnvelope {
         let mut env = maybe_block(value.block_reason);
         if let Some(ctx) = value.additional_context {
             let mut fields = serde_json::Map::new();
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
             env.hook_specific_output = Some(hook_specific_output("PostToolBatch", fields));
         }
         env
@@ -657,7 +678,10 @@ impl From<ClaudeNotificationOutput> for OutputEnvelope {
     fn from(value: ClaudeNotificationOutput) -> Self {
         if let Some(ctx) = value.additional_context {
             let mut fields = serde_json::Map::new();
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
             OutputEnvelope {
                 hook_specific_output: Some(hook_specific_output("Notification", fields)),
                 ..OutputEnvelope::new()
@@ -688,7 +712,10 @@ impl From<ClaudeSubagentStartOutput> for OutputEnvelope {
     fn from(value: ClaudeSubagentStartOutput) -> Self {
         if let Some(ctx) = value.additional_context {
             let mut fields = serde_json::Map::new();
-            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            fields.insert(
+                "additionalContext".to_string(),
+                serde_json::Value::String(ctx),
+            );
             OutputEnvelope {
                 hook_specific_output: Some(hook_specific_output("SubagentStart", fields)),
                 ..OutputEnvelope::new()
@@ -780,7 +807,10 @@ impl ClaudeElicitationOutput {
 impl From<ClaudeElicitationOutput> for OutputEnvelope {
     fn from(value: ClaudeElicitationOutput) -> Self {
         let mut fields = serde_json::Map::new();
-        fields.insert("action".to_string(), serde_json::Value::String(value.action));
+        fields.insert(
+            "action".to_string(),
+            serde_json::Value::String(value.action),
+        );
         if let Some(content) = value.content {
             fields.insert("content".to_string(), content);
         }
@@ -823,7 +853,10 @@ impl ClaudeElicitationResultOutput {
 impl From<ClaudeElicitationResultOutput> for OutputEnvelope {
     fn from(value: ClaudeElicitationResultOutput) -> Self {
         let mut fields = serde_json::Map::new();
-        fields.insert("action".to_string(), serde_json::Value::String(value.action));
+        fields.insert(
+            "action".to_string(),
+            serde_json::Value::String(value.action),
+        );
         if let Some(content) = value.content {
             fields.insert("content".to_string(), content);
         }

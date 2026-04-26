@@ -307,7 +307,10 @@ fn output_pre_tool_deny_with_updated_input() {
     );
     let json = serde_json::to_value(&out).unwrap();
     assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
-    assert_eq!(json["hookSpecificOutput"]["updatedInput"]["command"], "echo safe");
+    assert_eq!(
+        json["hookSpecificOutput"]["updatedInput"]["command"],
+        "echo safe"
+    );
 }
 
 #[test]
@@ -519,10 +522,7 @@ fn parse_instructions_loaded() {
 
 #[test]
 fn parse_worktree_create() {
-    let v = mk_json_with(
-        "WorktreeCreate",
-        serde_json::json!({"name": "feature-x"}),
-    );
+    let v = mk_json_with("WorktreeCreate", serde_json::json!({"name": "feature-x"}));
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::WorktreeCreate(_)));
 }
@@ -586,7 +586,10 @@ fn parse_stop_failure() {
 fn output_permission_approve() {
     let out = OutputEnvelope::permission_approve();
     let json = serde_json::to_value(&out).unwrap();
-    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+    assert_eq!(
+        json["hookSpecificOutput"]["hookEventName"],
+        "PermissionRequest"
+    );
     assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "allow");
 }
 
@@ -595,7 +598,10 @@ fn output_permission_deny() {
     let out = OutputEnvelope::permission_deny("too dangerous");
     let json = serde_json::to_value(&out).unwrap();
     assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "deny");
-    assert_eq!(json["hookSpecificOutput"]["decision"]["message"], "too dangerous");
+    assert_eq!(
+        json["hookSpecificOutput"]["decision"]["message"],
+        "too dangerous"
+    );
 }
 
 #[test]
@@ -641,8 +647,14 @@ fn output_prompt_submit_event_scoped() {
         .into();
     let allow_json = serde_json::to_value(&allow).unwrap();
     assert_eq!(allow_json["decision"], serde_json::Value::Null);
-    assert_eq!(allow_json["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
-    assert_eq!(allow_json["hookSpecificOutput"]["sessionTitle"], "Payments review");
+    assert_eq!(
+        allow_json["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    assert_eq!(
+        allow_json["hookSpecificOutput"]["sessionTitle"],
+        "Payments review"
+    );
 
     let block: OutputEnvelope = ClaudePromptSubmitOutput::block("insufficient context").into();
     let block_json = serde_json::to_value(&block).unwrap();
@@ -654,11 +666,17 @@ fn output_prompt_submit_event_scoped() {
 fn output_pre_tool_use_event_scoped() {
     let allow: OutputEnvelope = ClaudePreToolUseOutput::allow().into();
     let allow_json = serde_json::to_value(&allow).unwrap();
-    assert_eq!(allow_json["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert_eq!(
+        allow_json["hookSpecificOutput"]["permissionDecision"],
+        "allow"
+    );
 
     let deny: OutputEnvelope = ClaudePreToolUseOutput::deny("dangerous").into();
     let deny_json = serde_json::to_value(&deny).unwrap();
-    assert_eq!(deny_json["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(
+        deny_json["hookSpecificOutput"]["permissionDecision"],
+        "deny"
+    );
     assert_eq!(
         deny_json["hookSpecificOutput"]["permissionDecisionReason"],
         "dangerous"
@@ -680,7 +698,10 @@ fn output_prompt_expansion_event_scoped() {
         .into();
     let json = serde_json::to_value(&out).unwrap();
     assert_eq!(json["decision"], "block");
-    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "UserPromptExpansion");
+    assert_eq!(
+        json["hookSpecificOutput"]["hookEventName"],
+        "UserPromptExpansion"
+    );
 }
 
 #[test]
@@ -702,7 +723,10 @@ fn output_post_tool_use_failure_event_scoped() {
         .with_context("retry with smaller input")
         .into();
     let json = serde_json::to_value(&out).unwrap();
-    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolUseFailure");
+    assert_eq!(
+        json["hookSpecificOutput"]["hookEventName"],
+        "PostToolUseFailure"
+    );
     assert_eq!(
         json["hookSpecificOutput"]["additionalContext"],
         "retry with smaller input"
@@ -792,6 +816,9 @@ fn output_elicitation_event_scoped() {
 fn output_elicitation_result_event_scoped() {
     let out: OutputEnvelope = ClaudeElicitationResultOutput::decline().into();
     let json = serde_json::to_value(&out).unwrap();
-    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "ElicitationResult");
+    assert_eq!(
+        json["hookSpecificOutput"]["hookEventName"],
+        "ElicitationResult"
+    );
     assert_eq!(json["hookSpecificOutput"]["action"], "decline");
 }

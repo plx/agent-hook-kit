@@ -50,11 +50,9 @@ fn ensure_block_only(
             event,
             format!("decision must be 'block' when present, got '{other}'"),
         )),
-        None if reason.is_some() => Err(invalid(
-            harness,
-            event,
-            "reason requires decision: 'block'",
-        )),
+        None if reason.is_some() => {
+            Err(invalid(harness, event, "reason requires decision: 'block'"))
+        }
         None => Ok(()),
     }
 }
@@ -237,8 +235,10 @@ pub fn validate_claude(
         }
     }
 
-    if matches!(event, HookEventKey::Elicitation | HookEventKey::ElicitationResult)
-        && let Some(hso) = &envelope.hook_specific_output
+    if matches!(
+        event,
+        HookEventKey::Elicitation | HookEventKey::ElicitationResult
+    ) && let Some(hso) = &envelope.hook_specific_output
     {
         let Some(action) = hso.get("action").and_then(|v| v.as_str()) else {
             return Err(invalid(

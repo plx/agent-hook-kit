@@ -41,10 +41,18 @@ pub enum ClaudeHookInput {
 pub struct CommonFields {
     #[serde(alias = "sessionId")]
     pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "transcriptPath")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "transcriptPath"
+    )]
     pub transcript_path: Option<String>,
     pub cwd: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "permissionMode")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "permissionMode"
+    )]
     pub permission_mode: Option<String>,
     #[serde(alias = "hookEventName")]
     pub hook_event_name: String,
@@ -132,13 +140,29 @@ pub struct UserPromptSubmit {
 pub struct UserPromptExpansion {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "expansionType")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "expansionType"
+    )]
     pub expansion_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "commandName")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "commandName"
+    )]
     pub command_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "commandArgs")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "commandArgs"
+    )]
     pub command_args: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "commandSource")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "commandSource"
+    )]
     pub command_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "userPrompt")]
     pub prompt: Option<String>,
@@ -173,7 +197,11 @@ pub struct PermissionRequest {
     pub tool_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "toolInput")]
     pub tool_input: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "permissionSuggestions")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "permissionSuggestions"
+    )]
     pub permission_suggestions: Option<Vec<serde_json::Value>>,
 }
 
@@ -199,7 +227,11 @@ pub struct PostToolUse {
     pub tool_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "toolInput")]
     pub tool_input: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "toolResponse")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "toolResponse"
+    )]
     pub tool_response: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "toolUseId")]
     pub tool_use_id: Option<String>,
@@ -226,7 +258,11 @@ pub struct PostToolUseFailure {
     pub tool_use_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "isInterrupt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "isInterrupt"
+    )]
     pub is_interrupt: Option<bool>,
 }
 
@@ -238,7 +274,11 @@ pub struct PostToolBatchCall {
     pub tool_input: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "toolUseId")]
     pub tool_use_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "toolResponse")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "toolResponse"
+    )]
     pub tool_response: Option<serde_json::Value>,
 }
 
@@ -258,7 +298,11 @@ pub struct Notification {
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "notificationType")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "notificationType"
+    )]
     pub notification_type: Option<String>,
 }
 
@@ -286,7 +330,11 @@ pub struct SubagentStart {
 pub struct SubagentStop {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "stopHookActive")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "stopHookActive"
+    )]
     pub stop_hook_active: Option<bool>,
     #[serde(
         default,
@@ -302,9 +350,17 @@ pub struct SubagentStop {
         alias = "subagentType"
     )]
     pub agent_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "agentTranscriptPath")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "agentTranscriptPath"
+    )]
     pub agent_transcript_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "lastAssistantMessage")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "lastAssistantMessage"
+    )]
     pub last_assistant_message: Option<String>,
 }
 
@@ -314,11 +370,23 @@ pub struct TaskCreated {
     pub common: CommonFields,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "taskSubject")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "taskSubject"
+    )]
     pub task_subject: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "taskDescription")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "taskDescription"
+    )]
     pub task_description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "teammateName")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "teammateName"
+    )]
     pub teammate_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "teamName")]
     pub team_name: Option<String>,
@@ -330,11 +398,23 @@ pub struct TaskCompleted {
     pub common: CommonFields,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "taskSubject")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "taskSubject"
+    )]
     pub task_subject: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "taskDescription")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "taskDescription"
+    )]
     pub task_description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "teammateName")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "teammateName"
+    )]
     pub teammate_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "teamName")]
     pub team_name: Option<String>,
@@ -344,9 +424,17 @@ pub struct TaskCompleted {
 pub struct Stop {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "stopHookActive")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "stopHookActive"
+    )]
     pub stop_hook_active: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "lastAssistantMessage")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "lastAssistantMessage"
+    )]
     pub last_assistant_message: Option<String>,
 }
 
@@ -356,9 +444,17 @@ pub struct StopFailure {
     pub common: CommonFields,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "errorDetails")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "errorDetails"
+    )]
     pub error_details: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "lastAssistantMessage")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "lastAssistantMessage"
+    )]
     pub last_assistant_message: Option<String>,
 }
 
@@ -366,7 +462,11 @@ pub struct StopFailure {
 pub struct TeammateIdle {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "teammateName")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "teammateName"
+    )]
     pub teammate_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "teamName")]
     pub team_name: Option<String>,
@@ -384,9 +484,17 @@ pub struct InstructionsLoaded {
     pub load_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub globs: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "triggerFilePath")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "triggerFilePath"
+    )]
     pub trigger_file_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "parentFilePath")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "parentFilePath"
+    )]
     pub parent_file_path: Option<String>,
 }
 
@@ -432,7 +540,11 @@ pub struct WorktreeCreate {
 pub struct WorktreeRemove {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "worktreePath")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "worktreePath"
+    )]
     pub worktree_path: Option<String>,
 }
 
@@ -442,7 +554,11 @@ pub struct PreCompact {
     pub common: CommonFields,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "customInstructions")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "customInstructions"
+    )]
     pub custom_instructions: Option<String>,
 }
 
@@ -452,7 +568,11 @@ pub struct PostCompact {
     pub common: CommonFields,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "compactSummary")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "compactSummary"
+    )]
     pub compact_summary: Option<String>,
 }
 
@@ -460,7 +580,11 @@ pub struct PostCompact {
 pub struct Elicitation {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "mcpServerName")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "mcpServerName"
+    )]
     pub mcp_server_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -468,9 +592,17 @@ pub struct Elicitation {
     pub mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "elicitationId")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "elicitationId"
+    )]
     pub elicitation_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "requestedSchema")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "requestedSchema"
+    )]
     pub requested_schema: Option<serde_json::Value>,
 }
 
@@ -478,13 +610,21 @@ pub struct Elicitation {
 pub struct ElicitationResult {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "mcpServerName")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "mcpServerName"
+    )]
     pub mcp_server_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "elicitationId")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "elicitationId"
+    )]
     pub elicitation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<serde_json::Value>,
