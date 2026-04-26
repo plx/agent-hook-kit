@@ -37,6 +37,44 @@ fn decision_requires_reason(decision: &str) -> bool {
     matches!(decision, "ask" | "block" | "deny" | "retry" | "stop")
 }
 
+fn ensure_block_only(
+    harness: Harness,
+    event: &HookEventKey,
+    decision: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), HookkitError> {
+    match decision {
+        Some("block") => require_reason(harness, event, decision, reason),
+        Some(other) => Err(invalid(
+            harness,
+            event,
+            format!("decision must be 'block' when present, got '{other}'"),
+        )),
+        None if reason.is_some() => Err(invalid(
+            harness,
+            event,
+            "reason requires decision: 'block'",
+        )),
+        None => Ok(()),
+    }
+}
+
+fn reject_top_level_decision(
+    harness: Harness,
+    event: &HookEventKey,
+    envelope: &impl std::borrow::Borrow<ClaudeEnvelope>,
+) -> Result<(), HookkitError> {
+    let envelope = envelope.borrow();
+    if envelope.decision.is_some() || envelope.reason.is_some() {
+        return Err(invalid(
+            harness,
+            event,
+            "top-level decision/reason is not supported for this event",
+        ));
+    }
+    Ok(())
+}
+
 fn is_absolute(path: &str) -> bool {
     Path::new(path).is_absolute()
 }
@@ -46,70 +84,106 @@ pub fn validate_claude(
     event: &HookEventKey,
     envelope: &ClaudeEnvelope,
 ) -> Result<(), HookkitError> {
-    // Block requires a reason
-    require_reason(
-        Harness::Claude,
-        event,
-        envelope.decision.as_deref(),
-        envelope.reason.as_deref(),
-    )?;
-
-    // PreToolUse must use hookSpecificOutput.permissionDecision, not top-level decision.
-    if matches!(event, HookEventKey::PreToolUse) {
-        if envelope.decision.is_some() || envelope.reason.is_some() {
-            return Err(invalid(
-                Harness::Claude,
-                event,
-                "PreToolUse must use hookSpecificOutput.permissionDecision, not top-level decision/reason",
-            ));
+    match event {
+        HookEventKey::PromptSubmit
+        | HookEventKey::PromptExpansion
+        | HookEventKey::PostToolUse
+        | HookEventKey::PostToolUseFailure
+        | HookEventKey::PostToolBatch
+        | HookEventKey::Stop
+        | HookEventKey::SubagentStop
+        | HookEventKey::ConfigChange
+        | HookEventKey::PreCompact => ensure_block_only(
+            Harness::Claude,
+            event,
+            envelope.decision.as_deref(),
+            envelope.reason.as_deref(),
+        )?,
+        HookEventKey::PreToolUse | HookEventKey::PermissionRequest => {
+            reject_top_level_decision(Harness::Claude, event, envelope)?
         }
-
-        if let Some(hso) = &envelope.hook_specific_output {
-            let Some(permission) = hso.get("permissionDecision") else {
+        _ => {
+            if envelope.decision.is_some() || envelope.reason.is_some() {
                 return Err(invalid(
                     Harness::Claude,
                     event,
-                    "PreToolUse hookSpecificOutput must include permissionDecision",
+                    "top-level decision/reason is not supported for this event",
                 ));
-            };
-            let decision = permission.get("decision").and_then(|v| v.as_str());
-            match decision {
-                Some("allow") => {}
-                Some("deny") | Some("ask") => {
-                    if permission.get("reason").and_then(|v| v.as_str()).is_none() {
-                        return Err(invalid(
-                            Harness::Claude,
-                            event,
-                            "permissionDecision deny/ask requires a reason",
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(invalid(
-                        Harness::Claude,
-                        event,
-                        "permissionDecision.decision must be one of: allow, deny, ask",
-                    ));
-                }
             }
         }
     }
 
-    // Cannot have both top-level decision and hookSpecificOutput.permissionDecision
-    if envelope.decision.is_some()
-        && envelope
-            .hook_specific_output
-            .as_ref()
-            .is_some_and(|hso| hso.get("permissionDecision").is_some())
+    if matches!(event, HookEventKey::PreToolUse)
+        && let Some(hso) = &envelope.hook_specific_output
     {
-        return Err(invalid(
-            Harness::Claude,
-            event,
-            "cannot set both top-level decision and hookSpecificOutput.permissionDecision",
-        ));
+        let Some(decision) = hso.get("permissionDecision").and_then(|v| v.as_str()) else {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "PreToolUse hookSpecificOutput must include permissionDecision",
+            ));
+        };
+
+        if !matches!(decision, "allow" | "deny" | "ask" | "defer") {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "permissionDecision must be one of: allow, deny, ask, defer",
+            ));
+        }
     }
 
-    if matches!(event, HookEventKey::Other(name) if name == "WorktreeCreate")
+    if matches!(event, HookEventKey::PermissionRequest)
+        && let Some(hso) = &envelope.hook_specific_output
+    {
+        let Some(decision) = hso.get("decision").and_then(|v| v.as_object()) else {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "PermissionRequest hookSpecificOutput must include a decision object",
+            ));
+        };
+
+        let Some(behavior) = decision.get("behavior").and_then(|v| v.as_str()) else {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "PermissionRequest decision.behavior is required",
+            ));
+        };
+
+        match behavior {
+            "allow" => {
+                if decision.get("message").is_some() || decision.get("interrupt").is_some() {
+                    return Err(invalid(
+                        Harness::Claude,
+                        event,
+                        "PermissionRequest allow cannot include message or interrupt",
+                    ));
+                }
+            }
+            "deny" => {
+                if decision.get("updatedInput").is_some()
+                    || decision.get("updatedPermissions").is_some()
+                {
+                    return Err(invalid(
+                        Harness::Claude,
+                        event,
+                        "PermissionRequest deny cannot include updatedInput or updatedPermissions",
+                    ));
+                }
+            }
+            _ => {
+                return Err(invalid(
+                    Harness::Claude,
+                    event,
+                    "PermissionRequest decision.behavior must be allow or deny",
+                ));
+            }
+        }
+    }
+
+    if matches!(event, HookEventKey::WorktreeCreate)
         && let Some(path) = envelope
             .hook_specific_output
             .as_ref()
@@ -124,15 +198,27 @@ pub fn validate_claude(
         ));
     }
 
-    let supports_watch_paths = matches!(event, HookEventKey::Other(name) if name == "FileChanged")
-        || matches!(event, HookEventKey::PreToolUse | HookEventKey::PostToolUse);
-    if supports_watch_paths
-        && let Some(paths) = envelope
-            .hook_specific_output
-            .as_ref()
-            .and_then(|hso| hso.get("watchPaths"))
-            .and_then(|v| v.as_array())
+    if let Some(paths) = envelope
+        .hook_specific_output
+        .as_ref()
+        .and_then(|hso| hso.get("watchPaths"))
     {
+        if !matches!(event, HookEventKey::CwdChanged | HookEventKey::FileChanged) {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "watchPaths is only supported for CwdChanged and FileChanged",
+            ));
+        }
+
+        let Some(paths) = paths.as_array() else {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "watchPaths must be an array",
+            ));
+        };
+
         for p in paths {
             let Some(path) = p.as_str() else {
                 return Err(invalid(
@@ -148,6 +234,36 @@ pub fn validate_claude(
                     "watchPaths entries must be absolute paths",
                 ));
             }
+        }
+    }
+
+    if matches!(event, HookEventKey::Elicitation | HookEventKey::ElicitationResult)
+        && let Some(hso) = &envelope.hook_specific_output
+    {
+        let Some(action) = hso.get("action").and_then(|v| v.as_str()) else {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "elicitation outputs must include action",
+            ));
+        };
+
+        if !matches!(action, "accept" | "decline" | "cancel") {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "elicitation action must be accept, decline, or cancel",
+            ));
+        }
+
+        if let Some(content) = hso.get("content")
+            && !content.is_object()
+        {
+            return Err(invalid(
+                Harness::Claude,
+                event,
+                "elicitation content must be an object",
+            ));
         }
     }
 
@@ -272,13 +388,13 @@ mod tests {
     #[test]
     fn claude_worktree_path_requires_absolute() {
         let env = ClaudeEnvelope::worktree_path("relative/path");
-        assert!(validate_claude(&HookEventKey::Other("WorktreeCreate".to_string()), &env).is_err());
+        assert!(validate_claude(&HookEventKey::WorktreeCreate, &env).is_err());
     }
 
     #[test]
     fn claude_watch_paths_require_absolute_entries() {
         let env = ClaudeEnvelope::watch_paths(vec!["/tmp/ok".to_string(), "relative".to_string()]);
-        assert!(validate_claude(&HookEventKey::Other("FileChanged".to_string()), &env).is_err());
+        assert!(validate_claude(&HookEventKey::FileChanged, &env).is_err());
     }
 
     #[test]

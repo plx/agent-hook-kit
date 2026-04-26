@@ -1,8 +1,9 @@
 {
-  "sessionId": "abc-123-def",
-  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
   "cwd": "/home/user/project",
-  "hookEventName": "Stop",
-  "stopReason": "end_turn",
-  "lastAssistantMessage": "I've fixed the login bug. The issue was..."
+  "permission_mode": "default",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "I've fixed the login bug. The issue was..."
 }

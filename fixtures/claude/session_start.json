@@ -1,6 +1,8 @@
 {
-  "sessionId": "abc-123-def",
-  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
   "cwd": "/home/user/project",
-  "hookEventName": "SessionStart"
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "model": "claude-sonnet-4-6"
 }

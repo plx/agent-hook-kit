@@ -1,7 +1,9 @@
 //! Common output types with intent-oriented fields.
 
 use crate::message::{TailToolCall, UserNotice};
-use hookkit_claude::output::{ClaudeHookOutput, OutputEnvelope as ClaudeEnvelope};
+use hookkit_claude::output::{
+    ClaudeHookOutput, ClaudeSessionStartOutput, OutputEnvelope as ClaudeEnvelope,
+};
 use hookkit_codex::output::{CodexHookOutput, OutputEnvelope as CodexEnvelope};
 use hookkit_core::{Harness, HookEventKey, HookkitError};
 use hookkit_gemini::output::{GeminiHookOutput, OutputEnvelope as GeminiEnvelope};
@@ -78,9 +80,11 @@ impl CommonSessionStartOutput {
         if self.agent_context.is_empty() {
             return Ok(ClaudeHookOutput::Empty);
         }
-        Ok(ClaudeHookOutput::Json(ClaudeEnvelope::with_context(
-            self.agent_context.join("\n"),
-        )))
+        Ok(ClaudeHookOutput::Json(
+            ClaudeSessionStartOutput::new()
+                .with_context(self.agent_context.join("\n"))
+                .into(),
+        ))
     }
 
     pub fn to_codex(&self) -> Result<CodexHookOutput, HookkitError> {
@@ -294,6 +298,7 @@ impl CommonPostToolUseOutput {
         let mut envelope = ClaudeEnvelope::new();
         if !context.is_empty() {
             envelope.hook_specific_output = Some(serde_json::json!({
+                "hookEventName": "PostToolUse",
                 "additionalContext": context.join("\n")
             }));
         }
@@ -566,12 +571,14 @@ impl CommonPreCompressOutput {
                 "user_notice (not supported by Claude PreCompact)",
             ));
         }
-        if self.agent_context.is_empty() {
-            return Ok(ClaudeHookOutput::Empty);
+        if !self.agent_context.is_empty() {
+            return Err(unsupported(
+                Harness::Claude,
+                HookEventKey::PreCompress,
+                "additionalContext (not supported by Claude PreCompact)",
+            ));
         }
-        Ok(ClaudeHookOutput::Json(ClaudeEnvelope::with_context(
-            self.agent_context.join("\n"),
-        )))
+        Ok(ClaudeHookOutput::Empty)
     }
 
     pub fn to_gemini(&self) -> Result<GeminiHookOutput, HookkitError> {

@@ -14,12 +14,14 @@ fn post_tool_use_shared_accessors() {
             session_id: "sess-1".to_string(),
             transcript_path: None,
             cwd: "/home/user".to_string(),
+            permission_mode: Some("default".to_string()),
             hook_event_name: "PostToolUse".to_string(),
             extra: Default::default(),
         },
         tool_name: Some("Write".to_string()),
         tool_input: Some(serde_json::json!({"file_path": "/tmp/test.rs"})),
-        tool_result: Some(serde_json::json!({"success": true})),
+        tool_response: Some(serde_json::json!({"success": true})),
+        tool_use_id: Some("toolu_01COMMON".to_string()),
     };
 
     let common = CommonPostToolUseInput::Claude(claude_ev);
@@ -73,10 +75,11 @@ fn prompt_submit_shared_accessors() {
             session_id: "s1".to_string(),
             transcript_path: None,
             cwd: "/home".to_string(),
+            permission_mode: Some("default".to_string()),
             hook_event_name: "UserPromptSubmit".to_string(),
             extra: Default::default(),
         },
-        user_prompt: Some("fix the bug".to_string()),
+        prompt: Some("fix the bug".to_string()),
     };
 
     let common = CommonPromptSubmitInput::Claude(ev);
@@ -92,9 +95,13 @@ fn from_claude_session_start() {
             session_id: "s1".to_string(),
             transcript_path: None,
             cwd: "/tmp".to_string(),
+            permission_mode: None,
             hook_event_name: "SessionStart".to_string(),
             extra: Default::default(),
         },
+        source: None,
+        model: None,
+        agent_type: None,
     };
     let common: CommonHookInput = ev.into();
     assert!(matches!(common, CommonHookInput::SessionStart(_)));
@@ -122,11 +129,13 @@ fn from_claude_notification() {
             session_id: "s1".to_string(),
             transcript_path: None,
             cwd: "/tmp".to_string(),
+            permission_mode: None,
             hook_event_name: "Notification".to_string(),
             extra: Default::default(),
         },
         message: Some("build done".to_string()),
-        level: Some("info".to_string()),
+        title: Some("Build done".to_string()),
+        notification_type: Some("idle_prompt".to_string()),
     };
     let common: CommonHookInput = ev.into();
     assert!(matches!(common, CommonHookInput::Notification(_)));
@@ -153,9 +162,12 @@ fn from_pre_compress_variants() {
             session_id: "c1".to_string(),
             transcript_path: None,
             cwd: "/tmp".to_string(),
+            permission_mode: Some("default".to_string()),
             hook_event_name: "PreCompact".to_string(),
             extra: Default::default(),
         },
+        trigger: Some("manual".to_string()),
+        custom_instructions: Some(String::new()),
     };
     let g = gemini::PreCompress {
         common: gemini::CommonFields {

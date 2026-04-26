@@ -1,8 +1,9 @@
 {
-  "sessionId": "abc-123-def",
-  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
   "cwd": "/home/user/project",
-  "hookEventName": "Notification",
+  "hook_event_name": "Notification",
   "message": "Task completed successfully",
-  "level": "info"
+  "title": "Task completed",
+  "notification_type": "idle_prompt"
 }

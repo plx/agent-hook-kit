@@ -34,6 +34,32 @@ pub struct OutputEnvelope {
     pub hook_specific_output: Option<serde_json::Value>,
 }
 
+fn hook_specific_output(
+    event_name: &str,
+    mut fields: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    fields.insert(
+        "hookEventName".to_string(),
+        serde_json::Value::String(event_name.to_string()),
+    );
+    serde_json::Value::Object(fields)
+}
+
+fn block_envelope(reason: impl Into<String>) -> OutputEnvelope {
+    OutputEnvelope {
+        decision: Some("block".to_string()),
+        reason: Some(reason.into()),
+        ..OutputEnvelope::new()
+    }
+}
+
+fn maybe_block(reason: Option<String>) -> OutputEnvelope {
+    match reason {
+        Some(reason) => block_envelope(reason),
+        None => OutputEnvelope::new(),
+    }
+}
+
 /// Event-scoped Claude output model.
 ///
 /// This keeps event-level output intent explicit and avoids forcing callers
@@ -42,12 +68,21 @@ pub struct OutputEnvelope {
 pub enum ClaudeEventOutput {
     SessionStart(ClaudeSessionStartOutput),
     PromptSubmit(ClaudePromptSubmitOutput),
+    PromptExpansion(ClaudePromptExpansionOutput),
     PreToolUse(ClaudePreToolUseOutput),
+    PermissionRequest(ClaudePermissionRequestOutput),
     PostToolUse(ClaudePostToolUseOutput),
+    PostToolUseFailure(ClaudePostToolUseFailureOutput),
+    PostToolBatch(ClaudePostToolBatchOutput),
     PermissionDenied(ClaudePermissionDeniedOutput),
     Stop(ClaudeStopOutput),
+    Notification(ClaudeNotificationOutput),
+    SubagentStart(ClaudeSubagentStartOutput),
     WorktreeCreate(ClaudeWorktreeCreateOutput),
-    FileChanged(ClaudeFileChangedOutput),
+    CwdChanged(ClaudeWatchPathsOutput),
+    FileChanged(ClaudeWatchPathsOutput),
+    Elicitation(ClaudeElicitationOutput),
+    ElicitationResult(ClaudeElicitationResultOutput),
 }
 
 impl From<ClaudeEventOutput> for OutputEnvelope {
@@ -55,12 +90,21 @@ impl From<ClaudeEventOutput> for OutputEnvelope {
         match value {
             ClaudeEventOutput::SessionStart(v) => v.into(),
             ClaudeEventOutput::PromptSubmit(v) => v.into(),
+            ClaudeEventOutput::PromptExpansion(v) => v.into(),
             ClaudeEventOutput::PreToolUse(v) => v.into(),
+            ClaudeEventOutput::PermissionRequest(v) => v.into(),
             ClaudeEventOutput::PostToolUse(v) => v.into(),
+            ClaudeEventOutput::PostToolUseFailure(v) => v.into(),
+            ClaudeEventOutput::PostToolBatch(v) => v.into(),
             ClaudeEventOutput::PermissionDenied(v) => v.into(),
             ClaudeEventOutput::Stop(v) => v.into(),
+            ClaudeEventOutput::Notification(v) => v.into(),
+            ClaudeEventOutput::SubagentStart(v) => v.into(),
             ClaudeEventOutput::WorktreeCreate(v) => v.into(),
+            ClaudeEventOutput::CwdChanged(v) => v.into(),
             ClaudeEventOutput::FileChanged(v) => v.into(),
+            ClaudeEventOutput::Elicitation(v) => v.into(),
+            ClaudeEventOutput::ElicitationResult(v) => v.into(),
         }
     }
 }
@@ -97,7 +141,9 @@ impl From<ClaudeSessionStartOutput> for OutputEnvelope {
     fn from(value: ClaudeSessionStartOutput) -> Self {
         let mut env = OutputEnvelope::new();
         if let Some(ctx) = value.additional_context {
-            env.hook_specific_output = Some(serde_json::json!({ "additionalContext": ctx }));
+            let mut fields = serde_json::Map::new();
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            env.hook_specific_output = Some(hook_specific_output("SessionStart", fields));
         }
         env.system_message = value.system_message;
         env.suppress_output = value.suppress_output;
@@ -105,129 +151,193 @@ impl From<ClaudeSessionStartOutput> for OutputEnvelope {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ClaudePromptSubmitOutput {
-    Allow,
-    Block { reason: String },
+#[derive(Debug, Clone, Default)]
+pub struct ClaudePromptSubmitOutput {
+    pub block_reason: Option<String>,
+    pub additional_context: Option<String>,
+    pub session_title: Option<String>,
+    pub system_message: Option<String>,
+    pub suppress_output: Option<bool>,
 }
 
 impl ClaudePromptSubmitOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn allow() -> Self {
-        Self::Allow
+        Self::default()
     }
 
     pub fn block(reason: impl Into<String>) -> Self {
-        Self::Block {
-            reason: reason.into(),
+        Self {
+            block_reason: Some(reason.into()),
+            ..Self::default()
         }
+    }
+
+    pub fn with_context(mut self, message: impl Into<String>) -> Self {
+        self.additional_context = Some(message.into());
+        self
+    }
+
+    pub fn with_session_title(mut self, title: impl Into<String>) -> Self {
+        self.session_title = Some(title.into());
+        self
+    }
+
+    pub fn with_system_message(mut self, message: impl Into<String>) -> Self {
+        self.system_message = Some(message.into());
+        self
+    }
+
+    pub fn with_suppress_output(mut self, suppress: bool) -> Self {
+        self.suppress_output = Some(suppress);
+        self
     }
 }
 
 impl From<ClaudePromptSubmitOutput> for OutputEnvelope {
     fn from(value: ClaudePromptSubmitOutput) -> Self {
-        match value {
-            ClaudePromptSubmitOutput::Allow => OutputEnvelope {
-                decision: Some("allow".to_string()),
-                ..OutputEnvelope::new()
-            },
-            ClaudePromptSubmitOutput::Block { reason } => OutputEnvelope {
-                decision: Some("block".to_string()),
-                reason: Some(reason),
-                ..OutputEnvelope::new()
-            },
+        let mut env = maybe_block(value.block_reason);
+
+        let mut fields = serde_json::Map::new();
+        if let Some(ctx) = value.additional_context {
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+        }
+        if let Some(title) = value.session_title {
+            fields.insert("sessionTitle".to_string(), serde_json::Value::String(title));
+        }
+        if !fields.is_empty() {
+            env.hook_specific_output = Some(hook_specific_output("UserPromptSubmit", fields));
+        }
+        env.system_message = value.system_message;
+        env.suppress_output = value.suppress_output;
+        env
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ClaudePromptExpansionOutput {
+    pub block_reason: Option<String>,
+    pub additional_context: Option<String>,
+    pub system_message: Option<String>,
+    pub suppress_output: Option<bool>,
+}
+
+impl ClaudePromptExpansionOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn allow() -> Self {
+        Self::default()
+    }
+
+    pub fn block(reason: impl Into<String>) -> Self {
+        Self {
+            block_reason: Some(reason.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_context(mut self, message: impl Into<String>) -> Self {
+        self.additional_context = Some(message.into());
+        self
+    }
+
+    pub fn with_system_message(mut self, message: impl Into<String>) -> Self {
+        self.system_message = Some(message.into());
+        self
+    }
+
+    pub fn with_suppress_output(mut self, suppress: bool) -> Self {
+        self.suppress_output = Some(suppress);
+        self
+    }
+}
+
+impl From<ClaudePromptExpansionOutput> for OutputEnvelope {
+    fn from(value: ClaudePromptExpansionOutput) -> Self {
+        let mut env = maybe_block(value.block_reason);
+        if let Some(ctx) = value.additional_context {
+            let mut fields = serde_json::Map::new();
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            env.hook_specific_output = Some(hook_specific_output("UserPromptExpansion", fields));
+        }
+        env.system_message = value.system_message;
+        env.suppress_output = value.suppress_output;
+        env
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ClaudePreToolDecision {
+    Allow,
+    Deny,
+    Ask,
+    Defer,
+}
+
+impl ClaudePreToolDecision {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+            Self::Defer => "defer",
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum ClaudePreToolUseOutput {
-    Allow,
-    Deny {
-        reason: String,
-        updated_input: Option<serde_json::Value>,
-    },
-    Ask {
-        reason: String,
-    },
+pub struct ClaudePreToolUseOutput {
+    pub decision: ClaudePreToolDecision,
+    pub reason: Option<String>,
+    pub updated_input: Option<serde_json::Value>,
+    pub additional_context: Option<String>,
 }
 
 impl ClaudePreToolUseOutput {
     pub fn allow() -> Self {
-        Self::Allow
-    }
-
-    pub fn deny(reason: impl Into<String>) -> Self {
-        Self::Deny {
-            reason: reason.into(),
+        Self {
+            decision: ClaudePreToolDecision::Allow,
+            reason: None,
             updated_input: None,
+            additional_context: None,
         }
     }
 
-    pub fn deny_with_updated_input(
-        reason: impl Into<String>,
-        updated_input: serde_json::Value,
-    ) -> Self {
-        Self::Deny {
-            reason: reason.into(),
-            updated_input: Some(updated_input),
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self {
+            decision: ClaudePreToolDecision::Deny,
+            reason: Some(reason.into()),
+            updated_input: None,
+            additional_context: None,
         }
     }
 
     pub fn ask(reason: impl Into<String>) -> Self {
-        Self::Ask {
-            reason: reason.into(),
+        Self {
+            decision: ClaudePreToolDecision::Ask,
+            reason: Some(reason.into()),
+            updated_input: None,
+            additional_context: None,
         }
     }
-}
 
-impl From<ClaudePreToolUseOutput> for OutputEnvelope {
-    fn from(value: ClaudePreToolUseOutput) -> Self {
-        match value {
-            ClaudePreToolUseOutput::Allow => OutputEnvelope {
-                hook_specific_output: Some(serde_json::json!({
-                    "permissionDecision": { "decision": "allow" }
-                })),
-                ..OutputEnvelope::new()
-            },
-            ClaudePreToolUseOutput::Deny {
-                reason,
-                updated_input,
-            } => {
-                let mut decision = serde_json::json!({
-                    "decision": "deny",
-                    "reason": reason
-                });
-                if let Some(updated) = updated_input {
-                    decision["updatedInput"] = updated;
-                }
-                OutputEnvelope {
-                    hook_specific_output: Some(serde_json::json!({
-                        "permissionDecision": decision
-                    })),
-                    ..OutputEnvelope::new()
-                }
-            }
-            ClaudePreToolUseOutput::Ask { reason } => OutputEnvelope {
-                hook_specific_output: Some(serde_json::json!({
-                    "permissionDecision": {
-                        "decision": "ask",
-                        "reason": reason
-                    }
-                })),
-                ..OutputEnvelope::new()
-            },
+    pub fn defer() -> Self {
+        Self {
+            decision: ClaudePreToolDecision::Defer,
+            reason: None,
+            updated_input: None,
+            additional_context: None,
         }
     }
-}
 
-#[derive(Debug, Clone, Default)]
-pub struct ClaudePostToolUseOutput {
-    pub additional_context: Option<String>,
-}
-
-impl ClaudePostToolUseOutput {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn with_updated_input(mut self, updated_input: serde_json::Value) -> Self {
+        self.updated_input = Some(updated_input);
+        self
     }
 
     pub fn with_context(mut self, message: impl Into<String>) -> Self {
@@ -236,17 +346,241 @@ impl ClaudePostToolUseOutput {
     }
 }
 
+impl From<ClaudePreToolUseOutput> for OutputEnvelope {
+    fn from(value: ClaudePreToolUseOutput) -> Self {
+        let mut fields = serde_json::Map::new();
+        fields.insert(
+            "permissionDecision".to_string(),
+            serde_json::Value::String(value.decision.as_str().to_string()),
+        );
+        if let Some(reason) = value.reason {
+            fields.insert(
+                "permissionDecisionReason".to_string(),
+                serde_json::Value::String(reason),
+            );
+        }
+        if let Some(updated_input) = value.updated_input {
+            fields.insert("updatedInput".to_string(), updated_input);
+        }
+        if let Some(ctx) = value.additional_context {
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+        }
+        OutputEnvelope {
+            hook_specific_output: Some(hook_specific_output("PreToolUse", fields)),
+            ..OutputEnvelope::new()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ClaudePermissionRequestBehavior {
+    Allow,
+    Deny,
+}
+
+impl ClaudePermissionRequestBehavior {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClaudePermissionRequestOutput {
+    pub behavior: ClaudePermissionRequestBehavior,
+    pub updated_input: Option<serde_json::Value>,
+    pub updated_permissions: Option<Vec<serde_json::Value>>,
+    pub message: Option<String>,
+    pub interrupt: Option<bool>,
+}
+
+impl ClaudePermissionRequestOutput {
+    pub fn allow() -> Self {
+        Self {
+            behavior: ClaudePermissionRequestBehavior::Allow,
+            updated_input: None,
+            updated_permissions: None,
+            message: None,
+            interrupt: None,
+        }
+    }
+
+    pub fn deny(message: impl Into<String>) -> Self {
+        Self {
+            behavior: ClaudePermissionRequestBehavior::Deny,
+            updated_input: None,
+            updated_permissions: None,
+            message: Some(message.into()),
+            interrupt: None,
+        }
+    }
+
+    pub fn with_updated_input(mut self, updated_input: serde_json::Value) -> Self {
+        self.updated_input = Some(updated_input);
+        self
+    }
+
+    pub fn with_updated_permissions(mut self, entries: Vec<serde_json::Value>) -> Self {
+        self.updated_permissions = Some(entries);
+        self
+    }
+
+    pub fn with_interrupt(mut self, interrupt: bool) -> Self {
+        self.interrupt = Some(interrupt);
+        self
+    }
+}
+
+impl From<ClaudePermissionRequestOutput> for OutputEnvelope {
+    fn from(value: ClaudePermissionRequestOutput) -> Self {
+        let mut decision = serde_json::Map::new();
+        decision.insert(
+            "behavior".to_string(),
+            serde_json::Value::String(value.behavior.as_str().to_string()),
+        );
+        if let Some(updated_input) = value.updated_input {
+            decision.insert("updatedInput".to_string(), updated_input);
+        }
+        if let Some(updated_permissions) = value.updated_permissions {
+            decision.insert(
+                "updatedPermissions".to_string(),
+                serde_json::Value::Array(updated_permissions),
+            );
+        }
+        if let Some(message) = value.message {
+            decision.insert("message".to_string(), serde_json::Value::String(message));
+        }
+        if let Some(interrupt) = value.interrupt {
+            decision.insert("interrupt".to_string(), serde_json::Value::Bool(interrupt));
+        }
+
+        let mut fields = serde_json::Map::new();
+        fields.insert("decision".to_string(), serde_json::Value::Object(decision));
+        OutputEnvelope {
+            hook_specific_output: Some(hook_specific_output("PermissionRequest", fields)),
+            ..OutputEnvelope::new()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ClaudePostToolUseOutput {
+    pub block_reason: Option<String>,
+    pub additional_context: Option<String>,
+    pub updated_mcp_tool_output: Option<serde_json::Value>,
+}
+
+impl ClaudePostToolUseOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn block(reason: impl Into<String>) -> Self {
+        Self {
+            block_reason: Some(reason.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_context(mut self, message: impl Into<String>) -> Self {
+        self.additional_context = Some(message.into());
+        self
+    }
+
+    pub fn with_updated_mcp_tool_output(mut self, output: serde_json::Value) -> Self {
+        self.updated_mcp_tool_output = Some(output);
+        self
+    }
+}
+
 impl From<ClaudePostToolUseOutput> for OutputEnvelope {
     fn from(value: ClaudePostToolUseOutput) -> Self {
-        match value.additional_context {
-            Some(ctx) => OutputEnvelope {
-                hook_specific_output: Some(serde_json::json!({
-                    "additionalContext": ctx
-                })),
-                ..OutputEnvelope::new()
-            },
-            None => OutputEnvelope::new(),
+        let mut env = maybe_block(value.block_reason);
+        let mut fields = serde_json::Map::new();
+        if let Some(ctx) = value.additional_context {
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
         }
+        if let Some(output) = value.updated_mcp_tool_output {
+            fields.insert("updatedMCPToolOutput".to_string(), output);
+        }
+        if !fields.is_empty() {
+            env.hook_specific_output = Some(hook_specific_output("PostToolUse", fields));
+        }
+        env
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ClaudePostToolUseFailureOutput {
+    pub block_reason: Option<String>,
+    pub additional_context: Option<String>,
+}
+
+impl ClaudePostToolUseFailureOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn block(reason: impl Into<String>) -> Self {
+        Self {
+            block_reason: Some(reason.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_context(mut self, message: impl Into<String>) -> Self {
+        self.additional_context = Some(message.into());
+        self
+    }
+}
+
+impl From<ClaudePostToolUseFailureOutput> for OutputEnvelope {
+    fn from(value: ClaudePostToolUseFailureOutput) -> Self {
+        let mut env = maybe_block(value.block_reason);
+        if let Some(ctx) = value.additional_context {
+            let mut fields = serde_json::Map::new();
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            env.hook_specific_output = Some(hook_specific_output("PostToolUseFailure", fields));
+        }
+        env
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ClaudePostToolBatchOutput {
+    pub block_reason: Option<String>,
+    pub additional_context: Option<String>,
+}
+
+impl ClaudePostToolBatchOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn block(reason: impl Into<String>) -> Self {
+        Self {
+            block_reason: Some(reason.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_context(mut self, message: impl Into<String>) -> Self {
+        self.additional_context = Some(message.into());
+        self
+    }
+}
+
+impl From<ClaudePostToolBatchOutput> for OutputEnvelope {
+    fn from(value: ClaudePostToolBatchOutput) -> Self {
+        let mut env = maybe_block(value.block_reason);
+        if let Some(ctx) = value.additional_context {
+            let mut fields = serde_json::Map::new();
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            env.hook_specific_output = Some(hook_specific_output("PostToolBatch", fields));
+        }
+        env
     }
 }
 
@@ -264,8 +598,10 @@ impl ClaudePermissionDeniedOutput {
 impl From<ClaudePermissionDeniedOutput> for OutputEnvelope {
     fn from(value: ClaudePermissionDeniedOutput) -> Self {
         if value.retry {
+            let mut fields = serde_json::Map::new();
+            fields.insert("retry".to_string(), serde_json::Value::Bool(true));
             OutputEnvelope {
-                hook_specific_output: Some(serde_json::json!({ "retry": true })),
+                hook_specific_output: Some(hook_specific_output("PermissionDenied", fields)),
                 ..OutputEnvelope::new()
             }
         } else {
@@ -296,11 +632,69 @@ impl From<ClaudeStopOutput> for OutputEnvelope {
     fn from(value: ClaudeStopOutput) -> Self {
         match value {
             ClaudeStopOutput::AllowStop => OutputEnvelope::new(),
-            ClaudeStopOutput::ContinueSession { reason } => OutputEnvelope {
-                decision: Some("block".to_string()),
-                reason: Some(reason),
+            ClaudeStopOutput::ContinueSession { reason } => block_envelope(reason),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeNotificationOutput {
+    pub additional_context: Option<String>,
+}
+
+impl ClaudeNotificationOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_context(mut self, message: impl Into<String>) -> Self {
+        self.additional_context = Some(message.into());
+        self
+    }
+}
+
+impl From<ClaudeNotificationOutput> for OutputEnvelope {
+    fn from(value: ClaudeNotificationOutput) -> Self {
+        if let Some(ctx) = value.additional_context {
+            let mut fields = serde_json::Map::new();
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            OutputEnvelope {
+                hook_specific_output: Some(hook_specific_output("Notification", fields)),
                 ..OutputEnvelope::new()
-            },
+            }
+        } else {
+            OutputEnvelope::new()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeSubagentStartOutput {
+    pub additional_context: Option<String>,
+}
+
+impl ClaudeSubagentStartOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_context(mut self, message: impl Into<String>) -> Self {
+        self.additional_context = Some(message.into());
+        self
+    }
+}
+
+impl From<ClaudeSubagentStartOutput> for OutputEnvelope {
+    fn from(value: ClaudeSubagentStartOutput) -> Self {
+        if let Some(ctx) = value.additional_context {
+            let mut fields = serde_json::Map::new();
+            fields.insert("additionalContext".to_string(), serde_json::Value::String(ctx));
+            OutputEnvelope {
+                hook_specific_output: Some(hook_specific_output("SubagentStart", fields)),
+                ..OutputEnvelope::new()
+            }
+        } else {
+            OutputEnvelope::new()
         }
     }
 }
@@ -320,32 +714,121 @@ impl ClaudeWorktreeCreateOutput {
 
 impl From<ClaudeWorktreeCreateOutput> for OutputEnvelope {
     fn from(value: ClaudeWorktreeCreateOutput) -> Self {
+        let mut fields = serde_json::Map::new();
+        fields.insert(
+            "worktreePath".to_string(),
+            serde_json::Value::String(value.worktree_path),
+        );
         OutputEnvelope {
-            hook_specific_output: Some(serde_json::json!({
-                "worktreePath": value.worktree_path
-            })),
+            hook_specific_output: Some(hook_specific_output("WorktreeCreate", fields)),
             ..OutputEnvelope::new()
         }
     }
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ClaudeFileChangedOutput {
+pub struct ClaudeWatchPathsOutput {
     pub watch_paths: Vec<String>,
 }
 
-impl ClaudeFileChangedOutput {
+impl ClaudeWatchPathsOutput {
     pub fn new(paths: Vec<String>) -> Self {
         Self { watch_paths: paths }
     }
 }
 
-impl From<ClaudeFileChangedOutput> for OutputEnvelope {
-    fn from(value: ClaudeFileChangedOutput) -> Self {
+impl From<ClaudeWatchPathsOutput> for OutputEnvelope {
+    fn from(value: ClaudeWatchPathsOutput) -> Self {
         OutputEnvelope {
             hook_specific_output: Some(serde_json::json!({
                 "watchPaths": value.watch_paths
             })),
+            ..OutputEnvelope::new()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClaudeElicitationOutput {
+    pub action: String,
+    pub content: Option<serde_json::Value>,
+}
+
+impl ClaudeElicitationOutput {
+    pub fn accept(content: serde_json::Value) -> Self {
+        Self {
+            action: "accept".to_string(),
+            content: Some(content),
+        }
+    }
+
+    pub fn decline() -> Self {
+        Self {
+            action: "decline".to_string(),
+            content: None,
+        }
+    }
+
+    pub fn cancel() -> Self {
+        Self {
+            action: "cancel".to_string(),
+            content: None,
+        }
+    }
+}
+
+impl From<ClaudeElicitationOutput> for OutputEnvelope {
+    fn from(value: ClaudeElicitationOutput) -> Self {
+        let mut fields = serde_json::Map::new();
+        fields.insert("action".to_string(), serde_json::Value::String(value.action));
+        if let Some(content) = value.content {
+            fields.insert("content".to_string(), content);
+        }
+        OutputEnvelope {
+            hook_specific_output: Some(hook_specific_output("Elicitation", fields)),
+            ..OutputEnvelope::new()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClaudeElicitationResultOutput {
+    pub action: String,
+    pub content: Option<serde_json::Value>,
+}
+
+impl ClaudeElicitationResultOutput {
+    pub fn accept(content: serde_json::Value) -> Self {
+        Self {
+            action: "accept".to_string(),
+            content: Some(content),
+        }
+    }
+
+    pub fn decline() -> Self {
+        Self {
+            action: "decline".to_string(),
+            content: None,
+        }
+    }
+
+    pub fn cancel() -> Self {
+        Self {
+            action: "cancel".to_string(),
+            content: None,
+        }
+    }
+}
+
+impl From<ClaudeElicitationResultOutput> for OutputEnvelope {
+    fn from(value: ClaudeElicitationResultOutput) -> Self {
+        let mut fields = serde_json::Map::new();
+        fields.insert("action".to_string(), serde_json::Value::String(value.action));
+        if let Some(content) = value.content {
+            fields.insert("content".to_string(), content);
+        }
+        OutputEnvelope {
+            hook_specific_output: Some(hook_specific_output("ElicitationResult", fields)),
             ..OutputEnvelope::new()
         }
     }
@@ -356,19 +839,19 @@ impl OutputEnvelope {
         Self::default()
     }
 
-    // --- UserPromptSubmit / PostToolUse / Stop: top-level decision ---
+    // --- Block-only decision helpers ---
 
-    /// Block — used for UserPromptSubmit, PostToolUse, or Stop to reject the action.
+    /// Block the current action with a user/model-visible reason.
     pub fn block(reason: impl Into<String>) -> Self {
-        ClaudePromptSubmitOutput::block(reason).into()
+        block_envelope(reason)
     }
 
-    /// Allow — explicit approval.
+    /// Allow the action to proceed by emitting no decision fields.
     pub fn allow() -> Self {
-        ClaudePromptSubmitOutput::allow().into()
+        OutputEnvelope::new()
     }
 
-    // --- PreToolUse: hookSpecificOutput.permissionDecision ---
+    // --- PreToolUse helpers ---
 
     /// Deny a PreToolUse via hookSpecificOutput.permissionDecision.
     pub fn pre_tool_deny(reason: impl Into<String>) -> Self {
@@ -385,17 +868,24 @@ impl OutputEnvelope {
         ClaudePreToolUseOutput::ask(reason).into()
     }
 
-    /// Deny a PreToolUse and provide rewritten input.
+    /// Defer a PreToolUse so it can be resumed later.
+    pub fn pre_tool_defer() -> Self {
+        ClaudePreToolUseOutput::defer().into()
+    }
+
+    /// Return a PreToolUse permission decision with rewritten input.
     pub fn pre_tool_deny_with_updated_input(
         reason: impl Into<String>,
         updated_input: serde_json::Value,
     ) -> Self {
-        ClaudePreToolUseOutput::deny_with_updated_input(reason, updated_input).into()
+        ClaudePreToolUseOutput::deny(reason)
+            .with_updated_input(updated_input)
+            .into()
     }
 
     // --- Context injection ---
 
-    /// Inject additional context visible to the model.
+    /// Inject additional context for a PostToolUse hook.
     pub fn with_context(message: impl Into<String>) -> Self {
         ClaudePostToolUseOutput::new().with_context(message).into()
     }
@@ -418,27 +908,12 @@ impl OutputEnvelope {
 
     /// Approve a permission request.
     pub fn permission_approve() -> Self {
-        Self {
-            hook_specific_output: Some(serde_json::json!({
-                "permissionDecision": {
-                    "decision": "allow"
-                }
-            })),
-            ..Default::default()
-        }
+        ClaudePermissionRequestOutput::allow().into()
     }
 
     /// Deny a permission request.
     pub fn permission_deny(reason: impl Into<String>) -> Self {
-        Self {
-            hook_specific_output: Some(serde_json::json!({
-                "permissionDecision": {
-                    "decision": "deny",
-                    "reason": reason.into()
-                }
-            })),
-            ..Default::default()
-        }
+        ClaudePermissionRequestOutput::deny(reason).into()
     }
 
     // --- WorktreeCreate: path return ---
@@ -448,11 +923,11 @@ impl OutputEnvelope {
         ClaudeWorktreeCreateOutput::new(path).into()
     }
 
-    // --- FileChanged: watch paths ---
+    // --- FileChanged / CwdChanged: watch paths ---
 
-    /// Set dynamic watch paths for FileChanged.
+    /// Set dynamic watch paths.
     pub fn watch_paths(paths: Vec<String>) -> Self {
-        ClaudeFileChangedOutput::new(paths).into()
+        ClaudeWatchPathsOutput::new(paths).into()
     }
 
     // --- Fluent setters ---

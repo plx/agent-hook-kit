@@ -1,0 +1,25 @@
+{
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolBatch",
+  "tool_calls": [
+    {
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/home/user/project/src/ledger/accounts.rs"
+      },
+      "tool_use_id": "toolu_01READ1",
+      "tool_response": "     1\tpub struct Account;"
+    },
+    {
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/home/user/project/src/ledger/transactions.rs"
+      },
+      "tool_use_id": "toolu_01READ2",
+      "tool_response": "     1\tpub struct Transaction;"
+    }
+  ]
+}

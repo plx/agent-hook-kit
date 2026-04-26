@@ -101,7 +101,7 @@ impl CommonPromptSubmitInput {
 
     pub fn user_prompt(&self) -> Option<&str> {
         match self {
-            Self::Claude(ev) => ev.user_prompt.as_deref(),
+            Self::Claude(ev) => ev.prompt.as_deref(),
             Self::Codex(ev) => ev.user_prompt.as_deref(),
             Self::Gemini(ev) => ev.user_prompt.as_deref(),
         }

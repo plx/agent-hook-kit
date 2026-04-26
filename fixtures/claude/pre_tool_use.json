@@ -1,10 +1,12 @@
 {
-  "sessionId": "abc-123-def",
-  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
   "cwd": "/home/user/project",
-  "hookEventName": "PreToolUse",
-  "toolName": "Bash",
-  "toolInput": {
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
     "command": "rm -rf /tmp/build-artifacts"
-  }
+  },
+  "tool_use_id": "toolu_01PRETOOL"
 }

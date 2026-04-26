@@ -1,0 +1,12 @@
+{
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptExpansion",
+  "expansion_type": "slash_command",
+  "command_name": "review-skill",
+  "command_args": "payments",
+  "command_source": "plugin",
+  "prompt": "/review-skill payments"
+}

@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"additionalContext":"formatted 3 files with rustfmt"}}
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"formatted 3 files with rustfmt"}}

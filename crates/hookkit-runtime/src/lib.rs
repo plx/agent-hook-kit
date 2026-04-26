@@ -93,35 +93,33 @@ fn hook_event_key(input: &NativeHookInput) -> HookEventKey {
         NativeHookInput::Claude(ev) => match ev {
             ClaudeHookInput::SessionStart(_) => HookEventKey::SessionStart,
             ClaudeHookInput::UserPromptSubmit(_) => HookEventKey::PromptSubmit,
+            ClaudeHookInput::UserPromptExpansion(_) => HookEventKey::PromptExpansion,
             ClaudeHookInput::PreToolUse(_) => HookEventKey::PreToolUse,
+            ClaudeHookInput::PermissionRequest(_) => HookEventKey::PermissionRequest,
+            ClaudeHookInput::PermissionDenied(_) => HookEventKey::PermissionDenied,
             ClaudeHookInput::PostToolUse(_) => HookEventKey::PostToolUse,
             ClaudeHookInput::PostToolUseFailure(_) => HookEventKey::PostToolUseFailure,
-            ClaudeHookInput::PermissionDenied(_) => HookEventKey::PermissionDenied,
+            ClaudeHookInput::PostToolBatch(_) => HookEventKey::PostToolBatch,
             ClaudeHookInput::Stop(_) => HookEventKey::Stop,
+            ClaudeHookInput::StopFailure(_) => HookEventKey::StopFailure,
             ClaudeHookInput::Notification(_) => HookEventKey::Notification,
+            ClaudeHookInput::SubagentStart(_) => HookEventKey::SubagentStart,
+            ClaudeHookInput::SubagentStop(_) => HookEventKey::SubagentStop,
+            ClaudeHookInput::TaskCreated(_) => HookEventKey::TaskCreated,
+            ClaudeHookInput::TaskCompleted(_) => HookEventKey::TaskCompleted,
+            ClaudeHookInput::TeammateIdle(_) => HookEventKey::TeammateIdle,
+            ClaudeHookInput::InstructionsLoaded(_) => HookEventKey::InstructionsLoaded,
+            ClaudeHookInput::ConfigChange(_) => HookEventKey::ConfigChange,
+            ClaudeHookInput::CwdChanged(_) => HookEventKey::CwdChanged,
+            ClaudeHookInput::FileChanged(_) => HookEventKey::FileChanged,
+            ClaudeHookInput::WorktreeCreate(_) => HookEventKey::WorktreeCreate,
+            ClaudeHookInput::WorktreeRemove(_) => HookEventKey::WorktreeRemove,
+            ClaudeHookInput::PreCompact(_) => HookEventKey::PreCompact,
+            ClaudeHookInput::PostCompact(_) => HookEventKey::PostCompact,
+            ClaudeHookInput::Elicitation(_) => HookEventKey::Elicitation,
+            ClaudeHookInput::ElicitationResult(_) => HookEventKey::ElicitationResult,
             ClaudeHookInput::SessionEnd(_) => HookEventKey::SessionEnd,
-            ClaudeHookInput::PermissionRequest(_) => HookEventKey::PermissionRequest,
-            ClaudeHookInput::PreCompact(_) => HookEventKey::PreCompress,
             ClaudeHookInput::Unknown { event_name, .. } => HookEventKey::Other(event_name.clone()),
-            ClaudeHookInput::SubagentStart(_) => HookEventKey::Other("SubagentStart".to_string()),
-            ClaudeHookInput::SubagentStop(_) => HookEventKey::Other("SubagentStop".to_string()),
-            ClaudeHookInput::TaskCreated(_) => HookEventKey::Other("TaskCreated".to_string()),
-            ClaudeHookInput::TaskCompleted(_) => HookEventKey::Other("TaskCompleted".to_string()),
-            ClaudeHookInput::TeammateIdle(_) => HookEventKey::Other("TeammateIdle".to_string()),
-            ClaudeHookInput::ConfigChange(_) => HookEventKey::Other("ConfigChange".to_string()),
-            ClaudeHookInput::CwdChanged(_) => HookEventKey::Other("CwdChanged".to_string()),
-            ClaudeHookInput::FileChanged(_) => HookEventKey::Other("FileChanged".to_string()),
-            ClaudeHookInput::PostCompact(_) => HookEventKey::Other("PostCompact".to_string()),
-            ClaudeHookInput::InstructionsLoaded(_) => {
-                HookEventKey::Other("InstructionsLoaded".to_string())
-            }
-            ClaudeHookInput::WorktreeCreate(_) => HookEventKey::Other("WorktreeCreate".to_string()),
-            ClaudeHookInput::WorktreeRemove(_) => HookEventKey::Other("WorktreeRemove".to_string()),
-            ClaudeHookInput::Elicitation(_) => HookEventKey::Other("Elicitation".to_string()),
-            ClaudeHookInput::ElicitationResult(_) => {
-                HookEventKey::Other("ElicitationResult".to_string())
-            }
-            ClaudeHookInput::StopFailure(_) => HookEventKey::Other("StopFailure".to_string()),
         },
         NativeHookInput::Codex(ev) => match ev {
             CodexHookInput::SessionStart(_) => HookEventKey::SessionStart,
@@ -211,13 +209,31 @@ fn hook_event_key_name(key: &HookEventKey) -> String {
         HookEventKey::SessionStart => "SessionStart".to_string(),
         HookEventKey::SessionEnd => "SessionEnd".to_string(),
         HookEventKey::PromptSubmit => "PromptSubmit".to_string(),
+        HookEventKey::PromptExpansion => "PromptExpansion".to_string(),
         HookEventKey::PreToolUse => "PreToolUse".to_string(),
-        HookEventKey::PostToolUse => "PostToolUse".to_string(),
-        HookEventKey::PostToolUseFailure => "PostToolUseFailure".to_string(),
-        HookEventKey::Stop => "Stop".to_string(),
-        HookEventKey::Notification => "Notification".to_string(),
         HookEventKey::PermissionRequest => "PermissionRequest".to_string(),
         HookEventKey::PermissionDenied => "PermissionDenied".to_string(),
+        HookEventKey::PostToolUse => "PostToolUse".to_string(),
+        HookEventKey::PostToolUseFailure => "PostToolUseFailure".to_string(),
+        HookEventKey::PostToolBatch => "PostToolBatch".to_string(),
+        HookEventKey::Stop => "Stop".to_string(),
+        HookEventKey::StopFailure => "StopFailure".to_string(),
+        HookEventKey::Notification => "Notification".to_string(),
+        HookEventKey::SubagentStart => "SubagentStart".to_string(),
+        HookEventKey::SubagentStop => "SubagentStop".to_string(),
+        HookEventKey::TaskCreated => "TaskCreated".to_string(),
+        HookEventKey::TaskCompleted => "TaskCompleted".to_string(),
+        HookEventKey::TeammateIdle => "TeammateIdle".to_string(),
+        HookEventKey::InstructionsLoaded => "InstructionsLoaded".to_string(),
+        HookEventKey::ConfigChange => "ConfigChange".to_string(),
+        HookEventKey::CwdChanged => "CwdChanged".to_string(),
+        HookEventKey::FileChanged => "FileChanged".to_string(),
+        HookEventKey::WorktreeCreate => "WorktreeCreate".to_string(),
+        HookEventKey::WorktreeRemove => "WorktreeRemove".to_string(),
+        HookEventKey::PreCompact => "PreCompact".to_string(),
+        HookEventKey::PostCompact => "PostCompact".to_string(),
+        HookEventKey::Elicitation => "Elicitation".to_string(),
+        HookEventKey::ElicitationResult => "ElicitationResult".to_string(),
         HookEventKey::BeforeModel => "BeforeModel".to_string(),
         HookEventKey::AfterModel => "AfterModel".to_string(),
         HookEventKey::BeforeToolSelection => "BeforeToolSelection".to_string(),
@@ -235,7 +251,16 @@ fn parsed_value(input: &NativeHookInput) -> serde_json::Value {
             ClaudeHookInput::UserPromptSubmit(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
+            ClaudeHookInput::UserPromptExpansion(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
             ClaudeHookInput::PreToolUse(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PermissionRequest(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PermissionDenied(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
             ClaudeHookInput::PostToolUse(v) => {
@@ -244,17 +269,14 @@ fn parsed_value(input: &NativeHookInput) -> serde_json::Value {
             ClaudeHookInput::PostToolUseFailure(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
-            ClaudeHookInput::PermissionDenied(v) => {
+            ClaudeHookInput::PostToolBatch(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
             ClaudeHookInput::Stop(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::StopFailure(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
             ClaudeHookInput::Notification(v) => {
-                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
-            }
-            ClaudeHookInput::SessionEnd(v) => {
-                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
-            }
-            ClaudeHookInput::PermissionRequest(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
             ClaudeHookInput::SubagentStart(v) => {
@@ -272,6 +294,9 @@ fn parsed_value(input: &NativeHookInput) -> serde_json::Value {
             ClaudeHookInput::TeammateIdle(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
+            ClaudeHookInput::InstructionsLoaded(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
             ClaudeHookInput::ConfigChange(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
@@ -281,19 +306,16 @@ fn parsed_value(input: &NativeHookInput) -> serde_json::Value {
             ClaudeHookInput::FileChanged(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
-            ClaudeHookInput::PreCompact(v) => {
-                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
-            }
-            ClaudeHookInput::PostCompact(v) => {
-                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
-            }
-            ClaudeHookInput::InstructionsLoaded(v) => {
-                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
-            }
             ClaudeHookInput::WorktreeCreate(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
             ClaudeHookInput::WorktreeRemove(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PreCompact(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::PostCompact(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
             ClaudeHookInput::Elicitation(v) => {
@@ -302,7 +324,7 @@ fn parsed_value(input: &NativeHookInput) -> serde_json::Value {
             ClaudeHookInput::ElicitationResult(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
-            ClaudeHookInput::StopFailure(v) => {
+            ClaudeHookInput::SessionEnd(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
             ClaudeHookInput::Unknown { raw, .. } => raw.as_value().clone(),
@@ -795,8 +817,8 @@ mod tests {
         let (_, input) = parse_native(Harness::Claude, &bytes).unwrap();
         if let NativeHookInput::Claude(ClaudeHookInput::SessionStart(ev)) = input {
             let json = serde_json::to_value(&ev).unwrap();
-            assert_eq!(json["sessionId"], "abc-123-def");
-            assert_eq!(json["hookEventName"], "SessionStart");
+            assert_eq!(json["session_id"], "abc-123-def");
+            assert_eq!(json["hook_event_name"], "SessionStart");
             assert_eq!(json["cwd"], "/home/user/project");
         } else {
             panic!("expected Claude SessionStart");

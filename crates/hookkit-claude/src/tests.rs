@@ -1,8 +1,10 @@
 use crate::input::{self, ClaudeHookInput, ClaudeToolInput};
 use crate::output::{
-    ClaudeEventOutput, ClaudeFileChangedOutput, ClaudePermissionDeniedOutput,
-    ClaudePostToolUseOutput, ClaudePreToolUseOutput, ClaudePromptSubmitOutput,
-    ClaudeSessionStartOutput, ClaudeStopOutput, ClaudeWorktreeCreateOutput, OutputEnvelope,
+    ClaudeElicitationOutput, ClaudeElicitationResultOutput, ClaudeEventOutput,
+    ClaudePermissionDeniedOutput, ClaudePermissionRequestOutput, ClaudePostToolBatchOutput,
+    ClaudePostToolUseFailureOutput, ClaudePostToolUseOutput, ClaudePreToolUseOutput,
+    ClaudePromptExpansionOutput, ClaudePromptSubmitOutput, ClaudeSessionStartOutput,
+    ClaudeStopOutput, ClaudeWatchPathsOutput, ClaudeWorktreeCreateOutput, OutputEnvelope,
 };
 
 fn load_fixture(name: &str) -> serde_json::Value {
@@ -26,15 +28,17 @@ fn parse_session_start() {
         assert_eq!(ev.common.session_id, "abc-123-def");
         assert_eq!(ev.common.hook_event_name, "SessionStart");
         assert_eq!(ev.common.cwd, "/home/user/project");
+        assert_eq!(ev.source.as_deref(), Some("startup"));
+        assert_eq!(ev.model.as_deref(), Some("claude-sonnet-4-6"));
     }
 }
 
 #[test]
-fn parse_with_snake_case_event_name_alias() {
+fn parse_with_camel_case_event_name_alias() {
     let v = serde_json::json!({
-        "sessionId": "abc-123-def",
+        "session_id": "abc-123-def",
         "cwd": "/home/user/project",
-        "hook_event_name": "SessionStart"
+        "hookEventName": "SessionStart"
     });
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::SessionStart(_)));
@@ -46,10 +50,19 @@ fn parse_user_prompt_submit() {
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::UserPromptSubmit(_)));
     if let ClaudeHookInput::UserPromptSubmit(ev) = input {
-        assert_eq!(
-            ev.user_prompt.as_deref(),
-            Some("Fix the login bug in auth.rs")
-        );
+        assert_eq!(ev.prompt.as_deref(), Some("Fix the login bug in auth.rs"));
+    }
+}
+
+#[test]
+fn parse_user_prompt_expansion() {
+    let v = load_fixture("user_prompt_expansion.json");
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::UserPromptExpansion(_)));
+    if let ClaudeHookInput::UserPromptExpansion(ev) = input {
+        assert_eq!(ev.command_name.as_deref(), Some("review-skill"));
+        assert_eq!(ev.command_source.as_deref(), Some("plugin"));
+        assert_eq!(ev.prompt.as_deref(), Some("/review-skill payments"));
     }
 }
 
@@ -60,6 +73,7 @@ fn parse_pre_tool_use() {
     assert!(matches!(input, ClaudeHookInput::PreToolUse(_)));
     if let ClaudeHookInput::PreToolUse(ev) = input {
         assert_eq!(ev.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(ev.tool_use_id.as_deref(), Some("toolu_01PRETOOL"));
         let typed = ev.typed_tool_input().unwrap();
         assert!(matches!(typed, ClaudeToolInput::Bash(_)));
         if let ClaudeToolInput::Bash(bash) = typed {
@@ -75,7 +89,8 @@ fn parse_post_tool_use() {
     assert!(matches!(input, ClaudeHookInput::PostToolUse(_)));
     if let ClaudeHookInput::PostToolUse(ev) = input {
         assert_eq!(ev.tool_name.as_deref(), Some("Write"));
-        assert!(ev.tool_result.is_some());
+        assert!(ev.tool_response.is_some());
+        assert_eq!(ev.tool_use_id.as_deref(), Some("toolu_01POSTTOOL"));
         let typed = ev.typed_tool_input().unwrap();
         assert!(matches!(typed, ClaudeToolInput::Write(_)));
     }
@@ -84,11 +99,12 @@ fn parse_post_tool_use() {
 #[test]
 fn parse_post_tool_use_failure() {
     let v = serde_json::json!({
-        "sessionId": "abc-123",
+        "session_id": "abc-123",
         "cwd": "/home/user/project",
-        "hookEventName": "PostToolUseFailure",
-        "toolName": "Bash",
-        "toolInput": {"command": "false"},
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "false"},
+        "tool_use_id": "toolu_01FAIL",
         "error": "exit code 1"
     });
     let input = input::parse(&v).expect("should parse");
@@ -99,14 +115,27 @@ fn parse_post_tool_use_failure() {
 }
 
 #[test]
+fn parse_post_tool_batch() {
+    let v = load_fixture("post_tool_batch.json");
+    let input = input::parse(&v).expect("should parse");
+    assert!(matches!(input, ClaudeHookInput::PostToolBatch(_)));
+    if let ClaudeHookInput::PostToolBatch(ev) = input {
+        let calls = ev.tool_calls.expect("tool calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].tool_name.as_deref(), Some("Read"));
+    }
+}
+
+#[test]
 fn parse_permission_denied() {
     let v = serde_json::json!({
-        "sessionId": "abc-123",
+        "session_id": "abc-123",
         "cwd": "/home/user/project",
-        "hookEventName": "PermissionDenied",
-        "toolName": "Bash",
-        "toolInput": {"command": "rm -rf /"},
-        "permissionDecision": {"decision": "deny", "reason": "too dangerous"}
+        "hook_event_name": "PermissionDenied",
+        "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf /"},
+        "tool_use_id": "toolu_01DENIED",
+        "reason": "too dangerous"
     });
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::PermissionDenied(_)));
@@ -118,7 +147,7 @@ fn parse_stop() {
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::Stop(_)));
     if let ClaudeHookInput::Stop(ev) = input {
-        assert_eq!(ev.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(ev.stop_hook_active, Some(false));
         assert!(ev.last_assistant_message.is_some());
     }
 }
@@ -126,26 +155,29 @@ fn parse_stop() {
 #[test]
 fn parse_notification() {
     let v = serde_json::json!({
-        "sessionId": "abc-123",
+        "session_id": "abc-123",
         "cwd": "/home/user/project",
-        "hookEventName": "Notification",
+        "hook_event_name": "Notification",
         "message": "Build complete",
-        "level": "info"
+        "title": "Build finished",
+        "notification_type": "idle_prompt"
     });
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::Notification(_)));
     if let ClaudeHookInput::Notification(ev) = input {
         assert_eq!(ev.message.as_deref(), Some("Build complete"));
-        assert_eq!(ev.level.as_deref(), Some("info"));
+        assert_eq!(ev.title.as_deref(), Some("Build finished"));
+        assert_eq!(ev.notification_type.as_deref(), Some("idle_prompt"));
     }
 }
 
 #[test]
 fn parse_session_end() {
     let v = serde_json::json!({
-        "sessionId": "abc-123",
+        "session_id": "abc-123",
         "cwd": "/home/user/project",
-        "hookEventName": "SessionEnd"
+        "hook_event_name": "SessionEnd",
+        "reason": "other"
     });
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::SessionEnd(_)));
@@ -154,9 +186,9 @@ fn parse_session_end() {
 #[test]
 fn parse_unknown_event() {
     let v = serde_json::json!({
-        "sessionId": "test",
+        "session_id": "test",
         "cwd": "/tmp",
-        "hookEventName": "FutureEvent",
+        "hook_event_name": "FutureEvent",
         "someField": 42
     });
     let input = input::parse(&v).expect("should parse");
@@ -169,7 +201,7 @@ fn parse_unknown_event() {
 
 #[test]
 fn parse_missing_event_name() {
-    let v = serde_json::json!({"sessionId": "test", "cwd": "/tmp"});
+    let v = serde_json::json!({"session_id": "test", "cwd": "/tmp"});
     let result = input::parse(&v);
     assert!(result.is_err());
 }
@@ -177,9 +209,9 @@ fn parse_missing_event_name() {
 #[test]
 fn unknown_fields_preserved() {
     let v = serde_json::json!({
-        "sessionId": "test",
+        "session_id": "test",
         "cwd": "/tmp",
-        "hookEventName": "SessionStart",
+        "hook_event_name": "SessionStart",
         "futureField": "should survive",
         "anotherField": [1, 2, 3]
     });
@@ -234,33 +266,37 @@ fn output_block() {
 fn output_allow() {
     let out = OutputEnvelope::allow();
     let json = serde_json::to_value(&out).unwrap();
-    assert_eq!(json["decision"], "allow");
+    assert_eq!(json, serde_json::json!({}));
 }
 
 #[test]
 fn output_pre_tool_deny() {
     let out = OutputEnvelope::pre_tool_deny("dangerous command");
     let json = serde_json::to_value(&out).unwrap();
-    let perm = &json["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(perm["decision"], "deny");
-    assert_eq!(perm["reason"], "dangerous command");
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(
+        json["hookSpecificOutput"]["permissionDecisionReason"],
+        "dangerous command"
+    );
 }
 
 #[test]
 fn output_pre_tool_allow() {
     let out = OutputEnvelope::pre_tool_allow();
     let json = serde_json::to_value(&out).unwrap();
-    let perm = &json["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(perm["decision"], "allow");
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "allow");
 }
 
 #[test]
 fn output_pre_tool_ask() {
     let out = OutputEnvelope::pre_tool_ask("needs user confirmation");
     let json = serde_json::to_value(&out).unwrap();
-    let perm = &json["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(perm["decision"], "ask");
-    assert_eq!(perm["reason"], "needs user confirmation");
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "ask");
+    assert_eq!(
+        json["hookSpecificOutput"]["permissionDecisionReason"],
+        "needs user confirmation"
+    );
 }
 
 #[test]
@@ -270,15 +306,15 @@ fn output_pre_tool_deny_with_updated_input() {
         serde_json::json!({"command": "echo safe"}),
     );
     let json = serde_json::to_value(&out).unwrap();
-    let perm = &json["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(perm["decision"], "deny");
-    assert_eq!(perm["updatedInput"]["command"], "echo safe");
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(json["hookSpecificOutput"]["updatedInput"]["command"], "echo safe");
 }
 
 #[test]
 fn output_with_context() {
     let out = OutputEnvelope::with_context("formatted file src/main.rs");
     let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolUse");
     assert_eq!(
         json["hookSpecificOutput"]["additionalContext"],
         "formatted file src/main.rs"
@@ -328,9 +364,9 @@ fn output_no_nulls_for_omitted_fields() {
 
 fn mk_json(event_name: &str) -> serde_json::Value {
     serde_json::json!({
-        "sessionId": "test-session",
+        "session_id": "test-session",
         "cwd": "/tmp",
-        "hookEventName": event_name
+        "hook_event_name": event_name
     })
 }
 
@@ -348,7 +384,11 @@ fn mk_json_with(event_name: &str, extra: serde_json::Value) -> serde_json::Value
 fn parse_permission_request() {
     let v = mk_json_with(
         "PermissionRequest",
-        serde_json::json!({"toolName": "Bash", "toolInput": {"command": "ls"}}),
+        serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "permission_suggestions": [{"type": "addRules"}]
+        }),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::PermissionRequest(_)));
@@ -358,7 +398,7 @@ fn parse_permission_request() {
 fn parse_subagent_start() {
     let v = mk_json_with(
         "SubagentStart",
-        serde_json::json!({"subagentId": "agent-1", "subagentType": "coder"}),
+        serde_json::json!({"agent_id": "agent-1", "agent_type": "coder"}),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::SubagentStart(_)));
@@ -366,7 +406,15 @@ fn parse_subagent_start() {
 
 #[test]
 fn parse_subagent_stop() {
-    let v = mk_json_with("SubagentStop", serde_json::json!({"subagentId": "agent-1"}));
+    let v = mk_json_with(
+        "SubagentStop",
+        serde_json::json!({
+            "agent_id": "agent-1",
+            "agent_type": "coder",
+            "stop_hook_active": false,
+            "agent_transcript_path": "/tmp/subagents/agent-1.jsonl"
+        }),
+    );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::SubagentStop(_)));
 }
@@ -375,7 +423,11 @@ fn parse_subagent_stop() {
 fn parse_task_created() {
     let v = mk_json_with(
         "TaskCreated",
-        serde_json::json!({"taskId": "t-1", "taskDescription": "fix the bug"}),
+        serde_json::json!({
+            "task_id": "t-1",
+            "task_subject": "fix the bug",
+            "task_description": "investigate auth flow"
+        }),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::TaskCreated(_)));
@@ -383,7 +435,10 @@ fn parse_task_created() {
 
 #[test]
 fn parse_task_completed() {
-    let v = mk_json_with("TaskCompleted", serde_json::json!({"taskId": "t-1"}));
+    let v = mk_json_with(
+        "TaskCompleted",
+        serde_json::json!({"task_id": "t-1", "task_subject": "fix the bug"}),
+    );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::TaskCompleted(_)));
 }
@@ -392,7 +447,7 @@ fn parse_task_completed() {
 fn parse_teammate_idle() {
     let v = mk_json_with(
         "TeammateIdle",
-        serde_json::json!({"teammateId": "teammate-1"}),
+        serde_json::json!({"teammate_name": "teammate-1", "team_name": "alpha"}),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::TeammateIdle(_)));
@@ -402,7 +457,7 @@ fn parse_teammate_idle() {
 fn parse_config_change() {
     let v = mk_json_with(
         "ConfigChange",
-        serde_json::json!({"configKey": "model", "configValue": "opus"}),
+        serde_json::json!({"source": "project_settings", "file_path": "/tmp/.claude/settings.json"}),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::ConfigChange(_)));
@@ -422,7 +477,7 @@ fn parse_cwd_changed() {
 fn parse_file_changed() {
     let v = mk_json_with(
         "FileChanged",
-        serde_json::json!({"filePath": "/tmp/test.rs", "changeType": "modified"}),
+        serde_json::json!({"file_path": "/tmp/test.rs", "event": "change"}),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::FileChanged(_)));
@@ -430,14 +485,20 @@ fn parse_file_changed() {
 
 #[test]
 fn parse_pre_compact() {
-    let v = mk_json("PreCompact");
+    let v = mk_json_with(
+        "PreCompact",
+        serde_json::json!({"trigger": "manual", "custom_instructions": ""}),
+    );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::PreCompact(_)));
 }
 
 #[test]
 fn parse_post_compact() {
-    let v = mk_json("PostCompact");
+    let v = mk_json_with(
+        "PostCompact",
+        serde_json::json!({"trigger": "manual", "compact_summary": "summary"}),
+    );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::PostCompact(_)));
 }
@@ -446,7 +507,11 @@ fn parse_post_compact() {
 fn parse_instructions_loaded() {
     let v = mk_json_with(
         "InstructionsLoaded",
-        serde_json::json!({"instructionsSource": "CLAUDE.md"}),
+        serde_json::json!({
+            "file_path": "/tmp/CLAUDE.md",
+            "memory_type": "Project",
+            "load_reason": "session_start"
+        }),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::InstructionsLoaded(_)));
@@ -456,7 +521,7 @@ fn parse_instructions_loaded() {
 fn parse_worktree_create() {
     let v = mk_json_with(
         "WorktreeCreate",
-        serde_json::json!({"worktreePath": "/tmp/worktree-1", "branch": "feature-x"}),
+        serde_json::json!({"name": "feature-x"}),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::WorktreeCreate(_)));
@@ -476,13 +541,18 @@ fn parse_worktree_remove() {
 fn parse_elicitation() {
     let v = mk_json_with(
         "Elicitation",
-        serde_json::json!({"question": "Which option?", "options": ["a", "b"]}),
+        serde_json::json!({
+            "mcp_server_name": "my-mcp-server",
+            "message": "Which option?",
+            "mode": "form",
+            "requested_schema": {"type": "object"}
+        }),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::Elicitation(_)));
     if let ClaudeHookInput::Elicitation(ev) = input {
-        assert_eq!(ev.question.as_deref(), Some("Which option?"));
-        assert_eq!(ev.options.as_ref().unwrap().len(), 2);
+        assert_eq!(ev.message.as_deref(), Some("Which option?"));
+        assert_eq!(ev.mode.as_deref(), Some("form"));
     }
 }
 
@@ -490,7 +560,11 @@ fn parse_elicitation() {
 fn parse_elicitation_result() {
     let v = mk_json_with(
         "ElicitationResult",
-        serde_json::json!({"result": {"choice": "a"}}),
+        serde_json::json!({
+            "mcp_server_name": "my-mcp-server",
+            "action": "accept",
+            "content": {"choice": "a"}
+        }),
     );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::ElicitationResult(_)));
@@ -498,7 +572,10 @@ fn parse_elicitation_result() {
 
 #[test]
 fn parse_stop_failure() {
-    let v = mk_json_with("StopFailure", serde_json::json!({"error": "timed out"}));
+    let v = mk_json_with(
+        "StopFailure",
+        serde_json::json!({"error": "rate_limit", "error_details": {"message": "timed out"}}),
+    );
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, ClaudeHookInput::StopFailure(_)));
 }
@@ -509,17 +586,16 @@ fn parse_stop_failure() {
 fn output_permission_approve() {
     let out = OutputEnvelope::permission_approve();
     let json = serde_json::to_value(&out).unwrap();
-    let perm = &json["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(perm["decision"], "allow");
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+    assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "allow");
 }
 
 #[test]
 fn output_permission_deny() {
     let out = OutputEnvelope::permission_deny("too dangerous");
     let json = serde_json::to_value(&out).unwrap();
-    let perm = &json["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(perm["decision"], "deny");
-    assert_eq!(perm["reason"], "too dangerous");
+    assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "deny");
+    assert_eq!(json["hookSpecificOutput"]["decision"]["message"], "too dangerous");
 }
 
 #[test]
@@ -548,6 +624,7 @@ fn output_session_start_event_scoped() {
         .with_suppress_output(true)
         .into();
     let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
     assert_eq!(
         json["hookSpecificOutput"]["additionalContext"],
         "session prep context"
@@ -558,9 +635,14 @@ fn output_session_start_event_scoped() {
 
 #[test]
 fn output_prompt_submit_event_scoped() {
-    let allow: OutputEnvelope = ClaudePromptSubmitOutput::allow().into();
+    let allow: OutputEnvelope = ClaudePromptSubmitOutput::allow()
+        .with_context("team policy")
+        .with_session_title("Payments review")
+        .into();
     let allow_json = serde_json::to_value(&allow).unwrap();
-    assert_eq!(allow_json["decision"], "allow");
+    assert_eq!(allow_json["decision"], serde_json::Value::Null);
+    assert_eq!(allow_json["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+    assert_eq!(allow_json["hookSpecificOutput"]["sessionTitle"], "Payments review");
 
     let block: OutputEnvelope = ClaudePromptSubmitOutput::block("insufficient context").into();
     let block_json = serde_json::to_value(&block).unwrap();
@@ -572,22 +654,33 @@ fn output_prompt_submit_event_scoped() {
 fn output_pre_tool_use_event_scoped() {
     let allow: OutputEnvelope = ClaudePreToolUseOutput::allow().into();
     let allow_json = serde_json::to_value(&allow).unwrap();
-    assert_eq!(
-        allow_json["hookSpecificOutput"]["permissionDecision"]["decision"],
-        "allow"
-    );
+    assert_eq!(allow_json["hookSpecificOutput"]["permissionDecision"], "allow");
 
     let deny: OutputEnvelope = ClaudePreToolUseOutput::deny("dangerous").into();
     let deny_json = serde_json::to_value(&deny).unwrap();
-    let deny_decision = &deny_json["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(deny_decision["decision"], "deny");
-    assert_eq!(deny_decision["reason"], "dangerous");
+    assert_eq!(deny_json["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(
+        deny_json["hookSpecificOutput"]["permissionDecisionReason"],
+        "dangerous"
+    );
 
     let ask: OutputEnvelope = ClaudePreToolUseOutput::ask("need approval").into();
     let ask_json = serde_json::to_value(&ask).unwrap();
-    let ask_decision = &ask_json["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(ask_decision["decision"], "ask");
-    assert_eq!(ask_decision["reason"], "need approval");
+    assert_eq!(ask_json["hookSpecificOutput"]["permissionDecision"], "ask");
+    assert_eq!(
+        ask_json["hookSpecificOutput"]["permissionDecisionReason"],
+        "need approval"
+    );
+}
+
+#[test]
+fn output_prompt_expansion_event_scoped() {
+    let out: OutputEnvelope = ClaudePromptExpansionOutput::block("disabled")
+        .with_context("use /review instead")
+        .into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["decision"], "block");
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "UserPromptExpansion");
 }
 
 #[test]
@@ -596,9 +689,45 @@ fn output_post_tool_use_event_scoped() {
         .with_context("lint completed")
         .into();
     let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolUse");
     assert_eq!(
         json["hookSpecificOutput"]["additionalContext"],
         "lint completed"
+    );
+}
+
+#[test]
+fn output_post_tool_use_failure_event_scoped() {
+    let out: OutputEnvelope = ClaudePostToolUseFailureOutput::new()
+        .with_context("retry with smaller input")
+        .into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolUseFailure");
+    assert_eq!(
+        json["hookSpecificOutput"]["additionalContext"],
+        "retry with smaller input"
+    );
+}
+
+#[test]
+fn output_post_tool_batch_event_scoped() {
+    let out: OutputEnvelope = ClaudePostToolBatchOutput::new()
+        .with_context("these reads came from the ledger module")
+        .into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolBatch");
+}
+
+#[test]
+fn output_permission_request_event_scoped() {
+    let out: OutputEnvelope = ClaudePermissionRequestOutput::allow()
+        .with_updated_input(serde_json::json!({"command": "npm run lint"}))
+        .into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "allow");
+    assert_eq!(
+        json["hookSpecificOutput"]["decision"]["updatedInput"]["command"],
+        "npm run lint"
     );
 }
 
@@ -631,7 +760,7 @@ fn output_worktree_create_event_scoped() {
 #[test]
 fn output_file_changed_event_scoped() {
     let out: OutputEnvelope =
-        ClaudeFileChangedOutput::new(vec!["/tmp/a".to_string(), "/tmp/b".to_string()]).into();
+        ClaudeWatchPathsOutput::new(vec!["/tmp/a".to_string(), "/tmp/b".to_string()]).into();
     let json = serde_json::to_value(&out).unwrap();
     let paths = json["hookSpecificOutput"]["watchPaths"].as_array().unwrap();
     assert_eq!(paths.len(), 2);
@@ -646,4 +775,23 @@ fn output_event_enum_dispatch() {
     let json = serde_json::to_value(&out).unwrap();
     assert_eq!(json["decision"], "block");
     assert_eq!(json["reason"], "wait");
+}
+
+#[test]
+fn output_elicitation_event_scoped() {
+    let out: OutputEnvelope = ClaudeElicitationOutput::accept(serde_json::json!({
+        "username": "alice"
+    }))
+    .into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "Elicitation");
+    assert_eq!(json["hookSpecificOutput"]["action"], "accept");
+}
+
+#[test]
+fn output_elicitation_result_event_scoped() {
+    let out: OutputEnvelope = ClaudeElicitationResultOutput::decline().into();
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "ElicitationResult");
+    assert_eq!(json["hookSpecificOutput"]["action"], "decline");
 }
