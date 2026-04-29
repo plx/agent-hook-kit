@@ -368,7 +368,7 @@ pub struct SubagentStop {
 pub struct TaskCreated {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "taskId")]
     pub task_id: Option<String>,
     #[serde(
         default,
@@ -396,7 +396,7 @@ pub struct TaskCreated {
 pub struct TaskCompleted {
     #[serde(flatten)]
     pub common: CommonFields,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "taskId")]
     pub task_id: Option<String>,
     #[serde(
         default,

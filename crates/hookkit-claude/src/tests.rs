@@ -447,6 +447,26 @@ fn parse_task_completed() {
 }
 
 #[test]
+fn parse_task_created_with_camel_case_task_id() {
+    let v = mk_json_with("TaskCreated", serde_json::json!({"taskId": "t-1"}));
+    let input = input::parse(&v).expect("should parse");
+    let ClaudeHookInput::TaskCreated(ev) = input else {
+        panic!("expected TaskCreated");
+    };
+    assert_eq!(ev.task_id.as_deref(), Some("t-1"));
+}
+
+#[test]
+fn parse_task_completed_with_camel_case_task_id() {
+    let v = mk_json_with("TaskCompleted", serde_json::json!({"taskId": "t-1"}));
+    let input = input::parse(&v).expect("should parse");
+    let ClaudeHookInput::TaskCompleted(ev) = input else {
+        panic!("expected TaskCompleted");
+    };
+    assert_eq!(ev.task_id.as_deref(), Some("t-1"));
+}
+
+#[test]
 fn parse_teammate_idle() {
     let v = mk_json_with(
         "TeammateIdle",
