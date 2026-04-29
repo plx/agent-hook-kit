@@ -1,7 +1,8 @@
 {
-  "sessionId": "abc-123-def",
-  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
   "cwd": "/home/user/project",
-  "hookEventName": "UserPromptSubmit",
-  "userPrompt": "Fix the login bug in auth.rs"
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Fix the login bug in auth.rs"
 }

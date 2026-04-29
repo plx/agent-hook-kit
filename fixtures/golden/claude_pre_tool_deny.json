@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"permissionDecision":{"decision":"deny","reason":"destructive command blocked"}}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"destructive command blocked"}}

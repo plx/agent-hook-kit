@@ -1,14 +1,17 @@
 {
-  "sessionId": "abc-123-def",
-  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
   "cwd": "/home/user/project",
-  "hookEventName": "PostToolUse",
-  "toolName": "Write",
-  "toolInput": {
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
     "file_path": "/home/user/project/src/main.rs",
     "content": "fn main() { println!(\"hello\"); }"
   },
-  "toolResult": {
+  "tool_response": {
+    "filePath": "/home/user/project/src/main.rs",
     "success": true
-  }
+  },
+  "tool_use_id": "toolu_01POSTTOOL"
 }

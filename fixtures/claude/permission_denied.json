@@ -1,14 +1,13 @@
 {
-  "sessionId": "abc-123-def",
-  "transcriptPath": "/tmp/claude/transcript-abc.jsonl",
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
   "cwd": "/home/user/project",
-  "hookEventName": "PermissionDenied",
-  "toolName": "Bash",
-  "toolInput": {
+  "permission_mode": "auto",
+  "hook_event_name": "PermissionDenied",
+  "tool_name": "Bash",
+  "tool_input": {
     "command": "rm -rf /"
   },
-  "permissionDecision": {
-    "decision": "deny",
-    "reason": "destructive command blocked"
-  }
+  "tool_use_id": "toolu_01DENIED",
+  "reason": "destructive command blocked"
 }
