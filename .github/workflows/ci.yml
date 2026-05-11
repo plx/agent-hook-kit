@@ -31,3 +31,24 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --workspace
+
+  licenses:
+    name: Third-party license attribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Pinned in lockstep with scripts/regen-licenses.sh.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.0
+      - name: Regenerate THIRD_PARTY_LICENSES.md
+        run: scripts/regen-licenses.sh
+      - name: Verify committed file is up to date
+        run: |
+          if ! git diff --exit-code -- THIRD_PARTY_LICENSES.md; then
+            echo "::error file=THIRD_PARTY_LICENSES.md::Out of date. Run scripts/regen-licenses.sh locally and commit the result." >&2
+            exit 1
+          fi

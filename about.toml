@@ -1,0 +1,27 @@
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
+
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+[zmij]
+accepted = ["MIT"]
+
+[memchr]
+accepted = ["MIT"]
+
+[unicode-ident]
+accepted = ["MIT", "Unicode-3.0"]
