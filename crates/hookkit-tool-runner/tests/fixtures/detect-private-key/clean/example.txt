@@ -1,0 +1,2 @@
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDExampleSshPublicKeyContent user@example
+A regular note. No secrets here.
