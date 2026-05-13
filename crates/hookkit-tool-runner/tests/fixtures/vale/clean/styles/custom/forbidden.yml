@@ -1,0 +1,6 @@
+extends: existence
+message: "Avoid using the word 'foo'."
+level: error
+ignorecase: true
+tokens:
+  - foo

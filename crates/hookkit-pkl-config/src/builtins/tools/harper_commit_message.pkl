@@ -1,0 +1,43 @@
+/// Harper — grammar checker for commit messages (harper-cli on COMMIT_EDITMSG).
+///
+/// DRAFT: post-tool-use hooks operate on file edits, not the prepare-commit-msg
+/// lifecycle, so this spec is wired up but won't typically be triggered by the
+/// runner unless a workflow explicitly edits a commit message file. Verified
+/// against jdx/hk's reference; not exercised by hookkit-tool-runner fixtures.
+
+module agent_hook_kit.builtins.tools.HarperCommitMessage
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "harper-commit-message"
+  displayName = "Harper (commit message)"
+  executable = "harper-cli"
+  installHint = "install harper with `brew install harper`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "COMMIT_EDITMSG"
+      "**/COMMIT_EDITMSG"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--no-color"
+        "lint"
+        "--format"
+        "compact"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}
