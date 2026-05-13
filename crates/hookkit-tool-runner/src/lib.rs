@@ -364,6 +364,8 @@ pub fn run_common_input(
     let project_root = normalize_path(&loaded.project_root);
     let lowering = lowering_from(&loaded.config.settings.lowering_policy);
     let missing_tool_policy = loaded.config.settings.missing_tool_policy;
+    let fail_fast = loaded.config.settings.fail_fast;
+    let continue_after_issues = loaded.config.settings.continue_after_issues;
 
     let mut output = CommonPostToolUseOutput::new().with_lowering_policy(lowering);
     let mut had_hard_failure = false;
@@ -413,7 +415,7 @@ pub fn run_common_input(
             outcomes.push(run_job(&job, &context));
         }
 
-        accumulate_outcomes(
+        let batch_status = accumulate_outcomes(
             outcomes,
             &context,
             ctx,
@@ -422,6 +424,14 @@ pub fn run_common_input(
             &mut had_hard_failure,
             &mut had_harness_block_message,
         )?;
+
+        if had_harness_block_message.is_some()
+            || had_hard_failure
+            || (fail_fast && batch_status.operational_failure)
+            || (!continue_after_issues && batch_status.issues)
+        {
+            break;
+        }
     }
 
     if let Some(message) = had_harness_block_message {
@@ -466,6 +476,12 @@ fn resolve_run_order(config: &pkl::RunnerConfig) -> Vec<&pkl::ToolSpec> {
         .iter()
         .filter_map(|id| config.tools.get(id))
         .collect()
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ToolBatchStatus {
+    operational_failure: bool,
+    issues: bool,
 }
 
 /// Convert a Pkl-shaped tool spec to the runtime execution type.
@@ -1046,7 +1062,7 @@ fn accumulate_outcomes(
     output: &mut CommonPostToolUseOutput,
     had_hard_failure: &mut bool,
     had_harness_block_message: &mut Option<String>,
-) -> hookkit_core::Result<()> {
+) -> hookkit_core::Result<ToolBatchStatus> {
     let mut changed_files = BTreeSet::new();
     let mut issue_files = BTreeSet::new();
     let mut issue_diagnostics = Vec::new();
@@ -1077,6 +1093,11 @@ fn accumulate_outcomes(
         }
     }
 
+    let mut status = ToolBatchStatus {
+        operational_failure: !unavailable.is_empty() || !failure_diagnostics.is_empty(),
+        issues: !issue_diagnostics.is_empty(),
+    };
+
     if !unavailable.is_empty() {
         match missing_tool_policy {
             pkl::MissingToolPolicy::UserNotice => {
@@ -1101,7 +1122,7 @@ fn accumulate_outcomes(
                     eprintln!("{message}");
                 }
                 *had_hard_failure = true;
-                return Ok(());
+                return Ok(status);
             }
             pkl::MissingToolPolicy::HarnessBlock => {
                 if let Some((phase, executable, install_hint)) = unavailable.first() {
@@ -1113,7 +1134,7 @@ fn accumulate_outcomes(
                     )?;
                     *had_harness_block_message = Some(message);
                 }
-                return Ok(());
+                return Ok(status);
             }
         }
     }
@@ -1197,7 +1218,8 @@ fn accumulate_outcomes(
         *output = std::mem::take(output).with_agent_feedback(rendered);
     }
 
-    Ok(())
+    status.operational_failure = status.operational_failure || *had_hard_failure;
+    Ok(status)
 }
 
 fn render_unavailable_message(

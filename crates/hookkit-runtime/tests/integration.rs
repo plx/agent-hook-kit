@@ -50,6 +50,24 @@ fn temp_project(name: &str) -> PathBuf {
     path
 }
 
+fn write_executable(project: &Path, name: &str, body: &str) -> PathBuf {
+    let bin_dir = project.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("failed to create bin dir");
+    let path = bin_dir.join(name);
+    std::fs::write(&path, body).unwrap_or_else(|e| panic!("failed to write {name}: {e}"));
+
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(&path)
+            .unwrap_or_else(|e| panic!("{name} metadata: {e}"))
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap_or_else(|e| panic!("chmod {name}: {e}"));
+    }
+
+    path
+}
+
 fn write_fake_ruff(project: &Path) -> PathBuf {
     let bin_dir = project.join("bin");
     std::fs::create_dir_all(&bin_dir).expect("failed to create bin dir");
@@ -650,6 +668,186 @@ fn post_tool_use_reports_tool_failure_with_diagnostics() {
             .join(".agent-hook-kit/ruff-agent-hook/gemini-ruff-test_ruff-tool-failure.txt")
             .is_file()
     );
+}
+
+#[test]
+fn post_tool_use_fail_fast_stops_after_operational_failure() {
+    require_pkl!();
+    let project = temp_project("fail-fast");
+    let failer = write_executable(
+        &project,
+        "failer",
+        r#"#!/usr/bin/env bash
+echo "tool crashed" >&2
+exit 2
+"#,
+    );
+    let changer = write_executable(
+        &project,
+        "changer",
+        r#"#!/usr/bin/env bash
+file="${@: -1}"
+printf "changed\n" >> "$file"
+exit 0
+"#,
+    );
+
+    let config_dir = project.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let failer = failer.to_string_lossy().replace('\\', "\\\\");
+    let changer = changer.to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+
+settings {{
+  failFast = true
+  diagnosticsDirectory = ".agent-hook-kit/post-tool-use"
+}}
+
+tools {{
+  ["failer"] = new ToolSpec {{
+    id = "failer"
+    displayName = "Failer"
+    executable = "{failer}"
+    files {{ include = new Listing<String> {{ "*.py"; "**/*.py" }} }}
+    phases {{
+      ["verify"] = new Phase {{
+        mode = "verify"
+        argv = new Listing<String | ArgToken> {{ new Files {{}} }}
+        exitCodes {{ clean = new Listing<Int> {{ 0 }}; failure = new Listing<Int> {{ 2 }} }}
+      }}
+    }}
+  }}
+  ["changer"] = new ToolSpec {{
+    id = "changer"
+    displayName = "Changer"
+    executable = "{changer}"
+    files {{ include = new Listing<String> {{ "*.py"; "**/*.py" }} }}
+    phases {{
+      ["format"] = new Phase {{
+        mode = "format"
+        argv = new Listing<String | ArgToken> {{ new Files {{}} }}
+        writes = "target-files"
+      }}
+    }}
+  }}
+}}
+run = new Listing<String> {{ "failer"; "changer" }}
+"#
+        ),
+    )
+    .unwrap();
+
+    let src = project.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.py"), "original\n").unwrap();
+
+    let output = run_example(
+        "post-tool-use-agent-hook",
+        &post_tool_use_fixture("claude", &project, "src/a.py"),
+        &["--claude"],
+    );
+
+    assert!(output.status.success());
+    assert_eq!(
+        std::fs::read_to_string(src.join("a.py")).unwrap(),
+        "original\n"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Failer: phase `verify` failed"));
+    assert!(!stderr.contains("Changer: changed"));
+}
+
+#[test]
+fn post_tool_use_continue_after_issues_false_stops_later_tools() {
+    require_pkl!();
+    let project = temp_project("stop-after-issues");
+    let issuer = write_executable(
+        &project,
+        "issuer",
+        r#"#!/usr/bin/env bash
+echo "${1}: issue" >&2
+exit 1
+"#,
+    );
+    let changer = write_executable(
+        &project,
+        "changer",
+        r#"#!/usr/bin/env bash
+file="${@: -1}"
+printf "changed\n" >> "$file"
+exit 0
+"#,
+    );
+
+    let config_dir = project.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let issuer = issuer.to_string_lossy().replace('\\', "\\\\");
+    let changer = changer.to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+
+settings {{
+  continueAfterIssues = false
+  diagnosticsDirectory = ".agent-hook-kit/post-tool-use"
+}}
+
+tools {{
+  ["issuer"] = new ToolSpec {{
+    id = "issuer"
+    displayName = "Issuer"
+    executable = "{issuer}"
+    files {{ include = new Listing<String> {{ "*.py"; "**/*.py" }} }}
+    phases {{
+      ["verify"] = new Phase {{
+        mode = "verify"
+        argv = new Listing<String | ArgToken> {{ new Files {{}} }}
+        exitCodes {{ clean = new Listing<Int> {{ 0 }}; issues = new Listing<Int> {{ 1 }} }}
+      }}
+    }}
+  }}
+  ["changer"] = new ToolSpec {{
+    id = "changer"
+    displayName = "Changer"
+    executable = "{changer}"
+    files {{ include = new Listing<String> {{ "*.py"; "**/*.py" }} }}
+    phases {{
+      ["format"] = new Phase {{
+        mode = "format"
+        argv = new Listing<String | ArgToken> {{ new Files {{}} }}
+        writes = "target-files"
+      }}
+    }}
+  }}
+}}
+run = new Listing<String> {{ "issuer"; "changer" }}
+"#
+        ),
+    )
+    .unwrap();
+
+    let src = project.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.py"), "original\n").unwrap();
+
+    let output = run_example(
+        "post-tool-use-agent-hook",
+        &post_tool_use_fixture("claude", &project, "src/a.py"),
+        &["--claude"],
+    );
+
+    assert!(output.status.success());
+    assert_eq!(
+        std::fs::read_to_string(src.join("a.py")).unwrap(),
+        "original\n"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Issuer: issues remain"));
+    assert!(!stderr.contains("Changer: changed"));
 }
 
 #[test]
