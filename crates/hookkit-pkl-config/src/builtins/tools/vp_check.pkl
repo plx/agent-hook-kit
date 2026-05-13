@@ -1,0 +1,77 @@
+/// vp check — Vite+ unified check (format + lint + type-check).
+
+module agent_hook_kit.builtins.tools.VpCheck
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "vp-check"
+  displayName = "vp check"
+  executable = "vp"
+  installHint = "install Vite+ with `npm i -g vite-plus` or add it to the project"
+  workspaceIndicator = "package.json"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.js"; "**/*.js"
+      "*.mjs"; "**/*.mjs"
+      "*.cjs"; "**/*.cjs"
+      "*.ts"; "**/*.ts"
+      "*.mts"; "**/*.mts"
+      "*.cts"; "**/*.cts"
+      "*.jsx"; "**/*.jsx"
+      "*.tsx"; "**/*.tsx"
+      "*.mdx"; "**/*.mdx"
+      "*.vue"; "**/*.vue"
+      "*.svelte"; "**/*.svelte"
+      "*.astro"; "**/*.astro"
+      "*.json"; "**/*.json"
+      "*.jsonc"; "**/*.jsonc"
+      "*.json5"; "**/*.json5"
+      "*.yaml"; "**/*.yaml"
+      "*.yml"; "**/*.yml"
+      "*.md"; "**/*.md"
+      "*.markdown"; "**/*.markdown"
+      "*.html"; "**/*.html"
+      "*.htm"; "**/*.htm"
+      "*.css"; "**/*.css"
+      "*.scss"; "**/*.scss"
+      "*.less"; "**/*.less"
+      "*.graphql"; "**/*.graphql"
+      "*.gql"; "**/*.gql"
+      "*.handlebars"; "**/*.handlebars"
+      "*.hbs"; "**/*.hbs"
+      "*.toml"; "**/*.toml"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "check"
+        "--fix"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}
