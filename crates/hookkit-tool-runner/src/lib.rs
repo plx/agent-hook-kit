@@ -735,11 +735,13 @@ enum ToolRunOutcome {
         phase: String,
         executable: String,
         install_hint: Option<String>,
+        changed_files: Vec<PathBuf>,
     },
     ToolFailed {
         phase: String,
         exit_code: Option<i32>,
         diagnostics: String,
+        changed_files: Vec<PathBuf>,
     },
 }
 
@@ -803,6 +805,7 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                     phase: phase.id.clone(),
                     executable,
                     install_hint: context.spec.install_hint.clone(),
+                    changed_files: changed_files_since(&before, job, context),
                 };
             }
             logs.push(log);
@@ -810,6 +813,7 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                 phase: phase.id.clone(),
                 exit_code: None,
                 diagnostics: format_logs(&logs),
+                changed_files: changed_files_since(&before, job, context),
             };
         }
 
@@ -831,6 +835,7 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
                     phase: phase.id.clone(),
                     exit_code: logs.last().and_then(|log| log.status),
                     diagnostics: format_logs(&logs),
+                    changed_files: changed_files_since(&before, job, context),
                 };
             }
         }
@@ -860,6 +865,16 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
         diagnostics: format_logs(&logs),
         files: job.files.clone(),
     })
+}
+
+fn changed_files_since(
+    before: &Snapshot,
+    job: &ToolJob,
+    context: &ToolContext<'_>,
+) -> Vec<PathBuf> {
+    let after_scope = snapshot_scope(job, context);
+    let after = Snapshot::read(&after_scope);
+    before.changed_files(&after)
 }
 
 #[derive(Debug)]
@@ -1084,12 +1099,20 @@ fn accumulate_outcomes(
                 phase,
                 executable,
                 install_hint,
-            } => unavailable.push((phase, executable, install_hint)),
+                changed_files: files,
+            } => {
+                changed_files.extend(files);
+                unavailable.push((phase, executable, install_hint));
+            }
             ToolRunOutcome::ToolFailed {
                 phase,
                 exit_code,
                 diagnostics,
-            } => failure_diagnostics.push((phase, exit_code, diagnostics)),
+                changed_files: files,
+            } => {
+                changed_files.extend(files);
+                failure_diagnostics.push((phase, exit_code, diagnostics));
+            }
         }
     }
 

@@ -671,6 +671,99 @@ fn post_tool_use_reports_tool_failure_with_diagnostics() {
 }
 
 #[test]
+fn post_tool_use_reports_changes_made_before_later_phase_failure() {
+    require_pkl!();
+    let project = temp_project("changed-before-failure");
+    let changer = write_executable(
+        &project,
+        "changer",
+        r#"#!/usr/bin/env bash
+file="${@: -1}"
+printf "changed\n" >> "$file"
+exit 0
+"#,
+    );
+    let failer = write_executable(
+        &project,
+        "failer",
+        r#"#!/usr/bin/env bash
+echo "verify crashed" >&2
+exit 2
+"#,
+    );
+
+    let config_dir = project.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let changer = changer.to_string_lossy().replace('\\', "\\\\");
+    let failer = failer.to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+
+settings {{
+  diagnosticsDirectory = ".agent-hook-kit/post-tool-use"
+}}
+
+tools {{
+  ["combo"] = new ToolSpec {{
+    id = "combo"
+    displayName = "Combo"
+    executable = "{changer}"
+    files {{ include = new Listing<String> {{ "*.py"; "**/*.py" }} }}
+    phases {{
+      ["format"] = new Phase {{
+        mode = "format"
+        program = "{changer}"
+        argv = new Listing<String | ArgToken> {{ new Files {{}} }}
+        writes = "target-files"
+      }}
+      ["verify"] = new Phase {{
+        mode = "verify"
+        program = "{failer}"
+        argv = new Listing<String | ArgToken> {{ new Files {{}} }}
+        exitCodes {{ clean = new Listing<Int> {{ 0 }}; failure = new Listing<Int> {{ 2 }} }}
+      }}
+    }}
+    phaseOrder = new Listing<String> {{ "format"; "verify" }}
+  }}
+}}
+run = new Listing<String> {{ "combo" }}
+"#
+        ),
+    )
+    .unwrap();
+
+    let src = project.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.py"), "original\n").unwrap();
+
+    let output = run_example(
+        "post-tool-use-agent-hook",
+        &post_tool_use_fixture("claude", &project, "src/a.py"),
+        &["--claude"],
+    );
+
+    assert!(output.status.success());
+    assert!(
+        std::fs::read_to_string(src.join("a.py"))
+            .unwrap()
+            .contains("changed")
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    assert!(
+        json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("Combo changed src/a.py")
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Combo: phase `verify` failed"));
+    assert!(stderr.contains("verify crashed"));
+}
+
+#[test]
 fn post_tool_use_fail_fast_stops_after_operational_failure() {
     require_pkl!();
     let project = temp_project("fail-fast");
