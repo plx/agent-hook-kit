@@ -1,0 +1,16 @@
+warning: xmllint: issues remain; diagnostics: <workspace>/.agent-hook-kit/xmllint-agent-hook/test-session_xmllint-tool-issues.txt
+xmllint diagnostics:
+[verify] command: xmllint --noout <workspace>/example.xml
+status: Some(1)
+classification: Some(Issues)
+stderr:
+<workspace>/example.xml:1: parser error : Opening and ending tag mismatch: child line 1 and root
+<root><child>unterminated</root>
+                                ^
+<workspace>/example.xml:2: parser error : Premature end of data in tag root line 1
+
+^
+artifact: <workspace>/.agent-hook-kit/xmllint-agent-hook/test-session_xmllint-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/xmllint-agent-hook/test-session_xmllint-tool-issues.txt
+summary: xmllint diagnostics
+hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

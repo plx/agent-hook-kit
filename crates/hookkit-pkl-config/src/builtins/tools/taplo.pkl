@@ -1,0 +1,32 @@
+/// taplo — TOML linter (the `taplo` step in hk; see `taplo_format.pkl` for the formatter).
+
+module agent_hook_kit.builtins.tools.Taplo
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "taplo"
+  displayName = "taplo"
+  executable = "taplo"
+  installHint = "install taplo with `brew install taplo` or `cargo install taplo-cli`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.toml"; "**/*.toml" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "lint"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

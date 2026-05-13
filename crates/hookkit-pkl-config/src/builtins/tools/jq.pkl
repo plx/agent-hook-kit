@@ -1,0 +1,39 @@
+/// jq — JSON processor.
+///
+/// hk's recipes are multi-line bash pipelines (per-file stdout-to-tempfile and
+/// `diff -u`) that the single-argv runtime can't express directly. We expose a
+/// verify-only phase that asks `jq` to parse each file: `jq -e empty <files>`
+/// returns non-zero if parsing fails or the result is null. Use the `taplo`/
+/// `prettier`-style formatters for actual rewriting.
+
+module agent_hook_kit.builtins.tools.Jq
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "jq"
+  displayName = "jq"
+  executable = "jq"
+  installHint = "install jq with `brew install jq`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.json"; "**/*.json" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "-e"
+        "empty"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1; 2; 3; 4; 5 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

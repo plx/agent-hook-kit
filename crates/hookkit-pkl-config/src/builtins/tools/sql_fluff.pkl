@@ -1,0 +1,45 @@
+/// sqlfluff — SQL linter and formatter.
+
+module agent_hook_kit.builtins.tools.SqlFluff
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "sql-fluff"
+  displayName = "sqlfluff"
+  executable = "sqlfluff"
+  installHint = "install sqlfluff with `pipx install sqlfluff`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.sql"; "**/*.sql" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "fix"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "lint"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}
