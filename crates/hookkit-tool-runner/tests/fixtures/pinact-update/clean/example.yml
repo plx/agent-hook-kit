@@ -1,0 +1,8 @@
+name: pinact-update test
+on:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Pass"

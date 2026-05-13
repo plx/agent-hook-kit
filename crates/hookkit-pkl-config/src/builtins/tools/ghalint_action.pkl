@@ -1,0 +1,38 @@
+/// ghalint — GitHub Actions action.yml linter (run-action mode).
+
+module agent_hook_kit.builtins.tools.GhalintAction
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "ghalint-action"
+  displayName = "ghalint (action)"
+  executable = "ghalint"
+  installHint =
+    "install ghalint with `brew install suzuki-shunsuke/ghalint/ghalint` or `go install github.com/suzuki-shunsuke/ghalint/cmd/ghalint@latest`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "action.yml"
+      "action.yaml"
+      "**/action.yml"
+      "**/action.yaml"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "run-action"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}
