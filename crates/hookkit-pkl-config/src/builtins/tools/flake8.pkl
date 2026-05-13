@@ -1,0 +1,31 @@
+/// flake8 — Python style guide enforcement.
+
+module agent_hook_kit.builtins.tools.Flake8
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "flake8"
+  displayName = "flake8"
+  executable = "flake8"
+  installHint = "install flake8 with `pipx install flake8`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

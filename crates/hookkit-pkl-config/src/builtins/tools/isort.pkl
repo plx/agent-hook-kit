@@ -1,0 +1,43 @@
+/// isort — Python import sorter.
+
+module agent_hook_kit.builtins.tools.Isort
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "isort"
+  displayName = "isort"
+  executable = "isort"
+  installHint = "install isort with `brew install isort` or `pipx install isort`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--check-only"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}

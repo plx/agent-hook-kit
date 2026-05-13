@@ -1,0 +1,13 @@
+warning: mypy: issues remain; diagnostics: <workspace>/.agent-hook-kit/mypy-agent-hook/test-session_mypy-tool-issues.txt
+mypy diagnostics:
+[verify] command: mypy <workspace>/example.py
+status: Some(1)
+classification: Some(Issues)
+stdout:
+example.py:1: error: Incompatible types in assignment (expression has type "str", variable has type "int")  [assignment]
+Found 1 error in 1 file (checked 1 source file)
+artifact: <workspace>/.agent-hook-kit/mypy-agent-hook/test-session_mypy-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/mypy-agent-hook/test-session_mypy-tool-issues.txt
+summary: mypy diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
