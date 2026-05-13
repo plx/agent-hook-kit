@@ -1,0 +1,52 @@
+/// buildifier (format) — formatter for Bazel BUILD, WORKSPACE, and Starlark files.
+
+module agent_hook_kit.builtins.tools.BuildifierFormat
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "buildifier-format"
+  displayName = "buildifier format"
+  executable = "buildifier"
+  installHint = "install buildifier with `brew install buildifier`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "BUILD"; "**/BUILD"
+      "BUILD.bazel"; "**/BUILD.bazel"
+      "WORKSPACE"; "WORKSPACE.bazel"
+      "MODULE.bazel"
+      "*.bzl"; "**/*.bzl"
+      "*.star"; "**/*.star"
+      "*.sky"; "**/*.sky"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "-mode=check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        // buildifier exits 4 to indicate files would change in check mode.
+        issues = new Listing<Int> { 4 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}

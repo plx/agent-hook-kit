@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"cpplint reports issues; inspect diagnostics at <workspace>/.agent-hook-kit/cpplint-agent-hook/test-session_cpplint-tool-issues.txt.","hookEventName":"PostToolUse"}}

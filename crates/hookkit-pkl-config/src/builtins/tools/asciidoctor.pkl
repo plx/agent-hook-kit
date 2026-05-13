@@ -1,0 +1,41 @@
+/// Asciidoctor — AsciiDoc syntax validator and processor.
+///
+/// DRAFT: requires Ruby; not verified against a fixture in this catalog.
+
+module agent_hook_kit.builtins.tools.Asciidoctor
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "asciidoctor"
+  displayName = "Asciidoctor"
+  executable = "asciidoctor"
+  installHint = "install Asciidoctor with `gem install asciidoctor`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.adoc"; "**/*.adoc"
+      "*.asciidoc"; "**/*.asciidoc"
+      "*.asc"; "**/*.asc"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      // `--failure-level=WARNING` promotes warnings to non-zero exits;
+      // `--out-file=/dev/null` suppresses generated HTML.
+      argv = new Listing<String | Config.ArgToken> {
+        "--failure-level=WARNING"
+        "--out-file=/dev/null"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

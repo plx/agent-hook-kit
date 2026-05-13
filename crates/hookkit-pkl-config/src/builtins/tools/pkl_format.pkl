@@ -1,0 +1,49 @@
+/// Pkl format — opinionated formatter for `*.pkl` files.
+
+module agent_hook_kit.builtins.tools.PklFormat
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "pkl-format"
+  displayName = "pkl format"
+  executable = "pkl"
+  installHint = "install Pkl with `brew install pkl`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.pkl"; "**/*.pkl" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        "--write"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      // Modern Pkl (>= release including apple/pkl#1340) exits 0 even when
+      // files are rewritten. Older releases exit 11 — override the phase
+      // argv or remap exit codes in project config if you need that.
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "format"
+        "--diff-name-only"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 11 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}

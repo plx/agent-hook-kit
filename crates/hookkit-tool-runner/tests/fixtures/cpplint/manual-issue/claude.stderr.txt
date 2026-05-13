@@ -1,0 +1,14 @@
+warning: cpplint: issues remain; diagnostics: <workspace>/.agent-hook-kit/cpplint-agent-hook/test-session_cpplint-tool-issues.txt
+cpplint diagnostics:
+[verify] command: cpplint <workspace>/example.cpp
+status: Some(1)
+classification: Some(Issues)
+stdout:
+Done processing <workspace>/example.cpp
+Total errors found: 1
+stderr:
+<workspace>/example.cpp:0:  No copyright message found.  You should have a line: "Copyright [year] <Copyright Owner>"  [legal/copyright] [5]
+artifact: <workspace>/.agent-hook-kit/cpplint-agent-hook/test-session_cpplint-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/cpplint-agent-hook/test-session_cpplint-tool-issues.txt
+summary: cpplint diagnostics
+hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

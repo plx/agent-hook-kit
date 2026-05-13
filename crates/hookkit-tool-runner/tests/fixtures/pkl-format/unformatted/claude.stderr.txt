@@ -1,0 +1,2 @@
+pkl format: changed example.pkl
+hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

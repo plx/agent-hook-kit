@@ -1,0 +1,20 @@
+openapi: 3.0.0
+info:
+  title: Test API
+  description: A test API
+  version: 1.0.0
+servers:
+  - url: https://example.com
+tags:
+  - name: test
+    description: Test endpoints
+paths:
+  /test:
+    get:
+      operationId: getTest
+      summary: Get test
+      tags:
+        - test
+      responses:
+        '200':
+          description: OK
