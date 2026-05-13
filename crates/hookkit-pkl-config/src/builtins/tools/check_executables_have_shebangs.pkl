@@ -1,0 +1,29 @@
+/// check-executables-have-shebangs — verify executable files begin with `#!`.
+///
+// DRAFT: hk implements `hk util check-executables-have-shebangs` by stat-ing
+// each candidate path, filtering to mode-bit-executable regular files, and
+// reading the first two bytes to confirm `#!`. We could approximate the
+// same thing with `head -c2` inside a `bash -c` loop, but expressing the
+// "skip non-executable files" filter within our single-`executable` + argv
+// Phase model is awkward. The check is also fundamentally interesting only
+// on POSIX hosts and across staged-but-not-pushed work. Left as DRAFT
+// pending a hookkit-native helper.
+
+module agent_hook_kit.builtins.tools.CheckExecutablesHaveShebangs
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "check-executables-have-shebangs"
+  displayName = "check-executables-have-shebangs"
+  executable = "bash"
+  installHint = "bash is part of any POSIX environment"
+  enabled = false
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "**/*" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {}
+  phaseOrder = new Listing<String> {}
+}
