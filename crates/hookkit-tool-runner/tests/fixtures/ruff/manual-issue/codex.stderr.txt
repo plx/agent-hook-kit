@@ -1,0 +1,36 @@
+warning: Ruff: issues remain; diagnostics: <workspace>/.agent-hook-kit/ruff-agent-hook/test-session_ruff-tool-issues.txt
+Ruff diagnostics:
+[format] command: ruff format --quiet --force-exclude <workspace>/example.py
+status: Some(0)
+classification: Some(Clean)
+
+[fix] command: ruff check --force-exclude --fix <workspace>/example.py
+status: Some(1)
+classification: Some(Issues)
+stdout:
+F821 Undefined name `undefined_variable_for_testing`
+ --> example.py:1:7
+  |
+1 | print(undefined_variable_for_testing)
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+
+Found 1 error.
+
+[verify] command: ruff check --force-exclude <workspace>/example.py
+status: Some(1)
+classification: Some(Issues)
+stdout:
+F821 Undefined name `undefined_variable_for_testing`
+ --> example.py:1:7
+  |
+1 | print(undefined_variable_for_testing)
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+
+Found 1 error.
+artifact: <workspace>/.agent-hook-kit/ruff-agent-hook/test-session_ruff-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/ruff-agent-hook/test-session_ruff-tool-issues.txt
+summary: Ruff diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped

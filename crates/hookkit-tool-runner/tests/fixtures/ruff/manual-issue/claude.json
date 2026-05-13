@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"Ruff reports issues; inspect diagnostics at <workspace>/.agent-hook-kit/ruff-agent-hook/test-session_ruff-tool-issues.txt.","hookEventName":"PostToolUse"}}

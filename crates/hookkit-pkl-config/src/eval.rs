@@ -10,24 +10,31 @@
 
 use crate::error::PklConfigError;
 use crate::schema::{RunnerConfig, RunnerConfigPatch};
+use include_dir::{Dir, DirEntry, include_dir};
 use serde::de::DeserializeOwned;
 use std::ffi::OsStr;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Embedded `builtins/` tree containing `Config.pkl`, the `Builtins.pkl`
+/// aggregator, and `tools/<name>.pkl` per-tool spec modules.
+static BUILTINS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/builtins");
+
 /// Embedded `Config.pkl` source — schema definitions for project configs.
 pub const CONFIG_PKL: &str = include_str!("builtins/Config.pkl");
-/// Embedded `Builtins.pkl` source — bundled tool specs.
+/// Embedded `Builtins.pkl` aggregator source. Requires the sibling `tools/`
+/// directory to be staged alongside it to resolve its per-tool imports;
+/// [`stage_builtins`](staged_builtins_dir) handles that.
 pub const BUILTINS_PKL: &str = include_str!("builtins/Builtins.pkl");
 
 /// Evaluate a Pkl file and parse the result as a [`RunnerConfig`].
 ///
-/// `file_path` is the Pkl source to evaluate. The embedded `Config.pkl` and
-/// `Builtins.pkl` modules are materialized to a sibling temp directory so
-/// `amends "Config.pkl"` / `import "Builtins.pkl"` from project configs
-/// resolve. Other siblings from the real source directory are mirrored into
-/// the staging directory so project-local relative imports keep working.
+/// `file_path` is the Pkl source to evaluate. The embedded `Config.pkl`,
+/// `Builtins.pkl`, and `tools/*.pkl` modules are materialized to a sibling
+/// temp directory so `amends "Config.pkl"` / `import "Builtins.pkl"` from
+/// project configs resolve. Other siblings from the real source directory
+/// are mirrored into the staging directory so project-local relative imports
+/// keep working.
 pub fn evaluate_pkl_file(file_path: &Path) -> Result<RunnerConfig, PklConfigError> {
     evaluate_pkl_file_patch(file_path).map(RunnerConfigPatch::into_config)
 }
@@ -61,16 +68,15 @@ pub fn evaluate_pkl_source_patch(source: &str) -> Result<RunnerConfigPatch, PklC
     result
 }
 
-/// Evaluate `Builtins.pkl` and return a temp directory where `Config.pkl`
-/// and `Builtins.pkl` live as siblings.
+/// Stage the embedded `builtins/` tree to a temp directory.
 ///
 /// Useful when callers want to evaluate Pkl that imports `Builtins.pkl`.
 pub fn staged_builtins_dir() -> Result<StagedBuiltins, PklConfigError> {
     stage_builtins()
 }
 
-/// A temporary directory holding the embedded `Config.pkl` and `Builtins.pkl`.
-/// Deleted on drop.
+/// A temporary directory holding the embedded `Config.pkl`, `Builtins.pkl`,
+/// and `tools/*.pkl` files. Deleted on drop.
 pub struct StagedBuiltins {
     pub dir: PathBuf,
 }
@@ -97,9 +103,37 @@ fn stage_builtins() -> Result<StagedBuiltins, PklConfigError> {
         path: dir.clone(),
         error: e.to_string(),
     })?;
-    write_file(&dir.join("Config.pkl"), CONFIG_PKL)?;
-    write_file(&dir.join("Builtins.pkl"), BUILTINS_PKL)?;
+    write_embedded_dir(&BUILTINS_DIR, &dir)?;
     Ok(StagedBuiltins { dir })
+}
+
+fn write_embedded_dir(dir: &Dir<'_>, target: &Path) -> Result<(), PklConfigError> {
+    for entry in dir.entries() {
+        match entry {
+            DirEntry::File(file) => {
+                let dst = target.join(file.path());
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| PklConfigError::TempIo {
+                        path: parent.to_path_buf(),
+                        error: e.to_string(),
+                    })?;
+                }
+                std::fs::write(&dst, file.contents()).map_err(|e| PklConfigError::TempIo {
+                    path: dst,
+                    error: e.to_string(),
+                })?;
+            }
+            DirEntry::Dir(subdir) => {
+                let dst = target.join(subdir.path());
+                std::fs::create_dir_all(&dst).map_err(|e| PklConfigError::TempIo {
+                    path: dst.clone(),
+                    error: e.to_string(),
+                })?;
+                write_embedded_dir(subdir, target)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn copy_to_staging(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
@@ -132,6 +166,7 @@ fn mirror_source_siblings(src: &Path, dst_dir: &Path) -> Result<(), PklConfigErr
         if Some(name.as_os_str()) == src_name
             || name == OsStr::new("Config.pkl")
             || name == OsStr::new("Builtins.pkl")
+            || name == OsStr::new("tools")
         {
             continue;
         }
@@ -185,19 +220,6 @@ fn copy_path(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
         path: dst.to_path_buf(),
         error: e.to_string(),
     })?;
-    Ok(())
-}
-
-fn write_file(path: &Path, content: &str) -> Result<(), PklConfigError> {
-    let mut file = std::fs::File::create(path).map_err(|e| PklConfigError::TempIo {
-        path: path.to_path_buf(),
-        error: e.to_string(),
-    })?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| PklConfigError::TempIo {
-            path: path.to_path_buf(),
-            error: e.to_string(),
-        })?;
     Ok(())
 }
 

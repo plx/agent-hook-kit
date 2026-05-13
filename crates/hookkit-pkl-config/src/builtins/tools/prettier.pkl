@@ -1,0 +1,71 @@
+/// Prettier — opinionated formatter for JS/TS/CSS/HTML/Markdown/YAML and friends.
+
+module agent_hook_kit.builtins.tools.Prettier
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "prettier"
+  displayName = "Prettier"
+  executable = "prettier"
+  installHint = "install prettier with `brew install prettier` or add it to the project"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.js"; "**/*.js"
+      "*.jsx"; "**/*.jsx"
+      "*.mjs"; "**/*.mjs"
+      "*.cjs"; "**/*.cjs"
+      "*.ts"; "**/*.ts"
+      "*.tsx"; "**/*.tsx"
+      "*.mts"; "**/*.mts"
+      "*.cts"; "**/*.cts"
+      "*.css"; "**/*.css"
+      "*.scss"; "**/*.scss"
+      "*.less"; "**/*.less"
+      "*.html"; "**/*.html"
+      "*.json"; "**/*.json"
+      "*.json5"; "**/*.json5"
+      "*.jsonc"; "**/*.jsonc"
+      "*.yaml"; "**/*.yaml"
+      "*.yml"; "**/*.yml"
+      "*.markdown"; "**/*.markdown"
+      "*.markdown.mdx"; "**/*.markdown.mdx"
+      "*.md"; "**/*.md"
+      "*.graphql"; "**/*.graphql"
+      "*.handlebars"; "**/*.handlebars"
+      "*.svelte"; "**/*.svelte"
+      "*.astro"; "**/*.astro"
+      "*.htmlangular"; "**/*.htmlangular"
+      "*.vue"; "**/*.vue"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "--write"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}
