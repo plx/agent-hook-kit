@@ -6,6 +6,15 @@
 //! - Or for both via different channels?
 
 use serde::Serialize;
+use std::path::PathBuf;
+
+/// Intended audience for a message emitted by common hook logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageAudience {
+    User,
+    Agent,
+    Both,
+}
 
 /// A notice intended for the human user.
 #[derive(Debug, Clone, Serialize)]
@@ -73,17 +82,98 @@ impl Default for AgentContext {
     }
 }
 
-/// Feedback for the agent — a corrective instruction or suggestion.
+/// Severity level for agent-facing feedback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedbackSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+/// Feedback for the agent: a concise corrective instruction or suggestion.
 #[derive(Debug, Clone)]
 pub struct AgentFeedback {
-    pub message: String,
+    pub text: String,
+    pub severity: FeedbackSeverity,
 }
 
 impl AgentFeedback {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self::warning(text)
+    }
+
+    pub fn info(text: impl Into<String>) -> Self {
         Self {
-            message: message.into(),
+            text: text.into(),
+            severity: FeedbackSeverity::Info,
         }
+    }
+
+    pub fn warning(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            severity: FeedbackSeverity::Warning,
+        }
+    }
+
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            severity: FeedbackSeverity::Error,
+        }
+    }
+}
+
+/// A diagnostic artifact produced by a hook.
+#[derive(Debug, Clone)]
+pub struct DiagnosticArtifact {
+    pub absolute_path: PathBuf,
+    pub project_relative_path: Option<PathBuf>,
+    pub media_type: String,
+    pub summary: Option<String>,
+}
+
+impl DiagnosticArtifact {
+    pub fn new(absolute_path: impl Into<PathBuf>, media_type: impl Into<String>) -> Self {
+        Self {
+            absolute_path: absolute_path.into(),
+            project_relative_path: None,
+            media_type: media_type.into(),
+            summary: None,
+        }
+    }
+
+    pub fn with_project_relative_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.project_relative_path = Some(path.into());
+        self
+    }
+
+    pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
+        self.summary = Some(summary.into());
+        self
+    }
+}
+
+/// User-visible diagnostic text plus an optional artifact reference.
+#[derive(Debug, Clone)]
+pub struct DiagnosticReport {
+    pub title: String,
+    pub text: String,
+    pub artifact: Option<DiagnosticArtifact>,
+}
+
+impl DiagnosticReport {
+    pub fn new(title: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            text: text.into(),
+            artifact: None,
+        }
+    }
+
+    pub fn with_artifact(mut self, artifact: DiagnosticArtifact) -> Self {
+        self.artifact = Some(artifact);
+        self
     }
 }
 

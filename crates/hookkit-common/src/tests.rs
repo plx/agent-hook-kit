@@ -1,9 +1,12 @@
 use crate::input::*;
 use crate::message::*;
 use crate::output::*;
+use crate::semantic::{DerivedSource, PathRole, ToolExecutionStatus};
 use hookkit_claude::input as claude;
 use hookkit_codex::input as codex;
+use hookkit_core::Harness;
 use hookkit_gemini::input as gemini;
+use std::path::{Path, PathBuf};
 
 // ---- Shared accessor tests ----
 
@@ -32,6 +35,54 @@ fn post_tool_use_shared_accessors() {
     assert!(common.as_claude().is_some());
     assert!(common.as_codex().is_none());
     assert!(common.as_gemini().is_none());
+}
+
+#[test]
+fn post_tool_use_semantic_view_normalizes_result_and_paths() {
+    let claude_ev = claude::PostToolUse {
+        common: claude::CommonFields {
+            session_id: "sess-1".to_string(),
+            transcript_path: None,
+            cwd: "/repo".to_string(),
+            permission_mode: Some("default".to_string()),
+            hook_event_name: "PostToolUse".to_string(),
+            extra: Default::default(),
+        },
+        tool_name: Some("Write".to_string()),
+        tool_input: Some(serde_json::json!({"file_path": "src/app.py"})),
+        tool_response: Some(serde_json::json!({
+            "success": true,
+            "stdout": "wrote file",
+            "exitCode": 0
+        })),
+        tool_use_id: Some("toolu_01COMMON".to_string()),
+    };
+
+    let raw = serde_json::json!({"hookEventName": "PostToolUse"});
+    let common = CommonPostToolUseInput::Claude(claude_ev);
+    let view = common.view_with_raw(&raw);
+
+    assert_eq!(view.meta.harness, Harness::Claude);
+    assert_eq!(view.meta.session_id, Some("sess-1"));
+    assert_eq!(view.meta.tool_use_id, Some("toolu_01COMMON"));
+    assert_eq!(view.tool.name, Some("Write"));
+    assert_eq!(view.result.status, ToolExecutionStatus::Success);
+    assert_eq!(view.result.stdout, Some("wrote file"));
+    assert_eq!(view.result.exit_code, Some(0));
+
+    let modified = view.modified_files(Path::new("/repo"), Some(Path::new("/repo")));
+    assert_eq!(modified.len(), 1);
+    assert_eq!(modified[0].path, "src/app.py");
+    assert_eq!(modified[0].absolute_path, PathBuf::from("/repo/src/app.py"));
+    assert_eq!(
+        modified[0].project_relative_path,
+        Some(PathBuf::from("src/app.py"))
+    );
+    assert_eq!(modified[0].role, PathRole::ModifiedFile);
+    assert_eq!(
+        modified[0].source,
+        DerivedSource::ToolInputField("file_path")
+    );
 }
 
 #[test]
@@ -203,6 +254,58 @@ fn post_tool_output_to_codex_with_context_fails() {
 }
 
 #[test]
+fn post_tool_best_effort_redirects_user_notice_to_stderr() {
+    let out = CommonPostToolUseOutput::new()
+        .with_user_notice(UserNotice::info("done"))
+        .with_lowering_policy(LoweringPolicy::BestEffortWithWarnings);
+    let lowered = out.to_codex_lowered().unwrap();
+
+    assert!(matches!(
+        lowered.native,
+        hookkit_codex::CodexHookOutput::Empty
+    ));
+    assert_eq!(lowered.stderr_messages, vec!["done"]);
+    assert_eq!(lowered.warnings.len(), 1);
+    assert_eq!(
+        lowered.warnings[0].action,
+        LoweringAction::RedirectedToStderr
+    );
+}
+
+#[test]
+fn post_tool_best_effort_drops_codex_agent_feedback_with_warning() {
+    let out = CommonPostToolUseOutput::new()
+        .with_agent_feedback("fix imports")
+        .with_lowering_policy(LoweringPolicy::BestEffortWithWarnings);
+    let lowered = out.to_codex_lowered().unwrap();
+
+    assert!(matches!(
+        lowered.native,
+        hookkit_codex::CodexHookOutput::Empty
+    ));
+    assert!(lowered.stderr_messages.is_empty());
+    assert_eq!(lowered.warnings.len(), 1);
+    assert_eq!(lowered.warnings[0].intent, "additionalContext");
+    assert_eq!(lowered.warnings[0].action, LoweringAction::Dropped);
+}
+
+#[test]
+fn post_tool_gemini_keeps_replace_result_and_drops_optional_feedback() {
+    let out = CommonPostToolUseOutput::new()
+        .with_replaced_tool_result(serde_json::json!({"ok": true}))
+        .with_agent_feedback("optional note")
+        .with_lowering_policy(LoweringPolicy::BestEffortWithWarnings);
+    let lowered = out.to_gemini_lowered().unwrap();
+
+    assert!(matches!(
+        lowered.native,
+        hookkit_gemini::GeminiHookOutput::Json(_)
+    ));
+    assert_eq!(lowered.warnings.len(), 1);
+    assert_eq!(lowered.warnings[0].intent, "additionalContext");
+}
+
+#[test]
 fn post_tool_output_empty() {
     let out = CommonPostToolUseOutput::new();
     let claude = out.to_claude().unwrap();
@@ -320,7 +423,8 @@ fn agent_context_builder() {
 #[test]
 fn agent_feedback() {
     let fb = crate::message::AgentFeedback::new("please fix the imports");
-    assert_eq!(fb.message, "please fix the imports");
+    assert_eq!(fb.text, "please fix the imports");
+    assert_eq!(fb.severity, FeedbackSeverity::Warning);
 }
 
 #[test]

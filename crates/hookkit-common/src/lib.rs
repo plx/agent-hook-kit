@@ -7,10 +7,22 @@
 pub mod input;
 pub mod message;
 pub mod output;
+pub mod semantic;
 
 pub use input::CommonHookInput;
-pub use message::{NoticeLevel, UserNotice};
-pub use output::CommonHookOutput;
+pub use message::{
+    AgentFeedback, DiagnosticArtifact, DiagnosticReport, FeedbackSeverity, MessageAudience,
+    NoticeLevel, UserNotice,
+};
+pub use output::{
+    CommonHookOutput, IntentRequirement, LoweredPostToolUseOutput, LoweringAction, LoweringPolicy,
+    LoweringWarning, SessionControl,
+};
+pub use semantic::{
+    CommonEventMeta, CommonPostToolUseNative, CommonPostToolUseView, CommonToolResultView,
+    CommonToolUseView, DerivedConfidence, DerivedSource, PathCandidate, PathRole,
+    ToolExecutionStatus,
+};
 
 #[cfg(test)]
 mod tests;

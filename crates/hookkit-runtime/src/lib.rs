@@ -14,7 +14,7 @@ use hookkit_common::input::{
     CommonPreToolUseInput, CommonPromptSubmitInput, CommonSessionEndInput, CommonSessionStartInput,
     CommonStopInput,
 };
-use hookkit_common::output::CommonHookOutput;
+use hookkit_common::output::{CommonHookOutput, LoweringAction, LoweringWarning};
 use hookkit_core::{Harness, HookEventKey, HookkitError};
 use hookkit_gemini::{GeminiHookInput, GeminiHookOutput};
 use std::io::Read;
@@ -86,6 +86,23 @@ pub enum NativeHookOutput {
     Claude(ClaudeHookOutput),
     Codex(CodexHookOutput),
     Gemini(GeminiHookOutput),
+}
+
+/// Native output plus side-channel messages produced by common lowering.
+pub struct LoweredOutput {
+    pub native: NativeHookOutput,
+    pub stderr_messages: Vec<String>,
+    pub warnings: Vec<LoweringWarning>,
+}
+
+impl LoweredOutput {
+    fn new(native: NativeHookOutput) -> Self {
+        Self {
+            native,
+            stderr_messages: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
 }
 
 fn hook_event_key(input: &NativeHookInput) -> HookEventKey {
@@ -505,56 +522,105 @@ fn native_to_common(input: NativeHookInput) -> hookkit_core::Result<CommonHookIn
 fn common_to_native(
     harness: Harness,
     output: CommonHookOutput,
-) -> hookkit_core::Result<NativeHookOutput> {
+) -> hookkit_core::Result<LoweredOutput> {
     match output {
-        CommonHookOutput::Empty => Ok(empty_output_for_harness(harness)),
+        CommonHookOutput::Empty => Ok(LoweredOutput::new(empty_output_for_harness(harness))),
         CommonHookOutput::SessionStart(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
-            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+            Harness::Claude => Ok(LoweredOutput::new(NativeHookOutput::Claude(
+                out.to_claude()?,
+            ))),
+            Harness::Codex => Ok(LoweredOutput::new(NativeHookOutput::Codex(out.to_codex()?))),
+            Harness::Gemini => Ok(LoweredOutput::new(NativeHookOutput::Gemini(
+                out.to_gemini()?,
+            ))),
         },
         CommonHookOutput::Notification(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
+            Harness::Claude => Ok(LoweredOutput::new(NativeHookOutput::Claude(
+                out.to_claude()?,
+            ))),
             Harness::Codex => Err(HookkitError::UnsupportedCapability {
                 harness: Harness::Codex,
                 event: HookEventKey::Notification,
                 capability: "notification output conversion (not supported by Codex)",
             }),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+            Harness::Gemini => Ok(LoweredOutput::new(NativeHookOutput::Gemini(
+                out.to_gemini()?,
+            ))),
         },
         CommonHookOutput::SessionEnd(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
+            Harness::Claude => Ok(LoweredOutput::new(NativeHookOutput::Claude(
+                out.to_claude()?,
+            ))),
             Harness::Codex => Err(HookkitError::UnsupportedCapability {
                 harness: Harness::Codex,
                 event: HookEventKey::SessionEnd,
                 capability: "session_end output conversion (not supported by Codex)",
             }),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+            Harness::Gemini => Ok(LoweredOutput::new(NativeHookOutput::Gemini(
+                out.to_gemini()?,
+            ))),
         },
         CommonHookOutput::PreCompress(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
-            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+            Harness::Claude => Ok(LoweredOutput::new(NativeHookOutput::Claude(
+                out.to_claude()?,
+            ))),
+            Harness::Codex => Ok(LoweredOutput::new(NativeHookOutput::Codex(out.to_codex()?))),
+            Harness::Gemini => Ok(LoweredOutput::new(NativeHookOutput::Gemini(
+                out.to_gemini()?,
+            ))),
         },
         CommonHookOutput::PostToolUse(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude()?)),
-            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini()?)),
+            Harness::Claude => {
+                let lowered = out.to_claude_lowered()?;
+                Ok(LoweredOutput {
+                    native: NativeHookOutput::Claude(lowered.native),
+                    stderr_messages: lowered.stderr_messages,
+                    warnings: lowered.warnings,
+                })
+            }
+            Harness::Codex => {
+                let lowered = out.to_codex_lowered()?;
+                Ok(LoweredOutput {
+                    native: NativeHookOutput::Codex(lowered.native),
+                    stderr_messages: lowered.stderr_messages,
+                    warnings: lowered.warnings,
+                })
+            }
+            Harness::Gemini => {
+                let lowered = out.to_gemini_lowered()?;
+                Ok(LoweredOutput {
+                    native: NativeHookOutput::Gemini(lowered.native),
+                    stderr_messages: lowered.stderr_messages,
+                    warnings: lowered.warnings,
+                })
+            }
         },
         CommonHookOutput::PreToolUse(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),
-            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex()?)),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini())),
+            Harness::Claude => Ok(LoweredOutput::new(NativeHookOutput::Claude(
+                out.to_claude(),
+            ))),
+            Harness::Codex => Ok(LoweredOutput::new(NativeHookOutput::Codex(out.to_codex()?))),
+            Harness::Gemini => Ok(LoweredOutput::new(NativeHookOutput::Gemini(
+                out.to_gemini(),
+            ))),
         },
         CommonHookOutput::PromptSubmit(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),
-            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex())),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini())),
+            Harness::Claude => Ok(LoweredOutput::new(NativeHookOutput::Claude(
+                out.to_claude(),
+            ))),
+            Harness::Codex => Ok(LoweredOutput::new(NativeHookOutput::Codex(out.to_codex()))),
+            Harness::Gemini => Ok(LoweredOutput::new(NativeHookOutput::Gemini(
+                out.to_gemini(),
+            ))),
         },
         CommonHookOutput::Stop(out) => match harness {
-            Harness::Claude => Ok(NativeHookOutput::Claude(out.to_claude())),
-            Harness::Codex => Ok(NativeHookOutput::Codex(out.to_codex())),
-            Harness::Gemini => Ok(NativeHookOutput::Gemini(out.to_gemini())),
+            Harness::Claude => Ok(LoweredOutput::new(NativeHookOutput::Claude(
+                out.to_claude(),
+            ))),
+            Harness::Codex => Ok(LoweredOutput::new(NativeHookOutput::Codex(out.to_codex()))),
+            Harness::Gemini => Ok(LoweredOutput::new(NativeHookOutput::Gemini(
+                out.to_gemini(),
+            ))),
         },
     }
 }
@@ -590,6 +656,28 @@ fn emit_output(output: NativeHookOutput) -> std::process::ExitCode {
         NativeHookOutput::Codex(o) => emit_codex_output(o),
         NativeHookOutput::Gemini(o) => emit_gemini_output(o),
     }
+}
+
+fn emit_lowered_output(output: LoweredOutput) -> std::process::ExitCode {
+    for message in output.stderr_messages {
+        eprintln!("{message}");
+    }
+    for warning in output.warnings {
+        eprintln!("{}", format_lowering_warning(&warning));
+    }
+    emit_output(output.native)
+}
+
+fn format_lowering_warning(warning: &LoweringWarning) -> String {
+    let action = match warning.action {
+        LoweringAction::Dropped => "dropped",
+        LoweringAction::RedirectedToStderr => "redirected to stderr",
+        LoweringAction::Converted => "converted",
+    };
+    format!(
+        "hookkit: lowering warning: {} {:?} intent `{}` {}",
+        warning.harness, warning.event, warning.intent, action
+    )
 }
 
 fn emit_claude_output(output: ClaudeHookOutput) -> std::process::ExitCode {
@@ -742,18 +830,18 @@ where
 
     match handler(common_input, &ctx) {
         Ok(common_output) => {
-            let native_output = match common_to_native(harness, common_output) {
+            let lowered_output = match common_to_native(harness, common_output) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("hookkit: failed to convert common output: {e}");
                     return std::process::ExitCode::from(1);
                 }
             };
-            if let Err(e) = validate_native_output(&native_for_validation, &native_output) {
+            if let Err(e) = validate_native_output(&native_for_validation, &lowered_output.native) {
                 eprintln!("hookkit: output validation failed: {e}");
                 return std::process::ExitCode::from(1);
             }
-            emit_output(native_output)
+            emit_lowered_output(lowered_output)
         }
         Err(e) => {
             eprintln!("hookkit: handler error: {e}");
@@ -930,15 +1018,15 @@ mod tests {
         let codex_prompt = common_to_native(Harness::Codex, prompt.clone()).unwrap();
         let gemini_prompt = common_to_native(Harness::Gemini, prompt).unwrap();
         assert!(matches!(
-            claude_prompt,
+            claude_prompt.native,
             NativeHookOutput::Claude(ClaudeHookOutput::Empty)
         ));
         assert!(matches!(
-            codex_prompt,
+            codex_prompt.native,
             NativeHookOutput::Codex(CodexHookOutput::Empty)
         ));
         assert!(matches!(
-            gemini_prompt,
+            gemini_prompt.native,
             NativeHookOutput::Gemini(GeminiHookOutput::Empty)
         ));
 
@@ -946,15 +1034,15 @@ mod tests {
         let codex_post = common_to_native(Harness::Codex, post.clone()).unwrap();
         let gemini_post = common_to_native(Harness::Gemini, post).unwrap();
         assert!(matches!(
-            claude_post,
+            claude_post.native,
             NativeHookOutput::Claude(ClaudeHookOutput::Empty)
         ));
         assert!(matches!(
-            codex_post,
+            codex_post.native,
             NativeHookOutput::Codex(CodexHookOutput::Empty)
         ));
         assert!(matches!(
-            gemini_post,
+            gemini_post.native,
             NativeHookOutput::Gemini(GeminiHookOutput::Empty)
         ));
     }
@@ -978,10 +1066,10 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            output,
+            output.native,
             NativeHookOutput::Codex(CodexHookOutput::Json(_))
         ));
-        assert!(validate_native_output(&input, &output).is_ok());
+        assert!(validate_native_output(&input, &output.native).is_ok());
     }
 
     #[test]

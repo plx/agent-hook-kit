@@ -1,0 +1,14 @@
+[package]
+name = "hookkit-pkl-config"
+description = "Pkl-driven configuration loader for the post-tool-use agent hook runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hookkit-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }

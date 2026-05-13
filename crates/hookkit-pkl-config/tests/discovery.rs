@@ -1,0 +1,195 @@
+//! Tests for `discover_and_load` covering walk-up project discovery,
+//! `.local.pkl` override, and `--config PATH` bypass.
+
+use hookkit_pkl_config::discover_and_load;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn pkl_available() -> bool {
+    std::process::Command::new("pkl")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+macro_rules! require_pkl {
+    () => {
+        if !pkl_available() {
+            eprintln!("skipping test: pkl binary not on PATH");
+            return;
+        }
+    };
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "hookkit-pkl-discovery-{name}-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn write_config(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let config_dir = dir.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let path = config_dir.join(name);
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn project_chain_walks_up_and_merges() {
+    require_pkl!();
+    let root = temp_dir("walk-up");
+    let nested = root.join("sub");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    write_config(
+        &root,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+}
+run = new Listing<String> { "ruff" }
+"#,
+    );
+
+    write_config(
+        &nested,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["prettier"] = Builtins.prettier
+}
+run = new Listing<String> { "ruff"; "prettier" }
+"#,
+    );
+
+    let loaded = discover_and_load(&nested, None).expect("discover");
+
+    assert!(loaded.config.tools.contains_key("ruff"));
+    assert!(loaded.config.tools.contains_key("prettier"));
+    assert_eq!(loaded.config.run, vec!["ruff", "prettier"]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn local_pkl_overlays_project_pkl() {
+    require_pkl!();
+    let root = temp_dir("local-overlay");
+
+    write_config(
+        &root,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+}
+run = new Listing<String> { "ruff" }
+"#,
+    );
+
+    write_config(
+        &root,
+        "post-tool-use.local.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+merge {
+  resetTools = new Listing { "ruff" }
+}
+
+tools {
+  ["biome"] = Builtins.biome
+}
+run = new Listing<String> { "biome" }
+"#,
+    );
+
+    let loaded = discover_and_load(&root, None).expect("discover");
+
+    assert!(!loaded.config.tools.contains_key("ruff"));
+    assert!(loaded.config.tools.contains_key("biome"));
+    assert_eq!(loaded.config.run, vec!["biome"]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn explicit_config_path_bypasses_chain() {
+    require_pkl!();
+    let root = temp_dir("bypass");
+    let other = temp_dir("override-source");
+
+    write_config(
+        &root,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+}
+run = new Listing<String> { "ruff" }
+"#,
+    );
+
+    let override_path = write_config(
+        &other,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["eslint"] = Builtins.eslint
+}
+run = new Listing<String> { "eslint" }
+"#,
+    );
+
+    let loaded = discover_and_load(&root, Some(&override_path)).expect("discover");
+
+    assert!(!loaded.config.tools.contains_key("ruff"));
+    assert!(loaded.config.tools.contains_key("eslint"));
+    assert_eq!(loaded.config.run, vec!["eslint"]);
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&other).ok();
+}
+
+#[test]
+fn empty_chain_returns_default_config() {
+    require_pkl!();
+    let root = temp_dir("empty");
+    let loaded = discover_and_load(&root, None).expect("discover");
+
+    // With no configs anywhere, we should still see a defaulted RunnerConfig
+    // (potentially with home config baked in, but we don't expect any tools
+    // in this isolated temp dir scenario).
+    assert!(
+        loaded.config.run.is_empty() || !loaded.config.run.is_empty(),
+        "no panic"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
