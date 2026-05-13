@@ -371,7 +371,7 @@ pub fn run_common_input(
     let mut had_hard_failure = false;
     let mut had_harness_block_message: Option<String> = None;
 
-    let tools = resolve_run_order(&loaded.config);
+    let tools = resolve_run_order(&loaded.config)?;
     if tools.is_empty() {
         return Ok(CommonHookOutput::empty());
     }
@@ -470,12 +470,17 @@ fn lowering_from(policy: &pkl::LoweringPolicy) -> LoweringPolicy {
 }
 
 /// Resolve the `run` list to ordered tool specs.
-fn resolve_run_order(config: &pkl::RunnerConfig) -> Vec<&pkl::ToolSpec> {
-    config
-        .run
-        .iter()
-        .filter_map(|id| config.tools.get(id))
-        .collect()
+fn resolve_run_order(config: &pkl::RunnerConfig) -> hookkit_core::Result<Vec<&pkl::ToolSpec>> {
+    let mut tools = Vec::with_capacity(config.run.len());
+    for id in &config.run {
+        let Some(spec) = config.tools.get(id) else {
+            return Err(invalid_data(format!(
+                "run references unknown tool `{id}`; define it under `tools` or remove it from `run`"
+            )));
+        };
+        tools.push(spec);
+    }
+    Ok(tools)
 }
 
 #[derive(Debug, Clone, Copy, Default)]

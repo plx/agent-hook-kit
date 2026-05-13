@@ -944,6 +944,35 @@ run = new Listing<String> {{ "issuer"; "changer" }}
 }
 
 #[test]
+fn post_tool_use_unknown_run_entry_fails_hook() {
+    require_pkl!();
+    let project = temp_project("unknown-run-entry");
+    let config_dir = project.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        r#"amends "Config.pkl"
+run = new Listing<String> { "rff" }
+"#,
+    )
+    .unwrap();
+
+    let src = project.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.py"), "print('ok')\n").unwrap();
+
+    let output = run_example(
+        "post-tool-use-agent-hook",
+        &post_tool_use_fixture("claude", &project, "src/a.py"),
+        &["--claude"],
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("run references unknown tool `rff`"));
+}
+
+#[test]
 fn post_tool_use_codex_runs_but_cannot_emit_posttool_agent_context() {
     require_pkl!();
     let project = temp_project("ruff-codex");
