@@ -1,7 +1,7 @@
 //! Tests for `discover_and_load` covering walk-up project discovery,
 //! `.local.pkl` override, and `--config PATH` bypass.
 
-use hookkit_pkl_config::discover_and_load;
+use hookkit_pkl_config::{discover_and_load, schema::MissingToolPolicy};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -204,6 +204,48 @@ run = Shared.runList
 
     let loaded = discover_and_load(&root, Some(&config_path)).expect("discover");
 
+    assert_eq!(loaded.config.run, vec!["ruff"]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn later_config_without_settings_preserves_earlier_settings() {
+    require_pkl!();
+    let root = temp_dir("settings-overlay");
+
+    write_config(
+        &root,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+
+settings {
+  missingToolPolicy = "hard-failure"
+}
+"#,
+    );
+
+    write_config(
+        &root,
+        "post-tool-use.local.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+}
+run = new Listing<String> { "ruff" }
+"#,
+    );
+
+    let loaded = discover_and_load(&root, None).expect("discover");
+
+    assert_eq!(
+        loaded.config.settings.missing_tool_policy,
+        MissingToolPolicy::HardFailure
+    );
     assert_eq!(loaded.config.run, vec!["ruff"]);
 
     std::fs::remove_dir_all(&root).ok();

@@ -18,6 +18,29 @@ pub struct RunnerConfig {
     pub run: Vec<String>,
 }
 
+/// Root configuration patch loaded from one Pkl file before multi-file merge.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RunnerConfigPatch {
+    pub settings: SettingsPatch,
+    pub merge: Merge,
+    pub tools: BTreeMap<String, ToolSpec>,
+    pub run: Vec<String>,
+}
+
+impl RunnerConfigPatch {
+    pub fn into_config(self) -> RunnerConfig {
+        let mut settings = Settings::default();
+        self.settings.apply_to(&mut settings);
+        RunnerConfig {
+            settings,
+            merge: self.merge,
+            tools: self.tools,
+            run: self.run,
+        }
+    }
+}
+
 /// Top-level runner settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -41,6 +64,45 @@ impl Default for Settings {
             lowering_policy: LoweringPolicy::default(),
             diagnostics_directory: Some(".agent-hook-kit/post-tool-use".into()),
             missing_tool_policy: MissingToolPolicy::default(),
+        }
+    }
+}
+
+/// Field-preserving settings overlay for one Pkl file.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SettingsPatch {
+    pub jobs: Option<u32>,
+    pub fail_fast: Option<bool>,
+    pub continue_after_issues: Option<bool>,
+    pub exclude: Option<Vec<String>>,
+    pub lowering_policy: Option<LoweringPolicy>,
+    pub diagnostics_directory: Option<String>,
+    pub missing_tool_policy: Option<MissingToolPolicy>,
+}
+
+impl SettingsPatch {
+    pub fn apply_to(self, settings: &mut Settings) {
+        if let Some(jobs) = self.jobs {
+            settings.jobs = jobs;
+        }
+        if let Some(fail_fast) = self.fail_fast {
+            settings.fail_fast = fail_fast;
+        }
+        if let Some(continue_after_issues) = self.continue_after_issues {
+            settings.continue_after_issues = continue_after_issues;
+        }
+        if let Some(exclude) = self.exclude {
+            settings.exclude = exclude;
+        }
+        if let Some(lowering_policy) = self.lowering_policy {
+            settings.lowering_policy = lowering_policy;
+        }
+        if let Some(diagnostics_directory) = self.diagnostics_directory {
+            settings.diagnostics_directory = Some(diagnostics_directory);
+        }
+        if let Some(missing_tool_policy) = self.missing_tool_policy {
+            settings.missing_tool_policy = missing_tool_policy;
         }
     }
 }

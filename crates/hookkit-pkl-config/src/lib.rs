@@ -24,13 +24,13 @@ use std::path::{Path, PathBuf};
 
 pub use error::PklConfigError;
 pub use eval::{
-    BUILTINS_PKL, CONFIG_PKL, StagedBuiltins, evaluate_pkl_file, evaluate_pkl_source,
-    staged_builtins_dir,
+    BUILTINS_PKL, CONFIG_PKL, StagedBuiltins, evaluate_pkl_file, evaluate_pkl_file_patch,
+    evaluate_pkl_source, evaluate_pkl_source_patch, staged_builtins_dir,
 };
 pub use schema::{
     ArgToken, ArgvElement, Diagnostics, ExitCodes, FileSelection, LoweringPolicy, Merge,
-    MergeResetKey, Messages, MissingToolPolicy, Phase, PhaseMode, RunnerConfig, Settings, ToolSpec,
-    UnexpectedExitPolicy, WriteBehavior,
+    MergeResetKey, Messages, MissingToolPolicy, Phase, PhaseMode, RunnerConfig, RunnerConfigPatch,
+    Settings, SettingsPatch, ToolSpec, UnexpectedExitPolicy, WriteBehavior,
 };
 
 /// Result of loading the config chain.
@@ -52,7 +52,7 @@ pub fn discover_and_load(
     override_path: Option<&Path>,
 ) -> Result<Loaded, PklConfigError> {
     if let Some(path) = override_path {
-        let config = evaluate_pkl_file(path)?;
+        let config = evaluate_pkl_file_patch(path)?.into_config();
         let project_root = path
             .parent()
             .and_then(Path::parent)
@@ -69,7 +69,7 @@ pub fn discover_and_load(
     let mut configs = Vec::with_capacity(chain.len());
     let mut project_root = cwd.to_path_buf();
     for discovered in &chain {
-        let config = evaluate_pkl_file(&discovered.path)?;
+        let config = evaluate_pkl_file_patch(&discovered.path)?;
         if matches!(discovered.kind, discovery::DiscoveredKind::Project) {
             project_root = discovery::project_root_for(discovered, cwd);
         }
@@ -79,7 +79,7 @@ pub fn discover_and_load(
     let config = if configs.is_empty() {
         RunnerConfig::default()
     } else {
-        merge::merge_chain(configs.into_iter())
+        merge::merge_patch_chain(configs.into_iter())
     };
 
     Ok(Loaded {

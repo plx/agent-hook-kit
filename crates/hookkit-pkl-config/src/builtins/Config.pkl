@@ -10,28 +10,26 @@ module agent_hook_kit.PostToolUseConfig
 class Settings {
   /// Number of independent tool jobs to run concurrently. 0 means auto.
   /// v0 honors `1` and `>=1`; auto is reserved for future use.
-  jobs: UInt = 0
+  jobs: UInt?
 
   /// Stop after an operational failure (missing tool, configured failure code).
-  failFast: Boolean = true
+  failFast: Boolean?
 
   /// Continue running later tools after an earlier tool reports issues.
-  continueAfterIssues: Boolean = true
+  continueAfterIssues: Boolean?
 
   /// Global file exclusions applied before per-tool selection.
-  exclude: Listing<String> = new Listing<String> { ".git/**"; "node_modules/**" }
+  exclude: Listing<String>?
 
   /// How to handle optional common-output intents the harness cannot represent.
-  loweringPolicy: "strict" | "best-effort" | "best-effort-with-warnings" =
-    "best-effort-with-warnings"
+  loweringPolicy: ("strict" | "best-effort" | "best-effort-with-warnings")?
 
   /// Default directory for diagnostic artifacts. Relative paths resolve from
   /// the project root.
-  diagnosticsDirectory: String? = ".agent-hook-kit/post-tool-use"
+  diagnosticsDirectory: String?
 
   /// What to do when a configured tool executable is missing.
-  missingToolPolicy: "user-notice" | "hard-failure" | "harness-block" =
-    "user-notice"
+  missingToolPolicy: ("user-notice" | "hard-failure" | "harness-block")?
 }
 
 class Merge {

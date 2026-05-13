@@ -9,7 +9,8 @@
 //! and full Pkl semantic coverage (abstract classes, amends, imports).
 
 use crate::error::PklConfigError;
-use crate::schema::RunnerConfig;
+use crate::schema::{RunnerConfig, RunnerConfigPatch};
+use serde::de::DeserializeOwned;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,11 @@ pub const BUILTINS_PKL: &str = include_str!("builtins/Builtins.pkl");
 /// resolve. Other siblings from the real source directory are mirrored into
 /// the staging directory so project-local relative imports keep working.
 pub fn evaluate_pkl_file(file_path: &Path) -> Result<RunnerConfig, PklConfigError> {
+    evaluate_pkl_file_patch(file_path).map(RunnerConfigPatch::into_config)
+}
+
+/// Evaluate a Pkl file and keep per-field presence for multi-file merges.
+pub fn evaluate_pkl_file_patch(file_path: &Path) -> Result<RunnerConfigPatch, PklConfigError> {
     let staging = stage_builtins()?;
     mirror_source_siblings(file_path, &staging.dir)?;
     let staged_target = staging.dir.join(unique_pkl_name("user"));
@@ -39,6 +45,11 @@ pub fn evaluate_pkl_file(file_path: &Path) -> Result<RunnerConfig, PklConfigErro
 
 /// Evaluate an in-memory Pkl source string.
 pub fn evaluate_pkl_source(source: &str) -> Result<RunnerConfig, PklConfigError> {
+    evaluate_pkl_source_patch(source).map(RunnerConfigPatch::into_config)
+}
+
+/// Evaluate an in-memory Pkl source string and keep per-field presence.
+pub fn evaluate_pkl_source_patch(source: &str) -> Result<RunnerConfigPatch, PklConfigError> {
     let staging = stage_builtins()?;
     let target = staging.dir.join(unique_pkl_name("inline"));
     std::fs::write(&target, source).map_err(|e| PklConfigError::TempIo {
@@ -190,7 +201,10 @@ fn write_file(path: &Path, content: &str) -> Result<(), PklConfigError> {
     Ok(())
 }
 
-fn run_pkl_eval(path: &Path) -> Result<RunnerConfig, PklConfigError> {
+fn run_pkl_eval<T>(path: &Path) -> Result<T, PklConfigError>
+where
+    T: DeserializeOwned,
+{
     let output = Command::new("pkl")
         .args(["eval", "--format", "json"])
         .arg(path)
@@ -211,7 +225,7 @@ fn run_pkl_eval(path: &Path) -> Result<RunnerConfig, PklConfigError> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<RunnerConfig>(&stdout).map_err(|e| PklConfigError::JsonDecode {
+    serde_json::from_str::<T>(&stdout).map_err(|e| PklConfigError::JsonDecode {
         path: path.to_path_buf(),
         error: e.to_string(),
     })

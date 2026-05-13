@@ -5,7 +5,7 @@
 //! [`Merge::reset_all`] (drop everything), [`Merge::reset`] (drop specific
 //! top-level fields), or [`Merge::reset_tools`] (drop specific tool entries).
 
-use crate::schema::{Merge, MergeResetKey, RunnerConfig};
+use crate::schema::{Merge, MergeResetKey, RunnerConfig, RunnerConfigPatch};
 
 /// Merge `incoming` into `acc` according to `incoming.merge` semantics.
 ///
@@ -49,12 +49,55 @@ pub fn merge(acc: &mut RunnerConfig, incoming: RunnerConfig) {
     acc.merge = Merge::default();
 }
 
+/// Merge one field-preserving Pkl config patch into an accumulated config.
+pub fn merge_patch(acc: &mut RunnerConfig, incoming: RunnerConfigPatch) {
+    if incoming.merge.reset_all {
+        *acc = RunnerConfig::default();
+    }
+
+    for key in &incoming.merge.reset {
+        match key {
+            MergeResetKey::Settings => acc.settings = Default::default(),
+            MergeResetKey::Tools => acc.tools.clear(),
+            MergeResetKey::Run => acc.run.clear(),
+        }
+    }
+
+    for id in &incoming.merge.reset_tools {
+        acc.tools.remove(id);
+    }
+
+    incoming.settings.apply_to(&mut acc.settings);
+
+    for (id, spec) in incoming.tools {
+        acc.tools.insert(id, spec);
+    }
+
+    if !incoming.run.is_empty() {
+        acc.run = incoming.run;
+    }
+
+    acc.merge = Merge::default();
+}
+
 /// Fold a chain of configs together. The first config is the base; subsequent
 /// configs are merged over it in order.
 pub fn merge_chain(mut chain: impl Iterator<Item = RunnerConfig>) -> RunnerConfig {
     let mut acc = chain.next().unwrap_or_default();
     for next in chain {
         merge(&mut acc, next);
+    }
+    acc
+}
+
+/// Fold a chain of field-preserving Pkl config patches together.
+pub fn merge_patch_chain(mut chain: impl Iterator<Item = RunnerConfigPatch>) -> RunnerConfig {
+    let mut acc = chain
+        .next()
+        .map(RunnerConfigPatch::into_config)
+        .unwrap_or_default();
+    for next in chain {
+        merge_patch(&mut acc, next);
     }
     acc
 }
