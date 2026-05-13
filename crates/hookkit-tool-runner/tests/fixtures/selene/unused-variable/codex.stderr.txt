@@ -1,0 +1,21 @@
+warning: Selene: issues remain; diagnostics: <workspace>/.agent-hook-kit/selene-agent-hook/test-session_selene-tool-issues.txt
+Selene diagnostics:
+[verify] command: selene <workspace>/example.lua
+status: Some(1)
+classification: Some(Issues)
+stdout:
+warning[unused_variable]: unused is assigned a value, but never used
+  ┌─ <workspace>/example.lua:1:7
+  │
+1 │ local unused = 1
+  │       ^^^^^^
+
+Results:
+0 errors
+1 warnings
+0 parse errors
+artifact: <workspace>/.agent-hook-kit/selene-agent-hook/test-session_selene-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/selene-agent-hook/test-session_selene-tool-issues.txt
+summary: Selene diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
