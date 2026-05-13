@@ -178,6 +178,38 @@ run = new Listing<String> { "eslint" }
 }
 
 #[test]
+fn explicit_config_preserves_sibling_relative_imports() {
+    require_pkl!();
+    let root = temp_dir("sibling-import");
+    let config_dir = root.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).unwrap();
+
+    std::fs::write(
+        config_dir.join("shared.pkl"),
+        r#"
+runList = new Listing<String> { "ruff" }
+"#,
+    )
+    .unwrap();
+    let config_path = write_config(
+        &root,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "shared.pkl" as Shared
+
+run = Shared.runList
+"#,
+    );
+
+    let loaded = discover_and_load(&root, Some(&config_path)).expect("discover");
+
+    assert_eq!(loaded.config.run, vec!["ruff"]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn empty_chain_returns_default_config() {
     require_pkl!();
     let root = temp_dir("empty");

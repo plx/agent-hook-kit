@@ -10,6 +10,7 @@
 
 use crate::error::PklConfigError;
 use crate::schema::RunnerConfig;
+use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -24,9 +25,11 @@ pub const BUILTINS_PKL: &str = include_str!("builtins/Builtins.pkl");
 /// `file_path` is the Pkl source to evaluate. The embedded `Config.pkl` and
 /// `Builtins.pkl` modules are materialized to a sibling temp directory so
 /// `amends "Config.pkl"` / `import "Builtins.pkl"` from project configs
-/// resolve.
+/// resolve. Other siblings from the real source directory are mirrored into
+/// the staging directory so project-local relative imports keep working.
 pub fn evaluate_pkl_file(file_path: &Path) -> Result<RunnerConfig, PklConfigError> {
     let staging = stage_builtins()?;
+    mirror_source_siblings(file_path, &staging.dir)?;
     let staged_target = staging.dir.join(unique_pkl_name("user"));
     copy_to_staging(file_path, &staged_target)?;
     let result = run_pkl_eval(&staged_target);
@@ -97,6 +100,81 @@ fn copy_to_staging(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
         path: dst.to_path_buf(),
         error: e.to_string(),
     })
+}
+
+fn mirror_source_siblings(src: &Path, dst_dir: &Path) -> Result<(), PklConfigError> {
+    let Some(src_dir) = src.parent() else {
+        return Ok(());
+    };
+    let src_name = src.file_name();
+    let entries = std::fs::read_dir(src_dir).map_err(|e| PklConfigError::ReadIo {
+        path: src_dir.to_path_buf(),
+        error: e.to_string(),
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| PklConfigError::ReadIo {
+            path: src_dir.to_path_buf(),
+            error: e.to_string(),
+        })?;
+        let name = entry.file_name();
+        if Some(name.as_os_str()) == src_name
+            || name == OsStr::new("Config.pkl")
+            || name == OsStr::new("Builtins.pkl")
+        {
+            continue;
+        }
+
+        let dst = dst_dir.join(&name);
+        if dst.exists() {
+            continue;
+        }
+        mirror_path(&entry.path(), &dst)?;
+    }
+
+    Ok(())
+}
+
+fn mirror_path(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
+    #[cfg(unix)]
+    {
+        if std::os::unix::fs::symlink(src, dst).is_ok() {
+            return Ok(());
+        }
+    }
+
+    copy_path(src, dst)
+}
+
+fn copy_path(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
+    let metadata = std::fs::metadata(src).map_err(|e| PklConfigError::ReadIo {
+        path: src.to_path_buf(),
+        error: e.to_string(),
+    })?;
+
+    if metadata.is_dir() {
+        std::fs::create_dir_all(dst).map_err(|e| PklConfigError::TempIo {
+            path: dst.to_path_buf(),
+            error: e.to_string(),
+        })?;
+        for entry in std::fs::read_dir(src).map_err(|e| PklConfigError::ReadIo {
+            path: src.to_path_buf(),
+            error: e.to_string(),
+        })? {
+            let entry = entry.map_err(|e| PklConfigError::ReadIo {
+                path: src.to_path_buf(),
+                error: e.to_string(),
+            })?;
+            copy_path(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+
+    std::fs::copy(src, dst).map_err(|e| PklConfigError::TempIo {
+        path: dst.to_path_buf(),
+        error: e.to_string(),
+    })?;
+    Ok(())
 }
 
 fn write_file(path: &Path, content: &str) -> Result<(), PklConfigError> {
