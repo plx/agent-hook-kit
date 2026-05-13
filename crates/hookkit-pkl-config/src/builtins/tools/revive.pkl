@@ -1,0 +1,34 @@
+/// revive — fast, configurable Go linter, replacement for golint.
+
+module agent_hook_kit.builtins.tools.Revive
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "revive"
+  displayName = "revive"
+  executable = "revive"
+  installHint = "install revive with `go install github.com/mgechev/revive@latest`"
+  workspaceIndicator = "go.mod"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.go"; "**/*.go" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "-set_exit_status"
+        new Config.ExtraArgs {}
+        "./..."
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

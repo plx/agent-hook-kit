@@ -1,0 +1,34 @@
+/// go vet — Go's built-in static analyzer.
+
+module agent_hook_kit.builtins.tools.GoVet
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "go-vet"
+  displayName = "go vet"
+  executable = "go"
+  installHint = "install the Go toolchain (go vet ships with it)"
+  workspaceIndicator = "go.mod"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.go"; "**/*.go" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "vet"
+        new Config.ExtraArgs {}
+        "./..."
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

@@ -1,0 +1,36 @@
+/// gofmt — Go's standard formatter.
+///
+/// `gofmt` always exits 0, so we rely on the format phase to rewrite files
+/// and report changes through the runner's snapshot diff.
+
+module agent_hook_kit.builtins.tools.GoFmt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "go-fmt"
+  displayName = "gofmt"
+  executable = "gofmt"
+  installHint = "install the Go toolchain (gofmt ships with it)"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.go"; "**/*.go" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "-w"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 2 }
+      }
+      writes = "target-files"
+    }
+  }
+  phaseOrder = new Listing<String> { "format" }
+}
