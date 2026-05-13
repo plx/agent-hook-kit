@@ -1,25 +1,20 @@
-/// Aggregator for the embedded `post-tool-use-agent-hook` builtin tool specs.
+/// PLACEHOLDER — overwritten at runtime by `hookkit_pkl_config::eval`.
 ///
-/// Each builtin lives in its own file under `tools/`. This module imports each
-/// and re-exports it as a top-level property so existing user configs that do
-/// `import "Builtins.pkl"` and reference `Builtins.ruff` (etc.) keep working.
+/// `stage_builtins()` generates a fresh `Builtins.pkl` aggregator in the
+/// staging temp dir by scanning the embedded `tools/` directory. Every
+/// `tools/<name>.pkl` becomes a top-level property keyed by camelCase of
+/// the filename (`cargo_fmt.pkl` → `cargoFmt`).
 ///
-/// Adding a new builtin: drop a `tools/<name>.pkl` exporting `spec`, then add
-/// one alphabetically-ordered import + one re-export below.
+/// That means adding a new builtin is a single-file change: drop a new
+/// `tools/<name>.pkl` exporting a `spec: Config.ToolSpec`. No edits to this
+/// file required — leave it as-is.
+///
+/// The body below is just a static snapshot for compile-time `include_dir!`
+/// embedding; it gets clobbered the moment a config is evaluated.
 
 module agent_hook_kit.PostToolUseBuiltins
 
 import "Config.pkl" as Config
-import "tools/biome.pkl" as biomeMod
-import "tools/cargo_clippy.pkl" as cargoClippyMod
-import "tools/cargo_fmt.pkl" as cargoFmtMod
-import "tools/eslint.pkl" as eslintMod
-import "tools/prettier.pkl" as prettierMod
-import "tools/ruff.pkl" as ruffMod
 
-biome: Config.ToolSpec = biomeMod.spec
-cargoClippy: Config.ToolSpec = cargoClippyMod.spec
-cargoFmt: Config.ToolSpec = cargoFmtMod.spec
-eslint: Config.ToolSpec = eslintMod.spec
-prettier: Config.ToolSpec = prettierMod.spec
-ruff: Config.ToolSpec = ruffMod.spec
+// Snapshot of the catalog as of the most recent foundation commit. The
+// runtime regenerates this from `tools/` and ignores whatever is here.
