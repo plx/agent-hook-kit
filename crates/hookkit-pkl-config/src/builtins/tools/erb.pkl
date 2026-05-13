@@ -1,0 +1,49 @@
+/// erb_lint — ERB template linter (Shopify).
+///
+/// Tool id is `erb` to keep the public hook name short; the underlying
+/// executable is `erb_lint`.
+
+module agent_hook_kit.builtins.tools.Erb
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "erb"
+  displayName = "erb_lint"
+  executable = "erb_lint"
+  installHint = "install erb_lint with `gem install erb_lint` or add it to the project Gemfile"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.erb"; "**/*.erb" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "--autocorrect"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        unexpected = "failure"
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}

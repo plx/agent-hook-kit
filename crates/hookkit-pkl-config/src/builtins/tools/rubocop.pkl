@@ -1,0 +1,46 @@
+/// RuboCop — Ruby linter with auto-correct.
+
+module agent_hook_kit.builtins.tools.Rubocop
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "rubocop"
+  displayName = "RuboCop"
+  executable = "rubocop"
+  installHint = "install rubocop with `gem install rubocop` or add it to the project Gemfile"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.rb"; "**/*.rb" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "--force-exclusion"
+        "--autocorrect"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--force-exclusion"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}

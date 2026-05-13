@@ -1,0 +1,2 @@
+erb_lint: changed example.erb
+hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

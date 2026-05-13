@@ -1,0 +1,32 @@
+/// reek — Ruby code-smell detector.
+
+module agent_hook_kit.builtins.tools.Reek
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "reek"
+  displayName = "reek"
+  executable = "reek"
+  installHint = "install reek with `gem install reek` or add it to the project Gemfile"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.rb"; "**/*.rb" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 2 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

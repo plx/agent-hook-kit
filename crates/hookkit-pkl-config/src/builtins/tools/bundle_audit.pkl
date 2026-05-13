@@ -1,0 +1,41 @@
+/// bundler-audit — scans Gemfile.lock for known vulnerable dependencies.
+///
+/// Operates at the workspace level — the runner invokes it from the project
+/// root whenever Gemfile.lock or related files change. Requires the
+/// ruby-advisory-db to be downloadable (or pre-cloned to the default location).
+
+module agent_hook_kit.builtins.tools.BundleAudit
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "bundle-audit"
+  displayName = "bundler-audit"
+  executable = "bundle-audit"
+  installHint = "install bundler-audit with `gem install bundler-audit`"
+  workspaceIndicator = "Gemfile.lock"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "Gemfile"; "**/Gemfile"
+      "Gemfile.lock"; "**/Gemfile.lock"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "check"
+        new Config.ExtraArgs {}
+        new Config.ProjectRoot {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

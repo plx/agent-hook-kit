@@ -1,0 +1,40 @@
+/// mix test — Elixir test runner.
+///
+/// DRAFT: tests run for the whole Mix project, not per-file. The file list is
+/// only used as a gate; tests are invoked at the project root.
+
+module agent_hook_kit.builtins.tools.MixTest
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "mix-test"
+  displayName = "mix test"
+  executable = "mix"
+  installHint = "install Elixir (e.g. `brew install elixir`) so `mix` is available"
+  workspaceIndicator = "mix.exs"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.ex"; "**/*.ex"
+      "*.exs"; "**/*.exs"
+    }
+    exclude = new Listing<String> { "deps/**/*"; "_build/**/*" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "test"
+        new Config.ExtraArgs {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 2 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}
