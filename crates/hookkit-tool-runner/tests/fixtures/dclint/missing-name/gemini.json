@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"dclint changed docker-compose.yml and issues remain; re-read changed files, then inspect diagnostics at <workspace>/.agent-hook-kit/dclint-agent-hook/test-session_dclint-tool-issues.txt."}}

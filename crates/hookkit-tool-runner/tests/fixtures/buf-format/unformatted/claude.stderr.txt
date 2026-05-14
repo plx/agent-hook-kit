@@ -1,0 +1,2 @@
+buf format: changed example.proto
+hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

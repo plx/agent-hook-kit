@@ -1,0 +1,13 @@
+warning: ryl: issues remain; diagnostics: <workspace>/.agent-hook-kit/ryl-agent-hook/test-session_ryl-tool-issues.txt
+ryl diagnostics:
+[verify] command: ryl <workspace>/example.yaml
+status: Some(1)
+classification: Some(Issues)
+stderr:
+<workspace>/example.yaml
+  1:1       warning  missing document start "---"  (document-start)
+  2:1       error    duplication of key "x" in mapping  (key-duplicates)
+artifact: <workspace>/.agent-hook-kit/ryl-agent-hook/test-session_ryl-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/ryl-agent-hook/test-session_ryl-tool-issues.txt
+summary: ryl diagnostics
+hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr
