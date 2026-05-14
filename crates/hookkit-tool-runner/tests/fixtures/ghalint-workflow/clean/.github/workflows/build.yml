@@ -1,0 +1,9 @@
+on:
+  push:
+permissions: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "Pass"

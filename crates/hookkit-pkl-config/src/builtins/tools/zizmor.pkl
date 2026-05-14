@@ -1,0 +1,51 @@
+/// zizmor — GitHub Actions static analysis / security linter.
+
+module agent_hook_kit.builtins.tools.Zizmor
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "zizmor"
+  displayName = "zizmor"
+  executable = "zizmor"
+  installHint = "install zizmor with `brew install zizmor` or `pipx install zizmor`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.yml"; "*.yaml"
+      "**/*.yml"; "**/*.yaml"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "--no-progress"
+        "-qq"
+        "--fix"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 10; 11; 12; 13; 14 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--no-progress"
+        "-qq"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 10; 11; 12; 13; 14 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}

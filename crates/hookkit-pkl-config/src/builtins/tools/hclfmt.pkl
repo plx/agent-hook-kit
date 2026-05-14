@@ -1,0 +1,49 @@
+/// hclfmt — HCL formatter, provided by Terragrunt's `terragrunt hcl fmt`.
+///
+/// Operates workspace-wide (Terragrunt walks the working directory
+/// recursively) rather than per-file; the underlying CLI only accepts a
+/// single explicit `--file` value at a time.
+
+module agent_hook_kit.builtins.tools.Hclfmt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "hclfmt"
+  displayName = "hclfmt (terragrunt)"
+  executable = "terragrunt"
+  installHint = "install Terragrunt with `brew install terragrunt`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.hcl"; "**/*.hcl" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "hcl"
+        "fmt"
+        new Config.ExtraArgs {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "matching-globs"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "hcl"
+        "fmt"
+        "--check"
+        new Config.ExtraArgs {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}
