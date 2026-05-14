@@ -1,0 +1,54 @@
+/// clang-format — C/C++ formatter.
+
+module agent_hook_kit.builtins.tools.ClangFormat
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "clang-format"
+  displayName = "clang-format"
+  executable = "clang-format"
+  installHint = "install clang-format with `brew install clang-format`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.c"; "**/*.c"
+      "*.h"; "**/*.h"
+      "*.cpp"; "**/*.cpp"
+      "*.hpp"; "**/*.hpp"
+      "*.cc"; "**/*.cc"
+      "*.hh"; "**/*.hh"
+      "*.cxx"; "**/*.cxx"
+      "*.hxx"; "**/*.hxx"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "-i"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--dry-run"
+        "-Werror"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}

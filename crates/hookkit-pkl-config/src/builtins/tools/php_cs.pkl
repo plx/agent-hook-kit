@@ -1,0 +1,48 @@
+/// php-cs — PHP CodeSniffer (`phpcs`) style checker with `phpbcf` auto-fixer.
+///
+/// DRAFT: requires a PHP runtime and the PHP_CodeSniffer package; not
+/// verified against a fixture in this catalog.
+
+module agent_hook_kit.builtins.tools.PhpCs
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "php-cs"
+  displayName = "PHP_CodeSniffer"
+  executable = "phpcs"
+  installHint =
+    "install PHP_CodeSniffer (`phpcs`/`phpcbf`) via `brew install php-code-sniffer` or `composer global require \"squizlabs/php_codesniffer=*\"`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.php"; "**/*.php" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      program = "phpcbf"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1; 2 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}

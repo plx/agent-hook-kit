@@ -1,0 +1,32 @@
+/// Pkl — validate Pkl files via `pkl eval`.
+
+module agent_hook_kit.builtins.tools.Pkl
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "pkl"
+  displayName = "Pkl"
+  executable = "pkl"
+  installHint = "install Pkl with `brew install pkl`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.pkl"; "**/*.pkl" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "eval"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

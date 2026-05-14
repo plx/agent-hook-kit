@@ -1,0 +1,26 @@
+warning: stylelint: issues remain; diagnostics: <workspace>/.agent-hook-kit/stylelint-agent-hook/test-session_stylelint-tool-issues.txt
+stylelint diagnostics:
+[fix] command: stylelint --fix <workspace>/example.css
+status: Some(2)
+classification: Some(Issues)
+stderr:
+
+example.css
+  1:8  ✖  Deprecated media type "tty"  media-type-no-deprecated
+
+✖ 1 problem (1 error, 0 warnings)
+
+
+[verify] command: stylelint <workspace>/example.css
+status: Some(2)
+classification: Some(Issues)
+stderr:
+
+example.css
+  1:8  ✖  Deprecated media type "tty"  media-type-no-deprecated
+
+✖ 1 problem (1 error, 0 warnings)
+artifact: <workspace>/.agent-hook-kit/stylelint-agent-hook/test-session_stylelint-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/stylelint-agent-hook/test-session_stylelint-tool-issues.txt
+summary: stylelint diagnostics
+hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr
