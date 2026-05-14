@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"mypy reports issues; inspect diagnostics at <workspace>/.agent-hook-kit/mypy-agent-hook/test-session_mypy-tool-issues.txt.","hookEventName":"PostToolUse"}}

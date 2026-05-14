@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"flake8 reports issues; inspect diagnostics at <workspace>/.agent-hook-kit/flake8-agent-hook/test-session_flake8-tool-issues.txt.","hookEventName":"PostToolUse"}}

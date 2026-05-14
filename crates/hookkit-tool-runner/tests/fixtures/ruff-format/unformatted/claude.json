@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"ruff format changed example.py; re-read changed files before editing further.","hookEventName":"PostToolUse"}}

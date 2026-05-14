@@ -1,0 +1,45 @@
+/// Black — opinionated Python formatter.
+
+module agent_hook_kit.builtins.tools.Black
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "black"
+  displayName = "Black"
+  executable = "black"
+  installHint = "install black with `brew install black` or `pipx install black`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py"; "*.pyi"; "**/*.pyi" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 123 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+        failure = new Listing<Int> { 123 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}
