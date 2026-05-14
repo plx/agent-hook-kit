@@ -1,0 +1,35 @@
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
+
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+[zmij]
+accepted = ["MIT"]
+
+[memchr]
+accepted = ["MIT"]
+
+[unicode-ident]
+accepted = ["MIT", "Unicode-3.0"]
+
+# `option-ext` is a small utility helper pulled in transitively by `dirs` →
+# `dirs-sys`. MPL-2.0 is file-scoped copyleft and compatible with our
+# MIT-or-Apache-2.0 distribution as long as the upstream `option-ext` source
+# files retain their MPL-2.0 notice (which they do, since we don't vendor or
+# modify them — they're consumed as a normal crates.io dependency).
+[option-ext]
+accepted = ["MPL-2.0"]
