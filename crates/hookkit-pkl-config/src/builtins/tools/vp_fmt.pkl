@@ -1,0 +1,75 @@
+/// vp fmt — Vite+ formatter (oxfmt-based).
+
+module agent_hook_kit.builtins.tools.VpFmt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "vp-fmt"
+  displayName = "vp fmt"
+  executable = "vp"
+  installHint = "install Vite+ with `npm i -g vite-plus` or add it to the project"
+  workspaceIndicator = "package.json"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.js"; "**/*.js"
+      "*.mjs"; "**/*.mjs"
+      "*.cjs"; "**/*.cjs"
+      "*.ts"; "**/*.ts"
+      "*.mts"; "**/*.mts"
+      "*.cts"; "**/*.cts"
+      "*.jsx"; "**/*.jsx"
+      "*.tsx"; "**/*.tsx"
+      "*.mdx"; "**/*.mdx"
+      "*.vue"; "**/*.vue"
+      "*.json"; "**/*.json"
+      "*.jsonc"; "**/*.jsonc"
+      "*.json5"; "**/*.json5"
+      "*.yaml"; "**/*.yaml"
+      "*.yml"; "**/*.yml"
+      "*.toml"; "**/*.toml"
+      "*.md"; "**/*.md"
+      "*.markdown"; "**/*.markdown"
+      "*.html"; "**/*.html"
+      "*.htm"; "**/*.htm"
+      "*.css"; "**/*.css"
+      "*.scss"; "**/*.scss"
+      "*.less"; "**/*.less"
+      "*.graphql"; "**/*.graphql"
+      "*.gql"; "**/*.gql"
+      "*.handlebars"; "**/*.handlebars"
+      "*.hbs"; "**/*.hbs"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "fmt"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "fmt"
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}

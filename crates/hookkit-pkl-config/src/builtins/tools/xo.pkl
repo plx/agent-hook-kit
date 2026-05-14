@@ -1,0 +1,49 @@
+/// xo — JavaScript/TypeScript linter built on ESLint with strong defaults.
+
+module agent_hook_kit.builtins.tools.Xo
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "xo"
+  displayName = "xo"
+  executable = "xo"
+  installHint = "install xo with `npm i -g xo` or add it to the project"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.js"; "**/*.js"
+      "*.jsx"; "**/*.jsx"
+      "*.ts"; "**/*.ts"
+      "*.tsx"; "**/*.tsx"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "--fix"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}

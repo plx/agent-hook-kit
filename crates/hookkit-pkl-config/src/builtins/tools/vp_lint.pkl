@@ -1,0 +1,62 @@
+/// vp lint — Vite+ linter (oxlint-based).
+
+module agent_hook_kit.builtins.tools.VpLint
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "vp-lint"
+  displayName = "vp lint"
+  executable = "vp"
+  installHint = "install Vite+ with `npm i -g vite-plus` or add it to the project"
+  workspaceIndicator = "package.json"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.js"; "**/*.js"
+      "*.mjs"; "**/*.mjs"
+      "*.cjs"; "**/*.cjs"
+      "*.ts"; "**/*.ts"
+      "*.mts"; "**/*.mts"
+      "*.cts"; "**/*.cts"
+      "*.jsx"; "**/*.jsx"
+      "*.tsx"; "**/*.tsx"
+      "*.mdx"; "**/*.mdx"
+      "*.vue"; "**/*.vue"
+      "*.svelte"; "**/*.svelte"
+      "*.astro"; "**/*.astro"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "lint"
+        "--deny-warnings"
+        "--fix"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "lint"
+        "--deny-warnings"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}

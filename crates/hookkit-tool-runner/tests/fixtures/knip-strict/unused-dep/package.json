@@ -1,0 +1,9 @@
+{
+  "name": "knip-strict-fixture-unused-dep",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./entry.ts",
+  "dependencies": {
+    "lodash": "^4.17.0"
+  }
+}

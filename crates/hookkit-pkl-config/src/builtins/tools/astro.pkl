@@ -1,0 +1,39 @@
+// DRAFT: astro check refuses to run without a local node_modules install of
+// `@astrojs/check` + `typescript` and a full Astro project layout
+// (`src/pages/`, `astro.config.mjs`). Per-file fixturing is impractical, so
+// this spec ships as-is and validation should happen in real projects.
+
+/// astro check — Astro framework component checker.
+
+module agent_hook_kit.builtins.tools.Astro
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "astro"
+  displayName = "astro check"
+  executable = "astro"
+  installHint = "install astro check with `npm i -g astro @astrojs/check` or add it to the project"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.astro"; "**/*.astro"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

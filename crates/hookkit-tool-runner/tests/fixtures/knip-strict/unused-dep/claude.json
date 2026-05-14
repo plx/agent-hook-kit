@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"knip --strict changed package.json; re-read changed files before editing further.","hookEventName":"PostToolUse"}}
