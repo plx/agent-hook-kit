@@ -1,0 +1,17 @@
+warning: reek: issues remain; diagnostics: <workspace>/.agent-hook-kit/reek-agent-hook/test-session_reek-tool-issues.txt
+reek diagnostics:
+[verify] command: reek <workspace>/example.rb
+status: Some(2)
+classification: Some(Issues)
+stdout:
+<workspace>/example.rb -- 5 warnings:
+  [1]:IrresponsibleModule: Foo has no descriptive comment [https://github.com/troessner/reek/blob/v6.5.0/docs/Irresponsible-Module.md]
+  [3]:UncommunicativeVariableName: Foo#long_method has the variable name 'a' [https://github.com/troessner/reek/blob/v6.5.0/docs/Uncommunicative-Variable-Name.md]
+  [4]:UncommunicativeVariableName: Foo#long_method has the variable name 'b' [https://github.com/troessner/reek/blob/v6.5.0/docs/Uncommunicative-Variable-Name.md]
+  [5]:UncommunicativeVariableName: Foo#long_method has the variable name 'c' [https://github.com/troessner/reek/blob/v6.5.0/docs/Uncommunicative-Variable-Name.md]
+  [2]:UtilityFunction: Foo#long_method doesn't depend on instance state (maybe move it to another class?) [https://github.com/troessner/reek/blob/v6.5.0/docs/Utility-Function.md]
+artifact: <workspace>/.agent-hook-kit/reek-agent-hook/test-session_reek-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/reek-agent-hook/test-session_reek-tool-issues.txt
+summary: reek diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
