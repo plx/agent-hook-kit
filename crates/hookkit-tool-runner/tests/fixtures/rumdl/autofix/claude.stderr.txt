@@ -1,0 +1,2 @@
+rumdl: changed example.md
+hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

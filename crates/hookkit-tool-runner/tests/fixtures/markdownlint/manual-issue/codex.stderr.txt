@@ -1,0 +1,18 @@
+warning: markdownlint: issues remain; diagnostics: <workspace>/.agent-hook-kit/markdownlint-agent-hook/test-session_markdownlint-tool-issues.txt
+markdownlint diagnostics:
+[fix] command: markdownlint --fix <workspace>/example.md
+status: Some(1)
+classification: Some(Issues)
+stderr:
+<workspace>/example.md:1 error MD041/first-line-heading/first-line-h1 First line in a file should be a top-level heading [Context: "content without a first-line h..."]
+
+[verify] command: markdownlint <workspace>/example.md
+status: Some(1)
+classification: Some(Issues)
+stderr:
+<workspace>/example.md:1 error MD041/first-line-heading/first-line-h1 First line in a file should be a top-level heading [Context: "content without a first-line h..."]
+artifact: <workspace>/.agent-hook-kit/markdownlint-agent-hook/test-session_markdownlint-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/markdownlint-agent-hook/test-session_markdownlint-tool-issues.txt
+summary: markdownlint diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
