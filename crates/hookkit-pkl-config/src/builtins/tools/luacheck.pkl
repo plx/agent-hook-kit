@@ -1,0 +1,36 @@
+/// luacheck — static analyzer and linter for Lua.
+///
+/// DRAFT: luacheck installation is non-trivial (`luarocks install luacheck`
+/// requires a working LuaRocks setup). Exit-code policy is inferred from
+/// luacheck's documented codes. Verify with a real run when `luacheck` is
+/// available before relying on this in production.
+
+module agent_hook_kit.builtins.tools.Luacheck
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "luacheck"
+  displayName = "Luacheck"
+  executable = "luacheck"
+  installHint = "install luacheck via LuaRocks: `brew install luarocks && luarocks install luacheck`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.lua"; "**/*.lua" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1; 2 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}
