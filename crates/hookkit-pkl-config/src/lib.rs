@@ -53,14 +53,12 @@ pub fn discover_and_load(
 ) -> Result<Loaded, PklConfigError> {
     if let Some(path) = override_path {
         let config = evaluate_pkl_file_patch(path)?.into_config();
-        let project_root = path
-            .parent()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| cwd.to_path_buf());
+        // `--config PATH` accepts arbitrary locations (e.g. `/tmp/custom.pkl`),
+        // so we cannot infer a project root from the file's parents; anchor on
+        // cwd as documented in `discovery::project_root_for`.
         return Ok(Loaded {
             config,
-            project_root,
+            project_root: cwd.to_path_buf(),
         });
     }
 
@@ -70,7 +68,10 @@ pub fn discover_and_load(
     let mut project_root = cwd.to_path_buf();
     for discovered in &chain {
         let config = evaluate_pkl_file_patch(&discovered.path)?;
-        if matches!(discovered.kind, discovery::DiscoveredKind::Project) {
+        if matches!(
+            discovered.kind,
+            discovery::DiscoveredKind::Project | discovery::DiscoveredKind::Local
+        ) {
             project_root = discovery::project_root_for(discovered, cwd);
         }
         configs.push(config);

@@ -260,6 +260,12 @@ pub struct CommonPostToolUseOutput {
     pub replace_tool_result: Option<serde_json::Value>,
     pub tail_tool_call: Option<TailToolCall>,
     pub session_control: Option<SessionControl>,
+    /// When set, lowering emits a harness-native blocking output (exit code 2
+    /// across all harnesses) with this message on stderr. Lets handlers
+    /// signal an unrecoverable abort condition (e.g. a required tool was
+    /// unavailable under `missingToolPolicy = "harness-block"`) without
+    /// reaching for `std::process::exit`.
+    pub harness_block: Option<String>,
     pub lowering: LoweringPolicy,
 }
 
@@ -351,6 +357,13 @@ impl CommonPostToolUseOutput {
         self
     }
 
+    /// Mark this output as a harness block: lowering will produce a native
+    /// blocking output (exit code 2) with `message` on stderr.
+    pub fn with_harness_block(mut self, message: impl Into<String>) -> Self {
+        self.harness_block = Some(message.into());
+        self
+    }
+
     fn context_lines(&self) -> Vec<String> {
         self.agent_feedback
             .iter()
@@ -382,7 +395,13 @@ impl CommonPostToolUseOutput {
     pub fn to_claude_lowered(
         &self,
     ) -> Result<LoweredPostToolUseOutput<ClaudeHookOutput>, HookkitError> {
-        let mut lowered = PostToolUseLowering::new(Harness::Claude, self.lowering);
+        let lowered = PostToolUseLowering::new(Harness::Claude, self.lowering);
+        if let Some(stderr) = &self.harness_block {
+            return Ok(lowered.finish(ClaudeHookOutput::BlockingError {
+                stderr: stderr.clone(),
+            }));
+        }
+        let mut lowered = lowered;
         lowered.fallback_user_messages(&self.notices, &self.diagnostics)?;
 
         if self.replace_tool_result.is_some() {
@@ -431,7 +450,13 @@ impl CommonPostToolUseOutput {
     pub fn to_codex_lowered(
         &self,
     ) -> Result<LoweredPostToolUseOutput<CodexHookOutput>, HookkitError> {
-        let mut lowered = PostToolUseLowering::new(Harness::Codex, self.lowering);
+        let lowered = PostToolUseLowering::new(Harness::Codex, self.lowering);
+        if let Some(stderr) = &self.harness_block {
+            return Ok(lowered.finish(CodexHookOutput::BlockingDeny {
+                stderr: stderr.clone(),
+            }));
+        }
+        let mut lowered = lowered;
         lowered.fallback_user_messages(&self.notices, &self.diagnostics)?;
 
         if !self.context_lines().is_empty() {
@@ -469,7 +494,13 @@ impl CommonPostToolUseOutput {
     pub fn to_gemini_lowered(
         &self,
     ) -> Result<LoweredPostToolUseOutput<GeminiHookOutput>, HookkitError> {
-        let mut lowered = PostToolUseLowering::new(Harness::Gemini, self.lowering);
+        let lowered = PostToolUseLowering::new(Harness::Gemini, self.lowering);
+        if let Some(stderr) = &self.harness_block {
+            return Ok(lowered.finish(GeminiHookOutput::BlockingError {
+                stderr: stderr.clone(),
+            }));
+        }
+        let mut lowered = lowered;
         lowered.fallback_user_messages(&self.notices, &self.diagnostics)?;
 
         if self.tail_tool_call.is_some() {

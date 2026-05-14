@@ -252,6 +252,74 @@ run = new Listing<String> { "ruff" }
 }
 
 #[test]
+fn explicit_config_anchors_project_root_on_cwd() {
+    require_pkl!();
+    let cwd = temp_dir("explicit-anchor-cwd");
+    let elsewhere = temp_dir("explicit-anchor-source");
+
+    // Override file lives outside `<cwd>/.agent-hook-kit/`. The previous
+    // implementation treated `path.parent().parent()` as project root, which
+    // for paths like `/tmp/foo/post-tool-use.pkl` resolves to `/tmp` — guard
+    // against that by asserting `project_root == cwd` instead.
+    let override_path = elsewhere.join("post-tool-use.pkl");
+    std::fs::write(
+        &override_path,
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+}
+run = new Listing<String> { "ruff" }
+"#,
+    )
+    .unwrap();
+
+    let loaded = discover_and_load(&cwd, Some(&override_path)).expect("discover");
+    assert_eq!(
+        loaded.project_root, cwd,
+        "explicit --config PATH should anchor project_root on cwd, not on the override file's parents"
+    );
+
+    std::fs::remove_dir_all(&cwd).ok();
+    std::fs::remove_dir_all(&elsewhere).ok();
+}
+
+#[test]
+fn local_only_config_updates_project_root() {
+    require_pkl!();
+    let root = temp_dir("local-only-root");
+    let nested = root.join("inner");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    // Only a local pkl exists at the repo root, no project pkl. The runner
+    // should still treat the directory containing `.agent-hook-kit/` as the
+    // project root, instead of leaving project_root at cwd.
+    write_config(
+        &root,
+        "post-tool-use.local.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+}
+run = new Listing<String> { "ruff" }
+"#,
+    );
+
+    let loaded = discover_and_load(&nested, None).expect("discover");
+    assert_eq!(
+        loaded.project_root, root,
+        "local-only discovery should anchor project_root on the directory containing .agent-hook-kit/"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn empty_chain_returns_default_config() {
     require_pkl!();
     let root = temp_dir("empty");

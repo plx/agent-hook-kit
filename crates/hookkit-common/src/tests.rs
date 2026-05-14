@@ -86,6 +86,50 @@ fn post_tool_use_semantic_view_normalizes_result_and_paths() {
 }
 
 #[test]
+fn post_tool_use_read_tool_input_does_not_count_as_modified_file() {
+    // Read carries `file_path` in its input but doesn't modify the file.
+    // The post-tool runner uses `modified_files` to decide whether to run
+    // formatters/linters, so this must not report the path as ModifiedFile.
+    let claude_ev = claude::PostToolUse {
+        common: claude::CommonFields {
+            session_id: "sess-1".to_string(),
+            transcript_path: None,
+            cwd: "/repo".to_string(),
+            permission_mode: Some("default".to_string()),
+            hook_event_name: "PostToolUse".to_string(),
+            extra: Default::default(),
+        },
+        tool_name: Some("Read".to_string()),
+        tool_input: Some(serde_json::json!({"file_path": "src/app.py"})),
+        tool_response: Some(serde_json::json!({
+            "success": true,
+            "content": "def f(): pass\n"
+        })),
+        tool_use_id: Some("toolu_01READ".to_string()),
+    };
+
+    let raw = serde_json::json!({"hookEventName": "PostToolUse"});
+    let common = CommonPostToolUseInput::Claude(claude_ev);
+    let view = common.view_with_raw(&raw);
+
+    let modified = view.modified_files(Path::new("/repo"), Some(Path::new("/repo")));
+    assert!(
+        modified.is_empty(),
+        "Read should not produce ModifiedFile candidates, got {modified:?}"
+    );
+
+    // The path should still be surfaced as a ReadFile candidate so consumers
+    // that want a complete view of referenced paths can see it.
+    let all = view.path_candidates(Path::new("/repo"), Some(Path::new("/repo")));
+    let target = Path::new("/repo/src/app.py");
+    assert!(
+        all.iter()
+            .any(|c| c.role == PathRole::ReadFile && c.absolute_path == target),
+        "expected a ReadFile candidate for Read input, got {all:?}"
+    );
+}
+
+#[test]
 fn pre_tool_use_shared_accessors() {
     let codex_ev = codex::PreToolUse {
         common: codex::CommonFields {

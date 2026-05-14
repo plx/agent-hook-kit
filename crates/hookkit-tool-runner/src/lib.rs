@@ -435,8 +435,13 @@ pub fn run_common_input(
     }
 
     if let Some(message) = had_harness_block_message {
-        eprintln!("{message}");
-        std::process::exit(2);
+        // Surface harness-block as a CommonHookOutput intent that lowers to
+        // each harness's blocking output (exit code 2 + stderr). This keeps
+        // `run_common_input` composable for tests and embedders — they get
+        // a real Result back instead of having the host process terminated.
+        return Ok(CommonHookOutput::PostToolUse(
+            output.with_harness_block(message),
+        ));
     }
 
     if had_hard_failure {
@@ -459,6 +464,7 @@ fn is_empty_output(output: &CommonPostToolUseOutput) -> bool {
         && output.replace_tool_result.is_none()
         && output.tail_tool_call.is_none()
         && output.session_control.is_none()
+        && output.harness_block.is_none()
 }
 
 fn lowering_from(policy: &pkl::LoweringPolicy) -> LoweringPolicy {
@@ -824,7 +830,8 @@ fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
 
         match log.classification {
             Some(PhaseStatus::Clean) => {
-                if phase.is_verifier() {
+                if phase.is_verifier() && verify_state != Some(IssueState::Issues) {
+                    // Don't downgrade a prior verifier's Issues verdict.
                     verify_state = Some(IssueState::Clean);
                 }
             }

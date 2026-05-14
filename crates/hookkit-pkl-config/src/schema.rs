@@ -69,6 +69,15 @@ impl Default for Settings {
 }
 
 /// Field-preserving settings overlay for one Pkl file.
+///
+/// NOTE: Pkl's JSON output always emits every class field with its evaluated
+/// value, so we cannot distinguish "user omitted the field" from "user set the
+/// field to its Pkl default" purely at the deserialization layer. Each
+/// `Option<T>` here represents "field was non-null in JSON"; a `null` value
+/// from Pkl deserializes to `None`. Per-field explicit clearing (e.g., setting
+/// `diagnosticsDirectory = null` to unset an inherited value) would require a
+/// Pkl-side sentinel convention or a separate `merge.resetSettings` mechanism;
+/// see PR #6–#16 discussion.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {

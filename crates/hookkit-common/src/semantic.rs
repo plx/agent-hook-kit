@@ -342,11 +342,41 @@ fn candidate_from_field<'a>(
     source_kind: SourceKind,
     tool_name: Option<&str>,
 ) -> Option<RawPathCandidate<'a>> {
-    let role = match key {
-        "file_path" | "filePath" | "target_file" | "targetFile" | "absolute_path"
-        | "absolutePath" => PathRole::ModifiedFile,
-        "path" if matches!(source_kind, SourceKind::ToolResult) => PathRole::ModifiedFile,
-        "path" if tool_name.is_some_and(is_known_file_writing_tool) => PathRole::ModifiedFile,
+    // Field names that strongly suggest the tool is targeting a specific file
+    // (vs. just listing a path among many). Even so, the file is only
+    // *modified* when the tool is known to write — Read also carries
+    // `file_path` in its input but doesn't change the file. Without this
+    // gate, the post-tool runner would re-format/re-lint files after Read.
+    let is_target_field = matches!(
+        key,
+        "file_path" | "filePath" | "target_file" | "targetFile" | "absolute_path" | "absolutePath"
+    );
+    let is_path_field = key == "path";
+
+    if !is_target_field && !is_path_field {
+        return None;
+    }
+
+    let tool_writes = tool_name.is_some_and(is_known_file_writing_tool);
+    let role = match (source_kind, is_target_field, is_path_field, tool_writes) {
+        // Input from a known writer: targeted file is modified.
+        (SourceKind::ToolInput, true, _, true) => PathRole::ModifiedFile,
+        // Input from a non-writer (e.g. Read): targeted file is read, not
+        // modified. Surface it as ReadFile so downstream filters can ignore
+        // it for modify-only purposes while still seeing it for general
+        // path-awareness.
+        (SourceKind::ToolInput, true, _, false) => PathRole::ReadFile,
+        // Plain `path` field in input is too ambiguous on its own; only treat
+        // it as a modification when the tool is a known writer.
+        (SourceKind::ToolInput, false, true, true) => PathRole::ModifiedFile,
+        (SourceKind::ToolInput, false, true, false) => return None,
+        // Tool result fields explicitly describe what the tool operated on.
+        // For known writers, treat as modified; otherwise treat as a path
+        // the tool referenced but did not write.
+        (SourceKind::ToolResult, _, _, true) => PathRole::ModifiedFile,
+        (SourceKind::ToolResult, true, _, false) => PathRole::ReadFile,
+        // Plain `path` in a non-writer's result is too ambiguous.
+        (SourceKind::ToolResult, false, true, false) => return None,
         _ => return None,
     };
 
