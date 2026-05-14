@@ -1,0 +1,27 @@
+/// no-commit-to-branch — block direct commits to protected branches.
+///
+// DRAFT: this is fundamentally a *pre-commit* guard — it checks the result
+// of `git symbolic-ref HEAD` against a configured branch list and refuses
+// the commit. A post-tool-use hook is the wrong shape for it: we run after
+// every edit, we have no commit-stage context, and the check has nothing
+// to do with the file the agent just modified. Listed here for catalog
+// completeness; left as DRAFT.
+
+module agent_hook_kit.builtins.tools.NoCommitToBranch
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "no-commit-to-branch"
+  displayName = "no-commit-to-branch"
+  executable = "git"
+  installHint = "install git from your platform's package manager"
+  enabled = false
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "**/*" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {}
+  phaseOrder = new Listing<String> {}
+}

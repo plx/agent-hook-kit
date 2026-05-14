@@ -1,0 +1,28 @@
+/// mixed-line-ending — normalize file line endings (default LF).
+///
+// DRAFT: hk implements both `--diff` and `--fix` for this entirely inside
+// the hk binary, scanning the file's byte stream and reporting / rewriting
+// CRLF and CR runs. Equivalent portable shell would need to invoke `dos2unix`
+// (not always installed) or a `perl -pi -e 's/\r\n/\n/g; s/\r/\n/g'` one-
+// liner, both of which we would have to wrap as `bash -c`. Left as DRAFT
+// until we either ship a hookkit-native helper or commit to one of those
+// shell-script wrappers.
+
+module agent_hook_kit.builtins.tools.MixedLineEnding
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "mixed-line-ending"
+  displayName = "mixed-line-ending"
+  executable = "dos2unix"
+  installHint = "install dos2unix with `brew install dos2unix` or your distro's package manager"
+  enabled = false
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "**/*" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {}
+  phaseOrder = new Listing<String> {}
+}

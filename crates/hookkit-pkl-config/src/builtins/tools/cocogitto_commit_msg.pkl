@@ -1,0 +1,28 @@
+/// cocogitto-commit-msg — validate a commit message with `cog verify`.
+///
+// DRAFT: like `check_conventional_commit`, this is a `commit-msg` hook that
+// takes the commit-message *file* path as its argument (`cog --quiet verify
+// --file <path>`). It does not consume the list of project files that
+// post-tool-use produces, and it only makes sense at commit time. Our
+// Phase model has no commit-message mode yet, so this is shipped as a
+// catalog entry only. Reactivate once a commit-message phase kind exists.
+
+module agent_hook_kit.builtins.tools.CocogittoCommitMsg
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "cocogitto-commit-msg"
+  displayName = "cocogitto commit-msg"
+  executable = "cog"
+  installHint = "install cocogitto with `brew install cocogitto` or `cargo install cocogitto`"
+  workspaceIndicator = "cog.toml"
+  enabled = false
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {}
+  }
+
+  phases = new Mapping<String, Config.Phase> {}
+  phaseOrder = new Listing<String> {}
+}

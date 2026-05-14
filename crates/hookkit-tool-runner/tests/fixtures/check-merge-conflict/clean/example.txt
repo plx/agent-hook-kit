@@ -1,0 +1,2 @@
+A plain text file with no merge markers.
+Just regular content here.
