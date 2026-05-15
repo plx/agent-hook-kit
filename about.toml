@@ -33,3 +33,16 @@ accepted = ["MIT", "Unicode-3.0"]
 # modify them — they're consumed as a normal crates.io dependency).
 [option-ext]
 accepted = ["MPL-2.0"]
+
+# `minijinja` ships its top-level Apache-2.0 LICENSE plus a vendored copy of
+# `self_cell`'s LICENSE at `src/vendor/self_cell/LICENSE`. cargo-about's
+# filesystem-order scan picks different ones on macOS vs. Linux CI, producing
+# a different deduplication grouping each time. Clarify it to the top-level
+# LICENSE so the output is deterministic across platforms.
+[minijinja.clarify]
+license = "Apache-2.0"
+
+[[minijinja.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
