@@ -17,6 +17,8 @@ use minijinja::Environment;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEFAULT_CLEAN_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further.";
 const DEFAULT_ISSUES_AGENT: &str =
@@ -410,10 +412,7 @@ pub fn run_common_input(
             continue;
         }
 
-        let mut outcomes = Vec::new();
-        for job in jobs {
-            outcomes.push(run_job(&job, &context));
-        }
+        let outcomes = run_jobs(&jobs, &context, loaded.config.settings.jobs);
 
         let batch_status = accumulate_outcomes(
             outcomes,
@@ -792,6 +791,61 @@ struct PhaseLog {
     stdout: String,
     stderr: String,
     error: Option<String>,
+}
+
+/// Run a tool's independent per-workspace jobs, honoring `settings.jobs` for
+/// bounded parallelism. Outcomes are returned in job order regardless of which
+/// job finishes first, so downstream aggregation stays deterministic.
+fn run_jobs(jobs: &[ToolJob], context: &ToolContext<'_>, jobs_setting: u32) -> Vec<ToolRunOutcome> {
+    let worker_count = resolve_worker_count(jobs_setting, jobs.len());
+    if worker_count <= 1 {
+        return jobs.iter().map(|job| run_job(job, context)).collect();
+    }
+
+    // Work-stealing over a shared cursor: each worker claims the next index via
+    // an atomic fetch-add, so uneven job costs balance across threads. The
+    // mutex is held only to stash a finished outcome, never across `run_job`.
+    let cursor = AtomicUsize::new(0);
+    let outcomes = Mutex::new(Vec::<(usize, ToolRunOutcome)>::with_capacity(jobs.len()));
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| {
+                loop {
+                    let idx = cursor.fetch_add(1, Ordering::Relaxed);
+                    let Some(job) = jobs.get(idx) else { break };
+                    let outcome = run_job(job, context);
+                    outcomes
+                        .lock()
+                        .expect("run_jobs outcome mutex poisoned")
+                        .push((idx, outcome));
+                }
+            });
+        }
+    });
+
+    let mut outcomes = outcomes
+        .into_inner()
+        .expect("run_jobs outcome mutex poisoned");
+    outcomes.sort_by_key(|(idx, _)| *idx);
+    outcomes.into_iter().map(|(_, outcome)| outcome).collect()
+}
+
+/// Resolve `settings.jobs` to a worker-thread count for a batch of `job_count`
+/// independent jobs.
+///
+/// `jobs = 0` selects "auto", which is reserved for future use and runs
+/// serially for now. `jobs = n >= 1` runs up to `n` jobs concurrently, capped
+/// at `job_count` since extra workers would have nothing to claim.
+fn resolve_worker_count(jobs_setting: u32, job_count: usize) -> usize {
+    if job_count == 0 {
+        return 0;
+    }
+    let requested = match jobs_setting {
+        0 => 1, // auto: reserved for future use; serial for now
+        n => n as usize,
+    };
+    requested.clamp(1, job_count)
 }
 
 fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcome {
@@ -1463,4 +1517,71 @@ fn rel_display(path: &Path, project_root: &Path) -> String {
 
 fn invalid_data(message: String) -> HookkitError {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_worker_count_honors_jobs_setting() {
+        // auto (0) is reserved for future use and runs serially for now.
+        assert_eq!(resolve_worker_count(0, 5), 1);
+        // explicit serial.
+        assert_eq!(resolve_worker_count(1, 5), 1);
+        // bounded parallelism up to the requested count.
+        assert_eq!(resolve_worker_count(4, 5), 4);
+        // never spin up more workers than there are jobs.
+        assert_eq!(resolve_worker_count(8, 5), 5);
+        assert_eq!(resolve_worker_count(2, 1), 1);
+        // no jobs means no workers.
+        assert_eq!(resolve_worker_count(4, 0), 0);
+        assert_eq!(resolve_worker_count(0, 0), 0);
+    }
+
+    fn job_with_file(root: &Path, name: &str) -> ToolJob {
+        ToolJob {
+            workspace_dir: root.to_path_buf(),
+            workspace_indicator: None,
+            files: vec![root.join(name)],
+        }
+    }
+
+    fn completed_files(outcome: &ToolRunOutcome) -> &[PathBuf] {
+        match outcome {
+            ToolRunOutcome::Completed(completed) => completed.files.as_slice(),
+            other => panic!("expected Completed outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_jobs_preserves_order_across_concurrency_levels() {
+        // A spec with no phases makes `run_job` complete without spawning any
+        // process or touching the filesystem, so this stays fast and
+        // deterministic while still exercising the parallel execution path.
+        let root = PathBuf::from("/tmp/hookkit-run-jobs-test");
+        let spec = ToolSpec::new("test-tool", "Test Tool", "test-exec");
+        let context = ToolContext {
+            spec: &spec,
+            project_root: &root,
+            global_diagnostics_dir: None,
+        };
+        let jobs: Vec<ToolJob> = (0..16)
+            .map(|i| job_with_file(&root, &format!("file-{i:02}.rs")))
+            .collect();
+
+        // Serial (1), auto (0), and bounded-parallel (>1, including more than
+        // CPUs) must all return one outcome per job, in job order.
+        for jobs_setting in [0u32, 1, 4, 32] {
+            let outcomes = run_jobs(&jobs, &context, jobs_setting);
+            assert_eq!(outcomes.len(), jobs.len(), "jobs_setting={jobs_setting}");
+            for (job, outcome) in jobs.iter().zip(&outcomes) {
+                assert_eq!(
+                    completed_files(outcome),
+                    job.files.as_slice(),
+                    "jobs_setting={jobs_setting}: outcome order must match job order",
+                );
+            }
+        }
+    }
 }

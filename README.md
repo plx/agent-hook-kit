@@ -218,7 +218,7 @@ run = new Listing<String> { "ruff"; "prettier" }
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `settings.jobs` | `0` (auto) | Reserved for future parallelism. |
+| `settings.jobs` | `0` (auto) | Max independent per-workspace jobs to run concurrently. `1` (or `0`/auto, currently serial) runs jobs sequentially; `>= 2` runs up to that many at once, capped at the job count. |
 | `settings.failFast` | `true` | Stop after operational failures. |
 | `settings.continueAfterIssues` | `true` | Keep running later tools after source issues. |
 | `settings.exclude` | `[".git/**", "node_modules/**"]` | Global file exclusions applied before per-tool filters. |
