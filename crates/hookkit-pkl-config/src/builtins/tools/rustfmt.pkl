@@ -1,0 +1,43 @@
+/// rustfmt — standalone Rust code formatter.
+
+module agent_hook_kit.builtins.tools.Rustfmt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "rustfmt"
+  displayName = "rustfmt"
+  executable = "rustfmt"
+  installHint = "install the Rust toolchain (rustfmt ships with rustup) or run `rustup component add rustfmt`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.rs"; "**/*.rs" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}

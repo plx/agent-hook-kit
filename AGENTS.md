@@ -23,7 +23,9 @@ These wrappers are typically written in bash as a lowest-common-denominator, but
 - `crates/hookkit-runtime` — stdin/stdout/exit-code plumbing; entry points like `run_native` and `run_common`.
 - `crates/hookkit-{claude,codex,gemini}` — per-harness input/output models.
 - `crates/hookkit-common` — cross-harness wrapper layer for hooks that should behave the same everywhere.
+- `crates/hookkit-pkl-config` — Pkl evaluation, embedded builtin tool catalog, multi-file config merge, and discovery for the post-tool-use runner.
+- `crates/hookkit-tool-runner` — ships the `post-tool-use-agent-hook` binary that drives a Pkl-configured pipeline of formatter/linter/checker tools.
 - `examples/` — runnable hook stubs paired with `fixtures/` JSON for each harness.
 - `planning/` — design notes; not shipped.
 
-See `README.md` for build/test commands and example invocations.
+`pkl` must be on `$PATH` at runtime for the post-tool-use runner; see `README.md` for prerequisites, build/test commands, and example invocations.

@@ -1,0 +1,11 @@
+warning: detect-private-key: issues remain; diagnostics: <workspace>/.agent-hook-kit/detect-private-key-agent-hook/test-session_detect-private-key-tool-issues.txt
+detect-private-key diagnostics:
+[verify] command: grep -lE -- -----BEGIN ([A-Z]+ )?PRIVATE KEY-----|PuTTY-User-Key-File- <workspace>/example.txt
+status: Some(0)
+classification: Some(Issues)
+stdout:
+<workspace>/example.txt
+artifact: <workspace>/.agent-hook-kit/detect-private-key-agent-hook/test-session_detect-private-key-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/detect-private-key-agent-hook/test-session_detect-private-key-tool-issues.txt
+summary: detect-private-key diagnostics
+hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

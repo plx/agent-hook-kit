@@ -1,0 +1,38 @@
+/// Sorbet — gradual type checker for Ruby.
+///
+/// DRAFT: Sorbet expects a `sorbet/` directory at the project root with a
+/// `config` file. Most projects also need RBI files, runtime hooks, and a
+/// non-trivial setup beyond `gem install sorbet`. This spec covers the common
+/// "type-check the whole project" invocation but real projects will likely
+/// want to override `extraArgs` to point at specific paths.
+
+module agent_hook_kit.builtins.tools.Sorbet
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "sorbet"
+  displayName = "Sorbet"
+  executable = "srb"
+  installHint = "install sorbet with `gem install sorbet sorbet-runtime` and run `srb init`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.rb"; "**/*.rb"; "*.rbi"; "**/*.rbi" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "tc"
+        new Config.ExtraArgs {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 100 }
+        unexpected = "failure"
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

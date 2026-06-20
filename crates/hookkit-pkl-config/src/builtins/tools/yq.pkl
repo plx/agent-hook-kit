@@ -1,0 +1,39 @@
+/// yq — YAML processor used here as an in-place pretty-printer.
+///
+/// hk's "verify" recipe is a multi-line bash pipeline (`yq -P "$f" | diff -u`)
+/// that the runner's single-argv model can't express; only the in-place
+/// formatting phase is wired up here.
+
+module agent_hook_kit.builtins.tools.Yq
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "yq"
+  displayName = "yq"
+  executable = "yq"
+  installHint = "install yq with `brew install yq`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.yaml"; "**/*.yaml"
+      "*.yml"; "**/*.yml"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "-iP"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+  }
+  phaseOrder = new Listing<String> { "format" }
+}

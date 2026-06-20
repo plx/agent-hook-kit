@@ -1,0 +1,37 @@
+/// python-check-ast — validate Python syntax via `python3 -m py_compile`.
+///
+/// hk implements this as `hk util python-check-ast`; we translate to the
+/// standard-library `py_compile` module which parses each file and reports
+/// SyntaxError on stderr with exit code 1.
+
+module agent_hook_kit.builtins.tools.PythonCheckAst
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "python-check-ast"
+  displayName = "python check-ast"
+  executable = "python3"
+  installHint = "install Python 3 (e.g. `brew install python`)"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "-m"
+        "py_compile"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

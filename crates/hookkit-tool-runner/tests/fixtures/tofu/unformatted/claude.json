@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"tofu fmt changed example.tf; re-read changed files before editing further.","hookEventName":"PostToolUse"}}

@@ -1,0 +1,37 @@
+/// deno check — Deno's TypeScript type checker.
+
+module agent_hook_kit.builtins.tools.DenoCheck
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "deno-check"
+  displayName = "deno check"
+  executable = "deno"
+  installHint = "install deno with `brew install deno` or `curl -fsSL https://deno.land/install.sh | sh`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "*.js"; "**/*.js"
+      "*.jsx"; "**/*.jsx"
+      "*.ts"; "**/*.ts"
+      "*.tsx"; "**/*.tsx"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "check"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

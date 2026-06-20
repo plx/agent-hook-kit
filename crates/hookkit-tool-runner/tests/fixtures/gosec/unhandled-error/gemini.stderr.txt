@@ -1,0 +1,26 @@
+warning: gosec: issues remain; diagnostics: <workspace>/.agent-hook-kit/gosec-agent-hook/test-session_gosec-tool-issues.txt
+gosec diagnostics:
+[verify] command: gosec -quiet ./...
+status: Some(1)
+classification: Some(Issues)
+stdout:
+Results:
+
+
+[[37;40m<workspace>/example.go:9[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    8: func main() {
+  > 9: 	os.Remove("foo")
+    10: 	fmt.Println("done")
+
+Autofix: 
+
+[1;36mSummary:[0m
+  Gosec  : dev
+  Files  : 1
+  Lines  : 11
+  Nosec  : 0
+  Issues : [1;31m1[0m
+artifact: <workspace>/.agent-hook-kit/gosec-agent-hook/test-session_gosec-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/gosec-agent-hook/test-session_gosec-tool-issues.txt
+summary: gosec diagnostics
+hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

@@ -1,0 +1,61 @@
+/// just-format — format a Justfile with `just --fmt --unstable`.
+///
+/// `just --fmt` only accepts a single justfile per invocation and is gated
+/// behind `--unstable`. The post-tool-use runner fires per modified file,
+/// so the typical job's `Files` expansion is exactly one path — which fits
+/// `--justfile <path>`. If a future job ever batches multiple justfiles
+/// into one invocation, this phase will fail loudly rather than silently
+/// formatting only the first; that is the right behavior until we add a
+/// per-file loop primitive to the schema.
+
+module agent_hook_kit.builtins.tools.JustFormat
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "just-format"
+  displayName = "just --fmt"
+  executable = "just"
+  installHint = "install just with `brew install just` or `cargo install just`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {
+      "Justfile"; "justfile"
+      "**/Justfile"; "**/justfile"
+      "*.just"; "**/*.just"
+    }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "--fmt"
+        "--unstable"
+        new Config.ExtraArgs {}
+        "--justfile"
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        "--fmt"
+        "--unstable"
+        "--check"
+        new Config.ExtraArgs {}
+        "--justfile"
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "format"; "verify" }
+}

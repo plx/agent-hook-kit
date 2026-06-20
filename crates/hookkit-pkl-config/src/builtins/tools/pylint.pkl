@@ -1,0 +1,47 @@
+/// pylint — Python code analysis.
+///
+/// pylint's exit code is a bitmask: 1=fatal, 2=error, 4=warning, 8=refactor,
+/// 16=convention, 32=usage. Any non-zero non-usage code means lint issues
+/// were reported; only 1 (fatal) and 32 (usage error) we treat as failure.
+
+module agent_hook_kit.builtins.tools.Pylint
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "pylint"
+  displayName = "pylint"
+  executable = "pylint"
+  installHint = "install pylint with `pipx install pylint`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      // `--score=no` suppresses the trailing score line whose dash width and
+      // "previous run" rating both depend on pylint's persistent cache, making
+      // it impractical to fixture stably.
+      argv = new Listing<String | Config.ArgToken> {
+        "--score=no"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        // Evens 2..=30: any combination of error(2)/warning(4)/refactor(8)/
+        // convention(16) bits with the fatal(1) bit clear.
+        issues = new Listing<Int> {
+          2; 4; 6; 8; 10; 12; 14; 16; 18; 20; 22; 24; 26; 28; 30
+        }
+        // Odds 1..=31 carry the fatal bit; 32 is usage error.
+        failure = new Listing<Int> {
+          1; 3; 5; 7; 9; 11; 13; 15; 17; 19; 21; 23; 25; 27; 29; 31; 32
+        }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

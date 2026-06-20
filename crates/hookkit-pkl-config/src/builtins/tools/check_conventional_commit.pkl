@@ -1,0 +1,28 @@
+/// check-conventional-commit — verify a commit message matches Conventional Commits.
+///
+// DRAFT: this is a `commit-msg` hook in pre-commit / hk terminology — it
+// takes the commit-message *file* (typically `$1` = `.git/COMMIT_EDITMSG`)
+// rather than a list of project files, and runs only at commit time. Our
+// post-tool-use Phase model is built around per-file invocations and has
+// no "commit-message" mode, so the wiring is not in place. Listed here for
+// catalog completeness; left as DRAFT until we add a commit-msg phase kind
+// or ship a dedicated commit-msg runner.
+
+module agent_hook_kit.builtins.tools.CheckConventionalCommit
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "check-conventional-commit"
+  displayName = "check-conventional-commit"
+  executable = "hk"
+  installHint = "install hk from https://github.com/jdx/hk; this tool is currently a thin wrapper around `hk util check-conventional-commit`"
+  enabled = false
+
+  files = new Config.FileSelection {
+    include = new Listing<String> {}
+  }
+
+  phases = new Mapping<String, Config.Phase> {}
+  phaseOrder = new Listing<String> {}
+}

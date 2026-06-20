@@ -1,0 +1,11 @@
+warning: jq: issues remain; diagnostics: <workspace>/.agent-hook-kit/jq-agent-hook/test-session_jq-tool-issues.txt
+jq diagnostics:
+[verify] command: jq -e empty <workspace>/example.json
+status: Some(5)
+classification: Some(Issues)
+stderr:
+jq: parse error: Invalid numeric literal at line 1, column 5
+artifact: <workspace>/.agent-hook-kit/jq-agent-hook/test-session_jq-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/jq-agent-hook/test-session_jq-tool-issues.txt
+summary: jq diagnostics
+hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

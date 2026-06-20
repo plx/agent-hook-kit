@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"just --fmt changed example.just; re-read changed files before editing further.","hookEventName":"PostToolUse"}}

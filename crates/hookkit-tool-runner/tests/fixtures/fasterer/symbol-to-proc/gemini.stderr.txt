@@ -1,0 +1,15 @@
+warning: fasterer: issues remain; diagnostics: <workspace>/.agent-hook-kit/fasterer-agent-hook/test-session_fasterer-tool-issues.txt
+fasterer diagnostics:
+[verify] command: fasterer <workspace>/example.rb
+status: Some(1)
+classification: Some(Issues)
+stdout:
+[31m<workspace>/example.rb:1[0m Calling argumentless methods within blocks is slower than using symbol to proc.
+
+[32m1 file inspected[0m, [31m1 offense detected[0m
+stderr:
+NOTE: RubyParser::V40 undefined, using RubyParser::V34.
+artifact: <workspace>/.agent-hook-kit/fasterer-agent-hook/test-session_fasterer-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/fasterer-agent-hook/test-session_fasterer-tool-issues.txt
+summary: fasterer diagnostics
+hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

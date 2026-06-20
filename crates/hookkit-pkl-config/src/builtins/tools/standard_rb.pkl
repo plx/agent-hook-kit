@@ -1,0 +1,44 @@
+/// Standard Ruby — opinionated RuboCop preset.
+
+module agent_hook_kit.builtins.tools.StandardRb
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "standard-rb"
+  displayName = "Standard Ruby"
+  executable = "standardrb"
+  installHint = "install standard with `gem install standard` or add it to the project Gemfile"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.rb"; "**/*.rb" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["fix"] = new Config.Phase {
+      mode = "fix"
+      argv = new Listing<String | Config.ArgToken> {
+        "--fix"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+      writes = "target-files"
+    }
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      argv = new Listing<String | Config.ArgToken> {
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "fix"; "verify" }
+}

@@ -1,0 +1,36 @@
+/// gofumpt — stricter Go formatter, a superset of gofmt.
+///
+/// `gofumpt -l` exits 0 even when files would change, so the runner relies
+/// on the format phase rewriting files and observing the snapshot diff.
+
+module agent_hook_kit.builtins.tools.GoFumpt
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "gofumpt"
+  displayName = "gofumpt"
+  executable = "gofumpt"
+  installHint = "install gofumpt with `go install mvdan.cc/gofumpt@latest`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.go"; "**/*.go" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "-w"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 2 }
+      }
+      writes = "target-files"
+    }
+  }
+  phaseOrder = new Listing<String> { "format" }
+}

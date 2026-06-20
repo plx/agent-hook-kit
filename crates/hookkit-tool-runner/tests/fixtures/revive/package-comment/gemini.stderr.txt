@@ -1,0 +1,11 @@
+warning: revive: issues remain; diagnostics: <workspace>/.agent-hook-kit/revive-agent-hook/test-session_revive-tool-issues.txt
+revive diagnostics:
+[verify] command: revive -set_exit_status ./...
+status: Some(1)
+classification: Some(Issues)
+stdout:
+example.go:1:1: should have a package comment
+artifact: <workspace>/.agent-hook-kit/revive-agent-hook/test-session_revive-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/revive-agent-hook/test-session_revive-tool-issues.txt
+summary: revive diagnostics
+hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

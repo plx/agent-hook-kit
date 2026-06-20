@@ -1,0 +1,36 @@
+/// goimports — gofmt plus automatic import management.
+///
+/// `goimports -l` exits 0 even when files would change, so the runner relies
+/// on the format phase rewriting files and observing the snapshot diff.
+
+module agent_hook_kit.builtins.tools.GoImports
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "goimports"
+  displayName = "goimports"
+  executable = "goimports"
+  installHint = "install goimports with `go install golang.org/x/tools/cmd/goimports@latest`"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.go"; "**/*.go" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["format"] = new Config.Phase {
+      mode = "format"
+      argv = new Listing<String | Config.ArgToken> {
+        "-w"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 2 }
+      }
+      writes = "target-files"
+    }
+  }
+  phaseOrder = new Listing<String> { "format" }
+}

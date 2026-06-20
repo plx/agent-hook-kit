@@ -1,0 +1,45 @@
+warning: tflint: issues remain; diagnostics: <workspace>/.agent-hook-kit/tflint-agent-hook/test-session_tflint-tool-issues.txt
+tflint diagnostics:
+[fix] command: tflint --fix
+status: Some(2)
+classification: Some(Issues)
+stdout:
+2 issue(s) found:
+
+Warning: Missing version constraint for provider "aws" in `required_providers` (terraform_required_providers)
+
+  on example.tf line 1:
+   1: resource "aws_instance" "test" {
+
+Reference: https://github.com/terraform-linters/tflint-ruleset-terraform/blob/v0.14.1/docs/rules/terraform_required_providers.md
+
+Warning: terraform "required_version" attribute is required (terraform_required_version)
+
+  on example.tf line 1:
+
+Reference: https://github.com/terraform-linters/tflint-ruleset-terraform/blob/v0.14.1/docs/rules/terraform_required_version.md
+
+
+[verify] command: tflint
+status: Some(2)
+classification: Some(Issues)
+stdout:
+2 issue(s) found:
+
+Warning: Missing version constraint for provider "aws" in `required_providers` (terraform_required_providers)
+
+  on example.tf line 1:
+   1: resource "aws_instance" "test" {
+
+Reference: https://github.com/terraform-linters/tflint-ruleset-terraform/blob/v0.14.1/docs/rules/terraform_required_providers.md
+
+Warning: terraform "required_version" attribute is required (terraform_required_version)
+
+  on example.tf line 1:
+
+Reference: https://github.com/terraform-linters/tflint-ruleset-terraform/blob/v0.14.1/docs/rules/terraform_required_version.md
+artifact: <workspace>/.agent-hook-kit/tflint-agent-hook/test-session_tflint-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/tflint-agent-hook/test-session_tflint-tool-issues.txt
+summary: tflint diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped

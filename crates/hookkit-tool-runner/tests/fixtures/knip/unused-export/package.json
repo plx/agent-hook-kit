@@ -1,0 +1,6 @@
+{
+  "name": "knip-fixture-unused-export",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./entry.ts"
+}

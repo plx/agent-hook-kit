@@ -1,0 +1,11 @@
+warning: tsserver: issues remain; diagnostics: <workspace>/.agent-hook-kit/tsserver-agent-hook/test-session_tsserver-tool-issues.txt
+tsserver diagnostics:
+[verify] command: tsc-files --noEmit <workspace>/example.ts
+status: Some(2)
+classification: Some(Issues)
+stdout:
+example.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.
+artifact: <workspace>/.agent-hook-kit/tsserver-agent-hook/test-session_tsserver-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/tsserver-agent-hook/test-session_tsserver-tool-issues.txt
+summary: tsserver diagnostics
+hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

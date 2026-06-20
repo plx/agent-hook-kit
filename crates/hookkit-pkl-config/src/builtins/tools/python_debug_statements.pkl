@@ -1,0 +1,44 @@
+/// python-debug-statements — flag leftover `breakpoint()` / `pdb.set_trace()`.
+///
+// DRAFT: hk ships this behind its `hk util python-debug-statements` namespace
+// with a multi-line implementation we cannot replicate as a single argv
+// invocation. A naive `grep -nH -E ...` would miss commented-out lines and
+// docstring/string-literal contexts. Recommended alternatives: configure ruff
+// rule T100 (`flake8-debugger`) on your project. Left as a DRAFT until we
+// either ship our own helper binary or settle on a robust grep regex.
+
+module agent_hook_kit.builtins.tools.PythonDebugStatements
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "python-debug-statements"
+  displayName = "python debug-statements"
+  executable = "grep"
+  installHint = "grep is part of any POSIX environment"
+
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*.py"; "**/*.py" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      // Flags any non-comment line containing `breakpoint()` or `pdb.set_trace()`.
+      // grep exits 0 when a match is found (issues) and 1 when no match (clean).
+      argv = new Listing<String | Config.ArgToken> {
+        "-nH"
+        "-E"
+        #"^[^#]*(\bbreakpoint\(\)|pdb\.set_trace\(\))"#
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 1 }
+        issues = new Listing<Int> { 0 }
+        failure = new Listing<Int> { 2 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

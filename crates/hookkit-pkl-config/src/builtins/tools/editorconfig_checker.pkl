@@ -1,0 +1,35 @@
+/// editorconfig-checker — validate files against `.editorconfig` rules.
+
+module agent_hook_kit.builtins.tools.EditorconfigChecker
+
+import "../Config.pkl" as Config
+
+spec: Config.ToolSpec = new Config.ToolSpec {
+  id = "editorconfig-checker"
+  displayName = "editorconfig-checker"
+  executable = "editorconfig-checker"
+  installHint = "install editorconfig-checker with `brew install editorconfig-checker`"
+
+  // `.editorconfig` rules apply to any text file; let the tool decide what
+  // to skip via its own ignore handling.
+  files = new Config.FileSelection {
+    include = new Listing<String> { "*"; "**/*" }
+  }
+
+  phases = new Mapping<String, Config.Phase> {
+    ["verify"] = new Config.Phase {
+      mode = "verify"
+      // `-no-color` keeps diagnostics ANSI-free for downstream consumers.
+      argv = new Listing<String | Config.ArgToken> {
+        "-no-color"
+        new Config.ExtraArgs {}
+        new Config.Files {}
+      }
+      exitCodes = new Config.ExitCodes {
+        clean = new Listing<Int> { 0 }
+        issues = new Listing<Int> { 1 }
+      }
+    }
+  }
+  phaseOrder = new Listing<String> { "verify" }
+}

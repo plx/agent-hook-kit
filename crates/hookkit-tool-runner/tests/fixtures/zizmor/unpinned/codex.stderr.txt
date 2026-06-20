@@ -1,0 +1,38 @@
+warning: zizmor: issues remain; diagnostics: <workspace>/.agent-hook-kit/zizmor-agent-hook/test-session_zizmor-tool-issues.txt
+zizmor diagnostics:
+[fix] command: zizmor --no-progress -qq --fix <workspace>/example.yml
+status: Some(14)
+classification: Some(Issues)
+stdout:
+error[unpinned-uses]: unpinned action reference
+ --> <workspace>/example.yml:9:15
+  |
+9 |       - uses: actions/checkout@v4
+  |               ^^^^^^^^^^^^^^^^^^^ action is not pinned to a hash (required by blanket policy)
+  |
+  = note: audit confidence → High
+  = help: audit documentation → https://docs.zizmor.sh/audits/#unpinned-uses
+
+3 findings (2 suppressed): 0 informational, 0 low, 0 medium, 1 high
+stderr:
+No fixes available to apply.
+
+[verify] command: zizmor --no-progress -qq <workspace>/example.yml
+status: Some(14)
+classification: Some(Issues)
+stdout:
+error[unpinned-uses]: unpinned action reference
+ --> <workspace>/example.yml:9:15
+  |
+9 |       - uses: actions/checkout@v4
+  |               ^^^^^^^^^^^^^^^^^^^ action is not pinned to a hash (required by blanket policy)
+  |
+  = note: audit confidence → High
+  = help: audit documentation → https://docs.zizmor.sh/audits/#unpinned-uses
+
+3 findings (2 suppressed): 0 informational, 0 low, 0 medium, 1 high
+artifact: <workspace>/.agent-hook-kit/zizmor-agent-hook/test-session_zizmor-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/zizmor-agent-hook/test-session_zizmor-tool-issues.txt
+summary: zizmor diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped

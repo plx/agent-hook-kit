@@ -1,0 +1,12 @@
+warning: hadolint: issues remain; diagnostics: <workspace>/.agent-hook-kit/hadolint-agent-hook/test-session_hadolint-tool-issues.txt
+hadolint diagnostics:
+[verify] command: hadolint <workspace>/Dockerfile
+status: Some(1)
+classification: Some(Issues)
+stdout:
+<workspace>/Dockerfile:1 DL3006 [1m[93mwarning[0m: Always tag the version of an image explicitly
+artifact: <workspace>/.agent-hook-kit/hadolint-agent-hook/test-session_hadolint-tool-issues.txt (text/plain)
+project-relative artifact: .agent-hook-kit/hadolint-agent-hook/test-session_hadolint-tool-issues.txt
+summary: hadolint diagnostics
+hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
+hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped
