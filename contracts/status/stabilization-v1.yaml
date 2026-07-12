@@ -53,6 +53,46 @@ targets:
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/SessionStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/BeforeAgent
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/BeforeModel
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/BeforeTool
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/AfterTool
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/AfterModel
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/AfterAgent
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/Notification
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/PreCompress
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/SessionEnd
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
   - contract: antigravity/docs-2026-07-12-r1/PreInvocation
     binding: command
     level: command-runtime-beta
