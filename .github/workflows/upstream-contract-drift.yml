@@ -1,0 +1,21 @@
+name: Upstream contract drift
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Discover pinned-source drift without mutating snapshots
+        run: scripts/check-upstream-contract-drift.sh | tee contract-drift-report.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contract-drift-report
+          path: contract-drift-report.txt
