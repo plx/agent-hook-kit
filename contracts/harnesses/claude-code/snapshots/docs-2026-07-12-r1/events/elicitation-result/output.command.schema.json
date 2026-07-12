@@ -1,0 +1,28 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r1:elicitation-result:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "accept",
+            "decline",
+            "cancel"
+          ]
+        },
+        "content": {},
+        "hookEventName": {
+          "const": "ElicitationResult"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "object"
+}

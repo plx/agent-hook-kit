@@ -1,0 +1,102 @@
+format_version: 1
+input:
+  negative:
+  - expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      tool_input: {}
+      tool_name: Bash
+      tool_response: {}
+      tool_use_id: call-1
+      transcript_path: null
+      turn_id: turn-1
+  - expected_pointer: ''
+    id: missing-tool_input
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: PostToolUse
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      tool_name: Bash
+      tool_response: {}
+      tool_use_id: call-1
+      transcript_path: null
+      turn_id: turn-1
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: PostToolUse
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      tool_input: {}
+      tool_name: Bash
+      tool_response: {}
+      tool_use_id: call-1
+      transcript_path: null
+      turn_id: turn-1
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: PostToolUse
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      tool_input: {}
+      tool_name: Bash
+      tool_response: {}
+      tool_use_id: call-1
+      transcript_path: /tmp/transcript.jsonl
+      turn_id: turn-1
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - codex-hooks-reference
+  - codex-generated-schemas
+  value:
+    decision: block
+    hookSpecificOutput:
+      additionalContext: Generated files changed.
+      hookEventName: PostToolUse
+    reason: Review the output.
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiR2VuZXJhdGVkIGZpbGVzIGNoYW5nZWQuIiwiaG9va0V2ZW50TmFtZSI6IlBvc3RUb29sVXNlIn0sInJlYXNvbiI6IlJldmlldyB0aGUgb3V0cHV0LiJ9
+  stdout_sha256: 5b713af257eb60d44bee01bd765dc187b28a8b6db89bdd8eef172ed3c27a2440
+- binding: command
+  exit_code: 2
+  id: exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:meta:v1:event-contract",
+  "type": "object",
+  "required": ["format_version", "id", "harness", "snapshot", "event", "schemas", "bindings", "fixtures"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "harness": { "type": "string", "minLength": 1 },
+    "snapshot": { "type": "string", "minLength": 1 },
+    "event": { "type": "object" },
+    "schemas": { "type": "object" },
+    "bindings": { "type": "object", "minProperties": 1 },
+    "handler_kinds": { "type": "array", "items": { "enum": ["command", "http", "mcp_tool", "prompt", "agent"] }, "uniqueItems": true },
+    "fixtures": { "type": "string", "minLength": 1 },
+    "uncertainties": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

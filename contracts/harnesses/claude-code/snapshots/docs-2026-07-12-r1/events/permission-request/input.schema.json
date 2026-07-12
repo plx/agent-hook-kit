@@ -1,0 +1,73 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r1:permission-request:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "hook_event_name": {
+      "const": "PermissionRequest"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ]
+    },
+    "permission_suggestions": {
+      "type": "array"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "tool_input": {},
+    "tool_name": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "tool_name",
+    "tool_input",
+    "permission_suggestions"
+  ],
+  "type": "object"
+}

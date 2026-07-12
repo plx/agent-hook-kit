@@ -1,0 +1,80 @@
+format_version: 1
+input:
+  negative:
+  - expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      reason: exit
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - expected_pointer: ''
+    id: missing-reason
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      reason: exit
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      permission_mode: default
+      prompt_id: prompt-1
+      reason: exit
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    systemMessage: Session ended.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiU2Vzc2lvbiBlbmRlZC4ifQ==
+  stdout_sha256: 6a1fe082e6e602d9f5ab365e3a497c86842a2e54aebef85adedcce74db46c041
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiU2Vzc2lvbiBlbmRlZC4ifQ==
+  stdout_sha256: 6a1fe082e6e602d9f5ab365e3a497c86842a2e54aebef85adedcce74db46c041
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

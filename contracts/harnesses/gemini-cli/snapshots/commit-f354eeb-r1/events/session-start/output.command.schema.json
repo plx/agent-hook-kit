@@ -1,0 +1,26 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:gemini-cli:commit-f354eeb-r1:session-start:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "SessionStart"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "systemMessage": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

@@ -1,0 +1,58 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [codex-hooks-reference]
+      value: { session_id: s1, transcript_path: null, cwd: /repo, hook_event_name: PreToolUse, model: gpt-test, turn_id: t1, permission_mode: default, tool_name: Bash, tool_use_id: call1, tool_input: { command: cargo test } }
+    - id: representative
+      origin: synthesized
+      sources: [codex-hooks-reference, codex-generated-schemas]
+      value: { session_id: s2, transcript_path: /tmp/t.jsonl, cwd: /repo, hook_event_name: PreToolUse, model: gpt-test, turn_id: t2, permission_mode: plan, tool_name: apply_patch, tool_use_id: call2, tool_input: { command: "*** Begin Patch" }, future_field: retained }
+  negative:
+    - id: wrong-discriminator
+      origin: regression
+      sources: [codex-hooks-reference]
+      value: { session_id: s1, transcript_path: null, cwd: /repo, hook_event_name: PostToolUse, model: gpt-test, turn_id: t1, permission_mode: default, tool_name: Bash, tool_use_id: call1, tool_input: {} }
+      expected_pointer: /hook_event_name
+    - id: missing-turn-id
+      origin: synthesized
+      sources: [codex-generated-schemas]
+      value: { session_id: s1, transcript_path: null, cwd: /repo, hook_event_name: PreToolUse, model: gpt-test, permission_mode: default, tool_name: Bash, tool_use_id: call1, tool_input: {} }
+      expected_pointer: ""
+output:
+  - id: deny
+    schema: command-response
+    origin: synthesized
+    sources: [codex-hooks-reference]
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: deny, permissionDecisionReason: blocked } }
+  - id: rewrite
+    schema: command-response
+    origin: synthesized
+    sources: [codex-hooks-reference]
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: allow, updatedInput: { command: echo rewritten } } }
+process:
+  - id: no-op
+    binding: command
+    outcome: no-op
+    exit_code: 0
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: deny-json
+    binding: command
+    outcome: control
+    exit_code: 0
+    stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVRvb2xVc2UiLCJwZXJtaXNzaW9uRGVjaXNpb24iOiJkZW55IiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiYmxvY2tlZCJ9fQ==
+    stdout_sha256: 63276993c95912ad3afb280cee36f760ee98a14fac07a1df2beb23fccfd71bef
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: deny-stderr
+    binding: command
+    outcome: block-stderr
+    exit_code: 2
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: YmxvY2tlZA==
+    stderr_sha256: 6973dddd3ef9cb6a2932702f31777faad9c9bf3124d147a84f31aadb6d139546

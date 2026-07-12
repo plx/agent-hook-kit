@@ -1,0 +1,96 @@
+format_version: 1
+input:
+  negative:
+  - expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      last_assistant_message: All work complete
+      session_id: s1
+      stop_hook_active: false
+      transcript_path: /tmp/t.jsonl
+  - expected_pointer: ''
+    id: missing-stop_hook_active
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Stop
+      last_assistant_message: All work complete
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Stop
+      last_assistant_message: All work complete
+      session_id: s1
+      stop_hook_active: false
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Stop
+      last_assistant_message: All work complete
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      stop_hook_active: false
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    hookSpecificOutput:
+      additionalContext: Focus on failures.
+      hookEventName: Stop
+    reason: Run tests again.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiRm9jdXMgb24gZmFpbHVyZXMuIiwiaG9va0V2ZW50TmFtZSI6IlN0b3AifSwicmVhc29uIjoiUnVuIHRlc3RzIGFnYWluLiJ9
+  stdout_sha256: 922f31b54f5ff063ad236166f0ae125821b4a17d145f94fed668e9909d15b4b9
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiRm9jdXMgb24gZmFpbHVyZXMuIiwiaG9va0V2ZW50TmFtZSI6IlN0b3AifSwicmVhc29uIjoiUnVuIHRlc3RzIGFnYWluLiJ9
+  stdout_sha256: 922f31b54f5ff063ad236166f0ae125821b4a17d145f94fed668e9909d15b4b9
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

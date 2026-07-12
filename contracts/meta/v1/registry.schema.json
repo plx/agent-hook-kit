@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:meta:v1:registry",
+  "type": "object",
+  "required": ["format_version", "harnesses"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "harnesses": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["current"],
+        "properties": { "current": { "type": "string", "minLength": 1 } },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
+

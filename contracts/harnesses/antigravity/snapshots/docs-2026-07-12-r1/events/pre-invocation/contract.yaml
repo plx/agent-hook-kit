@@ -1,0 +1,38 @@
+format_version: 1
+id: antigravity/docs-2026-07-12-r1/PreInvocation
+harness: antigravity
+snapshot: docs-2026-07-12-r1
+event:
+  wire_name: PreInvocation
+  rust_key: pre_invocation
+  category: model
+  identification:
+    inferability: ambiguous
+    overlaps: [PostInvocation]
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources: [antigravity-hooks-reference]
+    assurance: { confidence: high, verification: source-reviewed }
+  outputs:
+    - id: command-response
+      file: output.command.schema.json
+      origin: derived
+      sources: [antigravity-hooks-reference]
+      assurance: { confidence: high, verification: source-reviewed }
+bindings:
+  command:
+    kind: process
+    request: { channel: stdin, framing: single-document-at-eof, content_kind: json }
+    outcomes:
+      - id: inject
+        effect: rewrite
+        exit: { exact: 0 }
+        stdout: { presence: required, role: protocol-value, content_kind: json }
+        stderr: { presence: optional, role: diagnostics, content_kind: text, encoding: utf-8 }
+        output_schema: command-response
+        sources: [antigravity-hooks-reference]
+        assurance: { confidence: high, verification: source-reviewed }
+fixtures: fixtures.yaml
+

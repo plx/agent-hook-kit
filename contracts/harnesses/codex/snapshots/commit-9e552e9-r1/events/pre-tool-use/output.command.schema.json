@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:codex:commit-9e552e9-r1:pre-tool-use:command-output",
+  "type": "object",
+  "properties": {
+    "systemMessage": { "type": "string" },
+    "decision": { "const": "block" },
+    "reason": { "type": "string", "minLength": 1 },
+    "hookSpecificOutput": {
+      "type": "object",
+      "required": ["hookEventName"],
+      "properties": {
+        "hookEventName": { "const": "PreToolUse" },
+        "permissionDecision": { "enum": ["allow", "deny"] },
+        "permissionDecisionReason": { "type": "string" },
+        "updatedInput": { "type": "object" },
+        "additionalContext": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["updatedInput"] },
+          "then": { "properties": { "permissionDecision": { "const": "allow" } }, "required": ["permissionDecision"] }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    { "if": { "required": ["decision"] }, "then": { "required": ["reason"] } }
+  ],
+  "additionalProperties": false
+}
+

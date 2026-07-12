@@ -1,0 +1,124 @@
+format_version: 1
+release: stabilization-v1
+defaults:
+  - harness: claude-code
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - harness: claude-code
+    binding: http
+    level: catalog-only
+    verification: source-reviewed
+targets:
+  - contract: antigravity/docs-2026-07-12-r1/PreToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r1/PostToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r1/WorktreeCreate
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r1/WorktreeCreate
+    binding: http
+    level: catalog-only
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PreToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/SessionStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/SubagentStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PermissionRequest
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PostToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PreCompact
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PostCompact
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/UserPromptSubmit
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/SubagentStop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/Stop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/BeforeToolSelection
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/SessionStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/BeforeAgent
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/BeforeModel
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/BeforeTool
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/AfterTool
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/AfterModel
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/AfterAgent
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/Notification
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/PreCompress
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r1/SessionEnd
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r1/PreInvocation
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r1/PostInvocation
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r1/Stop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed

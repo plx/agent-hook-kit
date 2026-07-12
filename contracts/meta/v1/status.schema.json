@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:meta:v1:status",
+  "type": "object",
+  "required": ["format_version", "release", "targets"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "release": { "type": "string", "minLength": 1 },
+    "targets": { "type": "array" }
+    ,"defaults": { "type": "array" }
+  },
+  "additionalProperties": false
+}
