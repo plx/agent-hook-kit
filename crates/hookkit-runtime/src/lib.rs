@@ -1,5 +1,6 @@
 //! I/O and execution plumbing for hookkit hook executables.
 
+pub mod aligned;
 pub mod artifacts;
 pub mod logging;
 pub mod resolution;

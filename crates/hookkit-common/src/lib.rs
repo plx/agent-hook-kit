@@ -4,11 +4,13 @@
 //! equivalent events across Claude, Codex, and Gemini, while preserving
 //! lossless access to the underlying native types.
 
+pub mod aligned;
 pub mod input;
 pub mod message;
 pub mod output;
 pub mod semantic;
 
+pub use aligned::{PostToolUseInput, PostToolUseOutput};
 pub use input::CommonHookInput;
 pub use message::{
     AgentFeedback, DiagnosticArtifact, DiagnosticReport, FeedbackSeverity, MessageAudience,

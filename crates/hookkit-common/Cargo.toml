@@ -10,5 +10,6 @@ hookkit-core = { workspace = true }
 hookkit-claude = { workspace = true }
 hookkit-codex = { workspace = true }
 hookkit-gemini = { workspace = true }
+hookkit-antigravity = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
