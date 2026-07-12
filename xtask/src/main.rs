@@ -30,7 +30,11 @@ enum Command {
 #[derive(Subcommand)]
 enum ContractsCommand {
     /// Validate catalog metadata, schemas, fixtures, and status coverage.
-    Check,
+    Check {
+        /// Validate selected current snapshots (the default and only Phase 1 selection).
+        #[arg(long, value_parser = ["current"])]
+        snapshot: Option<String>,
+    },
     /// Render the generated support report.
     Report {
         /// Update contracts/status/support.md.
@@ -40,6 +44,10 @@ enum ContractsCommand {
         #[arg(long)]
         check: bool,
     },
+    /// Compare event inventories and content hashes between two snapshot IDs.
+    Diff { old: String, new: String },
+    /// Verify vendored files against their checked-in SHA-256 manifests.
+    VerifyVendor,
 }
 
 #[derive(Debug, Deserialize)]
@@ -337,10 +345,21 @@ fn run() -> Result<()> {
     let root = workspace_root()?;
     match cli.command {
         Command::Contracts {
-            command: ContractsCommand::Check,
+            command: ContractsCommand::Check { snapshot },
         } => {
+            let _ = snapshot;
             let contracts = check_catalog(&root)?;
             println!("validated {} event contracts", contracts.len());
+            Ok(())
+        }
+        Command::Contracts {
+            command: ContractsCommand::Diff { old, new },
+        } => diff_snapshots(&root, &old, &new),
+        Command::Contracts {
+            command: ContractsCommand::VerifyVendor,
+        } => {
+            let count = verify_vendor(&root)?;
+            println!("verified {count} vendored files");
             Ok(())
         }
         Command::Contracts {
@@ -388,6 +407,7 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
     validate_yaml_metadata(&stabilization_path, &meta.join("status.schema.json"))?;
     let stabilization: Stabilization = read_yaml(&stabilization_path)?;
     require_version(stabilization.format_version, "stabilization target")?;
+    verify_vendor(root)?;
 
     let mut contracts = Vec::new();
     let mut contract_ids = BTreeSet::new();
@@ -484,6 +504,23 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
             }
             validate_contract(&contract, &dir, &source_ids)?;
             contracts.push(LoadedContract { contract, dir });
+        }
+        let indexed_paths: BTreeSet<_> = snapshot
+            .events
+            .iter()
+            .map(|event| snapshot_dir.join(&event.path).join("contract.yaml"))
+            .collect();
+        let discovered_paths: BTreeSet<_> = walkdir::WalkDir::new(snapshot_dir.join("events"))
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_type().is_file() && entry.file_name() == "contract.yaml")
+            .map(|entry| entry.into_path())
+            .collect();
+        if indexed_paths != discovered_paths {
+            return Err(format!(
+                "{}: snapshot index and event contract directories differ",
+                snapshot_dir.display()
+            ));
         }
     }
 
@@ -1022,6 +1059,136 @@ fn render_report(root: &Path, contracts: &[LoadedContract]) -> Result<String> {
         output.push_str(&format!(
             "| {harness} | `{event}` | `{binding}` | complete | `{level}` | `{verification}` |\n"
         ));
+    }
+    Ok(output)
+}
+
+fn verify_vendor(root: &Path) -> Result<usize> {
+    let vendor = root.join("contracts/vendor");
+    if !vendor.exists() {
+        return Ok(0);
+    }
+    let manifests: Vec<_> = walkdir::WalkDir::new(&vendor)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "MANIFEST.sha256")
+        .map(|entry| entry.into_path())
+        .collect();
+    let mut count = 0;
+    for manifest in manifests {
+        let directory = manifest.parent().expect("manifest parent");
+        let text = fs::read_to_string(&manifest)
+            .map_err(|error| format!("{}: {error}", manifest.display()))?;
+        for (line_number, line) in text.lines().enumerate() {
+            let (expected, relative) = line.split_once("  ").ok_or_else(|| {
+                format!(
+                    "{}:{}: expected '<sha256>  <file>'",
+                    manifest.display(),
+                    line_number + 1
+                )
+            })?;
+            if !valid_sha256(expected)
+                || relative.contains("..")
+                || Path::new(relative).is_absolute()
+            {
+                return Err(format!(
+                    "{}:{}: invalid vendor manifest entry",
+                    manifest.display(),
+                    line_number + 1
+                ));
+            }
+            let path = directory.join(relative);
+            let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+            if hex_sha256(&bytes) != expected {
+                return Err(format!("{}: vendored checksum mismatch", path.display()));
+            }
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn diff_snapshots(root: &Path, old: &str, new: &str) -> Result<()> {
+    let snapshots = root.join("contracts/harnesses");
+    let old_dir = find_snapshot(&snapshots, old)?;
+    let new_dir = find_snapshot(&snapshots, new)?;
+    let old_snapshot: Snapshot = read_yaml(&old_dir.join("snapshot.yaml"))?;
+    let new_snapshot: Snapshot = read_yaml(&new_dir.join("snapshot.yaml"))?;
+    let old_events: BTreeSet<_> = old_snapshot
+        .events
+        .iter()
+        .map(|event| event.wire_name.as_str())
+        .collect();
+    let new_events: BTreeSet<_> = new_snapshot
+        .events
+        .iter()
+        .map(|event| event.wire_name.as_str())
+        .collect();
+    println!(
+        "old: {}/{} ({} events)",
+        old_snapshot.harness,
+        old_snapshot.id,
+        old_events.len()
+    );
+    println!(
+        "new: {}/{} ({} events)",
+        new_snapshot.harness,
+        new_snapshot.id,
+        new_events.len()
+    );
+    for event in new_events.difference(&old_events) {
+        println!("+ {event}");
+    }
+    for event in old_events.difference(&new_events) {
+        println!("- {event}");
+    }
+    let old_hash = hash_tree(&old_dir)?;
+    let new_hash = hash_tree(&new_dir)?;
+    println!(
+        "content: {}",
+        if old_hash == new_hash {
+            "identical"
+        } else {
+            "changed"
+        }
+    );
+    Ok(())
+}
+
+fn find_snapshot(root: &Path, id: &str) -> Result<PathBuf> {
+    let matches: Vec<_> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_dir() && entry.file_name() == id)
+        .map(|entry| entry.into_path())
+        .collect();
+    match matches.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(format!("snapshot {id} not found")),
+        _ => Err(format!("snapshot id {id} is ambiguous across harnesses")),
+    }
+}
+
+fn hash_tree(root: &Path) -> Result<String> {
+    let mut files: Vec<_> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .collect();
+    files.sort();
+    let mut digest = Sha256::new();
+    for path in files {
+        let relative = path.strip_prefix(root).expect("walked path below root");
+        digest.update(relative.to_string_lossy().as_bytes());
+        digest.update([0]);
+        digest.update(fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?);
+        digest.update([0]);
+    }
+    let bytes = digest.finalize();
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
     }
     Ok(output)
 }

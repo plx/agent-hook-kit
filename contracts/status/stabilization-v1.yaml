@@ -13,6 +13,42 @@ targets:
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/SessionStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/SubagentStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PermissionRequest
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PostToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PreCompact
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/PostCompact
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/UserPromptSubmit
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/SubagentStop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r1/Stop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
   - contract: gemini-cli/commit-f354eeb-r1/BeforeToolSelection
     binding: command
     level: command-runtime-beta
@@ -25,4 +61,3 @@ targets:
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-

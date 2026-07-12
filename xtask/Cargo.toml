@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+default-run = "xtask"
 
 [dependencies]
 base64.workspace = true
@@ -14,4 +15,3 @@ serde_json.workspace = true
 serde_yaml_ng.workspace = true
 sha2.workspace = true
 walkdir.workspace = true
-

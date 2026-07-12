@@ -27,6 +27,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format check
         run: cargo fmt --check
+      - name: Contract catalog
+        run: |
+          cargo xtask contracts check --snapshot current
+          cargo xtask contracts report --check
+          cargo xtask contracts verify-vendor
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Hermetic workspace tests
