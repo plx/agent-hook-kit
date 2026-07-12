@@ -29,6 +29,7 @@ jobs:
         run: cargo fmt --check
       - name: Contract catalog
         run: |
+          cargo run --quiet -p hookkit-conformance
           cargo run --quiet -p xtask --bin generate-claude-contracts
           cargo run --quiet -p xtask --bin generate-codex-contracts
           cargo run --quiet -p xtask --bin generate-gemini-contracts

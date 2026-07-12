@@ -1,13 +1,17 @@
 //! Core types and error model for hookkit.
 
 mod error;
+mod event;
 mod harness;
+mod identity;
 pub mod json_helpers;
 mod raw;
 
 pub use error::HookkitError;
+pub use event::{EventCategory, EventSpec, HandlerKind, NativeEventDescriptor, ProcessEmission};
 pub use harness::Harness;
-pub use raw::RawPayload;
+pub use identity::{DialectLineage, EventId, HarnessId};
+pub use raw::{RawInvocation, RawPayload};
 
 pub use camino::{Utf8Path, Utf8PathBuf};
 

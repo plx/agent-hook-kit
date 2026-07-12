@@ -17,3 +17,13 @@ impl fmt::Display for Harness {
         }
     }
 }
+
+impl Harness {
+    pub const fn id(self) -> crate::HarnessId {
+        match self {
+            Self::Claude => crate::HarnessId::CLAUDE_CODE,
+            Self::Codex => crate::HarnessId::CODEX,
+            Self::Gemini => crate::HarnessId::GEMINI_CLI,
+        }
+    }
+}

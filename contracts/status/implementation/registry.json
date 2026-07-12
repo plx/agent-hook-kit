@@ -1,0 +1,75 @@
+{
+  "format_version": 1,
+  "events": [
+    {
+      "contract": "antigravity/docs-2026-07-12-r1/PreInvocation",
+      "harness": "antigravity",
+      "event": "PreInvocation",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "inject-reminder"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/SessionStart",
+      "harness": "claude-code",
+      "event": "SessionStart",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-text"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/WorktreeCreate",
+      "harness": "claude-code",
+      "event": "WorktreeCreate",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-created",
+        "command-failed"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/PreToolUse",
+      "harness": "codex",
+      "event": "PreToolUse",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "no-op",
+        "deny-json",
+        "deny-stderr"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/BeforeToolSelection",
+      "harness": "gemini-cli",
+      "event": "BeforeToolSelection",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "no-op",
+        "disable-tools"
+      ]
+    }
+  ]
+}

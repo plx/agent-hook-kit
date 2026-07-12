@@ -374,9 +374,29 @@ struct ImplementationGap {
     expiry: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImplementationRegistry {
+    format_version: u32,
+    events: Vec<ImplementationEvent>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImplementationEvent {
+    contract: String,
+    harness: String,
+    event: String,
+    native_input: bool,
+    native_output: bool,
+    bindings: Vec<String>,
+    conformance_cases: Vec<String>,
+}
+
 struct LoadedContract {
     contract: Contract,
     dir: PathBuf,
+    process_cases: BTreeSet<String>,
 }
 
 fn main() -> ExitCode {
@@ -591,8 +611,12 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
             if !contract_ids.insert(contract.id.clone()) {
                 return Err(format!("duplicate contract id {}", contract.id));
             }
-            validate_contract(&contract, &dir, &source_ids)?;
-            contracts.push(LoadedContract { contract, dir });
+            let process_cases = validate_contract(&contract, &dir, &source_ids)?;
+            contracts.push(LoadedContract {
+                contract,
+                dir,
+                process_cases,
+            });
         }
         let indexed_paths: BTreeSet<_> = snapshot
             .events
@@ -684,6 +708,15 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
         }
     }
     validate_implementation_gaps(&gaps, &contracts)?;
+    let implementation_path = catalog.join("status/implementation/registry.json");
+    validate_json_metadata(
+        &implementation_path,
+        &meta.join("implementation-registry.schema.json"),
+    )?;
+    let implementation: ImplementationRegistry =
+        serde_json::from_value(read_json(&implementation_path)?)
+            .map_err(|error| format!("invalid implementation registry: {error}"))?;
+    validate_implementation_registry(&implementation, &contracts)?;
     let _ = &stabilization.release;
     Ok(contracts)
 }
@@ -715,7 +748,11 @@ fn validate_contract_identity(
     Ok(())
 }
 
-fn validate_contract(contract: &Contract, dir: &Path, sources: &BTreeSet<&str>) -> Result<()> {
+fn validate_contract(
+    contract: &Contract,
+    dir: &Path,
+    sources: &BTreeSet<&str>,
+) -> Result<BTreeSet<String>> {
     let input_schema = read_json(&safe_join(dir, &contract.schemas.input.file)?)?;
     validate_schema_references(&input_schema, dir)?;
     validate_schema_claim(&contract.schemas.input, sources, dir)?;
@@ -915,10 +952,18 @@ fn validate_contract(contract: &Contract, dir: &Path, sources: &BTreeSet<&str>) 
             )
         })?;
     }
+    let mut process_cases = BTreeSet::new();
     for fixture in &fixtures.process {
+        if !process_cases.insert(fixture.id.clone()) {
+            return Err(format!(
+                "{}: duplicate process fixture {}",
+                dir.display(),
+                fixture.id
+            ));
+        }
         validate_process_fixture(fixture, contract, &output_validators, dir)?;
     }
-    Ok(())
+    Ok(process_cases)
 }
 
 fn validate_schema_claim(claim: &SchemaClaim, sources: &BTreeSet<&str>, dir: &Path) -> Result<()> {
@@ -1156,6 +1201,10 @@ fn compile_schema(schema: &Value, dir: &Path) -> Result<jsonschema::Validator> {
 
 fn render_report(root: &Path, contracts: &[LoadedContract]) -> Result<String> {
     let status: Stabilization = read_yaml(&root.join("contracts/status/stabilization-v1.yaml"))?;
+    let implementation: ImplementationRegistry = serde_json::from_value(read_json(
+        &root.join("contracts/status/implementation/registry.json"),
+    )?)
+    .map_err(|error| format!("invalid implementation registry: {error}"))?;
     let mut rows = Vec::new();
     for loaded in contracts {
         for binding in loaded.contract.bindings.keys() {
@@ -1175,12 +1224,23 @@ fn render_report(root: &Path, contracts: &[LoadedContract]) -> Result<String> {
                         .map(|default| (default.level.as_str(), default.verification.as_str()))
                 })
                 .expect("checked target");
+            let implemented = implementation
+                .events
+                .iter()
+                .find(|event| event.contract == loaded.contract.id);
+            let binding_implemented = implemented
+                .is_some_and(|event| event.bindings.iter().any(|value| value == binding));
             rows.push((
                 loaded.contract.harness.as_str(),
                 loaded.contract.event.wire_name.as_str(),
                 binding.as_str(),
                 target.0,
                 target.1,
+                implemented.is_some_and(|event| event.native_input),
+                implemented.is_some_and(|event| event.native_output),
+                binding_implemented,
+                binding_implemented
+                    && implemented.is_some_and(|event| !event.conformance_cases.is_empty()),
             ));
         }
         let _ = &loaded.dir;
@@ -1191,14 +1251,29 @@ fn render_report(root: &Path, contracts: &[LoadedContract]) -> Result<String> {
         status.release
     );
     output.push_str("| Harness | Event | Binding | Inventoried | Input schema | Output/process | Native input | Native output | Command runtime | Other runtime | Hermetic conformance | Live verified | Release target | Verification |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
-    for (harness, event, binding, level, verification) in rows {
+    for (
+        harness,
+        event,
+        binding,
+        level,
+        verification,
+        native_input,
+        native_output,
+        binding_implemented,
+        conformance,
+    ) in rows
+    {
         let (command, other) = if binding == "command" {
-            ("legacy/unknown", "n/a")
+            (if binding_implemented { "yes" } else { "no" }, "n/a")
         } else {
-            ("n/a", "legacy/unknown")
+            ("n/a", if binding_implemented { "yes" } else { "no" })
         };
         output.push_str(&format!(
-            "| {harness} | `{event}` | `{binding}` | yes | yes | yes | legacy/unknown | legacy/unknown | {command} | {other} | not yet measured | no | `{level}` | `{verification}` |\n"
+            "| {harness} | `{event}` | `{binding}` | yes | yes | yes | {} | {} | {command} | {other} | {} | {} | `{level}` | `{verification}` |\n",
+            if native_input { "yes" } else { "no" },
+            if native_output { "yes" } else { "no" },
+            if conformance { "yes" } else { "no" },
+            if verification == "live-observed" { "yes" } else { "no" },
         ));
     }
     Ok(output)
@@ -1333,6 +1408,73 @@ fn validate_implementation_gaps(
             return Err(format!(
                 "implementation gap {contract_id} has invalid expiry"
             ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_implementation_registry(
+    registry: &ImplementationRegistry,
+    contracts: &[LoadedContract],
+) -> Result<()> {
+    require_version(registry.format_version, "implementation registry")?;
+    let mut ids = BTreeSet::new();
+    for event in &registry.events {
+        if !ids.insert(event.contract.as_str()) {
+            return Err(format!(
+                "duplicate implementation registry entry {}",
+                event.contract
+            ));
+        }
+        let Some(contract) = contracts
+            .iter()
+            .find(|loaded| loaded.contract.id == event.contract)
+        else {
+            return Err(format!(
+                "implementation registry references unknown contract {}",
+                event.contract
+            ));
+        };
+        if event.harness != contract.contract.harness
+            || event.event != contract.contract.event.wire_name
+            || !event.native_input
+            || !event.native_output
+            || event.bindings.is_empty()
+            || event.conformance_cases.is_empty()
+        {
+            return Err(format!(
+                "implementation registry identity/coverage incomplete for {}",
+                event.contract
+            ));
+        }
+        for binding in &event.bindings {
+            if !contract.contract.bindings.contains_key(binding) {
+                return Err(format!(
+                    "implementation registry references unknown binding {}/{}",
+                    event.contract, binding
+                ));
+            }
+        }
+        if event.bindings.iter().collect::<BTreeSet<_>>().len() != event.bindings.len()
+            || event
+                .conformance_cases
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != event.conformance_cases.len()
+        {
+            return Err(format!(
+                "implementation registry has duplicate coverage for {}",
+                event.contract
+            ));
+        }
+        for case in &event.conformance_cases {
+            if !contract.process_cases.contains(case) {
+                return Err(format!(
+                    "implementation registry references unknown process case {}/{}",
+                    event.contract, case
+                ));
+            }
         }
     }
     Ok(())
@@ -1552,6 +1694,21 @@ fn validate_yaml_metadata(path: &Path, meta_schema: &Path) -> Result<()> {
         .map_err(|error| format!("{}: {error}", path.display()))?;
     let value = serde_json::to_value(yaml)
         .map_err(|error| format!("{}: cannot normalize YAML: {error}", path.display()))?;
+    let schema = read_json(meta_schema)?;
+    compile_schema(&schema, meta_schema)?
+        .validate(&value)
+        .map_err(|error| {
+            format!(
+                "{}: metadata failed {} at {}: {error}",
+                path.display(),
+                meta_schema.display(),
+                error.instance_path()
+            )
+        })
+}
+
+fn validate_json_metadata(path: &Path, meta_schema: &Path) -> Result<()> {
+    let value = read_json(path)?;
     let schema = read_json(meta_schema)?;
     compile_schema(&schema, meta_schema)?
         .validate(&value)
