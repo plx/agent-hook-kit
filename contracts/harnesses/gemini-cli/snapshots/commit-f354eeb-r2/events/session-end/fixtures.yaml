@@ -1,0 +1,76 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - gemini-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      reason: exit
+      session_id: session-1
+      timestamp: 2026-07-12T00:00:00Z
+      transcript_path: /tmp/transcript.json
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-reason
+    origin: synthesized
+    sources:
+    - gemini-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      session_id: session-1
+      timestamp: 2026-07-12T00:00:00Z
+      transcript_path: /tmp/transcript.json
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - gemini-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      reason: exit
+      session_id: session-1
+      timestamp: 2026-07-12T00:00:00Z
+      transcript_path: /tmp/transcript.json
+  - id: representative
+    origin: synthesized
+    sources:
+    - gemini-hooks-reference
+    - gemini-hooks-source
+    value:
+      cwd: /workspace/project
+      hook_event_name: SessionEnd
+      reason: prompt_input_exit
+      session_id: session-representative
+      timestamp: 2026-07-12T12:34:56Z
+      transcript_path: /tmp/representative-transcript.json
+output:
+- id: no-op
+  origin: synthesized
+  schema: command-response
+  sources:
+  - gemini-hooks-reference
+  value: {}
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - gemini-hooks-reference
+  - gemini-hooks-source
+  value:
+    systemMessage: Session cleanup complete.
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiU2Vzc2lvbiBjbGVhbnVwIGNvbXBsZXRlLiJ9
+  stdout_sha256: 18a8bd010835aace6108a46905755c1059f7f69b84e51cd3da4f63f0c74611e5

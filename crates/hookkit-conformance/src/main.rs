@@ -4,37 +4,32 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Serialize)]
-struct Registry<'a> {
+struct Registry {
     format_version: u32,
-    events: Vec<Event<'a>>,
+    events: Vec<Event>,
 }
 
 #[derive(Serialize)]
-struct Event<'a> {
-    contract: &'a str,
-    harness: &'a str,
-    event: &'a str,
+struct Event {
+    contract: String,
+    harness: String,
+    event: String,
     native_input: bool,
     native_output: bool,
     bindings: Vec<&'static str>,
-    conformance_cases: &'a [&'a str],
+    conformance_cases: Vec<&'static str>,
 }
 
 fn main() {
     let check = std::env::args().any(|arg| arg == "--check");
-    let mut descriptors: Vec<_> = [
-        hookkit_claude::protocol::EVENTS,
-        hookkit_codex::protocol::EVENTS,
-        hookkit_gemini::protocol::EVENTS,
-        hookkit_antigravity::EVENTS,
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    descriptors.sort_by_key(|descriptor| descriptor.contract_id);
+    let mut descriptors = hookkit_conformance::verified_descriptors().unwrap_or_else(|error| {
+        eprintln!("conformance failed: {error}");
+        std::process::exit(1);
+    });
+    descriptors.sort_by_key(|descriptor| descriptor.contract().as_str());
     let registry = Registry {
         format_version: 1,
-        events: descriptors.into_iter().map(event).collect(),
+        events: descriptors.iter().map(event).collect(),
     };
     let rendered = format!(
         "{}\n",
@@ -53,15 +48,15 @@ fn main() {
     }
 }
 
-fn event(descriptor: &NativeEventDescriptor) -> Event<'_> {
+fn event(descriptor: &NativeEventDescriptor) -> Event {
     Event {
-        contract: descriptor.contract_id,
-        harness: descriptor.harness,
-        event: descriptor.event,
-        native_input: descriptor.native_input,
-        native_output: descriptor.native_output,
-        bindings: descriptor.bindings.iter().map(binding_name).collect(),
-        conformance_cases: descriptor.conformance_cases,
+        contract: descriptor.contract().to_string(),
+        harness: descriptor.event().harness().to_string(),
+        event: descriptor.event().name().to_string(),
+        native_input: descriptor.native_input(),
+        native_output: descriptor.native_output(),
+        bindings: descriptor.bindings().iter().map(binding_name).collect(),
+        conformance_cases: descriptor.conformance_cases().to_vec(),
     }
 }
 

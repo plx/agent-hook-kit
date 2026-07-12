@@ -1,5 +1,8 @@
 {
-  "sessionId": "gemini-sess-001",
+  "session_id": "gemini-sess-001",
+  "transcript_path": "/tmp/gemini/transcript-001.json",
   "cwd": "/home/user/project",
-  "hookEventName": "SessionEnd"
+  "hook_event_name": "SessionEnd",
+  "timestamp": "2026-07-12T00:00:00Z",
+  "reason": "exit"
 }

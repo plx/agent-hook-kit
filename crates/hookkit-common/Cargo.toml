@@ -1,6 +1,6 @@
 [package]
 name = "hookkit-common"
-description = "Cross-harness wrapper enums and semantic helpers"
+description = "Lossless cross-harness aligned event wrappers and message helpers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

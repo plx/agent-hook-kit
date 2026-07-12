@@ -1,0 +1,95 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      team_name: quality
+      teammate_name: reviewer
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-teammate_name
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: TeammateIdle
+      session_id: s1
+      team_name: quality
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: TeammateIdle
+      session_id: s1
+      team_name: quality
+      teammate_name: reviewer
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: TeammateIdle
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      team_name: quality
+      teammate_name: reviewer
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    reason: Continue reviewing.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiQ29udGludWUgcmV2aWV3aW5nLiJ9
+  stdout_sha256: 4a0449645f0626916c57daa5e28fd0efbd5ca5bb93d264b0c4f1c461e257dc09
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiQ29udGludWUgcmV2aWV3aW5nLiJ9
+  stdout_sha256: 4a0449645f0626916c57daa5e28fd0efbd5ca5bb93d264b0c4f1c461e257dc09
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

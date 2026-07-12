@@ -1,119 +1,183 @@
-use hookkit_core::{EventId, HarnessId, HookkitError, RawInvocation};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IdentificationStrength {
-    Definitive,
-    SoundShape,
-    WeakShape,
-    Ambiguous,
-    Impossible,
-}
-
-#[derive(Clone, Copy)]
-pub struct EventDescriptor {
-    pub harness: &'static str,
-    pub event: &'static str,
-    pub contract_id: &'static str,
-    pub strength: IdentificationStrength,
-    pub discriminator: Option<(&'static str, &'static str)>,
-    pub validate: fn(&RawInvocation) -> hookkit_core::Result<()>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolutionProvenance {
-    DefinitiveDiscriminator,
-    SoundShape,
-    HintValidated,
-}
+use hookkit_core::{
+    ContractId, EventId, HarnessId, HookkitError, IdentificationDescriptor, IdentificationStrength,
+    RawInvocation, ResolutionProvenance, SnapshotId,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedEvent {
-    pub harness: HarnessId,
     pub event: EventId,
-    pub contract_id: &'static str,
+    pub contract: ContractId,
+    pub snapshot: SnapshotId,
     pub provenance: ResolutionProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectedCandidate {
-    pub harness: HarnessId,
     pub event: EventId,
     pub strength: IdentificationStrength,
+    pub evidence: DetectionEvidence,
+    pub overlaps: Vec<EventId>,
+    pub native_parser: bool,
 }
 
-pub fn resolve_event(
-    registry: &[EventDescriptor],
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetectionEvidence {
+    Discriminator { pointer: String, value: String },
+    NativeParserAccepted,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetectionConstraints {
+    pub harness: Option<HarnessId>,
+    pub event: Option<EventId>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetectionReport {
+    pub candidates: Vec<DetectedCandidate>,
+    pub ambiguous: bool,
+    pub constraint_mismatches: Vec<String>,
+    pub validation_failures: Vec<(EventId, String)>,
+}
+
+pub struct Detector {
+    descriptors: Vec<IdentificationDescriptor>,
+}
+
+impl Detector {
+    pub fn builtins() -> Self {
+        Self {
+            descriptors: builtin_descriptors(),
+        }
+    }
+
+    pub fn new(descriptors: Vec<IdentificationDescriptor>) -> Self {
+        Self { descriptors }
+    }
+
+    /// Best-effort inspection only. Reports are deliberately not executable.
+    pub fn inspect(
+        &self,
+        invocation: &RawInvocation,
+        constraints: DetectionConstraints,
+    ) -> DetectionReport {
+        detect_candidates(&self.descriptors, invocation, constraints)
+    }
+}
+
+pub fn builtin_descriptors() -> Vec<IdentificationDescriptor> {
+    let mut descriptors = Vec::new();
+    descriptors.extend(hookkit_claude::protocol::identification_descriptors());
+    descriptors.extend(hookkit_codex::protocol::identification_descriptors());
+    descriptors.extend(hookkit_gemini::protocol::identification_descriptors());
+    descriptors.extend(hookkit_antigravity::identification_descriptors());
+    descriptors
+}
+
+pub fn resolve_builtin_event(
     harness: HarnessId,
     invocation: &RawInvocation,
     hint: Option<EventId>,
 ) -> hookkit_core::Result<ResolvedEvent> {
+    resolve_event(&builtin_descriptors(), harness, invocation, hint)
+}
+
+pub fn resolve_event(
+    registry: &[IdentificationDescriptor],
+    harness: HarnessId,
+    invocation: &RawInvocation,
+    hint: Option<EventId>,
+) -> hookkit_core::Result<ResolvedEvent> {
+    if let Some(hint) = hint.as_ref().filter(|hint| hint.harness() != &harness) {
+        return Err(HookkitError::HintHarnessMismatch {
+            selected: harness,
+            hint: hint.clone(),
+        });
+    }
+
     let descriptors: Vec<_> = registry
         .iter()
-        .filter(|descriptor| descriptor.harness == harness.as_str())
+        .filter(|descriptor| descriptor.event().harness() == &harness)
         .collect();
+
     if let Some(hint) = hint {
-        if let Some(actual) = authoritative_event(&descriptors, invocation)
-            && actual != hint.as_str()
-        {
-            return Err(HookkitError::HintContradiction {
-                harness,
-                hint,
-                actual: EventId::new(actual)?,
-            });
+        if let Some(actual) = authoritative_event(&descriptors, invocation) {
+            if actual.event() != &hint {
+                return Err(HookkitError::EventHintMismatch {
+                    hint,
+                    actual: actual.event().clone(),
+                });
+            }
         }
         let descriptor = descriptors
             .iter()
-            .find(|descriptor| descriptor.event == hint.as_str())
-            .ok_or_else(|| HookkitError::InvalidForHint {
-                harness: harness.clone(),
+            .find(|descriptor| descriptor.event() == &hint)
+            .ok_or_else(|| HookkitError::InvalidInputForHint {
                 event: hint.clone(),
-                message: "event is not registered".into(),
+                message: "event is not registered for selected harness".into(),
             })?;
-        (descriptor.validate)(invocation).map_err(|error| HookkitError::InvalidForHint {
-            harness: harness.clone(),
-            event: hint.clone(),
-            message: error.to_string(),
-        })?;
-        return Ok(resolved(
-            descriptor,
-            harness,
-            ResolutionProvenance::HintValidated,
-        ));
+
+        if !descriptor.has_native_parser() {
+            return Err(HookkitError::InvalidInputForHint {
+                event: hint,
+                message: "catalog event has no implemented native parser".into(),
+            });
+        }
+
+        if let Err(error) = descriptor.validate(invocation) {
+            let established = unique_sound_candidate(&descriptors, invocation, Some(&hint));
+            if let Some(actual) = established {
+                return Err(HookkitError::EventHintMismatch {
+                    hint,
+                    actual: actual.event().clone(),
+                });
+            }
+            return Err(HookkitError::InvalidInputForHint {
+                event: hint,
+                message: error.to_string(),
+            });
+        }
+        return Ok(resolved(descriptor, ResolutionProvenance::HintValidated));
     }
 
-    if let Some(actual) = authoritative_event(&descriptors, invocation) {
-        let descriptor = descriptors
-            .iter()
-            .find(|descriptor| descriptor.event == actual)
-            .expect("authoritative event came from descriptors");
-        (descriptor.validate)(invocation)?;
+    if let Some(descriptor) = authoritative_event(&descriptors, invocation) {
+        if !descriptor.has_native_parser() {
+            return Err(HookkitError::UnrecognizedEvent {
+                harness,
+                message: format!(
+                    "payload identifies catalog event {}, but its native parser is not implemented",
+                    descriptor.event()
+                ),
+            });
+        }
+        descriptor.validate(invocation)?;
         return Ok(resolved(
             descriptor,
-            harness,
             ResolutionProvenance::DefinitiveDiscriminator,
         ));
     }
 
     let sound: Vec<_> = descriptors
         .iter()
-        .filter(|descriptor| descriptor.strength == IdentificationStrength::SoundShape)
-        .filter(|descriptor| (descriptor.validate)(invocation).is_ok())
+        .filter(|descriptor| descriptor.has_native_parser())
+        .filter(|descriptor| descriptor.strength() == IdentificationStrength::SoundShape)
+        .filter(|descriptor| descriptor.validate(invocation).is_ok())
         .collect();
     if let [descriptor] = sound.as_slice() {
-        return Ok(resolved(
-            descriptor,
-            harness,
-            ResolutionProvenance::SoundShape,
-        ));
+        return Ok(resolved(descriptor, ResolutionProvenance::SoundShape));
     }
 
     let compatible: Vec<_> = descriptors
         .iter()
-        .filter(|descriptor| (descriptor.validate)(invocation).is_ok())
-        .map(|descriptor| EventId::builtin(descriptor.event))
+        .filter(|descriptor| descriptor.has_native_parser())
+        .filter(|descriptor| descriptor.validate(invocation).is_ok())
+        .map(|descriptor| descriptor.event().clone())
         .collect();
     match compatible.len() {
-        0 => Err(HookkitError::NoEventCandidate { harness }),
+        0 => Err(HookkitError::UnrecognizedEvent {
+            harness,
+            message: "no implemented native event parser accepted the invocation".into(),
+        }),
         _ => Err(HookkitError::AmbiguousEvent {
             harness,
             candidates: compatible,
@@ -121,46 +185,142 @@ pub fn resolve_event(
     }
 }
 
-/// Best-effort inspection only. This result is deliberately not executable.
 pub fn detect_candidates(
-    registry: &[EventDescriptor],
+    registry: &[IdentificationDescriptor],
     invocation: &RawInvocation,
-) -> Vec<DetectedCandidate> {
-    registry
+    constraints: DetectionConstraints,
+) -> DetectionReport {
+    let mut report = DetectionReport::default();
+    if let (Some(harness), Some(event)) = (&constraints.harness, &constraints.event) {
+        if event.harness() != harness {
+            report.constraint_mismatches.push(format!(
+                "event constraint {event} does not belong to harness {harness}"
+            ));
+        }
+    }
+
+    for descriptor in registry {
+        let discriminator_evidence = descriptor.discriminator().and_then(|(pointer, expected)| {
+            (pointer_value(invocation.json(), pointer) == Some(expected)).then(|| {
+                DetectionEvidence::Discriminator {
+                    pointer: pointer.to_string(),
+                    value: expected.to_string(),
+                }
+            })
+        });
+        let validation = descriptor
+            .has_native_parser()
+            .then(|| descriptor.validate(invocation));
+        let evidence = discriminator_evidence.or_else(|| {
+            validation
+                .as_ref()
+                .is_some_and(|result| result.is_ok())
+                .then_some(DetectionEvidence::NativeParserAccepted)
+        });
+
+        if let Some(Err(error)) = &validation {
+            report
+                .validation_failures
+                .push((descriptor.event().clone(), error.to_string()));
+        }
+
+        let Some(evidence) = evidence else {
+            continue;
+        };
+
+        if constraints
+            .harness
+            .as_ref()
+            .is_some_and(|harness| descriptor.event().harness() != harness)
+        {
+            if matches!(evidence, DetectionEvidence::Discriminator { .. })
+                || descriptor.strength() == IdentificationStrength::SoundShape
+            {
+                report.constraint_mismatches.push(format!(
+                    "payload evidence identifies {}, outside harness constraint {}",
+                    descriptor.event(),
+                    constraints.harness.as_ref().expect("checked")
+                ));
+            }
+            continue;
+        }
+        if constraints
+            .event
+            .as_ref()
+            .is_some_and(|event| descriptor.event() != event)
+        {
+            if matches!(evidence, DetectionEvidence::Discriminator { .. })
+                || descriptor.strength() == IdentificationStrength::SoundShape
+            {
+                report.constraint_mismatches.push(format!(
+                    "payload evidence identifies {}, outside event constraint {}",
+                    descriptor.event(),
+                    constraints.event.as_ref().expect("checked")
+                ));
+            }
+            continue;
+        }
+        report.candidates.push(DetectedCandidate {
+            event: descriptor.event().clone(),
+            strength: descriptor.strength(),
+            evidence,
+            overlaps: descriptor.overlap_events(),
+            native_parser: descriptor.has_native_parser(),
+        });
+    }
+    report.ambiguous = report.candidates.len() > 1
+        || report.candidates.iter().any(|candidate| {
+            matches!(
+                candidate.strength,
+                IdentificationStrength::WeakShape | IdentificationStrength::Ambiguous
+            ) || !candidate.overlaps.is_empty()
+        });
+    report
+}
+
+fn unique_sound_candidate<'a>(
+    descriptors: &[&'a IdentificationDescriptor],
+    invocation: &RawInvocation,
+    excluded: Option<&EventId>,
+) -> Option<&'a IdentificationDescriptor> {
+    let matches: Vec<_> = descriptors
         .iter()
+        .copied()
+        .filter(|descriptor| Some(descriptor.event()) != excluded)
+        .filter(|descriptor| descriptor.has_native_parser())
         .filter(|descriptor| {
-            descriptor.discriminator.is_some_and(|(pointer, expected)| {
-                pointer_value(invocation.json(), pointer) == Some(expected)
-            }) || (descriptor.validate)(invocation).is_ok()
+            descriptor.strength() == IdentificationStrength::SoundShape
+                && descriptor.validate(invocation).is_ok()
         })
-        .map(|descriptor| DetectedCandidate {
-            harness: HarnessId::builtin(descriptor.harness),
-            event: EventId::builtin(descriptor.event),
-            strength: descriptor.strength,
-        })
-        .collect()
+        .collect();
+    match matches.as_slice() {
+        [descriptor] => Some(*descriptor),
+        _ => None,
+    }
 }
 
 fn resolved(
-    descriptor: &EventDescriptor,
-    harness: HarnessId,
+    descriptor: &IdentificationDescriptor,
     provenance: ResolutionProvenance,
 ) -> ResolvedEvent {
     ResolvedEvent {
-        harness,
-        event: EventId::builtin(descriptor.event),
-        contract_id: descriptor.contract_id,
+        event: descriptor.event().clone(),
+        contract: descriptor.contract(),
+        snapshot: descriptor.snapshot(),
         provenance,
     }
 }
 
 fn authoritative_event<'a>(
-    descriptors: &[&'a EventDescriptor],
+    descriptors: &[&'a IdentificationDescriptor],
     invocation: &RawInvocation,
-) -> Option<&'a str> {
-    descriptors.iter().find_map(|descriptor| {
-        let (pointer, expected) = descriptor.discriminator?;
-        (pointer_value(invocation.json(), pointer) == Some(expected)).then_some(descriptor.event)
+) -> Option<&'a IdentificationDescriptor> {
+    descriptors.iter().copied().find(|descriptor| {
+        descriptor
+            .discriminator()
+            .is_some_and(|(pointer, expected)| {
+                pointer_value(invocation.json(), pointer) == Some(expected)
+            })
     })
 }
 
@@ -171,82 +331,64 @@ fn pointer_value<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hookkit_core::EventSpec;
+    use hookkit_core::{
+        ContractId, EventCategory, EventSpec, NativeContext, ProcessEmission, SnapshotId,
+    };
 
-    fn require(value: &'static str) -> fn(&RawInvocation) -> hookkit_core::Result<()> {
-        match value {
-            "alpha" => |raw| {
-                raw.json()
-                    .get("alpha")
-                    .is_some()
-                    .then_some(())
-                    .ok_or(HookkitError::MissingHookEventName)
-            },
-            _ => |raw| {
-                raw.json()
-                    .get("shared")
-                    .is_some()
-                    .then_some(())
-                    .ok_or(HookkitError::MissingHookEventName)
-            },
-        }
+    macro_rules! test_event {
+        ($type:ident, $harness:literal, $event:literal, $required:literal) => {
+            struct $type;
+            impl EventSpec for $type {
+                type Input = serde_json::Value;
+                type CommandOutput = ();
+                const HARNESS: HarnessId = HarnessId::builtin($harness);
+                const SNAPSHOT: SnapshotId = SnapshotId::builtin("v1");
+                const EVENT: EventId = EventId::builtin(Self::HARNESS, $event);
+                const CATEGORY: EventCategory = EventCategory::Other;
+                const CONTRACT: ContractId = ContractId::builtin(concat!($harness, "/v1/", $event));
+                fn parse(raw: &RawInvocation) -> hookkit_core::Result<Self::Input> {
+                    raw.json()
+                        .get($required)
+                        .is_some()
+                        .then(|| raw.json().clone())
+                        .ok_or(HookkitError::MissingHookEventName)
+                }
+                fn emit(_: ()) -> hookkit_core::Result<ProcessEmission> {
+                    Ok(ProcessEmission::command_empty(Self::CONTRACT))
+                }
+                fn context(_: &Self::Input) -> NativeContext {
+                    NativeContext::default()
+                }
+            }
+        };
     }
+    test_event!(Alpha, "h", "Alpha", "alpha");
+    test_event!(Beta, "h", "Beta", "shared");
+    test_event!(Gamma, "h", "Gamma", "shared");
+    test_event!(Sound, "sound", "Only", "sound");
+    test_event!(Weak, "weak", "Only", "weak");
 
-    fn registry() -> Vec<EventDescriptor> {
+    fn registry() -> Vec<IdentificationDescriptor> {
         vec![
-            EventDescriptor {
-                harness: "h",
-                event: "Alpha",
-                contract_id: "h/v/Alpha",
-                strength: IdentificationStrength::Definitive,
-                discriminator: Some(("/kind", "Alpha")),
-                validate: require("alpha"),
-            },
-            EventDescriptor {
-                harness: "h",
-                event: "Beta",
-                contract_id: "h/v/Beta",
-                strength: IdentificationStrength::Ambiguous,
-                discriminator: None,
-                validate: require("shared"),
-            },
-            EventDescriptor {
-                harness: "h",
-                event: "Gamma",
-                contract_id: "h/v/Gamma",
-                strength: IdentificationStrength::Ambiguous,
-                discriminator: None,
-                validate: require("shared"),
-            },
-            EventDescriptor {
-                harness: "other",
-                event: "Beta",
-                contract_id: "other/v/Beta",
-                strength: IdentificationStrength::WeakShape,
-                discriminator: None,
-                validate: require("shared"),
-            },
-            EventDescriptor {
-                harness: "sound",
-                event: "Only",
-                contract_id: "sound/v/Only",
-                strength: IdentificationStrength::SoundShape,
-                discriminator: None,
-                validate: require("shared"),
-            },
-            EventDescriptor {
-                harness: "weak",
-                event: "Only",
-                contract_id: "weak/v/Only",
-                strength: IdentificationStrength::WeakShape,
-                discriminator: None,
-                validate: require("shared"),
-            },
+            IdentificationDescriptor::definitive::<Alpha>("/kind", "Alpha"),
+            IdentificationDescriptor::ambiguous::<Beta>(&["Gamma"]),
+            IdentificationDescriptor::ambiguous::<Gamma>(&["Beta"]),
+            IdentificationDescriptor::sound_shape::<Sound>(&[]),
+            IdentificationDescriptor::weak_shape::<Weak>(&[]),
         ]
     }
 
-    fn antigravity_invocation(raw: &RawInvocation) -> hookkit_core::Result<()> {
-        hookkit_antigravity::PreInvocation::parse(raw).map(|_| ())
+    #[test]
+    fn cross_harness_hint_fails_before_payload_analysis() {
+        let invalid = RawInvocation::parse(br#"{}"#.to_vec()).unwrap();
+        let error = resolve_event(
+            &registry(),
+            HarnessId::builtin("h"),
+            &invalid,
+            Some(EventId::builtin(HarnessId::builtin("other"), "Alpha")),
+        )
+        .unwrap_err();
+        assert!(matches!(error, HookkitError::HintHarnessMismatch { .. }));
     }
 
     #[test]
@@ -261,7 +403,7 @@ mod tests {
             &registry(),
             HarnessId::builtin("h"),
             &raw,
-            Some(EventId::builtin("Alpha")),
+            Some(EventId::builtin(HarnessId::builtin("h"), "Alpha")),
         )
         .unwrap();
         assert_eq!(hinted.provenance, ResolutionProvenance::HintValidated);
@@ -275,88 +417,140 @@ mod tests {
                 &registry(),
                 HarnessId::builtin("h"),
                 &raw,
-                Some(EventId::builtin("Beta"))
+                Some(EventId::builtin(HarnessId::builtin("h"), "Beta"))
             ),
-            Err(HookkitError::HintContradiction { .. })
+            Err(HookkitError::EventHintMismatch { .. })
         ));
         let shared = RawInvocation::parse(br#"{"shared":true}"#.to_vec()).unwrap();
         assert!(matches!(
             resolve_event(&registry(), HarnessId::builtin("h"), &shared, None),
             Err(HookkitError::AmbiguousEvent { .. })
         ));
-        let invalid = RawInvocation::parse(br#"{}"#.to_vec()).unwrap();
-        assert!(matches!(
-            resolve_event(
-                &registry(),
-                HarnessId::builtin("h"),
-                &invalid,
-                Some(EventId::builtin("Beta"))
-            ),
-            Err(HookkitError::InvalidForHint { .. })
-        ));
     }
 
     #[test]
-    fn detector_can_report_multiple_harnesses_but_cannot_execute() {
-        let raw = RawInvocation::parse(br#"{"shared":true}"#.to_vec()).unwrap();
-        let candidates = detect_candidates(&registry(), &raw);
-        assert_eq!(candidates.len(), 5);
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.harness.as_str() == "other")
-        );
-    }
-
-    #[test]
-    fn only_catalog_declared_sound_shape_resolves_without_a_hint() {
-        let shared = RawInvocation::parse(br#"{"shared":true}"#.to_vec()).unwrap();
-        let resolved =
-            resolve_event(&registry(), HarnessId::builtin("sound"), &shared, None).unwrap();
+    fn catalog_declared_sound_shape_resolves_without_hint() {
+        let raw = RawInvocation::parse(br#"{"sound":true}"#.to_vec()).unwrap();
+        let resolved = resolve_event(&registry(), HarnessId::builtin("sound"), &raw, None).unwrap();
         assert_eq!(resolved.provenance, ResolutionProvenance::SoundShape);
-        assert!(matches!(
-            resolve_event(&registry(), HarnessId::builtin("weak"), &shared, None),
-            Err(HookkitError::AmbiguousEvent { .. })
-        ));
-        let empty = RawInvocation::parse(br#"{}"#.to_vec()).unwrap();
-        assert!(matches!(
-            resolve_event(&registry(), HarnessId::builtin("sound"), &empty, None),
-            Err(HookkitError::NoEventCandidate { .. })
-        ));
     }
 
     #[test]
-    fn antigravity_identical_shapes_require_and_accept_a_hint() {
-        let descriptors = [
-            EventDescriptor {
-                harness: "antigravity",
-                event: "PreInvocation",
-                contract_id: "antigravity/docs-2026-07-12-r1/PreInvocation",
-                strength: IdentificationStrength::Impossible,
-                discriminator: None,
-                validate: antigravity_invocation,
-            },
-            EventDescriptor {
-                harness: "antigravity",
-                event: "PostInvocation",
-                contract_id: "antigravity/docs-2026-07-12-r1/PostInvocation",
-                strength: IdentificationStrength::Impossible,
-                discriminator: None,
-                validate: antigravity_invocation,
-            },
-        ];
-        let raw = RawInvocation::parse(br#"{"conversationId":"c","workspacePaths":["/repo"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","invocationNum":0,"initialNumSteps":0}"#.to_vec()).unwrap();
+    fn unique_weak_shape_still_requires_a_hint() {
+        let raw = RawInvocation::parse(br#"{"weak":true}"#.to_vec()).unwrap();
+        let error = resolve_event(&registry(), HarnessId::builtin("weak"), &raw, None).unwrap_err();
         assert!(matches!(
-            resolve_event(&descriptors, HarnessId::ANTIGRAVITY, &raw, None),
-            Err(HookkitError::AmbiguousEvent { .. })
+            error,
+            HookkitError::AmbiguousEvent { candidates, .. } if candidates.len() == 1
         ));
         let resolved = resolve_event(
-            &descriptors,
-            HarnessId::ANTIGRAVITY,
+            &registry(),
+            HarnessId::builtin("weak"),
             &raw,
-            Some(EventId::builtin("PreInvocation")),
+            Some(EventId::builtin(HarnessId::builtin("weak"), "Only")),
         )
         .unwrap();
         assert_eq!(resolved.provenance, ResolutionProvenance::HintValidated);
+    }
+
+    #[test]
+    fn detector_reports_constraint_mismatch_without_executing() {
+        let raw = RawInvocation::parse(br#"{"kind":"Alpha","alpha":1}"#.to_vec()).unwrap();
+        let report = detect_candidates(
+            &registry(),
+            &raw,
+            DetectionConstraints {
+                harness: Some(HarnessId::builtin("sound")),
+                event: None,
+            },
+        );
+        assert!(report.candidates.is_empty());
+        assert!(!report.constraint_mismatches.is_empty());
+
+        let sound = RawInvocation::parse(br#"{"sound":true}"#.to_vec()).unwrap();
+        let sound_report = detect_candidates(
+            &registry(),
+            &sound,
+            DetectionConstraints {
+                harness: Some(HarnessId::builtin("h")),
+                event: None,
+            },
+        );
+        assert!(sound_report.candidates.is_empty());
+        assert!(!sound_report.constraint_mismatches.is_empty());
+    }
+
+    #[test]
+    fn builtin_detector_covers_catalog_only_events_without_authorizing_them() {
+        let descriptors = builtin_descriptors();
+        assert_eq!(descriptors.len(), 56);
+        assert_eq!(
+            descriptors
+                .iter()
+                .filter(|descriptor| descriptor.has_native_parser())
+                .count(),
+            13
+        );
+
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","hook_event_name":"SessionStart"}"#.to_vec(),
+        )
+        .unwrap();
+        let report = Detector::builtins().inspect(
+            &raw,
+            DetectionConstraints {
+                harness: Some(HarnessId::CODEX),
+                event: None,
+            },
+        );
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(
+            report.candidates[0].event,
+            EventId::builtin(HarnessId::CODEX, "SessionStart")
+        );
+        assert!(!report.candidates[0].native_parser);
+    }
+
+    #[test]
+    fn catalog_only_authoritative_event_contradicts_an_implemented_hint() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","hook_event_name":"SessionStart"}"#.to_vec(),
+        )
+        .unwrap();
+        let error = resolve_builtin_event(
+            HarnessId::CODEX,
+            &raw,
+            Some(EventId::builtin(HarnessId::CODEX, "PreToolUse")),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            HookkitError::EventHintMismatch { hint, actual }
+                if hint == EventId::builtin(HarnessId::CODEX, "PreToolUse")
+                    && actual == EventId::builtin(HarnessId::CODEX, "SessionStart")
+        ));
+    }
+
+    #[test]
+    fn detector_retains_parser_failure_alongside_discriminator_evidence() {
+        let raw = RawInvocation::parse(br#"{"hook_event_name":"PreToolUse"}"#.to_vec()).unwrap();
+        let report = Detector::builtins().inspect(
+            &raw,
+            DetectionConstraints {
+                harness: Some(HarnessId::CODEX),
+                event: None,
+            },
+        );
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(
+            report.candidates[0].event,
+            EventId::builtin(HarnessId::CODEX, "PreToolUse")
+        );
+        assert!(
+            report
+                .validation_failures
+                .iter()
+                .any(|(event, _)| event == &EventId::builtin(HarnessId::CODEX, "PreToolUse"))
+        );
     }
 }

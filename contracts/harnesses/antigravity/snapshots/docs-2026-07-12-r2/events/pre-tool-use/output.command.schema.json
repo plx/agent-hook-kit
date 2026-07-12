@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-07-12-r2:pre-tool-use:command-output",
+  "type": "object",
+  "required": ["decision"],
+  "properties": {
+    "decision": { "enum": ["allow", "deny", "ask", "force_ask"] },
+    "reason": { "type": "string" },
+    "permissionOverrides": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+  },
+  "additionalProperties": false
+}

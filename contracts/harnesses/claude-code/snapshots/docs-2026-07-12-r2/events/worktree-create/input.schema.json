@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r2:worktree-create:input",
+  "type": "object",
+  "required": ["session_id", "transcript_path", "cwd", "hook_event_name", "name"],
+  "properties": {
+    "session_id": { "type": "string", "minLength": 1 },
+    "transcript_path": { "type": "string" },
+    "cwd": { "type": "string", "minLength": 1 },
+    "permission_mode": { "type": "string" },
+    "hook_event_name": { "const": "WorktreeCreate" },
+    "name": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": true
+}

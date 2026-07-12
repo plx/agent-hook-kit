@@ -8,24 +8,26 @@ their results never rewrite protocol snapshots or goldens automatically.
 
 ### 1. Contract and metadata conformance
 
-Phase 1 activates this lane:
-
 ```sh
 cargo xtask contracts check
+cargo run -p hookkit-conformance -- --check
 cargo xtask contracts report --check
+cargo xtask contracts verify-vendor
 ```
 
 It validates catalog YAML/meta-schemas, offline JSON Schema references, positive
 and negative fixtures, exact stream checksums/framing, immutable snapshots, and
-catalog/status consistency. Phase 2 extends the same required lane with
-Rust/catalog parity and runtime conformance cases.
+catalog/status consistency. The conformance executable runs every declared Rust
+case and reconciles the machine-generated implementation registry. Workspace
+tests also compare production identification metadata with the selected catalog
+snapshots.
 
 ### 2. Hermetic library, runtime, examples, and documentation
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
+cargo test --workspace --all-targets
 cargo doc --workspace --no-deps
 ```
 

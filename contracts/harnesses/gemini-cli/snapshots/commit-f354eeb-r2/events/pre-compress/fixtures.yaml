@@ -1,0 +1,76 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - gemini-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: session-1
+      timestamp: 2026-07-12T00:00:00Z
+      transcript_path: /tmp/transcript.json
+      trigger: auto
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-trigger
+    origin: synthesized
+    sources:
+    - gemini-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PreCompress
+      session_id: session-1
+      timestamp: 2026-07-12T00:00:00Z
+      transcript_path: /tmp/transcript.json
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - gemini-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PreCompress
+      session_id: session-1
+      timestamp: 2026-07-12T00:00:00Z
+      transcript_path: /tmp/transcript.json
+      trigger: auto
+  - id: representative
+    origin: synthesized
+    sources:
+    - gemini-hooks-reference
+    - gemini-hooks-source
+    value:
+      cwd: /workspace/project
+      hook_event_name: PreCompress
+      session_id: session-representative
+      timestamp: 2026-07-12T12:34:56Z
+      transcript_path: /tmp/representative-transcript.json
+      trigger: manual
+output:
+- id: no-op
+  origin: synthesized
+  schema: command-response
+  sources:
+  - gemini-hooks-reference
+  value: {}
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - gemini-hooks-reference
+  - gemini-hooks-source
+  value:
+    systemMessage: Saving state before compression.
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiU2F2aW5nIHN0YXRlIGJlZm9yZSBjb21wcmVzc2lvbi4ifQ==
+  stdout_sha256: dc53161cb883a3aa04f3313082f3b6e1fc77236dd9ccf75d7d743a20df357044

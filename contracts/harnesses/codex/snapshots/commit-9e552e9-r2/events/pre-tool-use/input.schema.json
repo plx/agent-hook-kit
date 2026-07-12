@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:codex:commit-9e552e9-r2:pre-tool-use:input",
+  "type": "object",
+  "required": ["session_id", "transcript_path", "cwd", "hook_event_name", "model", "turn_id", "permission_mode", "tool_name", "tool_use_id", "tool_input"],
+  "properties": {
+    "session_id": { "type": "string" },
+    "transcript_path": { "type": ["string", "null"] },
+    "cwd": { "type": "string" },
+    "hook_event_name": { "const": "PreToolUse" },
+    "model": { "type": "string" },
+    "turn_id": { "type": "string" },
+    "permission_mode": { "enum": ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"] },
+    "tool_name": { "type": "string" },
+    "tool_use_id": { "type": "string" },
+    "tool_input": {}
+  },
+  "additionalProperties": true
+}

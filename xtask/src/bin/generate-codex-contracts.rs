@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SNAPSHOT: &str = "commit-9e552e9-r1";
+const SNAPSHOT: &str = "commit-9e552e9-r2";
 const REVISION: &str = "9e552e9d15ba52bed7077d5357f3e18e330f8f38";
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -175,7 +175,7 @@ fn contract(seed: &Seed) -> Value {
             "stdout":{"presence":"required","role":"agent-context","content_kind":"text","encoding":"utf-8","trailing_newline":"allowed"},
             "stderr":{"presence":"optional","role":"diagnostics","content_kind":"text","encoding":"utf-8"},
             "sources":["codex-hooks-reference"],
-            "assurance":{"confidence":"high","verification":"source-reviewed"}
+            "assurance":{"confidence":"medium","verification":"source-reviewed"}
         }));
     }
     if let Some(effect) = seed.block_effect {
@@ -186,7 +186,7 @@ fn contract(seed: &Seed) -> Value {
             "stdout":{"presence":"forbidden","role":"none","content_kind":"empty"},
             "stderr":{"presence":"required","role":"agent-context","content_kind":"text","encoding":"utf-8"},
             "sources":["codex-hooks-reference"],
-            "assurance":{"confidence":"high","verification":"source-reviewed"}
+            "assurance":{"confidence":"medium","verification":"source-reviewed"}
         }));
     }
     json!({
@@ -306,8 +306,8 @@ fn fixtures(seed: &Seed, input_schema: &Value) -> Value {
                 {"id":"representative","origin":"synthesized","sources":["codex-hooks-reference","codex-generated-schemas"],"value":representative}
             ],
             "negative":[
-                {"id":"wrong-discriminator","origin":"regression","sources":["codex-generated-schemas"],"value":wrong,"expected_pointer":"/hook_event_name"},
-                {"id":format!("missing-{missing}"),"origin":"synthesized","sources":["codex-generated-schemas"],"value":missing_value,"expected_pointer":""}
+                {"id":"wrong-discriminator","origin":"regression","sources":["codex-generated-schemas"],"value":wrong,"expected_pointer":"/hook_event_name","expected_keyword":"const"},
+                {"id":format!("missing-{missing}"),"origin":"synthesized","sources":["codex-generated-schemas"],"value":missing_value,"expected_pointer":"","expected_keyword":"required"}
             ]
         },
         "output":[
@@ -342,13 +342,17 @@ fn example_value(name: &str, schema: &Value, definitions: &Map<String, Value>) -
     if let Some(values) = schema.get("enum").and_then(Value::as_array) {
         return values.first().cloned().unwrap_or(Value::Null);
     }
-    if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
-        && let Some(key) = reference.strip_prefix("#/definitions/")
+    if let Some(key) = schema
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/definitions/"))
     {
         return example_value(name, &definitions[key], definitions);
     }
-    if let Some(all_of) = schema.get("allOf").and_then(Value::as_array)
-        && let Some(first) = all_of.first()
+    if let Some(first) = schema
+        .get("allOf")
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
     {
         return example_value(name, first, definitions);
     }

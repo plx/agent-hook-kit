@@ -1,9 +1,11 @@
 {
-  "sessionId": "gemini-sess-001",
+  "session_id": "gemini-sess-001",
+  "transcript_path": "/tmp/gemini/transcript-001.json",
   "cwd": "/home/user/project",
-  "hookEventName": "BeforeTool",
-  "toolName": "shell",
-  "toolInput": {
-    "command": ["rm", "-rf", "/"]
+  "hook_event_name": "BeforeTool",
+  "timestamp": "2026-07-12T00:00:00Z",
+  "tool_name": "run_shell_command",
+  "tool_input": {
+    "command": "rm -rf /"
   }
 }

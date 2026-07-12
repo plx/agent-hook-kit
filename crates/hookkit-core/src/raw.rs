@@ -1,5 +1,3 @@
-use serde::{Deserialize, Serialize};
-
 /// Lossless invocation retaining both exact bytes and parsed JSON.
 #[derive(Debug, Clone)]
 pub struct RawInvocation {
@@ -34,27 +32,5 @@ impl RawInvocation {
 
     pub fn source(&self) -> Option<&str> {
         self.source.as_deref()
-    }
-}
-
-/// Wrapper preserving the original JSON payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RawPayload(pub serde_json::Value);
-
-impl RawPayload {
-    /// Access the inner JSON value.
-    pub fn as_value(&self) -> &serde_json::Value {
-        &self.0
-    }
-
-    /// Consume the wrapper, returning the inner JSON value.
-    pub fn into_value(self) -> serde_json::Value {
-        self.0
-    }
-}
-
-impl From<serde_json::Value> for RawPayload {
-    fn from(v: serde_json::Value) -> Self {
-        RawPayload(v)
     }
 }

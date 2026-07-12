@@ -13,6 +13,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  msrv:
+    name: Rust 1.85 libraries and runner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Check supported packages on the declared MSRV
+        run: >-
+          cargo check
+          -p hookkit-core
+          -p hookkit-claude
+          -p hookkit-codex
+          -p hookkit-gemini
+          -p hookkit-antigravity
+          -p hookkit-common
+          -p hookkit-runtime
+          -p hookkit-pkl-config
+          -p hookkit-tool-runner
+          --all-targets
+
   check:
     name: Check, lint, test
     runs-on: ${{ matrix.os }}

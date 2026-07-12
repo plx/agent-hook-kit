@@ -26,11 +26,19 @@ Checks are offline. Remote URIs in provenance are never fetched during normal
 validation. JSON schemas are self-contained or vendored under approved catalog
 roots; a network resolver is not enabled in the validator.
 
+Every catalog snapshot is validated on each check, including deterministic
+manifest recomputation for historical frozen snapshots. The current v1 metadata
+schema remains backward-compatible with the first frozen snapshots; successor
+`-r2` snapshots additionally require reproducibility classifications, distinct
+representative fixtures, and negative-fixture validation keywords.
+
 Every indexed event has a `contract.yaml`, event-root input schema, each distinct
-JSON output schema, and `fixtures.yaml`. Fixtures include two positive inputs,
-focused negative inputs, JSON output examples, and exact base64/checksummed stream
-cases. Origins are explicit: `official`, `sanitized-live`, `synthesized`, or
-`regression`.
+JSON output schema, and `fixtures.yaml`. Fixtures include distinct `minimal` and
+`representative` positive inputs, focused negative inputs that name both the
+expected JSON pointer and validation keyword, JSON output examples, optional
+`output_negative` exclusivity/regression traps, and exact base64/checksummed
+stream cases. Origins are explicit: `official`, `sanitized-live`, `synthesized`,
+or `regression`.
 
 ## Snapshot lifecycle
 
@@ -47,6 +55,12 @@ recompute it and reject any mutation. Upstream changes therefore require a new
 snapshot ID; refresh tooling must never overwrite a frozen snapshot.
 
 `status/implementation-gaps.yaml` is the machine-readable exception interface
-for the Phase 2 Rust conformance runner. Each future exception must name one exact
-harness, snapshot, event, binding, and assertion, plus its rationale, owner, and
-removal phase. Empty or unmatched exceptions are rejected.
+for Rust conformance. Each exception names one exact harness, snapshot, event,
+binding, and stable assertion (`native-input`, `native-output`,
+`binding-implemented`, or `conformance-case:<fixture-id>`), plus its rationale,
+owner, and removal phase. Unknown assertions and stale entries whose assertion
+now passes are rejected.
+
+Until a machine-validated live-observation overlay is added, status validation
+rejects `*-stable` and `live-observed` claims rather than deriving them from a
+handwritten label.

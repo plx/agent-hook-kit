@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-07-12-r2:pre-invocation:command-output",
+  "type": "object",
+  "properties": {
+    "injectSteps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "oneOf": [
+          { "required": ["toolCall"] },
+          { "required": ["userMessage"] },
+          { "required": ["ephemeralMessage"] }
+        ],
+        "properties": {
+          "toolCall": { "type": "object" },
+          "userMessage": { "type": "string" },
+          "ephemeralMessage": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

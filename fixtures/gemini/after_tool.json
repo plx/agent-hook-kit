@@ -1,13 +1,15 @@
 {
-  "sessionId": "gemini-sess-001",
+  "session_id": "gemini-sess-001",
+  "transcript_path": "/tmp/gemini/transcript-001.json",
   "cwd": "/home/user/project",
-  "hookEventName": "AfterTool",
-  "toolName": "shell",
-  "toolInput": {
-    "command": ["cargo", "fmt"]
+  "hook_event_name": "AfterTool",
+  "timestamp": "2026-07-12T00:00:00Z",
+  "tool_name": "run_shell_command",
+  "tool_input": {
+    "command": "cargo fmt"
   },
-  "toolResponse": {
+  "tool_response": {
     "stdout": "",
-    "exitCode": 0
+    "exit_code": 0
   }
 }

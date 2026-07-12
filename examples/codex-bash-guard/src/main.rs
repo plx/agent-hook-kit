@@ -1,8 +1,4 @@
-use hookkit_codex::input::CodexToolInput;
-use hookkit_codex::output::OutputEnvelope;
-use hookkit_codex::{CodexHookInput, CodexHookOutput};
-use hookkit_core::Harness;
-use hookkit_runtime::{NativeHookInput, NativeHookOutput, RuntimeContext};
+use hookkit_codex::protocol::{PreToolUse, PreToolUseOutput};
 
 /// Patterns that should be denied.
 const DENY_PATTERNS: &[&str] = &[
@@ -18,29 +14,24 @@ const DENY_PATTERNS: &[&str] = &[
 ];
 
 fn main() -> std::process::ExitCode {
-    hookkit_runtime::run_native(Harness::Codex, handle)
-}
-
-fn handle(input: NativeHookInput, _ctx: &RuntimeContext) -> hookkit_core::Result<NativeHookOutput> {
-    let NativeHookInput::Codex(codex_input) = input else {
-        return Ok(NativeHookOutput::Codex(CodexHookOutput::Empty));
-    };
-
-    match codex_input {
-        CodexHookInput::PreToolUse(ev) => {
-            if let Some(CodexToolInput::Bash(bash)) = ev.typed_tool_input() {
-                for pattern in DENY_PATTERNS {
-                    if bash.command.contains(pattern) {
-                        return Ok(NativeHookOutput::Codex(CodexHookOutput::Json(
-                            OutputEnvelope::deny(format!(
-                                "Denied: command matches blocked pattern '{pattern}'"
-                            )),
-                        )));
-                    }
+    hookkit_runtime::typed::run_typed::<PreToolUse, _>(|input, _ctx| {
+        let command = if input.tool_name == "Bash" {
+            input
+                .tool_input
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+        } else {
+            None
+        };
+        if let Some(command) = command {
+            for pattern in DENY_PATTERNS {
+                if command.contains(pattern) {
+                    return Ok(PreToolUseOutput::deny(Some(format!(
+                        "Denied: command matches blocked pattern '{pattern}'"
+                    ))));
                 }
             }
-            Ok(NativeHookOutput::Codex(CodexHookOutput::Empty))
         }
-        _ => Ok(NativeHookOutput::Codex(CodexHookOutput::Empty)),
-    }
+        Ok(PreToolUseOutput::no_op())
+    })
 }

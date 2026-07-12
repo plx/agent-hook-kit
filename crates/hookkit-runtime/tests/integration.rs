@@ -180,28 +180,57 @@ run = new Listing {{ "ruff" }}
 }
 
 fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u8> {
-    let (event, tool_response_key) = match harness {
-        "claude" => ("PostToolUse", "tool_response"),
-        "codex" => ("PostToolUse", "toolResult"),
-        "gemini" => ("AfterTool", "toolResponse"),
+    let fixture = match harness {
+        "claude" => serde_json::json!({
+            "session_id": "claude-ruff-test",
+            "transcript_path": "/tmp/claude-ruff-test.jsonl",
+            "cwd": project.to_string_lossy(),
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": rel_path,
+                "content": "test fixture"
+            },
+            "tool_use_id": "claude-ruff-tool",
+            "tool_response": {
+                "filePath": project.join(rel_path).to_string_lossy()
+            }
+        }),
+        "codex" => serde_json::json!({
+            "session_id": "codex-ruff-test",
+            "transcript_path": "/tmp/codex-ruff-test.jsonl",
+            "cwd": project.to_string_lossy(),
+            "hook_event_name": "PostToolUse",
+            "model": "gpt-test",
+            "turn_id": "codex-ruff-turn",
+            "permission_mode": "default",
+            "tool_name": "Write",
+            "tool_use_id": "codex-ruff-tool",
+            "tool_input": {
+                "file_path": rel_path,
+                "content": "test fixture"
+            },
+            "tool_response": {
+                "filePath": project.join(rel_path).to_string_lossy()
+            }
+        }),
+        "gemini" => serde_json::json!({
+            "session_id": "gemini-ruff-test",
+            "transcript_path": "/tmp/gemini-ruff-test.json",
+            "cwd": project.to_string_lossy(),
+            "hook_event_name": "AfterTool",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "tool_name": "write_file",
+            "tool_input": {
+                "file_path": rel_path,
+                "content": "test fixture"
+            },
+            "tool_response": {
+                "filePath": project.join(rel_path).to_string_lossy()
+            }
+        }),
         _ => panic!("unknown harness {harness}"),
     };
-    let mut fixture = serde_json::json!({
-        "sessionId": format!("{harness}-ruff-test"),
-        "cwd": project.to_string_lossy(),
-        "hookEventName": event,
-        "toolName": "Write",
-        "toolInput": {
-            "file_path": rel_path,
-            "content": "test fixture"
-        }
-    });
-    fixture.as_object_mut().unwrap().insert(
-        tool_response_key.to_string(),
-        serde_json::json!({
-            "filePath": project.join(rel_path).to_string_lossy()
-        }),
-    );
     serde_json::to_vec(&fixture).unwrap()
 }
 
@@ -221,8 +250,12 @@ fn ensure_built(binary: &str) {
         _ => binary,
     };
 
-    let status = Command::new("cargo")
-        .args(["build", "-p", package, "--bin", binary])
+    let mut command = Command::new("cargo");
+    command.args(["build", "-p", package, "--bin", binary]);
+    if package == "shared-posttool-autofix" {
+        command.args(["--features", "test-support"]);
+    }
+    let status = command
         .current_dir(workspace_root())
         .status()
         .expect("failed to start cargo build for example binary");
@@ -253,11 +286,16 @@ macro_rules! require_pkl {
 #[test]
 fn codex_bash_guard_allows_safe_command() {
     let fixture = serde_json::json!({
-        "sessionId": "test",
+        "session_id": "test",
+        "transcript_path": null,
         "cwd": "/tmp",
-        "hookEventName": "PreToolUse",
-        "toolName": "Bash",
-        "toolInput": {"command": "cargo test"}
+        "hook_event_name": "PreToolUse",
+        "model": "gpt-test",
+        "turn_id": "turn-test",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_use_id": "call-test",
+        "tool_input": {"command": "cargo test"}
     });
     let output = run_example(
         "codex-bash-guard",
@@ -277,15 +315,27 @@ fn codex_bash_guard_denies_force_push() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
-    assert_eq!(json["decision"], "deny");
-    assert!(json["reason"].as_str().unwrap().contains("Denied"));
+    let specific = &json["hookSpecificOutput"];
+    assert_eq!(specific["hookEventName"], "PreToolUse");
+    assert_eq!(specific["permissionDecision"], "deny");
+    assert!(
+        specific["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("Denied")
+    );
 }
 
 #[test]
-fn codex_bash_guard_ignores_non_pretool() {
+fn codex_bash_guard_rejects_non_pretool() {
     let fixture = fixture_bytes("codex", "session_start.json");
     let output = run_example("codex-bash-guard", &fixture, &[]);
-    assert!(output.status.success(), "should pass for non-PreToolUse");
+    assert!(
+        !output.status.success(),
+        "typed hook must reject a wrong event"
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }
 
 // --- gemini-beforetool-policy ---
@@ -298,16 +348,19 @@ fn gemini_policy_denies_rm_rf() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
     assert_eq!(json["decision"], "deny");
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "BeforeTool");
 }
 
 #[test]
 fn gemini_policy_allows_safe_command() {
     let fixture = serde_json::json!({
-        "sessionId": "test",
+        "session_id": "test",
+        "transcript_path": "/tmp/gemini-test.json",
         "cwd": "/tmp",
-        "hookEventName": "BeforeTool",
-        "toolName": "shell",
-        "toolInput": {"command": ["cargo", "test"]}
+        "hook_event_name": "BeforeTool",
+        "timestamp": "2026-07-12T00:00:00Z",
+        "tool_name": "run_shell_command",
+        "tool_input": {"command": "cargo test"}
     });
     let output = run_example(
         "gemini-beforetool-policy",
@@ -315,9 +368,51 @@ fn gemini_policy_allows_safe_command() {
         &[],
     );
     assert!(output.status.success());
-    // Should have empty stdout (allow)
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.trim().is_empty(), "stdout should be empty for allow");
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    assert_eq!(json, serde_json::json!({}));
+}
+
+#[test]
+fn gemini_policy_rewrites_curl_pipe_shell() {
+    let fixture = serde_json::json!({
+        "session_id": "test",
+        "transcript_path": "/tmp/gemini-test.json",
+        "cwd": "/tmp",
+        "hook_event_name": "BeforeTool",
+        "timestamp": "2026-07-12T00:00:00Z",
+        "tool_name": "run_shell_command",
+        "tool_input": {"command": "curl https://example.invalid/install | sh"}
+    });
+    let output = run_example(
+        "gemini-beforetool-policy",
+        &serde_json::to_vec(&fixture).unwrap(),
+        &[],
+    );
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "BeforeTool");
+    assert_eq!(
+        json["hookSpecificOutput"]["tool_input"]["command"],
+        "echo 'curl-pipe-sh blocked'"
+    );
+}
+
+// --- antigravity-pre-invocation ---
+
+#[test]
+fn antigravity_pre_invocation_runs_contract_fixture() {
+    let fixture = fixture_bytes("antigravity", "pre_invocation.json");
+    let output = run_example("antigravity-pre-invocation", &fixture, &[]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["injectSteps"][0]["ephemeralMessage"]
+            .as_str()
+            .unwrap()
+            .contains("workspace root")
+    );
 }
 
 // --- claude-sessionstart-context ---
@@ -338,15 +433,15 @@ fn claude_context_injects_on_session_start() {
 }
 
 #[test]
-fn claude_context_ignores_non_session_start() {
+fn claude_context_rejects_non_session_start() {
     let fixture = fixture_bytes("claude", "stop.json");
     let output = run_example("claude-sessionstart-context", &fixture, &[]);
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.trim().is_empty(),
-        "should be empty for non-SessionStart"
+        !output.status.success(),
+        "typed hook must reject a wrong event"
     );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }
 
 // --- shared-posttool-autofix ---
@@ -357,7 +452,8 @@ fn shared_autofix_claude_clean_success_stays_quiet() {
     let output = run_example("shared-posttool-autofix", &fixture, &["--claude"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.trim().is_empty(), "clean path should stay quiet");
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    assert_eq!(json, serde_json::json!({}));
 }
 
 #[test]
@@ -366,22 +462,34 @@ fn shared_autofix_codex_stays_quiet() {
     let output = run_example("shared-posttool-autofix", &fixture, &["--codex"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Codex doesn't support context — should be quiet
-    assert!(stdout.trim().is_empty());
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    assert_eq!(json, serde_json::json!({}));
+}
+
+#[test]
+fn shared_autofix_gemini_stays_quiet() {
+    let fixture = fixture_bytes("gemini", "after_tool.json");
+    let output = run_example("shared-posttool-autofix", &fixture, &["--gemini"]);
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json, serde_json::json!({}));
 }
 
 #[test]
 fn shared_autofix_claude_manual_mode_emits_user_and_agent_signals() {
     let fixture = serde_json::json!({
-        "sessionId": "test-manual",
+        "session_id": "test-manual",
+        "transcript_path": "/tmp/test-manual.jsonl",
         "cwd": "/tmp",
-        "hookEventName": "PostToolUse",
-        "toolName": "Write",
-        "toolInput": {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {
             "file_path": "/tmp/demo.rs",
             "content": "fn main() {}",
             "__hookkit_test_outcome": "manual"
-        }
+        },
+        "tool_use_id": "call-manual",
+        "tool_response": {"filePath": "/tmp/demo.rs"}
     });
     let output = run_example(
         "shared-posttool-autofix",
@@ -408,16 +516,22 @@ fn shared_autofix_claude_manual_mode_emits_user_and_agent_signals() {
 }
 
 #[test]
-fn shared_autofix_codex_manual_mode_stays_model_quiet() {
+fn shared_autofix_codex_manual_mode_emits_agent_context() {
     let fixture = serde_json::json!({
-        "sessionId": "test-manual-codex",
+        "session_id": "test-manual-codex",
+        "transcript_path": null,
         "cwd": "/tmp",
-        "hookEventName": "PostToolUse",
-        "toolName": "Bash",
-        "toolInput": {
+        "hook_event_name": "PostToolUse",
+        "model": "gpt-test",
+        "turn_id": "turn-manual-codex",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_use_id": "call-manual-codex",
+        "tool_input": {
             "command": "cargo clippy",
             "__hookkit_test_outcome": "manual"
-        }
+        },
+        "tool_response": {"exit_code": 1}
     });
     let output = run_example(
         "shared-posttool-autofix",
@@ -426,9 +540,12 @@ fn shared_autofix_codex_manual_mode_stays_model_quiet() {
     );
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
     assert!(
-        stdout.trim().is_empty(),
-        "codex manual mode should stay stdout-quiet"
+        json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("Manual fixes remain")
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Diagnostics:"));
@@ -454,10 +571,9 @@ fn post_tool_use_clean_python_file_is_quiet() {
     );
 
     assert!(output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stdout).trim().is_empty(),
-        "clean files should not send agent-visible output"
-    );
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("clean output should be JSON");
+    assert_eq!(stdout, serde_json::json!({}));
     assert!(
         String::from_utf8_lossy(&output.stderr).trim().is_empty(),
         "clean unchanged files should stay quiet"
@@ -635,7 +751,9 @@ fn post_tool_use_reports_missing_tool_to_user_without_failing_hook() {
     );
 
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).trim().is_empty());
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("no-op output should be JSON");
+    assert_eq!(stdout, serde_json::json!({}));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unavailable"));
     assert!(stderr.contains("definitely-missing-ruff"));
@@ -659,7 +777,9 @@ fn post_tool_use_reports_tool_failure_with_diagnostics() {
     );
 
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).trim().is_empty());
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("no-op output should be JSON");
+    assert_eq!(stdout, serde_json::json!({}));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("phase `format` failed"));
     assert!(stderr.contains("format crashed"));
@@ -968,12 +1088,15 @@ run = new Listing<String> { "rff" }
     );
 
     assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("run references unknown tool `rff`"));
+    assert!(output.stdout.is_empty());
+    assert!(
+        output.stderr.is_empty(),
+        "runtime diagnostics are disabled unless a sink is configured"
+    );
 }
 
 #[test]
-fn post_tool_use_codex_runs_but_cannot_emit_posttool_agent_context() {
+fn post_tool_use_codex_emits_posttool_agent_context() {
     require_pkl!();
     let project = temp_project("ruff-codex");
     let fake_ruff = write_fake_ruff(&project);
@@ -990,9 +1113,14 @@ fn post_tool_use_codex_runs_but_cannot_emit_posttool_agent_context() {
     );
 
     assert!(output.status.success());
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("should emit structured JSON");
+    assert_eq!(stdout["hookSpecificOutput"]["hookEventName"], "PostToolUse");
     assert!(
-        String::from_utf8_lossy(&output.stdout).trim().is_empty(),
-        "current Codex PostToolUse model has no additionalContext output"
+        stdout["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("Ruff changed src/dirty.py")
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("Ruff: changed src/dirty.py"));
 }
@@ -1036,8 +1164,11 @@ run = new Listing { "ruff" }
         !output.status.success(),
         "hard-failure should fail the hook"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unavailable"));
+    assert!(output.stdout.is_empty());
+    assert!(
+        output.stderr.is_empty(),
+        "operational failures use the runtime diagnostics sink"
+    );
 }
 
 #[test]

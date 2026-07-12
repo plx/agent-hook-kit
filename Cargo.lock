@@ -489,6 +489,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "walkdir",
 ]
 
 [[package]]
@@ -544,8 +545,11 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "globset",
+ "hookkit-claude",
+ "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
+ "hookkit-gemini",
  "hookkit-pkl-config",
  "hookkit-runtime",
  "minijinja",

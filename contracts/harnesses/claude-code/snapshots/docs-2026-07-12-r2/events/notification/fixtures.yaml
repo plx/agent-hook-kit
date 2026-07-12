@@ -1,0 +1,87 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      message: Permission required
+      notification_type: permission_prompt
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-message
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Notification
+      notification_type: permission_prompt
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Notification
+      message: Permission required
+      notification_type: permission_prompt
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Notification
+      message: Permission required
+      notification_type: permission_prompt
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      title: Claude Code
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    systemMessage: Permission notification emitted.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiUGVybWlzc2lvbiBub3RpZmljYXRpb24gZW1pdHRlZC4ifQ==
+  stdout_sha256: 5e4c8cbee83817a44ce25aab8391294c689fc4d88968aabd1a1b3156a6d2aeff
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiUGVybWlzc2lvbiBub3RpZmljYXRpb24gZW1pdHRlZC4ifQ==
+  stdout_sha256: 5e4c8cbee83817a44ce25aab8391294c689fc4d88968aabd1a1b3156a6d2aeff
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

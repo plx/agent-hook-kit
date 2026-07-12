@@ -1,6 +1,10 @@
 {
-  "sessionId": "gemini-sess-001",
+  "session_id": "gemini-sess-001",
+  "transcript_path": "/tmp/gemini/transcript-001.json",
   "cwd": "/home/user/project",
-  "hookEventName": "AfterAgent",
-  "agentResponse": "I've updated the README with the new API documentation."
+  "hook_event_name": "AfterAgent",
+  "timestamp": "2026-07-12T00:00:00Z",
+  "prompt": "Update the README with the new API documentation.",
+  "prompt_response": "I've updated the README with the new API documentation.",
+  "stop_hook_active": false
 }

@@ -1,0 +1,44 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, executionNum: 0, terminationReason: model_stop, fullyIdle: true }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c2, workspacePaths: [/repo, /lib], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, executionNum: 1, terminationReason: error, error: failed, fullyIdle: false, futureField: retained }
+  negative:
+    - id: missing-fully-idle
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, executionNum: 0, terminationReason: model_stop }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-execution-number
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, executionNum: first, terminationReason: model_stop, fullyIdle: true }
+      expected_pointer: /executionNum
+      expected_keyword: type
+output:
+  - id: continue
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference]
+    value: { decision: continue, reason: Not done yet }
+  - id: stop
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { decision: stop }
+process:
+  - id: continue
+    binding: command
+    outcome: decision
+    exit_code: 0
+    stdout_base64: eyJkZWNpc2lvbiI6ImNvbnRpbnVlIiwicmVhc29uIjoiTm90IGRvbmUgeWV0In0=
+    stdout_sha256: c48633d70d09baece7e760c93792a0e7cad7eee36bbd8af1f5f21ba2016b22c1
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

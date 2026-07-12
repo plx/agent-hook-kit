@@ -1,0 +1,55 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [claude-hooks-reference]
+      value: { session_id: s1, transcript_path: /tmp/t.jsonl, cwd: /repo, hook_event_name: WorktreeCreate, name: feature-auth }
+    - id: representative
+      origin: synthesized
+      sources: [claude-hooks-reference]
+      value: { session_id: s2, transcript_path: /tmp/t.jsonl, cwd: /repo, permission_mode: default, hook_event_name: WorktreeCreate, name: bold-oak-a3f2, future_field: retained }
+  negative:
+    - id: wrong-discriminator
+      origin: regression
+      sources: [claude-hooks-reference]
+      value: { session_id: s1, transcript_path: /tmp/t.jsonl, cwd: /repo, hook_event_name: WorktreeRemove, name: feature-auth }
+      expected_pointer: /hook_event_name
+      expected_keyword: const
+    - id: missing-name
+      origin: synthesized
+      sources: [claude-hooks-reference]
+      value: { session_id: s1, transcript_path: /tmp/t.jsonl, cwd: /repo, hook_event_name: WorktreeCreate }
+      expected_pointer: ""
+      expected_keyword: required
+output:
+  - id: http-created
+    schema: http-response
+    origin: synthesized
+    sources: [claude-hooks-reference]
+    value: { hookSpecificOutput: { hookEventName: WorktreeCreate, worktreePath: /tmp/hookkit-worktree } }
+process:
+  - id: command-created
+    binding: command
+    outcome: created
+    exit_code: 0
+    stdout_base64: L3RtcC9ob29ra2l0LXdvcmt0cmVlCg==
+    stdout_sha256: d5669f21f2e7cfab412026b7f982b02bd0c94f4a360d9ed2d8d652481f75df07
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: command-failed
+    binding: command
+    outcome: failed
+    exit_code: 1
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: http-created
+    binding: http
+    outcome: created
+    exit_code: 200
+    stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6Ildvcmt0cmVlQ3JlYXRlIiwid29ya3RyZWVQYXRoIjoiL3RtcC9ob29ra2l0LXdvcmt0cmVlIn19
+    stdout_sha256: b17028b13e3600c653f46cfa120516b60df6aacddb9cb2a6923c2c584409a314
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

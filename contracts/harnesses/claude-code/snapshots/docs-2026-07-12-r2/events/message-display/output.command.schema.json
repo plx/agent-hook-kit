@@ -1,0 +1,23 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r2:message-display:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "displayContent": {
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "MessageDisplay"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "object"
+}

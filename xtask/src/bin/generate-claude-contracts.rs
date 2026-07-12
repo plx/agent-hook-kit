@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SNAPSHOT: &str = "docs-2026-07-12-r1";
+const SNAPSHOT: &str = "docs-2026-07-12-r2";
 const SOURCE: &str = "claude-hooks-reference";
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -698,7 +698,7 @@ fn contract(seed: &Seed) -> Value {
         ));
     }
     if let Some(effect) = seed.exit2_effect {
-        command_outcomes.push(json!({"id":"exit-2","effect":effect,"exit":{"exact":2},"stdout":{"presence":"forbidden","role":"none","content_kind":"empty"},"stderr":{"presence":"required","role":"agent-context","content_kind":"text","encoding":"utf-8"},"sources":[SOURCE],"assurance":{"confidence":"high","verification":"source-reviewed"}}));
+        command_outcomes.push(json!({"id":"exit-2","effect":effect,"exit":{"exact":2},"stdout":{"presence":"forbidden","role":"none","content_kind":"empty"},"stderr":{"presence":"required","role":"agent-context","content_kind":"text","encoding":"utf-8"},"sources":[SOURCE],"assurance":{"confidence":"low","verification":"source-reviewed"}}));
     }
     let mut bindings = Map::new();
     bindings.insert("command".into(),json!({"kind":"process","request":{"channel":"stdin","framing":"single-document-at-eof","content_kind":"json"},"outcomes":command_outcomes}));
@@ -713,11 +713,11 @@ fn contract(seed: &Seed) -> Value {
         non_success["stdout"]["presence"] = json!("optional");
         bindings.insert("http".into(),json!({"kind":"http","method":"POST","request_content_type":"application/json","response_content_type":"application/json","request":{"channel":"body","framing":"one-http-message","content_kind":"json"},"outcomes":[outcome("structured","event-specific-control",json!({"range":{"min":200,"max":299}}),"json",Some("command-response")),non_success]}));
     }
-    json!({"format_version":1,"id":format!("claude-code/{SNAPSHOT}/{}",seed.wire),"harness":"claude-code","snapshot":SNAPSHOT,"event":{"wire_name":seed.wire,"rust_key":seed.key,"category":seed.category,"identification":{"inferability":"definitive","discriminator":{"json_pointer":"/hook_event_name","const":seed.wire}}},"schemas":{"input":{"file":"input.schema.json","origin":"derived","sources":[SOURCE],"assurance":{"confidence":"high","verification":"source-reviewed"}},"outputs":[{"id":"command-response","file":"output.command.schema.json","origin":"derived","sources":[SOURCE],"assurance":{"confidence":"high","verification":"source-reviewed"}}]},"bindings":bindings,"handler_kinds":handlers,"fixtures":"fixtures.yaml"})
+    json!({"format_version":1,"id":format!("claude-code/{SNAPSHOT}/{}",seed.wire),"harness":"claude-code","snapshot":SNAPSHOT,"event":{"wire_name":seed.wire,"rust_key":seed.key,"category":seed.category,"identification":{"inferability":"definitive","discriminator":{"json_pointer":"/hook_event_name","const":seed.wire}}},"schemas":{"input":{"file":"input.schema.json","origin":"derived","sources":[SOURCE],"assurance":{"confidence":"low","verification":"source-reviewed"}},"outputs":[{"id":"command-response","file":"output.command.schema.json","origin":"derived","sources":[SOURCE],"assurance":{"confidence":"low","verification":"source-reviewed"}}]},"bindings":bindings,"handler_kinds":handlers,"fixtures":"fixtures.yaml"})
 }
 
 fn outcome(id: &str, effect: &str, exit: Value, kind: &str, schema: Option<&str>) -> Value {
-    let mut value = json!({"id":id,"effect":effect,"exit":exit,"stdout":{"presence":"required","role":"protocol-value","content_kind":kind},"stderr":{"presence":"optional","role":"diagnostics","content_kind":"text","encoding":"utf-8"},"sources":[SOURCE],"assurance":{"confidence":"high","verification":"source-reviewed"}});
+    let mut value = json!({"id":id,"effect":effect,"exit":exit,"stdout":{"presence":"required","role":"protocol-value","content_kind":kind},"stderr":{"presence":"optional","role":"diagnostics","content_kind":"text","encoding":"utf-8"},"sources":[SOURCE],"assurance":{"confidence":"low","verification":"source-reviewed"}});
     if kind == "text" {
         value["stdout"]["encoding"] = json!("utf-8");
         value["stdout"]["trailing_newline"] = json!("allowed");
@@ -798,7 +798,7 @@ fn fixtures(seed: &Seed) -> Value {
         ));
         process.push(case("http-error", "http", "non-success", 500, b"", b""));
     }
-    json!({"format_version":1,"input":{"positive":[{"id":"minimal","origin":"synthesized","sources":[SOURCE],"value":minimal},{"id":"representative","origin":"synthesized","sources":[SOURCE],"value":representative}],"negative":[{"id":"wrong-discriminator","origin":"regression","sources":[SOURCE],"value":wrong,"expected_pointer":"/hook_event_name"},{"id":format!("missing-{missing_field}"),"origin":"synthesized","sources":[SOURCE],"value":missing,"expected_pointer":""}]},"output":[{"id":"structured","schema":"command-response","origin":"synthesized","sources":[SOURCE],"value":seed.structured}],"process":process})
+    json!({"format_version":1,"input":{"positive":[{"id":"minimal","origin":"synthesized","sources":[SOURCE],"value":minimal},{"id":"representative","origin":"synthesized","sources":[SOURCE],"value":representative}],"negative":[{"id":"wrong-discriminator","origin":"regression","sources":[SOURCE],"value":wrong,"expected_pointer":"/hook_event_name","expected_keyword":"const"},{"id":format!("missing-{missing_field}"),"origin":"synthesized","sources":[SOURCE],"value":missing,"expected_pointer":"","expected_keyword":"required"}]},"output":[{"id":"structured","schema":"command-response","origin":"synthesized","sources":[SOURCE],"value":seed.structured}],"process":process})
 }
 
 fn case(id: &str, binding: &str, outcome: &str, exit: i32, stdout: &[u8], stderr: &[u8]) -> Value {

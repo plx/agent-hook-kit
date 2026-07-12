@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SNAPSHOT: &str = "commit-f354eeb-r1";
+const SNAPSHOT: &str = "commit-f354eeb-r2";
 const SOURCE: &str = "gemini-hooks-reference";
 const SOURCE_CODE: &str = "gemini-hooks-source";
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -410,7 +410,7 @@ fn contract(seed: &Seed) -> Value {
         "stderr":{"presence":"optional","role":"diagnostics","content_kind":"text","encoding":"utf-8"},
         "output_schema":"command-response",
         "sources":[SOURCE,SOURCE_CODE],
-        "assurance":{"confidence":"high","verification":"source-reviewed"}
+        "assurance":{"confidence":"medium","verification":"source-reviewed"}
     })];
     if let Some(effect) = seed.block_effect {
         outcomes.push(json!({
@@ -420,7 +420,7 @@ fn contract(seed: &Seed) -> Value {
             "stdout":{"presence":"forbidden","role":"none","content_kind":"empty"},
             "stderr":{"presence":"required","role":"agent-context","content_kind":"text","encoding":"utf-8"},
             "sources":[SOURCE],
-            "assurance":{"confidence":"high","verification":"source-reviewed"}
+            "assurance":{"confidence":"medium","verification":"source-reviewed"}
         }));
     }
     json!({
@@ -430,8 +430,8 @@ fn contract(seed: &Seed) -> Value {
         "snapshot":SNAPSHOT,
         "event":{"wire_name":seed.wire_name,"rust_key":seed.rust_key,"category":seed.category,"identification":{"inferability":"definitive","discriminator":{"json_pointer":"/hook_event_name","const":seed.wire_name}}},
         "schemas":{
-            "input":{"file":"input.schema.json","origin":"derived","sources":[SOURCE,SOURCE_CODE],"assurance":{"confidence":"high","verification":"source-reviewed"}},
-            "outputs":[{"id":"command-response","file":"output.command.schema.json","origin":"derived","sources":[SOURCE,SOURCE_CODE],"assurance":{"confidence":"high","verification":"source-reviewed"}}]
+            "input":{"file":"input.schema.json","origin":"derived","sources":[SOURCE,SOURCE_CODE],"assurance":{"confidence":"medium","verification":"source-reviewed"}},
+            "outputs":[{"id":"command-response","file":"output.command.schema.json","origin":"derived","sources":[SOURCE,SOURCE_CODE],"assurance":{"confidence":"medium","verification":"source-reviewed"}}]
         },
         "bindings":{"command":{"kind":"process","request":{"channel":"stdin","framing":"single-document-at-eof","content_kind":"json"},"outcomes":outcomes}},
         "fixtures":"fixtures.yaml"
@@ -457,6 +457,14 @@ fn fixtures(seed: &Seed) -> Value {
             representative.insert(field.name.to_string(), field.example.clone());
         }
     }
+    representative.insert("session_id".to_string(), json!("session-representative"));
+    representative.insert(
+        "transcript_path".to_string(),
+        json!("/tmp/representative-transcript.json"),
+    );
+    representative.insert("cwd".to_string(), json!("/workspace/project"));
+    representative.insert("timestamp".to_string(), json!("2026-07-12T12:34:56Z"));
+    enrich_representative(seed, &mut representative);
     let mut wrong = minimal.clone();
     wrong.insert("hook_event_name".to_string(), json!("WrongEvent"));
     let missing_field = seed
@@ -490,8 +498,8 @@ fn fixtures(seed: &Seed) -> Value {
                 {"id":"representative","origin":"synthesized","sources":[SOURCE,SOURCE_CODE],"value":representative}
             ],
             "negative":[
-                {"id":"wrong-discriminator","origin":"regression","sources":[SOURCE],"value":wrong,"expected_pointer":"/hook_event_name"},
-                {"id":format!("missing-{missing_field}"),"origin":"synthesized","sources":[SOURCE],"value":missing,"expected_pointer":""}
+                {"id":"wrong-discriminator","origin":"regression","sources":[SOURCE],"value":wrong,"expected_pointer":"/hook_event_name","expected_keyword":"const"},
+                {"id":format!("missing-{missing_field}"),"origin":"synthesized","sources":[SOURCE],"value":missing,"expected_pointer":"","expected_keyword":"required"}
             ]
         },
         "output":[
@@ -499,6 +507,72 @@ fn fixtures(seed: &Seed) -> Value {
             {"id":"structured","schema":"command-response","origin":"synthesized","sources":[SOURCE,SOURCE_CODE],"value":seed.structured}
         ],
         "process":process
+    })
+}
+
+fn enrich_representative(seed: &Seed, representative: &mut Map<String, Value>) {
+    match seed.wire_name {
+        "BeforeAgent" => {
+            representative.insert(
+                "prompt".to_string(),
+                json!("Review the changes, run focused tests, and summarize any remaining risk."),
+            );
+        }
+        "AfterAgent" => {
+            representative.insert(
+                "prompt".to_string(),
+                json!("Run the full validation suite."),
+            );
+            representative.insert(
+                "prompt_response".to_string(),
+                json!("Formatting, linting, and focused tests all pass."),
+            );
+            representative.insert("stop_hook_active".to_string(), json!(true));
+        }
+        "BeforeModel" => {
+            representative.insert("llm_request".to_string(), representative_llm_request());
+        }
+        "AfterModel" => {
+            representative.insert("llm_request".to_string(), representative_llm_request());
+            representative.insert(
+                "llm_response".to_string(),
+                json!({
+                    "candidates": [{
+                        "content": {"role": "model", "parts": ["Validation complete."]},
+                        "finishReason": "STOP"
+                    }],
+                    "usageMetadata": {"totalTokenCount": 42}
+                }),
+            );
+        }
+        "Notification" => {
+            representative.insert(
+                "details".to_string(),
+                json!({"tool":"run_shell_command","command":"cargo test","risk":"write"}),
+            );
+        }
+        "PreCompress" => {
+            representative.insert("trigger".to_string(), json!("manual"));
+        }
+        "SessionStart" => {
+            representative.insert("source".to_string(), json!("resume"));
+        }
+        "SessionEnd" => {
+            representative.insert("reason".to_string(), json!("prompt_input_exit"));
+        }
+        _ => {}
+    }
+}
+
+fn representative_llm_request() -> Value {
+    json!({
+        "model":"gemini-test",
+        "messages":[
+            {"role":"system","content":"Follow repository policy."},
+            {"role":"user","content":"Run the tests."}
+        ],
+        "config":{"temperature":0.0,"maxOutputTokens":1024},
+        "toolConfig":{"mode":"ANY","allowedFunctionNames":["run_shell_command"]}
     })
 }
 

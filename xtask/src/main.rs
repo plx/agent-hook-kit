@@ -31,7 +31,7 @@ enum Command {
 enum ContractsCommand {
     /// Validate catalog metadata, schemas, fixtures, and status coverage.
     Check {
-        /// Validate selected current snapshots (the default and only Phase 1 selection).
+        /// Validate all snapshots and current-selection status overlays.
         #[arg(long, value_parser = ["current"])]
         snapshot: Option<String>,
     },
@@ -118,6 +118,10 @@ struct Source {
     content_sha256: Option<String>,
     #[serde(default)]
     license: Option<String>,
+    #[serde(default)]
+    reproducibility: Option<String>,
+    #[serde(default)]
+    limitations: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -272,6 +276,8 @@ struct Fixtures {
     input: InputFixtures,
     #[serde(default)]
     output: Vec<OutputFixture>,
+    #[serde(default)]
+    output_negative: Vec<NegativeOutputFixture>,
     process: Vec<ProcessFixture>,
 }
 
@@ -299,6 +305,8 @@ struct NegativeFixture {
     sources: Vec<String>,
     value: Value,
     expected_pointer: String,
+    #[serde(default)]
+    expected_keyword: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,6 +317,18 @@ struct OutputFixture {
     origin: String,
     sources: Vec<String>,
     value: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NegativeOutputFixture {
+    id: String,
+    schema: String,
+    origin: String,
+    sources: Vec<String>,
+    value: Value,
+    expected_pointer: String,
+    expected_keyword: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,7 +416,7 @@ struct ImplementationEvent {
 struct LoadedContract {
     contract: Contract,
     dir: PathBuf,
-    process_cases: BTreeSet<String>,
+    process_cases: BTreeMap<String, String>,
 }
 
 fn main() -> ExitCode {
@@ -418,7 +438,10 @@ fn run() -> Result<()> {
         } => {
             let _ = snapshot;
             let contracts = check_catalog(&root)?;
-            println!("validated {} event contracts", contracts.len());
+            println!(
+                "validated {} selected event contracts and all catalog snapshots",
+                contracts.len()
+            );
             Ok(())
         }
         Command::Contracts {
@@ -485,9 +508,7 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
     let gaps: ImplementationGaps = read_yaml(&gaps_path)?;
     require_version(gaps.format_version, "implementation gaps")?;
 
-    let mut contracts = Vec::new();
-    let mut contract_ids = BTreeSet::new();
-    for (harness, selected) in &registry.harnesses {
+    for harness in registry.harnesses.keys() {
         let harness_path = catalog.join("harnesses").join(harness).join("harness.yaml");
         validate_yaml_metadata(&harness_path, &meta.join("harness.schema.json"))?;
         let harness_metadata: Harness = read_yaml(&harness_path)?;
@@ -505,136 +526,38 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
         {
             return Err(format!("{}: unknown wire heritage", harness_path.display()));
         }
-        let snapshot_dir = catalog
-            .join("harnesses")
-            .join(harness)
-            .join("snapshots")
-            .join(&selected.current);
-        let snapshot_path = snapshot_dir.join("snapshot.yaml");
-        validate_yaml_metadata(&snapshot_path, &meta.join("snapshot.schema.json"))?;
-        let snapshot: Snapshot = read_yaml(&snapshot_path)?;
-        require_version(snapshot.format_version, "snapshot")?;
-        if snapshot.id != selected.current || snapshot.harness != *harness {
-            return Err(format!(
-                "{}: registry/snapshot identity mismatch",
-                snapshot_dir.display()
-            ));
-        }
-        if snapshot.state != "draft" && snapshot.state != "frozen" {
-            return Err(format!(
-                "{}: state must be draft or frozen",
-                snapshot_dir.display()
-            ));
-        }
-        if snapshot.state == "frozen" {
-            let manifest = snapshot.manifest_file.as_deref().ok_or_else(|| {
-                format!(
-                    "{}: frozen snapshot needs manifest_file",
-                    snapshot_dir.display()
-                )
-            })?;
-            verify_content_manifest(&snapshot_dir, manifest)?;
-        } else if snapshot.manifest_file.is_some() {
-            return Err(format!(
-                "{}: draft snapshot must not have manifest_file",
-                snapshot_dir.display()
-            ));
-        }
-        if snapshot.retrieved.is_empty() {
-            return Err(format!(
-                "{}: retrieval date is required",
-                snapshot_dir.display()
-            ));
-        }
+    }
 
-        let sources_path = safe_join(&snapshot_dir, &snapshot.sources_file)?;
-        validate_yaml_metadata(&sources_path, &meta.join("sources.schema.json"))?;
-        let sources: Sources = read_yaml(&sources_path)?;
-        require_version(sources.format_version, "sources")?;
-        let source_ids: BTreeSet<_> = sources
-            .sources
-            .iter()
-            .map(|source| source.id.as_str())
-            .collect();
-        if source_ids.len() != sources.sources.len() {
-            return Err(format!("{}: duplicate source id", snapshot_dir.display()));
-        }
-        for source in &sources.sources {
-            if source.kind.is_empty()
-                || source.authority.is_empty()
-                || source.url.is_empty()
-                || source.retrieved.is_empty()
-            {
-                return Err(format!(
-                    "{}: source {} is incomplete",
-                    snapshot_dir.display(),
-                    source.id
-                ));
-            }
-            if source.revision.is_none() && source.content_sha256.is_none() {
-                return Err(format!(
-                    "{}: source {} needs a revision or content hash",
-                    snapshot_dir.display(),
-                    source.id
-                ));
-            }
-            if source
-                .content_sha256
-                .as_deref()
-                .is_some_and(|hash| !valid_sha256(hash))
-            {
-                return Err(format!(
-                    "{}: source {} has invalid SHA-256",
-                    snapshot_dir.display(),
-                    source.id
-                ));
-            }
-            let _ = &source.license;
-        }
+    let mut snapshot_paths: Vec<_> = walkdir::WalkDir::new(catalog.join("harnesses"))
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to enumerate contract snapshots: {error}"))?
+        .into_iter()
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "snapshot.yaml")
+        .map(|entry| entry.into_path())
+        .collect();
+    snapshot_paths.sort();
 
-        let mut event_names = BTreeSet::new();
-        let mut event_keys = BTreeSet::new();
-        for indexed in &snapshot.events {
-            if !event_names.insert(indexed.wire_name.as_str())
-                || !event_keys.insert(indexed.rust_key.as_str())
-            {
-                return Err(format!(
-                    "{}: duplicate event name/key",
-                    snapshot_dir.display()
-                ));
-            }
-            let dir = safe_join(&snapshot_dir, &indexed.path)?;
-            let contract_path = dir.join("contract.yaml");
-            validate_yaml_metadata(&contract_path, &meta.join("event-contract.schema.json"))?;
-            let contract: Contract = read_yaml(&contract_path)?;
-            validate_contract_identity(&contract, &snapshot, indexed, &dir)?;
-            if !contract_ids.insert(contract.id.clone()) {
-                return Err(format!("duplicate contract id {}", contract.id));
-            }
-            let process_cases = validate_contract(&contract, &dir, &source_ids)?;
-            contracts.push(LoadedContract {
-                contract,
-                dir,
-                process_cases,
-            });
+    let mut contracts = Vec::new();
+    let mut contract_ids = BTreeSet::new();
+    let mut selected_snapshots = BTreeSet::new();
+    for snapshot_path in snapshot_paths {
+        let snapshot_dir = snapshot_path
+            .parent()
+            .expect("snapshot.yaml has a parent directory");
+        let (snapshot, loaded) =
+            validate_snapshot(&catalog, &meta, snapshot_dir, &registry, &mut contract_ids)?;
+        if registry
+            .harnesses
+            .get(&snapshot.harness)
+            .is_some_and(|selected| selected.current == snapshot.id)
+        {
+            selected_snapshots.insert(snapshot.harness.clone());
+            contracts.extend(loaded);
         }
-        let indexed_paths: BTreeSet<_> = snapshot
-            .events
-            .iter()
-            .map(|event| snapshot_dir.join(&event.path).join("contract.yaml"))
-            .collect();
-        let discovered_paths: BTreeSet<_> = walkdir::WalkDir::new(snapshot_dir.join("events"))
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-            .filter(|entry| entry.file_type().is_file() && entry.file_name() == "contract.yaml")
-            .map(|entry| entry.into_path())
-            .collect();
-        if indexed_paths != discovered_paths {
-            return Err(format!(
-                "{}: snapshot index and event contract directories differ",
-                snapshot_dir.display()
-            ));
-        }
+    }
+    if selected_snapshots.len() != registry.harnesses.len() {
+        return Err("one or more registry-selected snapshots were not found".to_string());
     }
 
     let target_keys: BTreeSet<_> = stabilization
@@ -644,6 +567,14 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
         .collect();
     if target_keys.len() != stabilization.targets.len() {
         return Err("stabilization target contains duplicate contract/binding entries".to_string());
+    }
+    let default_keys: BTreeSet<_> = stabilization
+        .defaults
+        .iter()
+        .map(|default| (default.harness.as_str(), default.binding.as_str()))
+        .collect();
+    if default_keys.len() != stabilization.defaults.len() {
+        return Err("stabilization target contains duplicate harness/binding defaults".to_string());
     }
     for loaded in &contracts {
         for binding in loaded.contract.bindings.keys() {
@@ -675,39 +606,36 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
                 target.contract, target.binding
             ));
         }
-        if !matches!(
-            target.level.as_str(),
-            "catalog-only"
-                | "native-source-reviewed"
-                | "command-runtime-beta"
-                | "command-runtime-stable"
-                | "unsupported"
-        ) {
+        if !valid_support_level(&target.level) {
             return Err(format!("invalid support level {}", target.level));
         }
-        if target.verification.is_empty() {
+        if !valid_verification(&target.verification) {
             return Err(format!("{} has empty verification status", target.contract));
+        }
+        if release_claim_requires_observation(&target.level, &target.verification) {
+            return Err(format!(
+                "{} requests stable/live support without a validated observation overlay",
+                target.contract
+            ));
         }
     }
     for default in &stabilization.defaults {
         if !registry.harnesses.contains_key(&default.harness)
-            || !matches!(
-                default.level.as_str(),
-                "catalog-only"
-                    | "native-source-reviewed"
-                    | "command-runtime-beta"
-                    | "command-runtime-stable"
-                    | "unsupported"
-            )
-            || default.verification.is_empty()
+            || !valid_support_level(&default.level)
+            || !valid_verification(&default.verification)
         {
             return Err(format!(
                 "invalid stabilization default for {}/{}",
                 default.harness, default.binding
             ));
         }
+        if release_claim_requires_observation(&default.level, &default.verification) {
+            return Err(format!(
+                "stabilization default for {}/{} requests stable/live support without a validated observation overlay",
+                default.harness, default.binding
+            ));
+        }
     }
-    validate_implementation_gaps(&gaps, &contracts)?;
     let implementation_path = catalog.join("status/implementation/registry.json");
     validate_json_metadata(
         &implementation_path,
@@ -717,8 +645,236 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
         serde_json::from_value(read_json(&implementation_path)?)
             .map_err(|error| format!("invalid implementation registry: {error}"))?;
     validate_implementation_registry(&implementation, &contracts)?;
+    validate_target_implementation(&stabilization, &implementation, &contracts)?;
+    validate_implementation_gaps(&gaps, &contracts, &implementation)?;
     let _ = &stabilization.release;
     Ok(contracts)
+}
+
+fn validate_snapshot(
+    catalog: &Path,
+    meta: &Path,
+    snapshot_dir: &Path,
+    registry: &Registry,
+    contract_ids: &mut BTreeSet<String>,
+) -> Result<(Snapshot, Vec<LoadedContract>)> {
+    let snapshots_dir = snapshot_dir
+        .parent()
+        .ok_or_else(|| format!("{}: snapshot has no parent", snapshot_dir.display()))?;
+    if snapshots_dir.file_name().and_then(|name| name.to_str()) != Some("snapshots") {
+        return Err(format!(
+            "{}: snapshot is outside a harness snapshots directory",
+            snapshot_dir.display()
+        ));
+    }
+    let harness = snapshots_dir
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{}: cannot determine harness", snapshot_dir.display()))?;
+    if !registry.harnesses.contains_key(harness) {
+        return Err(format!(
+            "{}: snapshot belongs to unregistered harness {harness}",
+            snapshot_dir.display()
+        ));
+    }
+
+    let snapshot_path = snapshot_dir.join("snapshot.yaml");
+    validate_yaml_metadata(&snapshot_path, &meta.join("snapshot.schema.json"))?;
+    let snapshot: Snapshot = read_yaml(&snapshot_path)?;
+    require_version(snapshot.format_version, "snapshot")?;
+    let directory_id = snapshot_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "{}: invalid snapshot directory name",
+                snapshot_dir.display()
+            )
+        })?;
+    if snapshot.id != directory_id || snapshot.harness != harness {
+        return Err(format!(
+            "{}: snapshot identity mismatch",
+            snapshot_dir.display()
+        ));
+    }
+    if snapshot.state != "draft" && snapshot.state != "frozen" {
+        return Err(format!(
+            "{}: state must be draft or frozen",
+            snapshot_dir.display()
+        ));
+    }
+    if snapshot.state == "frozen" {
+        let manifest = snapshot.manifest_file.as_deref().ok_or_else(|| {
+            format!(
+                "{}: frozen snapshot needs manifest_file",
+                snapshot_dir.display()
+            )
+        })?;
+        verify_content_manifest(snapshot_dir, manifest)?;
+    } else if snapshot.manifest_file.is_some() {
+        return Err(format!(
+            "{}: draft snapshot must not have manifest_file",
+            snapshot_dir.display()
+        ));
+    }
+    if snapshot.retrieved.is_empty() {
+        return Err(format!(
+            "{}: retrieval date is required",
+            snapshot_dir.display()
+        ));
+    }
+
+    let strict_successor = !uses_legacy_snapshot_semantics(&snapshot.harness, &snapshot.id);
+    let sources_path = safe_join(snapshot_dir, &snapshot.sources_file)?;
+    validate_yaml_metadata(&sources_path, &meta.join("sources.schema.json"))?;
+    let sources: Sources = read_yaml(&sources_path)?;
+    require_version(sources.format_version, "sources")?;
+    let source_ids: BTreeSet<_> = sources
+        .sources
+        .iter()
+        .map(|source| source.id.as_str())
+        .collect();
+    if source_ids.len() != sources.sources.len() {
+        return Err(format!("{}: duplicate source id", snapshot_dir.display()));
+    }
+    for source in &sources.sources {
+        validate_source(source, snapshot_dir, strict_successor)?;
+    }
+
+    let mut loaded = Vec::new();
+    let mut event_names = BTreeSet::new();
+    let mut event_keys = BTreeSet::new();
+    for indexed in &snapshot.events {
+        if !event_names.insert(indexed.wire_name.as_str())
+            || !event_keys.insert(indexed.rust_key.as_str())
+        {
+            return Err(format!(
+                "{}: duplicate event name/key",
+                snapshot_dir.display()
+            ));
+        }
+        let dir = safe_join(snapshot_dir, &indexed.path)?;
+        let contract_path = dir.join("contract.yaml");
+        validate_yaml_metadata(&contract_path, &meta.join("event-contract.schema.json"))?;
+        let contract: Contract = read_yaml(&contract_path)?;
+        validate_contract_identity(&contract, &snapshot, indexed, &dir)?;
+        if !contract_ids.insert(contract.id.clone()) {
+            return Err(format!("duplicate contract id {}", contract.id));
+        }
+        let process_cases = validate_contract(&contract, &dir, &source_ids, strict_successor)?;
+        loaded.push(LoadedContract {
+            contract,
+            dir,
+            process_cases,
+        });
+    }
+    let indexed_paths: BTreeSet<_> = snapshot
+        .events
+        .iter()
+        .map(|event| snapshot_dir.join(&event.path).join("contract.yaml"))
+        .collect();
+    let discovered_paths: BTreeSet<_> = walkdir::WalkDir::new(snapshot_dir.join("events"))
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "contract.yaml")
+        .map(|entry| entry.into_path())
+        .collect();
+    if indexed_paths != discovered_paths {
+        return Err(format!(
+            "{}: snapshot index and event contract directories differ",
+            snapshot_dir.display()
+        ));
+    }
+
+    // Retain this path relationship as an explicit invariant rather than relying
+    // only on the directory-name extraction above.
+    if !snapshot_dir.starts_with(catalog.join("harnesses").join(harness).join("snapshots")) {
+        return Err(format!(
+            "{}: invalid snapshot location",
+            snapshot_dir.display()
+        ));
+    }
+    Ok((snapshot, loaded))
+}
+
+fn uses_legacy_snapshot_semantics(harness: &str, snapshot: &str) -> bool {
+    matches!(
+        (harness, snapshot),
+        ("antigravity", "docs-2026-07-12-r1")
+            | ("claude-code", "docs-2026-07-12-r1")
+            | ("codex", "commit-9e552e9-r1")
+            | ("gemini-cli", "commit-f354eeb-r1")
+    )
+}
+
+fn validate_source(source: &Source, snapshot_dir: &Path, strict_successor: bool) -> Result<()> {
+    if source.kind.is_empty()
+        || source.authority.is_empty()
+        || source.url.is_empty()
+        || source.retrieved.is_empty()
+    {
+        return Err(format!(
+            "{}: source {} is incomplete",
+            snapshot_dir.display(),
+            source.id
+        ));
+    }
+    if source.revision.is_none() && source.content_sha256.is_none() {
+        return Err(format!(
+            "{}: source {} needs a revision or content hash",
+            snapshot_dir.display(),
+            source.id
+        ));
+    }
+    if source
+        .content_sha256
+        .as_deref()
+        .is_some_and(|hash| !valid_sha256(hash))
+    {
+        return Err(format!(
+            "{}: source {} has invalid SHA-256",
+            snapshot_dir.display(),
+            source.id
+        ));
+    }
+    let Some(reproducibility) = source.reproducibility.as_deref() else {
+        if strict_successor {
+            return Err(format!(
+                "{}: source {} must classify reproducibility",
+                snapshot_dir.display(),
+                source.id
+            ));
+        }
+        return Ok(());
+    };
+    if !matches!(
+        reproducibility,
+        "vendored" | "pinned-revision" | "content-hash-only" | "unreproducible"
+    ) {
+        return Err(format!(
+            "{}: source {} has invalid reproducibility",
+            snapshot_dir.display(),
+            source.id
+        ));
+    }
+    if reproducibility == "vendored" && source.revision.is_none()
+        || reproducibility == "pinned-revision" && source.revision.is_none()
+        || reproducibility == "content-hash-only" && source.content_sha256.is_none()
+        || reproducibility == "unreproducible" && source.limitations.is_empty()
+        || source
+            .limitations
+            .iter()
+            .any(|limitation| limitation.is_empty())
+    {
+        return Err(format!(
+            "{}: source {} reproducibility evidence is incomplete",
+            snapshot_dir.display(),
+            source.id
+        ));
+    }
+    let _ = &source.license;
+    Ok(())
 }
 
 fn validate_contract_identity(
@@ -752,7 +908,8 @@ fn validate_contract(
     contract: &Contract,
     dir: &Path,
     sources: &BTreeSet<&str>,
-) -> Result<BTreeSet<String>> {
+    strict_successor: bool,
+) -> Result<BTreeMap<String, String>> {
     let input_schema = read_json(&safe_join(dir, &contract.schemas.input.file)?)?;
     validate_schema_references(&input_schema, dir)?;
     validate_schema_claim(&contract.schemas.input, sources, dir)?;
@@ -795,11 +952,14 @@ fn validate_contract(
             dir.display()
         ));
     }
-    if let Some(discriminator) = &contract.event.identification.discriminator
-        && (discriminator.json_pointer.is_empty()
-            || discriminator.r#const != contract.event.wire_name)
-    {
-        return Err(format!("{}: invalid discriminator", dir.display()));
+    match &contract.event.identification.discriminator {
+        Some(discriminator)
+            if discriminator.json_pointer.is_empty()
+                || discriminator.r#const != contract.event.wire_name =>
+        {
+            return Err(format!("{}: invalid discriminator", dir.display()));
+        }
+        _ => {}
     }
     for kind in &contract.handler_kinds {
         if !matches!(
@@ -865,21 +1025,25 @@ fn validate_contract(
             validate_channel(&outcome.stderr, dir)?;
             validate_sources(&outcome.sources, sources, dir)?;
             validate_assurance(&outcome.assurance, dir)?;
-            if let Some(schema) = &outcome.output_schema {
-                if !output_validators.contains_key(schema.as_str()) {
+            if !output_schema_direction_valid(
+                &outcome.stdout.content_kind,
+                outcome.output_schema.as_deref(),
+            ) {
+                return Err(format!(
+                    "{}: outcome {} must reference a schema exactly when its response is JSON",
+                    dir.display(),
+                    outcome.id
+                ));
+            }
+            match outcome.output_schema.as_deref() {
+                Some(schema) if !output_validators.contains_key(schema) => {
                     return Err(format!(
                         "{}: outcome {} references unknown output schema {schema}",
                         dir.display(),
                         outcome.id
                     ));
                 }
-                if outcome.stdout.content_kind != "json" {
-                    return Err(format!(
-                        "{}: JSON output schema on non-JSON outcome {}",
-                        dir.display(),
-                        outcome.id
-                    ));
-                }
+                _ => {}
             }
         }
     }
@@ -899,7 +1063,33 @@ fn validate_contract(
             dir.display()
         ));
     }
+    let minimal = fixtures
+        .input
+        .positive
+        .iter()
+        .find(|fixture| fixture.id == "minimal")
+        .ok_or_else(|| format!("{}: missing minimal positive input", dir.display()))?;
+    let representative = fixtures
+        .input
+        .positive
+        .iter()
+        .find(|fixture| fixture.id == "representative")
+        .ok_or_else(|| format!("{}: missing representative positive input", dir.display()))?;
+    if strict_successor && minimal.value == representative.value {
+        return Err(format!(
+            "{}: minimal and representative positive inputs are identical",
+            dir.display()
+        ));
+    }
+    let mut positive_ids = BTreeSet::new();
     for fixture in &fixtures.input.positive {
+        if !positive_ids.insert(fixture.id.as_str()) {
+            return Err(format!(
+                "{}: duplicate positive input fixture {}",
+                dir.display(),
+                fixture.id
+            ));
+        }
         validate_fixture_provenance(&fixture.id, &fixture.origin, &fixture.sources, sources, dir)?;
         input_validator.validate(&fixture.value).map_err(|error| {
             format!(
@@ -910,29 +1100,42 @@ fn validate_contract(
             )
         })?;
     }
+    let mut negative_ids = BTreeSet::new();
     for fixture in &fixtures.input.negative {
-        validate_fixture_provenance(&fixture.id, &fixture.origin, &fixture.sources, sources, dir)?;
-        let errors: Vec<_> = input_validator.iter_errors(&fixture.value).collect();
-        if errors.is_empty() {
+        if !negative_ids.insert(fixture.id.as_str()) {
             return Err(format!(
-                "{}: negative input {} unexpectedly passed",
+                "{}: duplicate negative input fixture {}",
                 dir.display(),
                 fixture.id
             ));
         }
-        if !errors
-            .iter()
-            .any(|error| error.instance_path().as_str() == fixture.expected_pointer)
-        {
+        validate_fixture_provenance(&fixture.id, &fixture.origin, &fixture.sources, sources, dir)?;
+        if strict_successor && fixture.expected_keyword.is_none() {
             return Err(format!(
-                "{}: negative input {} did not fail at expected pointer {}",
+                "{}: negative input {} must name its expected validation keyword",
                 dir.display(),
-                fixture.id,
-                fixture.expected_pointer
+                fixture.id
             ));
         }
+        validate_expected_failure(
+            &input_validator,
+            &fixture.value,
+            &fixture.id,
+            &fixture.expected_pointer,
+            fixture.expected_keyword.as_deref(),
+            "negative input",
+            dir,
+        )?;
     }
+    let mut output_ids = BTreeSet::new();
     for fixture in &fixtures.output {
+        if !output_ids.insert(fixture.id.as_str()) {
+            return Err(format!(
+                "{}: duplicate output fixture {}",
+                dir.display(),
+                fixture.id
+            ));
+        }
         validate_fixture_provenance(&fixture.id, &fixture.origin, &fixture.sources, sources, dir)?;
         let validator = output_validators
             .get(fixture.schema.as_str())
@@ -952,9 +1155,41 @@ fn validate_contract(
             )
         })?;
     }
-    let mut process_cases = BTreeSet::new();
+    let mut negative_output_ids = BTreeSet::new();
+    for fixture in &fixtures.output_negative {
+        if !negative_output_ids.insert(fixture.id.as_str()) {
+            return Err(format!(
+                "{}: duplicate negative output fixture {}",
+                dir.display(),
+                fixture.id
+            ));
+        }
+        validate_fixture_provenance(&fixture.id, &fixture.origin, &fixture.sources, sources, dir)?;
+        let validator = output_validators
+            .get(fixture.schema.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "{}: negative output fixture {} references unknown schema",
+                    dir.display(),
+                    fixture.id
+                )
+            })?;
+        validate_expected_failure(
+            validator,
+            &fixture.value,
+            &fixture.id,
+            &fixture.expected_pointer,
+            Some(&fixture.expected_keyword),
+            "negative output",
+            dir,
+        )?;
+    }
+    let mut process_cases = BTreeMap::new();
     for fixture in &fixtures.process {
-        if !process_cases.insert(fixture.id.clone()) {
+        if process_cases
+            .insert(fixture.id.clone(), fixture.binding.clone())
+            .is_some()
+        {
             return Err(format!(
                 "{}: duplicate process fixture {}",
                 dir.display(),
@@ -964,6 +1199,49 @@ fn validate_contract(
         validate_process_fixture(fixture, contract, &output_validators, dir)?;
     }
     Ok(process_cases)
+}
+
+fn validate_expected_failure(
+    validator: &jsonschema::Validator,
+    value: &Value,
+    id: &str,
+    expected_pointer: &str,
+    expected_keyword: Option<&str>,
+    fixture_kind: &str,
+    dir: &Path,
+) -> Result<()> {
+    let errors: Vec<_> = validator.iter_errors(value).collect();
+    if errors.is_empty() {
+        return Err(format!(
+            "{}: {fixture_kind} {id} unexpectedly passed",
+            dir.display()
+        ));
+    }
+    if errors.iter().any(|error| {
+        error.instance_path().as_str() == expected_pointer
+            && expected_keyword.is_none_or(|keyword| error.kind().keyword() == keyword)
+    }) {
+        return Ok(());
+    }
+    let observed = errors
+        .iter()
+        .map(|error| {
+            format!(
+                "{}:{}",
+                error.instance_path().as_str(),
+                error.kind().keyword()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "{}: {fixture_kind} {id} did not fail at expected pointer {expected_pointer:?} with keyword {expected_keyword:?}; observed {observed}",
+        dir.display()
+    ))
+}
+
+fn output_schema_direction_valid(content_kind: &str, output_schema: Option<&str>) -> bool {
+    (content_kind == "json") == output_schema.is_some()
 }
 
 fn validate_schema_claim(claim: &SchemaClaim, sources: &BTreeSet<&str>, dir: &Path) -> Result<()> {
@@ -989,6 +1267,30 @@ fn validate_assurance(assurance: &Assurance, dir: &Path) -> Result<()> {
         return Err(format!("{}: invalid assurance verification", dir.display()));
     }
     Ok(())
+}
+
+fn valid_support_level(level: &str) -> bool {
+    matches!(
+        level,
+        "catalog-only"
+            | "native-source-reviewed"
+            | "command-runtime-beta"
+            | "command-runtime-stable"
+            | "other-runtime-beta"
+            | "other-runtime-stable"
+            | "unsupported"
+    )
+}
+
+fn valid_verification(verification: &str) -> bool {
+    matches!(
+        verification,
+        "unverified" | "fixture-validated" | "source-reviewed" | "live-observed"
+    )
+}
+
+fn release_claim_requires_observation(level: &str, verification: &str) -> bool {
+    level.ends_with("-stable") || verification == "live-observed"
 }
 
 fn validate_sources(claimed: &[String], sources: &BTreeSet<&str>, dir: &Path) -> Result<()> {
@@ -1208,22 +1510,8 @@ fn render_report(root: &Path, contracts: &[LoadedContract]) -> Result<String> {
     let mut rows = Vec::new();
     for loaded in contracts {
         for binding in loaded.contract.bindings.keys() {
-            let target = status
-                .targets
-                .iter()
-                .find(|target| target.contract == loaded.contract.id && target.binding == *binding)
-                .map(|target| (target.level.as_str(), target.verification.as_str()))
-                .or_else(|| {
-                    status
-                        .defaults
-                        .iter()
-                        .find(|default| {
-                            default.harness == loaded.contract.harness
-                                && default.binding == *binding
-                        })
-                        .map(|default| (default.level.as_str(), default.verification.as_str()))
-                })
-                .expect("checked target");
+            let target = effective_target(&status, &loaded.contract, binding)
+                .expect("checked target/default coverage");
             let implemented = implementation
                 .events
                 .iter()
@@ -1240,7 +1528,8 @@ fn render_report(root: &Path, contracts: &[LoadedContract]) -> Result<String> {
                 implemented.is_some_and(|event| event.native_output),
                 binding_implemented,
                 binding_implemented
-                    && implemented.is_some_and(|event| !event.conformance_cases.is_empty()),
+                    && implemented
+                        .is_some_and(|event| binding_has_conformance(event, loaded, binding)),
             ));
         }
         let _ = &loaded.dir;
@@ -1358,6 +1647,7 @@ fn verify_content_manifest(directory: &Path, manifest_name: &str) -> Result<()> 
 fn validate_implementation_gaps(
     gaps: &ImplementationGaps,
     contracts: &[LoadedContract],
+    registry: &ImplementationRegistry,
 ) -> Result<()> {
     let mut keys = BTreeSet::new();
     for gap in &gaps.gaps {
@@ -1409,8 +1699,62 @@ fn validate_implementation_gaps(
                 "implementation gap {contract_id} has invalid expiry"
             ));
         }
+        if implementation_assertion_satisfied(gap, contract, registry)? {
+            return Err(format!(
+                "implementation gap {contract_id}/{} assertion {} is stale because it now passes",
+                gap.binding, gap.assertion
+            ));
+        }
     }
     Ok(())
+}
+
+fn implementation_assertion_satisfied(
+    gap: &ImplementationGap,
+    contract: &LoadedContract,
+    registry: &ImplementationRegistry,
+) -> Result<bool> {
+    let event = registry
+        .events
+        .iter()
+        .find(|event| event.contract == contract.contract.id);
+    implementation_assertion_value(&gap.assertion, &gap.binding, event, &contract.process_cases)
+        .map_err(|error| format!("{}: {error}", contract.contract.id))
+}
+
+fn implementation_assertion_value(
+    assertion: &str,
+    binding: &str,
+    event: Option<&ImplementationEvent>,
+    process_cases: &BTreeMap<String, String>,
+) -> Result<bool> {
+    Ok(match assertion {
+        "native-input" => event.is_some_and(|event| event.native_input),
+        "native-output" => event.is_some_and(|event| event.native_output),
+        "binding-implemented" => {
+            event.is_some_and(|event| event.bindings.iter().any(|value| value == binding))
+        }
+        assertion if assertion.starts_with("conformance-case:") => {
+            let case = assertion
+                .strip_prefix("conformance-case:")
+                .expect("prefix checked");
+            let Some(case_binding) = process_cases.get(case) else {
+                return Err(format!("unknown conformance case {case}"));
+            };
+            if case_binding != binding {
+                return Err(format!(
+                    "conformance case {case} belongs to binding {case_binding}, not {binding}"
+                ));
+            }
+            event.is_some_and(|event| {
+                event.bindings.iter().any(|value| value == binding)
+                    && event.conformance_cases.iter().any(|value| value == case)
+            })
+        }
+        _ => {
+            return Err(format!("unknown implementation assertion {assertion}"));
+        }
+    })
 }
 
 fn validate_implementation_registry(
@@ -1437,13 +1781,20 @@ fn validate_implementation_registry(
         };
         if event.harness != contract.contract.harness
             || event.event != contract.contract.event.wire_name
-            || !event.native_input
-            || !event.native_output
-            || event.bindings.is_empty()
-            || event.conformance_cases.is_empty()
         {
             return Err(format!(
-                "implementation registry identity/coverage incomplete for {}",
+                "implementation registry identity mismatch for {}",
+                event.contract
+            ));
+        }
+        let output_without_input = event.native_output && !event.native_input;
+        let binding_without_native =
+            !(event.bindings.is_empty() || event.native_input && event.native_output);
+        let conformance_without_binding =
+            !event.conformance_cases.is_empty() && event.bindings.is_empty();
+        if output_without_input || binding_without_native || conformance_without_binding {
+            return Err(format!(
+                "implementation registry has inconsistent coverage for {}",
                 event.contract
             ));
         }
@@ -1469,15 +1820,98 @@ fn validate_implementation_registry(
             ));
         }
         for case in &event.conformance_cases {
-            if !contract.process_cases.contains(case) {
+            let Some(binding) = contract.process_cases.get(case) else {
                 return Err(format!(
                     "implementation registry references unknown process case {}/{}",
                     event.contract, case
+                ));
+            };
+            if !event.bindings.contains(binding) {
+                return Err(format!(
+                    "implementation registry conformance case {}/{} belongs to unimplemented binding {}",
+                    event.contract, case, binding
                 ));
             }
         }
     }
     Ok(())
+}
+
+fn effective_target<'a>(
+    status: &'a Stabilization,
+    contract: &Contract,
+    binding: &str,
+) -> Option<(&'a str, &'a str)> {
+    status
+        .targets
+        .iter()
+        .find(|target| target.contract == contract.id && target.binding == binding)
+        .map(|target| (target.level.as_str(), target.verification.as_str()))
+        .or_else(|| {
+            status
+                .defaults
+                .iter()
+                .find(|default| default.harness == contract.harness && default.binding == binding)
+                .map(|default| (default.level.as_str(), default.verification.as_str()))
+        })
+}
+
+fn binding_has_conformance(
+    event: &ImplementationEvent,
+    contract: &LoadedContract,
+    binding: &str,
+) -> bool {
+    event.conformance_cases.iter().any(|case| {
+        contract
+            .process_cases
+            .get(case)
+            .is_some_and(|case_binding| case_binding == binding)
+    })
+}
+
+fn validate_target_implementation(
+    status: &Stabilization,
+    registry: &ImplementationRegistry,
+    contracts: &[LoadedContract],
+) -> Result<()> {
+    for contract in contracts {
+        for binding in contract.contract.bindings.keys() {
+            let (level, _) = effective_target(status, &contract.contract, binding)
+                .expect("target/default coverage checked");
+            if matches!(level, "catalog-only" | "unsupported") {
+                continue;
+            }
+            let implemented = registry
+                .events
+                .iter()
+                .find(|event| event.contract == contract.contract.id);
+            let native = implemented.is_some_and(|event| event.native_input && event.native_output);
+            let runtime = implemented.is_some_and(|event| {
+                event.bindings.contains(binding)
+                    && binding_has_conformance(event, contract, binding)
+            });
+            let supported = support_level_backed(level, binding, native, runtime);
+            if !supported {
+                return Err(format!(
+                    "stabilization target claims {level} for {}/{} without matching native implementation and executed conformance",
+                    contract.contract.id, binding
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn support_level_backed(level: &str, binding: &str, native: bool, runtime: bool) -> bool {
+    match level {
+        "catalog-only" | "unsupported" => true,
+        "native-source-reviewed" => native,
+        "command-runtime-beta" | "command-runtime-stable" => {
+            binding == "command" && native && runtime
+        }
+        "other-runtime-beta" | "other-runtime-stable" => binding != "command" && native && runtime,
+        _ => false,
+    }
 }
 
 fn safe_join(root: &Path, relative: impl AsRef<Path>) -> Result<PathBuf> {
@@ -1512,13 +1946,14 @@ fn safe_join(root: &Path, relative: impl AsRef<Path>) -> Result<PathBuf> {
 fn validate_schema_references(schema: &Value, directory: &Path) -> Result<()> {
     match schema {
         Value::Object(object) => {
-            if let Some(Value::String(reference)) = object.get("$ref")
-                && !reference.starts_with('#')
-            {
-                return Err(format!(
-                    "{}: non-fragment $ref is not registered for offline resolution: {reference}",
-                    directory.display()
-                ));
+            match object.get("$ref") {
+                Some(Value::String(reference)) if !reference.starts_with('#') => {
+                    return Err(format!(
+                        "{}: non-fragment $ref is not registered for offline resolution: {reference}",
+                        directory.display()
+                    ));
+                }
+                _ => {}
             }
             for value in object.values() {
                 validate_schema_references(value, directory)?;
@@ -1828,5 +2263,155 @@ mod tests {
         assert!(safe_join(&root, "nested/file.json").is_ok());
         assert!(safe_join(&root, "../secret").is_err());
         assert!(safe_join(&root, "/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn negative_fixtures_match_pointer_and_keyword_together() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["kind"],
+            "properties": {"kind": {"const": "expected"}}
+        });
+        let validator = compile_schema(&schema, Path::new("test-schema")).unwrap();
+        validate_expected_failure(
+            &validator,
+            &serde_json::json!({"kind": "wrong"}),
+            "wrong-kind",
+            "/kind",
+            Some("const"),
+            "negative input",
+            Path::new("test-fixtures"),
+        )
+        .unwrap();
+        let error = validate_expected_failure(
+            &validator,
+            &serde_json::json!({"kind": "wrong"}),
+            "wrong-kind",
+            "/kind",
+            Some("type"),
+            "negative input",
+            Path::new("test-fixtures"),
+        )
+        .unwrap_err();
+        assert!(error.contains("observed /kind:const"));
+    }
+
+    #[test]
+    fn json_response_schema_direction_is_bidirectional() {
+        assert!(output_schema_direction_valid("json", Some("response")));
+        assert!(output_schema_direction_valid("text", None));
+        assert!(!output_schema_direction_valid("json", None));
+        assert!(!output_schema_direction_valid("text", Some("response")));
+    }
+
+    #[test]
+    fn runtime_targets_require_native_and_conformance_coverage() {
+        assert!(support_level_backed(
+            "catalog-only",
+            "command",
+            false,
+            false
+        ));
+        assert!(support_level_backed(
+            "native-source-reviewed",
+            "command",
+            true,
+            false
+        ));
+        assert!(!support_level_backed(
+            "command-runtime-beta",
+            "command",
+            true,
+            false
+        ));
+        assert!(support_level_backed(
+            "command-runtime-beta",
+            "command",
+            true,
+            true
+        ));
+        assert!(!support_level_backed(
+            "command-runtime-beta",
+            "http",
+            true,
+            true
+        ));
+    }
+
+    #[test]
+    fn stable_and_live_claims_require_an_observation_overlay() {
+        assert!(!release_claim_requires_observation(
+            "command-runtime-beta",
+            "source-reviewed"
+        ));
+        assert!(release_claim_requires_observation(
+            "command-runtime-stable",
+            "source-reviewed"
+        ));
+        assert!(release_claim_requires_observation(
+            "command-runtime-beta",
+            "live-observed"
+        ));
+    }
+
+    #[test]
+    fn only_the_original_frozen_snapshots_use_legacy_v1_semantics() {
+        assert!(uses_legacy_snapshot_semantics(
+            "claude-code",
+            "docs-2026-07-12-r1"
+        ));
+        assert!(!uses_legacy_snapshot_semantics(
+            "claude-code",
+            "docs-2026-07-12-r2"
+        ));
+        assert!(!uses_legacy_snapshot_semantics(
+            "claude-code",
+            "docs-2026-07-12-r3"
+        ));
+    }
+
+    #[test]
+    fn implementation_gap_assertions_track_real_registry_coverage() {
+        let event = ImplementationEvent {
+            contract: "h/s/Event".into(),
+            harness: "h".into(),
+            event: "Event".into(),
+            native_input: true,
+            native_output: true,
+            bindings: vec!["command".into()],
+            conformance_cases: vec!["structured".into()],
+        };
+        let process_cases = BTreeMap::from([("structured".into(), "command".into())]);
+        assert!(
+            implementation_assertion_value("native-input", "command", Some(&event), &process_cases)
+                .unwrap()
+        );
+        assert!(
+            implementation_assertion_value(
+                "conformance-case:structured",
+                "command",
+                Some(&event),
+                &process_cases
+            )
+            .unwrap()
+        );
+        assert!(
+            !implementation_assertion_value(
+                "conformance-case:structured",
+                "command",
+                None,
+                &process_cases
+            )
+            .unwrap()
+        );
+        assert!(
+            implementation_assertion_value(
+                "conformance-case:missing",
+                "command",
+                Some(&event),
+                &process_cases
+            )
+            .is_err()
+        );
     }
 }

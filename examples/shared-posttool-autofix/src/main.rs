@@ -1,7 +1,5 @@
-use hookkit_common::input::{CommonHookInput, CommonPostToolUseInput};
-use hookkit_common::output::{CommonHookOutput, CommonPostToolUseOutput};
-use hookkit_core::Harness;
-use hookkit_runtime::RuntimeContext;
+use hookkit_common::{PostToolUseInput, PostToolUseOutput};
+use hookkit_core::{HarnessId, RuntimeContext};
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
 use std::path::Path;
 use std::process::Command;
@@ -30,77 +28,140 @@ struct CommandLog {
 
 fn main() -> std::process::ExitCode {
     let harness = match std::env::args().nth(1).as_deref() {
-        Some("--claude") => Harness::Claude,
-        Some("--codex") => Harness::Codex,
-        Some("--gemini") => Harness::Gemini,
+        Some("--claude") => HarnessId::CLAUDE_CODE,
+        Some("--codex") => HarnessId::CODEX,
+        Some("--gemini") => HarnessId::GEMINI_CLI,
         _ => {
             eprintln!("Usage: shared-posttool-autofix --claude|--codex|--gemini");
             return std::process::ExitCode::from(1);
         }
     };
 
-    hookkit_runtime::run_common(harness, handle)
-}
-
-fn handle(input: CommonHookInput, ctx: &RuntimeContext) -> hookkit_core::Result<CommonHookOutput> {
-    match input {
-        CommonHookInput::PostToolUse(post_tool) => handle_post_tool(post_tool, ctx),
-        _ => Ok(CommonHookOutput::empty()),
-    }
+    hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PostToolUse, _>(
+        harness,
+        handle_post_tool,
+    )
 }
 
 fn handle_post_tool(
-    post_tool: CommonPostToolUseInput,
-    ctx: &RuntimeContext,
-) -> hookkit_core::Result<CommonHookOutput> {
-    let tool_name = post_tool.tool_name().unwrap_or("");
-    let is_file_tool = matches!(tool_name, "Write" | "Edit" | "shell" | "Bash");
+    post_tool: PostToolUseInput,
+    ctx: &RuntimeContext<'_>,
+) -> hookkit_core::Result<PostToolUseOutput> {
+    let tool_name = match &post_tool {
+        PostToolUseInput::Claude(input) => input.tool_name.as_str(),
+        PostToolUseInput::Codex(input) => input.tool_name.as_str(),
+        PostToolUseInput::Gemini(input) => input.tool_name.as_str(),
+        PostToolUseInput::Antigravity(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Antigravity PostToolUse has no tool payload",
+            )
+            .into());
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "unknown aligned PostToolUse arm",
+            )
+            .into());
+        }
+    };
+    let is_file_tool = matches!(
+        tool_name,
+        "Write" | "Edit" | "Bash" | "run_shell_command" | "write_file" | "replace"
+    );
 
     if !is_file_tool {
-        return Ok(CommonHookOutput::empty());
+        return native_output(ctx.harness(), None, None);
     }
 
-    let outcome = run_autofix_pipeline(post_tool.raw_tool_input(), ctx.cwd.as_str());
+    let cwd = ctx
+        .workspace_roots()
+        .first()
+        .ok_or_else(|| std::io::Error::other("missing workspace root"))?;
+    let outcome = run_autofix_pipeline(test_outcome_override(&post_tool), cwd.as_str());
 
     match outcome {
-        AutofixOutcome::Clean => Ok(CommonHookOutput::empty()),
-        AutofixOutcome::AutoFixed { summary } => {
-            // User-facing concise status should go to stderr, not model context.
-            eprintln!("[shared-posttool-autofix] {summary}");
-            Ok(CommonHookOutput::empty())
-        }
+        AutofixOutcome::Clean => native_output(ctx.harness(), None, None),
+        AutofixOutcome::AutoFixed { summary } => native_output(
+            ctx.harness(),
+            None,
+            Some(format!("[shared-posttool-autofix] {summary}")),
+        ),
         AutofixOutcome::ManualActionRequired {
             summary,
             diagnostics,
         } => {
             let manager = ArtifactManager::in_temp_dir()?;
-            let key = ArtifactKey::new(post_tool.session_id(), "autofix-diagnostics");
+            let session = ctx
+                .session_id()
+                .map(ToString::to_string)
+                .or_else(|| ctx.conversation_id().map(ToString::to_string))
+                .unwrap_or_else(|| "unknown-session".into());
+            let key = ArtifactKey::new(session, "autofix-diagnostics");
             let path = manager.write_text(&key, &diagnostics)?;
-
-            // User-facing concise status plus artifact location.
-            eprintln!(
-                "[shared-posttool-autofix] {summary}. Diagnostics: {}",
-                path.display()
-            );
-
-            // Codex has limited post-tool output support; keep model output quiet there.
-            if matches!(ctx.harness, Harness::Codex) {
-                return Ok(CommonHookOutput::empty());
-            }
-
             let guidance = format!(
                 "Manual fixes remain. Review diagnostics at {} and continue with targeted changes.",
                 path.display()
             );
-            Ok(CommonHookOutput::PostToolUse(
-                CommonPostToolUseOutput::new().with_agent_feedback(guidance),
-            ))
+            native_output(
+                ctx.harness(),
+                Some(guidance),
+                Some(format!(
+                    "[shared-posttool-autofix] {summary}. Diagnostics: {}",
+                    path.display()
+                )),
+            )
         }
     }
 }
 
-fn run_autofix_pipeline(tool_input: Option<&serde_json::Value>, cwd: &str) -> AutofixOutcome {
-    if let Some(mode) = test_outcome_override(tool_input) {
+fn native_output(
+    harness: &HarnessId,
+    context: Option<String>,
+    stderr: Option<String>,
+) -> hookkit_core::Result<PostToolUseOutput> {
+    match harness.as_str() {
+        "claude-code" => {
+            let output = context.map_or_else(
+                hookkit_claude::protocol::PostToolUseOutput::no_op,
+                hookkit_claude::protocol::PostToolUseOutput::with_context,
+            );
+            Ok(PostToolUseOutput::Claude(match stderr {
+                Some(stderr) => output.with_protocol_stderr(stderr)?,
+                None => output,
+            }))
+        }
+        "codex" => {
+            let output = context.map_or_else(
+                hookkit_codex::protocol::PostToolUseOutput::no_op,
+                hookkit_codex::protocol::PostToolUseOutput::with_context,
+            );
+            Ok(PostToolUseOutput::Codex(match stderr {
+                Some(stderr) => output.with_protocol_stderr(stderr)?,
+                None => output,
+            }))
+        }
+        "gemini-cli" => {
+            let output = context.map_or_else(
+                hookkit_gemini::protocol::AfterToolOutput::no_op,
+                hookkit_gemini::protocol::AfterToolOutput::with_context,
+            );
+            Ok(PostToolUseOutput::Gemini(match stderr {
+                Some(stderr) => output.with_protocol_stderr(stderr)?,
+                None => output,
+            }))
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!("unsupported harness {harness}"),
+        )
+        .into()),
+    }
+}
+
+fn run_autofix_pipeline(test_mode: Option<&str>, cwd: &str) -> AutofixOutcome {
+    if let Some(mode) = test_mode {
         return match mode {
             "clean" => AutofixOutcome::Clean,
             "autofixed" => AutofixOutcome::AutoFixed {
@@ -225,8 +286,19 @@ fn format_diagnostics(logs: &[CommandLog]) -> String {
     out
 }
 
-fn test_outcome_override(tool_input: Option<&serde_json::Value>) -> Option<&str> {
-    tool_input
-        .and_then(|v| v.get("__hookkit_test_outcome"))
-        .and_then(|v| v.as_str())
+#[cfg(feature = "test-support")]
+fn test_outcome_override(input: &PostToolUseInput) -> Option<&str> {
+    match input {
+        PostToolUseInput::Claude(input) => input.tool_input.get("__hookkit_test_outcome"),
+        PostToolUseInput::Codex(input) => input.tool_input.get("__hookkit_test_outcome"),
+        PostToolUseInput::Gemini(input) => input.tool_input.get("__hookkit_test_outcome"),
+        PostToolUseInput::Antigravity(_) => None,
+        _ => None,
+    }
+    .and_then(serde_json::Value::as_str)
+}
+
+#[cfg(not(feature = "test-support"))]
+fn test_outcome_override(_input: &PostToolUseInput) -> Option<&str> {
+    None
 }
