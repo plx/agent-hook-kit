@@ -2,6 +2,7 @@
 
 pub mod input;
 pub mod output;
+pub mod protocol;
 
 pub use input::GeminiHookInput;
 pub use output::GeminiHookOutput;

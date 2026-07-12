@@ -424,6 +424,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hookkit-antigravity"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "hookkit-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hookkit-claude"
 version = "0.1.0"
 dependencies = [
@@ -453,6 +463,22 @@ dependencies = [
  "hookkit-gemini",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "hookkit-conformance"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hookkit-antigravity",
+ "hookkit-claude",
+ "hookkit-codex",
+ "hookkit-core",
+ "hookkit-gemini",
+ "hookkit-runtime",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
 ]
 
 [[package]]
@@ -492,6 +518,7 @@ name = "hookkit-runtime"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "hookkit-antigravity",
  "hookkit-claude",
  "hookkit-codex",
  "hookkit-common",

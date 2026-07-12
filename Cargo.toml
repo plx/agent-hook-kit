@@ -7,6 +7,8 @@ members = [
     "crates/hookkit-claude",
     "crates/hookkit-codex",
     "crates/hookkit-gemini",
+    "crates/hookkit-antigravity",
+    "crates/hookkit-conformance",
     "crates/hookkit-common",
     "crates/hookkit-pkl-config",
     "crates/hookkit-tool-runner",
@@ -44,6 +46,7 @@ hookkit-runtime = { path = "crates/hookkit-runtime" }
 hookkit-claude = { path = "crates/hookkit-claude" }
 hookkit-codex = { path = "crates/hookkit-codex" }
 hookkit-gemini = { path = "crates/hookkit-gemini" }
+hookkit-antigravity = { path = "crates/hookkit-antigravity" }
 hookkit-common = { path = "crates/hookkit-common" }
 hookkit-pkl-config = { path = "crates/hookkit-pkl-config" }
 hookkit-tool-runner = { path = "crates/hookkit-tool-runner" }

@@ -2,6 +2,8 @@
 
 pub mod artifacts;
 pub mod logging;
+pub mod resolution;
+pub mod typed;
 mod validate;
 
 #[cfg(test)]
