@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:meta:v1:implementation-gaps",
+  "type": "object",
+  "required": ["format_version", "gaps"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["harness", "snapshot", "event", "binding", "assertion", "rationale", "owner", "removal_phase"],
+        "properties": {
+          "harness": { "type": "string", "minLength": 1 },
+          "snapshot": { "type": "string", "minLength": 1 },
+          "event": { "type": "string", "minLength": 1 },
+          "binding": { "type": "string", "minLength": 1 },
+          "assertion": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string", "minLength": 1 },
+          "owner": { "type": "string", "minLength": 1 },
+          "removal_phase": { "type": "integer", "minimum": 2, "maximum": 6 },
+          "expiry": { "type": "string", "format": "date" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,7 +1,7 @@
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,6 +48,8 @@ enum ContractsCommand {
     Diff { old: String, new: String },
     /// Verify vendored files against their checked-in SHA-256 manifests.
     VerifyVendor,
+    /// Freeze a reviewed snapshot with a deterministic SHA-256 manifest.
+    Freeze { harness: String, snapshot: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +67,16 @@ struct RegistryHarness {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct Harness {
+    format_version: u32,
+    id: String,
+    display_name: String,
+    #[serde(default)]
+    wire_heritage: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct Snapshot {
     format_version: u32,
     id: String,
@@ -72,10 +84,12 @@ struct Snapshot {
     state: String,
     retrieved: String,
     sources_file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manifest_file: Option<String>,
     events: Vec<SnapshotEvent>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotEvent {
     wire_name: String,
@@ -338,6 +352,28 @@ struct TargetDefault {
     verification: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImplementationGaps {
+    format_version: u32,
+    gaps: Vec<ImplementationGap>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImplementationGap {
+    harness: String,
+    snapshot: String,
+    event: String,
+    binding: String,
+    assertion: String,
+    rationale: String,
+    owner: String,
+    removal_phase: u8,
+    #[serde(default)]
+    expiry: Option<String>,
+}
+
 struct LoadedContract {
     contract: Contract,
     dir: PathBuf,
@@ -375,6 +411,9 @@ fn run() -> Result<()> {
             println!("verified {count} vendored files");
             Ok(())
         }
+        Command::Contracts {
+            command: ContractsCommand::Freeze { harness, snapshot },
+        } => freeze_snapshot(&root, &harness, &snapshot),
         Command::Contracts {
             command: ContractsCommand::Report { write, check },
         } => {
@@ -421,10 +460,31 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
     let stabilization: Stabilization = read_yaml(&stabilization_path)?;
     require_version(stabilization.format_version, "stabilization target")?;
     verify_vendor(root)?;
+    let gaps_path = catalog.join("status/implementation-gaps.yaml");
+    validate_yaml_metadata(&gaps_path, &meta.join("implementation-gaps.schema.json"))?;
+    let gaps: ImplementationGaps = read_yaml(&gaps_path)?;
+    require_version(gaps.format_version, "implementation gaps")?;
 
     let mut contracts = Vec::new();
     let mut contract_ids = BTreeSet::new();
     for (harness, selected) in &registry.harnesses {
+        let harness_path = catalog.join("harnesses").join(harness).join("harness.yaml");
+        validate_yaml_metadata(&harness_path, &meta.join("harness.schema.json"))?;
+        let harness_metadata: Harness = read_yaml(&harness_path)?;
+        require_version(harness_metadata.format_version, "harness")?;
+        if harness_metadata.id != *harness || harness_metadata.display_name.is_empty() {
+            return Err(format!(
+                "{}: harness identity mismatch",
+                harness_path.display()
+            ));
+        }
+        if harness_metadata
+            .wire_heritage
+            .as_deref()
+            .is_some_and(|heritage| !registry.harnesses.contains_key(heritage))
+        {
+            return Err(format!("{}: unknown wire heritage", harness_path.display()));
+        }
         let snapshot_dir = catalog
             .join("harnesses")
             .join(harness)
@@ -446,6 +506,20 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
                 snapshot_dir.display()
             ));
         }
+        if snapshot.state == "frozen" {
+            let manifest = snapshot.manifest_file.as_deref().ok_or_else(|| {
+                format!(
+                    "{}: frozen snapshot needs manifest_file",
+                    snapshot_dir.display()
+                )
+            })?;
+            verify_content_manifest(&snapshot_dir, manifest)?;
+        } else if snapshot.manifest_file.is_some() {
+            return Err(format!(
+                "{}: draft snapshot must not have manifest_file",
+                snapshot_dir.display()
+            ));
+        }
         if snapshot.retrieved.is_empty() {
             return Err(format!(
                 "{}: retrieval date is required",
@@ -453,7 +527,9 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
             ));
         }
 
-        let sources: Sources = read_yaml(&snapshot_dir.join(&snapshot.sources_file))?;
+        let sources_path = safe_join(&snapshot_dir, &snapshot.sources_file)?;
+        validate_yaml_metadata(&sources_path, &meta.join("sources.schema.json"))?;
+        let sources: Sources = read_yaml(&sources_path)?;
         require_version(sources.format_version, "sources")?;
         let source_ids: BTreeSet<_> = sources
             .sources
@@ -507,7 +583,7 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
                     snapshot_dir.display()
                 ));
             }
-            let dir = snapshot_dir.join(&indexed.path);
+            let dir = safe_join(&snapshot_dir, &indexed.path)?;
             let contract_path = dir.join("contract.yaml");
             validate_yaml_metadata(&contract_path, &meta.join("event-contract.schema.json"))?;
             let contract: Contract = read_yaml(&contract_path)?;
@@ -607,6 +683,7 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
             ));
         }
     }
+    validate_implementation_gaps(&gaps, &contracts)?;
     let _ = &stabilization.release;
     Ok(contracts)
 }
@@ -639,7 +716,8 @@ fn validate_contract_identity(
 }
 
 fn validate_contract(contract: &Contract, dir: &Path, sources: &BTreeSet<&str>) -> Result<()> {
-    let input_schema = read_json(&dir.join(&contract.schemas.input.file))?;
+    let input_schema = read_json(&safe_join(dir, &contract.schemas.input.file)?)?;
+    validate_schema_references(&input_schema, dir)?;
     validate_schema_claim(&contract.schemas.input, sources, dir)?;
     let input_validator = compile_schema(&input_schema, dir)?;
 
@@ -661,7 +739,8 @@ fn validate_contract(contract: &Contract, dir: &Path, sources: &BTreeSet<&str>) 
                 claim.origin
             ));
         }
-        let schema = read_json(&dir.join(&claim.file))?;
+        let schema = read_json(&safe_join(dir, &claim.file)?)?;
+        validate_schema_references(&schema, dir)?;
         output_validators.insert(claim.id.as_str(), compile_schema(&schema, dir)?);
     }
 
@@ -768,7 +847,7 @@ fn validate_contract(contract: &Contract, dir: &Path, sources: &BTreeSet<&str>) 
         }
     }
 
-    let fixtures_path = dir.join(&contract.fixtures);
+    let fixtures_path = safe_join(dir, &contract.fixtures)?;
     let meta_path = dir
         .ancestors()
         .find(|path| path.file_name().is_some_and(|name| name == "contracts"))
@@ -1111,13 +1190,206 @@ fn render_report(root: &Path, contracts: &[LoadedContract]) -> Result<String> {
         "# Generated support report\n\nRelease target: `{}`. Generated by `cargo xtask contracts report`.\n\n",
         status.release
     );
-    output.push_str("| Harness | Event | Binding | Inventory | Implementation target | Verification |\n| --- | --- | --- | --- | --- | --- |\n");
+    output.push_str("| Harness | Event | Binding | Inventoried | Input schema | Output/process | Native input | Native output | Command runtime | Other runtime | Hermetic conformance | Live verified | Release target | Verification |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for (harness, event, binding, level, verification) in rows {
+        let (command, other) = if binding == "command" {
+            ("legacy/unknown", "n/a")
+        } else {
+            ("n/a", "legacy/unknown")
+        };
         output.push_str(&format!(
-            "| {harness} | `{event}` | `{binding}` | complete | `{level}` | `{verification}` |\n"
+            "| {harness} | `{event}` | `{binding}` | yes | yes | yes | legacy/unknown | legacy/unknown | {command} | {other} | not yet measured | no | `{level}` | `{verification}` |\n"
         ));
     }
     Ok(output)
+}
+
+fn freeze_snapshot(root: &Path, harness: &str, snapshot_id: &str) -> Result<()> {
+    let directory = root
+        .join("contracts/harnesses")
+        .join(harness)
+        .join("snapshots")
+        .join(snapshot_id);
+    let snapshot_path = directory.join("snapshot.yaml");
+    let mut snapshot: Snapshot = read_yaml(&snapshot_path)?;
+    if snapshot.harness != harness || snapshot.id != snapshot_id {
+        return Err(format!(
+            "{}: snapshot identity mismatch",
+            directory.display()
+        ));
+    }
+    if snapshot.state != "draft" {
+        return Err(format!(
+            "{}: only draft snapshots can be frozen",
+            directory.display()
+        ));
+    }
+    let manifest_name = "MANIFEST.sha256";
+    let manifest = content_manifest(&directory, manifest_name)?;
+    fs::write(directory.join(manifest_name), manifest)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    snapshot.state = "frozen".to_string();
+    snapshot.manifest_file = Some(manifest_name.to_string());
+    let yaml = serde_yaml_ng::to_string(&snapshot)
+        .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
+    fs::write(&snapshot_path, yaml)
+        .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
+    verify_content_manifest(&directory, manifest_name)?;
+    println!("froze {harness}/{snapshot_id}");
+    Ok(())
+}
+
+fn content_manifest(directory: &Path, manifest_name: &str) -> Result<String> {
+    let mut paths: Vec<_> = walkdir::WalkDir::new(directory)
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| format!("{}: {error}", directory.display()))?
+        .into_iter()
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .filter(|path| {
+            path.file_name()
+                .is_none_or(|name| name != "snapshot.yaml" && name != manifest_name)
+        })
+        .collect();
+    paths.sort();
+    let mut output = String::new();
+    for path in paths {
+        let relative = path
+            .strip_prefix(directory)
+            .expect("walked path below snapshot")
+            .to_string_lossy();
+        let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        writeln!(&mut output, "{}  {relative}", hex_sha256(&bytes))
+            .expect("writing to String cannot fail");
+    }
+    Ok(output)
+}
+
+fn verify_content_manifest(directory: &Path, manifest_name: &str) -> Result<()> {
+    let manifest_path = safe_join(directory, manifest_name)?;
+    let actual = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("{}: {error}", manifest_path.display()))?;
+    let expected = content_manifest(directory, manifest_name)?;
+    if actual != expected {
+        return Err(format!(
+            "{}: frozen snapshot content differs from deterministic manifest",
+            directory.display()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_implementation_gaps(
+    gaps: &ImplementationGaps,
+    contracts: &[LoadedContract],
+) -> Result<()> {
+    let mut keys = BTreeSet::new();
+    for gap in &gaps.gaps {
+        let key = (
+            gap.harness.as_str(),
+            gap.snapshot.as_str(),
+            gap.event.as_str(),
+            gap.binding.as_str(),
+            gap.assertion.as_str(),
+        );
+        if !keys.insert(key) {
+            return Err(format!(
+                "duplicate implementation gap for {}/{}/{}/{} assertion {}",
+                gap.harness, gap.snapshot, gap.event, gap.binding, gap.assertion
+            ));
+        }
+        let contract_id = format!("{}/{}/{}", gap.harness, gap.snapshot, gap.event);
+        let Some(contract) = contracts
+            .iter()
+            .find(|loaded| loaded.contract.id == contract_id)
+        else {
+            return Err(format!(
+                "implementation gap references unknown {contract_id}"
+            ));
+        };
+        if !contract.contract.bindings.contains_key(&gap.binding) {
+            return Err(format!(
+                "implementation gap references unknown binding {contract_id}/{}",
+                gap.binding
+            ));
+        }
+        if gap.assertion.is_empty()
+            || gap.rationale.is_empty()
+            || gap.owner.is_empty()
+            || !(2..=6).contains(&gap.removal_phase)
+        {
+            return Err(format!("implementation gap {contract_id} is incomplete"));
+        }
+        if gap.expiry.as_deref().is_some_and(|date| {
+            date.len() != 10
+                || date.as_bytes()[4] != b'-'
+                || date.as_bytes()[7] != b'-'
+                || !date
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+        }) {
+            return Err(format!(
+                "implementation gap {contract_id} has invalid expiry"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn safe_join(root: &Path, relative: impl AsRef<Path>) -> Result<PathBuf> {
+    let relative = relative.as_ref();
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err(format!("unsafe catalog path {}", relative.display()));
+    }
+    let joined = root.join(relative);
+    if joined.exists() {
+        let canonical_root = root
+            .canonicalize()
+            .map_err(|error| format!("{}: {error}", root.display()))?;
+        let canonical = joined
+            .canonicalize()
+            .map_err(|error| format!("{}: {error}", joined.display()))?;
+        if !canonical.starts_with(&canonical_root) {
+            return Err(format!("catalog path escapes root: {}", joined.display()));
+        }
+    }
+    Ok(joined)
+}
+
+fn validate_schema_references(schema: &Value, directory: &Path) -> Result<()> {
+    match schema {
+        Value::Object(object) => {
+            if let Some(Value::String(reference)) = object.get("$ref")
+                && !reference.starts_with('#')
+            {
+                return Err(format!(
+                    "{}: non-fragment $ref is not registered for offline resolution: {reference}",
+                    directory.display()
+                ));
+            }
+            for value in object.values() {
+                validate_schema_references(value, directory)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_schema_references(value, directory)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn verify_vendor(root: &Path) -> Result<usize> {
@@ -1154,7 +1426,7 @@ fn verify_vendor(root: &Path) -> Result<usize> {
                     line_number + 1
                 ));
             }
-            let path = directory.join(relative);
+            let path = safe_join(directory, relative)?;
             let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
             if hex_sha256(&bytes) != expected {
                 return Err(format!("{}: vendored checksum mismatch", path.display()));
@@ -1391,5 +1663,13 @@ mod tests {
             set: vec![0],
             range: None,
         }));
+    }
+
+    #[test]
+    fn catalog_paths_cannot_escape_their_root() {
+        let root = std::env::temp_dir();
+        assert!(safe_join(&root, "nested/file.json").is_ok());
+        assert!(safe_join(&root, "../secret").is_err());
+        assert!(safe_join(&root, "/etc/passwd").is_err());
     }
 }
