@@ -842,3 +842,23 @@ fn output_elicitation_result_event_scoped() {
     );
     assert_eq!(json["hookSpecificOutput"]["action"], "decline");
 }
+#[test]
+fn parse_setup_and_message_display() {
+    let setup = serde_json::json!({
+        "session_id":"s", "transcript_path":"/tmp/t", "cwd":"/repo",
+        "hook_event_name":"Setup", "trigger":"init"
+    });
+    assert!(matches!(
+        input::parse(&setup).unwrap(),
+        ClaudeHookInput::Setup(_)
+    ));
+    let display = serde_json::json!({
+        "session_id":"s", "transcript_path":"/tmp/t", "cwd":"/repo",
+        "hook_event_name":"MessageDisplay", "turn_id":"t", "message_id":"m",
+        "index":0, "final":true, "delta":"done"
+    });
+    assert!(matches!(
+        input::parse(&display).unwrap(),
+        ClaudeHookInput::MessageDisplay(_)
+    ));
+}

@@ -5,25 +5,62 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const SNAPSHOT_ID: &str = "docs-2026-07-12-r1";
+macro_rules! descriptor {
+    ($event:literal, $cases:expr) => {
+        hookkit_core::NativeEventDescriptor {
+            contract_id: concat!("claude-code/docs-2026-07-12-r1/", $event),
+            harness: "claude-code",
+            event: $event,
+            native_input: true,
+            native_output: true,
+            bindings: &[hookkit_core::HandlerKind::Command],
+            conformance_cases: $cases,
+        }
+    };
+}
 pub static EVENTS: &[hookkit_core::NativeEventDescriptor] = &[
-    hookkit_core::NativeEventDescriptor {
-        contract_id: "claude-code/docs-2026-07-12-r1/SessionStart",
-        harness: "claude-code",
-        event: "SessionStart",
-        native_input: true,
-        native_output: true,
-        bindings: &[hookkit_core::HandlerKind::Command],
-        conformance_cases: &["command-structured", "command-text"],
-    },
-    hookkit_core::NativeEventDescriptor {
-        contract_id: "claude-code/docs-2026-07-12-r1/WorktreeCreate",
-        harness: "claude-code",
-        event: "WorktreeCreate",
-        native_input: true,
-        native_output: true,
-        bindings: &[hookkit_core::HandlerKind::Command],
-        conformance_cases: &["command-created", "command-failed"],
-    },
+    descriptor!("SessionStart", &["command-structured", "command-text"]),
+    descriptor!("Setup", &["command-structured"]),
+    descriptor!("InstructionsLoaded", &["command-structured"]),
+    descriptor!(
+        "UserPromptSubmit",
+        &["command-structured", "command-text", "command-exit-2"]
+    ),
+    descriptor!(
+        "UserPromptExpansion",
+        &["command-structured", "command-text", "command-exit-2"]
+    ),
+    descriptor!("MessageDisplay", &["command-structured"]),
+    descriptor!("PreToolUse", &["command-structured", "command-exit-2"]),
+    descriptor!(
+        "PermissionRequest",
+        &["command-structured", "command-exit-2"]
+    ),
+    descriptor!("PostToolUse", &["command-structured"]),
+    descriptor!("PostToolUseFailure", &["command-structured"]),
+    descriptor!("PostToolBatch", &["command-structured", "command-exit-2"]),
+    descriptor!("PermissionDenied", &["command-structured"]),
+    descriptor!("Notification", &["command-structured"]),
+    descriptor!("SubagentStart", &["command-structured"]),
+    descriptor!("SubagentStop", &["command-structured", "command-exit-2"]),
+    descriptor!("TaskCreated", &["command-structured", "command-exit-2"]),
+    descriptor!("TaskCompleted", &["command-structured", "command-exit-2"]),
+    descriptor!("Stop", &["command-structured", "command-exit-2"]),
+    descriptor!("StopFailure", &["command-structured"]),
+    descriptor!("TeammateIdle", &["command-structured", "command-exit-2"]),
+    descriptor!("ConfigChange", &["command-structured", "command-exit-2"]),
+    descriptor!("CwdChanged", &["command-structured"]),
+    descriptor!("FileChanged", &["command-structured"]),
+    descriptor!("WorktreeCreate", &["command-created", "command-failed"]),
+    descriptor!("WorktreeRemove", &["command-structured"]),
+    descriptor!("PreCompact", &["command-structured", "command-exit-2"]),
+    descriptor!("PostCompact", &["command-structured"]),
+    descriptor!("SessionEnd", &["command-structured"]),
+    descriptor!("Elicitation", &["command-structured", "command-exit-2"]),
+    descriptor!(
+        "ElicitationResult",
+        &["command-structured", "command-exit-2"]
+    ),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

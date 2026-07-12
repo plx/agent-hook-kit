@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub enum ClaudeHookInput {
     SessionStart(SessionStart),
+    Setup(Setup),
+    MessageDisplay(MessageDisplay),
     UserPromptSubmit(UserPromptSubmit),
     UserPromptExpansion(UserPromptExpansion),
     PreToolUse(PreToolUse),
@@ -126,6 +128,25 @@ pub struct SessionStart {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "agentType")]
     pub agent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Setup {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    pub trigger: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageDisplay {
+    #[serde(flatten)]
+    pub common: CommonFields,
+    pub turn_id: String,
+    pub message_id: String,
+    pub index: u64,
+    #[serde(rename = "final")]
+    pub final_message: bool,
+    pub delta: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -658,6 +679,12 @@ pub fn parse(value: &serde_json::Value) -> hookkit_core::Result<ClaudeHookInput>
 
     match event_name {
         "SessionStart" => Ok(ClaudeHookInput::SessionStart(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "Setup" => Ok(ClaudeHookInput::Setup(
+            serde_json::from_value(value.clone()).map_err(mk_err)?,
+        )),
+        "MessageDisplay" => Ok(ClaudeHookInput::MessageDisplay(
             serde_json::from_value(value.clone()).map_err(mk_err)?,
         )),
         "UserPromptSubmit" => Ok(ClaudeHookInput::UserPromptSubmit(

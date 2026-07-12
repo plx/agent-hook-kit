@@ -3,16 +3,34 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const SNAPSHOT_ID: &str = "commit-9e552e9-r1";
-pub static EVENTS: &[hookkit_core::NativeEventDescriptor] =
-    &[hookkit_core::NativeEventDescriptor {
-        contract_id: "codex/commit-9e552e9-r1/PreToolUse",
-        harness: "codex",
-        event: "PreToolUse",
-        native_input: true,
-        native_output: true,
-        bindings: &[hookkit_core::HandlerKind::Command],
-        conformance_cases: &["no-op", "deny-json", "deny-stderr"],
-    }];
+macro_rules! descriptor {
+    ($event:literal, $cases:expr) => {
+        hookkit_core::NativeEventDescriptor {
+            contract_id: concat!("codex/commit-9e552e9-r1/", $event),
+            harness: "codex",
+            event: $event,
+            native_input: true,
+            native_output: true,
+            bindings: &[hookkit_core::HandlerKind::Command],
+            conformance_cases: $cases,
+        }
+    };
+}
+pub static EVENTS: &[hookkit_core::NativeEventDescriptor] = &[
+    descriptor!("SessionStart", &["structured", "text-context"]),
+    descriptor!("SubagentStart", &["structured", "text-context"]),
+    descriptor!("PreToolUse", &["no-op", "deny-json", "deny-stderr"]),
+    descriptor!("PermissionRequest", &["structured", "exit-2"]),
+    descriptor!("PostToolUse", &["structured", "exit-2"]),
+    descriptor!("PreCompact", &["structured", "exit-2"]),
+    descriptor!("PostCompact", &["structured"]),
+    descriptor!(
+        "UserPromptSubmit",
+        &["structured", "text-context", "exit-2"]
+    ),
+    descriptor!("SubagentStop", &["structured", "exit-2"]),
+    descriptor!("Stop", &["structured", "exit-2"]),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreToolUseInput {
