@@ -1,6 +1,14 @@
 format_version: 1
 release: stabilization-v1
 targets:
+  - contract: antigravity/docs-2026-07-12-r1/PreToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r1/PostToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
   - contract: claude-code/docs-2026-07-12-r1/WorktreeCreate
     binding: command
     level: command-runtime-beta
@@ -98,6 +106,10 @@ targets:
     level: command-runtime-beta
     verification: source-reviewed
   - contract: antigravity/docs-2026-07-12-r1/PostInvocation
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r1/Stop
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
