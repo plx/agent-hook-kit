@@ -1523,6 +1523,9 @@ fn invalid_data(message: String) -> HookkitError {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     #[test]
     fn resolve_worker_count_honors_jobs_setting() {
         // auto (0) is reserved for future use and runs serially for now.
@@ -1583,5 +1586,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hermetic_fake_executable_smoke() {
+        let root =
+            std::env::temp_dir().join(format!("hookkit-hermetic-smoke-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create smoke directory");
+
+        let fake = root.join("fake-checker");
+        std::fs::write(&fake, "#!/bin/sh\nprintf 'fake checker clean\\n'\n")
+            .expect("write fake executable");
+        let mut permissions = std::fs::metadata(&fake)
+            .expect("read fake executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake, permissions).expect("make fake executable runnable");
+
+        let target = root.join("input.rs");
+        std::fs::write(&target, "fn main() {}\n").expect("write smoke input");
+        let spec = ToolSpec::new("fake", "Fake checker", fake.to_string_lossy().into_owned())
+            .with_phase(
+                ToolPhase::new("verify", PhaseMode::Verify).with_args([CommandArgTemplate::Files]),
+            );
+        let context = ToolContext {
+            spec: &spec,
+            project_root: &root,
+            global_diagnostics_dir: None,
+        };
+        let job = job_with_file(&root, "input.rs");
+
+        let outcome = run_job(&job, &context);
+        let ToolRunOutcome::Completed(completed) = outcome else {
+            panic!("expected completed fake-tool run");
+        };
+        assert_eq!(completed.issues, IssueState::Clean);
+        assert!(matches!(completed.changes, ChangeState::Unchanged));
+        assert!(completed.diagnostics.contains("fake checker clean"));
+
+        std::fs::remove_dir_all(&root).expect("remove smoke directory");
     }
 }

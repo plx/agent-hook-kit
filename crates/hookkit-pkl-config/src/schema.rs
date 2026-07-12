@@ -2,8 +2,8 @@
 //!
 //! The Pkl module evaluates to JSON via `pkl eval --format json`; these types
 //! deserialize from that JSON. The shape intentionally mirrors the runtime
-//! `ToolSpec` family in `hookkit-tool-runner` so the bridge in
-//! [`crate::convert`] is mechanical.
+//! `ToolSpec` family in `hookkit-tool-runner` so the downstream conversion is
+//! mechanical.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
