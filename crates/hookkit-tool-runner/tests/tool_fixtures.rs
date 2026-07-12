@@ -2,9 +2,9 @@
 //!
 //! The harness auto-discovers `tests/fixtures/<tool>/<example>/` directories
 //! at test time and runs each against the real `post-tool-use-agent-hook`
-//! binary for each harness (claude, codex, gemini). Skips per-fixture when
-//! `pkl` or the underlying tool executable isn't installed, so the suite
-//! stays green on minimal CI runners.
+//! binary for each harness (claude, codex, gemini). This compatibility suite
+//! is ignored by default because it intentionally executes arbitrary tool
+//! versions from `PATH`. Run it explicitly with `--ignored --nocapture`.
 //!
 //! See `tests/fixtures/README.md` for the on-disk format.
 
@@ -20,6 +20,7 @@ const HARNESSES: &[&str] = &["claude", "codex", "gemini"];
 const STABLE_SESSION: &str = "test-session";
 
 #[test]
+#[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
 fn run_all_tool_fixtures() {
     if !pkl_available() {
         eprintln!("skipping: pkl binary not on PATH");
