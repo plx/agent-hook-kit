@@ -44,6 +44,12 @@ jobs:
       - name: Hermetic runner fake-tool smoke
         if: runner.os != 'Windows'
         run: cargo test -p hookkit-tool-runner --lib hermetic_fake_executable_smoke
+      - name: Verify publishable package archives
+        run: |
+          for package in hookkit-core hookkit-claude hookkit-codex hookkit-gemini hookkit-antigravity hookkit-common hookkit-runtime; do
+            cargo package -p "$package" --list >/dev/null
+          done
+          cargo package -p hookkit-core
 
   licenses:
     name: Third-party license attribution

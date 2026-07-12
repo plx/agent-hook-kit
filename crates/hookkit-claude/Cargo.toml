@@ -4,6 +4,10 @@ description = "Claude Code native hook input/output types"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["hooks", "agents", "claude"]
+categories = ["development-tools"]
 
 [dependencies]
 hookkit-core = { workspace = true }

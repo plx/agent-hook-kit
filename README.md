@@ -1,6 +1,7 @@
 # agent-hook-kit
 
-Rust plumbing for agent hooks across Claude, Codex, and Gemini.
+Contract-first Rust plumbing for agent hooks across Claude Code, Codex, Gemini
+CLI, and Antigravity.
 
 ## What This Repository Provides
 
@@ -8,6 +9,7 @@ Rust plumbing for agent hooks across Claude, Codex, and Gemini.
   - `hookkit-claude`
   - `hookkit-codex`
   - `hookkit-gemini`
+  - `hookkit-antigravity`
 - Cross-harness wrapper layer:
   - `hookkit-common`
 - Runtime stdin/stdout/exit-code plumbing:
@@ -17,11 +19,15 @@ Rust plumbing for agent hooks across Claude, Codex, and Gemini.
   - `hookkit-tool-runner` (ships the `post-tool-use-agent-hook` binary)
 - Shared core error/types:
   - `hookkit-core`
+- Versioned upstream protocol ledger and generated support matrix:
+  - [`contracts/`](contracts/README.md)
+  - [`contracts/status/support.md`](contracts/status/support.md)
 - Runnable examples:
   - `examples/claude-sessionstart-context`
   - `examples/codex-bash-guard`
   - `examples/gemini-beforetool-policy`
   - `examples/shared-posttool-autofix`
+  - `examples/antigravity-pre-invocation`
 
 ## Workspace Layout
 
@@ -32,6 +38,7 @@ crates/
   hookkit-claude/
   hookkit-codex/
   hookkit-gemini/
+  hookkit-antigravity/
   hookkit-common/
   hookkit-pkl-config/
   hookkit-tool-runner/
@@ -60,31 +67,36 @@ The `hookkit-pkl-config` and `hookkit-tool-runner` integration tests skip
 themselves when `pkl` is not on `$PATH`, so the test suite still passes in
 build environments without Pkl installed.
 
-## Quick Start: Native Runtime (`run_native`)
+## Quick Start: Exact Typed Runtime
 
-Minimal pattern:
+Concrete hooks select neither harness nor event dynamically; the event type fixes
+both and associates the only valid output type:
 
 ```rust
-use hookkit_core::Harness;
-use hookkit_runtime::{NativeHookInput, NativeHookOutput, RuntimeContext};
+use hookkit_claude::protocol::{SessionStart, SessionStartOutput};
 
 fn main() -> std::process::ExitCode {
-    hookkit_runtime::run_native(Harness::Claude, handle)
-}
-
-fn handle(
-    input: NativeHookInput,
-    _ctx: &RuntimeContext,
-) -> hookkit_core::Result<NativeHookOutput> {
-    match input {
-        _ => Ok(NativeHookOutput::Claude(hookkit_claude::ClaudeHookOutput::Empty)),
-    }
+    hookkit_runtime::typed::run_typed::<SessionStart, _>(|input| {
+        Ok(SessionStartOutput::with_context(format!(
+            "Session {} loaded",
+            input.session_id
+        )))
+    })
 }
 ```
+
+`WorktreeCreate` demonstrates a non-JSON command result: its typed output emits an
+absolute path as plain text. Dynamic/aligned execution accepts an explicit
+`HarnessId`; optional event hints resolve ambiguous inputs, while the detector is
+inspection-only and cannot execute a guessed protocol.
 
 ## Quick Start: Common Runtime (`run_common`)
 
 Use when shared logic should run across harnesses:
+
+> This legacy semantic-lowering facade remains for migration. New shared
+> `PostToolUse` code should use the lossless native-arm enums in
+> `hookkit_common::aligned` and `hookkit_runtime::aligned`.
 
 ```rust
 use hookkit_common::input::CommonHookInput;
