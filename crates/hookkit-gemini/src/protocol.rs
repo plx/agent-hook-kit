@@ -3,16 +3,32 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const SNAPSHOT_ID: &str = "commit-f354eeb-r1";
-pub static EVENTS: &[hookkit_core::NativeEventDescriptor] =
-    &[hookkit_core::NativeEventDescriptor {
-        contract_id: "gemini-cli/commit-f354eeb-r1/BeforeToolSelection",
-        harness: "gemini-cli",
-        event: "BeforeToolSelection",
-        native_input: true,
-        native_output: true,
-        bindings: &[hookkit_core::HandlerKind::Command],
-        conformance_cases: &["no-op", "disable-tools"],
-    }];
+macro_rules! descriptor {
+    ($event:literal, $cases:expr) => {
+        hookkit_core::NativeEventDescriptor {
+            contract_id: concat!("gemini-cli/commit-f354eeb-r1/", $event),
+            harness: "gemini-cli",
+            event: $event,
+            native_input: true,
+            native_output: true,
+            bindings: &[hookkit_core::HandlerKind::Command],
+            conformance_cases: $cases,
+        }
+    };
+}
+pub static EVENTS: &[hookkit_core::NativeEventDescriptor] = &[
+    descriptor!("SessionStart", &["structured"]),
+    descriptor!("BeforeAgent", &["structured", "exit-2"]),
+    descriptor!("BeforeModel", &["structured", "exit-2"]),
+    descriptor!("BeforeToolSelection", &["no-op", "disable-tools"]),
+    descriptor!("BeforeTool", &["structured", "exit-2"]),
+    descriptor!("AfterTool", &["structured", "exit-2"]),
+    descriptor!("AfterModel", &["structured", "exit-2"]),
+    descriptor!("AfterAgent", &["structured", "exit-2"]),
+    descriptor!("Notification", &["structured"]),
+    descriptor!("PreCompress", &["structured"]),
+    descriptor!("SessionEnd", &["structured"]),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BeforeToolSelectionInput {

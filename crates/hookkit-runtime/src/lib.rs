@@ -111,6 +111,8 @@ fn hook_event_key(input: &NativeHookInput) -> HookEventKey {
     match input {
         NativeHookInput::Claude(ev) => match ev {
             ClaudeHookInput::SessionStart(_) => HookEventKey::SessionStart,
+            ClaudeHookInput::Setup(_) => HookEventKey::Other("Setup".into()),
+            ClaudeHookInput::MessageDisplay(_) => HookEventKey::Other("MessageDisplay".into()),
             ClaudeHookInput::UserPromptSubmit(_) => HookEventKey::PromptSubmit,
             ClaudeHookInput::UserPromptExpansion(_) => HookEventKey::PromptExpansion,
             ClaudeHookInput::PreToolUse(_) => HookEventKey::PreToolUse,
@@ -265,6 +267,10 @@ fn parsed_value(input: &NativeHookInput) -> serde_json::Value {
     match input {
         NativeHookInput::Claude(ev) => match ev {
             ClaudeHookInput::SessionStart(v) => {
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
+            }
+            ClaudeHookInput::Setup(v) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            ClaudeHookInput::MessageDisplay(v) => {
                 serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
             }
             ClaudeHookInput::UserPromptSubmit(v) => {

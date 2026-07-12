@@ -16,6 +16,7 @@ members = [
     "examples/gemini-beforetool-policy",
     "examples/claude-sessionstart-context",
     "examples/shared-posttool-autofix",
+    "examples/antigravity-pre-invocation",
 ]
 
 [workspace.package]

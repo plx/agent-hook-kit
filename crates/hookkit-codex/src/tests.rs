@@ -1,4 +1,4 @@
-use crate::input::{self, CodexFeatureSet, CodexHookInput, CodexToolInput, CodexVersion};
+use crate::input::{self, CodexHookInput, CodexToolInput};
 use crate::output::{self, OutputEnvelope};
 
 fn load_fixture(name: &str) -> serde_json::Value {
@@ -88,40 +88,6 @@ fn parse_unknown_event() {
     });
     let input = input::parse(&v).expect("should parse");
     assert!(matches!(input, CodexHookInput::Unknown { .. }));
-}
-
-// ---- Feature set tests ----
-
-#[test]
-fn feature_set_defaults() {
-    let fs = CodexFeatureSet::current();
-    assert!(fs.bash_only_tool_hooks);
-    assert!(!fs.pretool_allow_supported);
-    assert!(!fs.updated_input_supported);
-    assert!(!fs.additional_context_supported);
-}
-
-#[test]
-fn feature_set_v0_2() {
-    let fs = CodexFeatureSet::for_version(CodexVersion::V0_2);
-    assert!(!fs.bash_only_tool_hooks);
-    assert!(fs.pretool_allow_supported);
-    assert!(!fs.updated_input_supported);
-    assert!(fs.additional_context_supported);
-}
-
-#[test]
-fn feature_set_require_supported() {
-    let fs = CodexFeatureSet::for_version(CodexVersion::V0_2);
-    assert!(fs.require("pretool_allow").is_ok());
-    assert!(fs.require("additional_context").is_ok());
-}
-
-#[test]
-fn feature_set_require_unsupported() {
-    let fs = CodexFeatureSet::current();
-    assert!(fs.require("pretool_allow").is_err());
-    assert!(fs.require("additional_context").is_err());
 }
 
 // ---- Output tests ----

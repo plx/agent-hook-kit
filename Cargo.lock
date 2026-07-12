@@ -82,6 +82,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "antigravity-pre-invocation"
+version = "0.1.0"
+dependencies = [
+ "hookkit-antigravity",
+ "hookkit-core",
+ "hookkit-runtime",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -2,6 +2,32 @@
   "format_version": 1,
   "events": [
     {
+      "contract": "antigravity/docs-2026-07-12-r1/PostInvocation",
+      "harness": "antigravity",
+      "event": "PostInvocation",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "force-continue"
+      ]
+    },
+    {
+      "contract": "antigravity/docs-2026-07-12-r1/PostToolUse",
+      "harness": "antigravity",
+      "event": "PostToolUse",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "no-op"
+      ]
+    },
+    {
       "contract": "antigravity/docs-2026-07-12-r1/PreInvocation",
       "harness": "antigravity",
       "event": "PreInvocation",
@@ -12,6 +38,260 @@
       ],
       "conformance_cases": [
         "inject-reminder"
+      ]
+    },
+    {
+      "contract": "antigravity/docs-2026-07-12-r1/PreToolUse",
+      "harness": "antigravity",
+      "event": "PreToolUse",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "ask"
+      ]
+    },
+    {
+      "contract": "antigravity/docs-2026-07-12-r1/Stop",
+      "harness": "antigravity",
+      "event": "Stop",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "continue"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/ConfigChange",
+      "harness": "claude-code",
+      "event": "ConfigChange",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/CwdChanged",
+      "harness": "claude-code",
+      "event": "CwdChanged",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/Elicitation",
+      "harness": "claude-code",
+      "event": "Elicitation",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/ElicitationResult",
+      "harness": "claude-code",
+      "event": "ElicitationResult",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/FileChanged",
+      "harness": "claude-code",
+      "event": "FileChanged",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/InstructionsLoaded",
+      "harness": "claude-code",
+      "event": "InstructionsLoaded",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/MessageDisplay",
+      "harness": "claude-code",
+      "event": "MessageDisplay",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/Notification",
+      "harness": "claude-code",
+      "event": "Notification",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/PermissionDenied",
+      "harness": "claude-code",
+      "event": "PermissionDenied",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/PermissionRequest",
+      "harness": "claude-code",
+      "event": "PermissionRequest",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/PostCompact",
+      "harness": "claude-code",
+      "event": "PostCompact",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/PostToolBatch",
+      "harness": "claude-code",
+      "event": "PostToolBatch",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/PostToolUse",
+      "harness": "claude-code",
+      "event": "PostToolUse",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/PostToolUseFailure",
+      "harness": "claude-code",
+      "event": "PostToolUseFailure",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/PreCompact",
+      "harness": "claude-code",
+      "event": "PreCompact",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/PreToolUse",
+      "harness": "claude-code",
+      "event": "PreToolUse",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/SessionEnd",
+      "harness": "claude-code",
+      "event": "SessionEnd",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
       ]
     },
     {
@@ -29,6 +309,145 @@
       ]
     },
     {
+      "contract": "claude-code/docs-2026-07-12-r1/Setup",
+      "harness": "claude-code",
+      "event": "Setup",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/Stop",
+      "harness": "claude-code",
+      "event": "Stop",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/StopFailure",
+      "harness": "claude-code",
+      "event": "StopFailure",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/SubagentStart",
+      "harness": "claude-code",
+      "event": "SubagentStart",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/SubagentStop",
+      "harness": "claude-code",
+      "event": "SubagentStop",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/TaskCompleted",
+      "harness": "claude-code",
+      "event": "TaskCompleted",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/TaskCreated",
+      "harness": "claude-code",
+      "event": "TaskCreated",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/TeammateIdle",
+      "harness": "claude-code",
+      "event": "TeammateIdle",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/UserPromptExpansion",
+      "harness": "claude-code",
+      "event": "UserPromptExpansion",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-text",
+        "command-exit-2"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/UserPromptSubmit",
+      "harness": "claude-code",
+      "event": "UserPromptSubmit",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured",
+        "command-text",
+        "command-exit-2"
+      ]
+    },
+    {
       "contract": "claude-code/docs-2026-07-12-r1/WorktreeCreate",
       "harness": "claude-code",
       "event": "WorktreeCreate",
@@ -40,6 +459,74 @@
       "conformance_cases": [
         "command-created",
         "command-failed"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-07-12-r1/WorktreeRemove",
+      "harness": "claude-code",
+      "event": "WorktreeRemove",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/PermissionRequest",
+      "harness": "codex",
+      "event": "PermissionRequest",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/PostCompact",
+      "harness": "codex",
+      "event": "PostCompact",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/PostToolUse",
+      "harness": "codex",
+      "event": "PostToolUse",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/PreCompact",
+      "harness": "codex",
+      "event": "PreCompact",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
       ]
     },
     {
@@ -58,6 +545,161 @@
       ]
     },
     {
+      "contract": "codex/commit-9e552e9-r1/SessionStart",
+      "harness": "codex",
+      "event": "SessionStart",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "text-context"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/Stop",
+      "harness": "codex",
+      "event": "Stop",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/SubagentStart",
+      "harness": "codex",
+      "event": "SubagentStart",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "text-context"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/SubagentStop",
+      "harness": "codex",
+      "event": "SubagentStop",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "codex/commit-9e552e9-r1/UserPromptSubmit",
+      "harness": "codex",
+      "event": "UserPromptSubmit",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "text-context",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/AfterAgent",
+      "harness": "gemini-cli",
+      "event": "AfterAgent",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/AfterModel",
+      "harness": "gemini-cli",
+      "event": "AfterModel",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/AfterTool",
+      "harness": "gemini-cli",
+      "event": "AfterTool",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/BeforeAgent",
+      "harness": "gemini-cli",
+      "event": "BeforeAgent",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/BeforeModel",
+      "harness": "gemini-cli",
+      "event": "BeforeModel",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/BeforeTool",
+      "harness": "gemini-cli",
+      "event": "BeforeTool",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured",
+        "exit-2"
+      ]
+    },
+    {
       "contract": "gemini-cli/commit-f354eeb-r1/BeforeToolSelection",
       "harness": "gemini-cli",
       "event": "BeforeToolSelection",
@@ -69,6 +711,58 @@
       "conformance_cases": [
         "no-op",
         "disable-tools"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/Notification",
+      "harness": "gemini-cli",
+      "event": "Notification",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/PreCompress",
+      "harness": "gemini-cli",
+      "event": "PreCompress",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/SessionEnd",
+      "harness": "gemini-cli",
+      "event": "SessionEnd",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured"
+      ]
+    },
+    {
+      "contract": "gemini-cli/commit-f354eeb-r1/SessionStart",
+      "harness": "gemini-cli",
+      "event": "SessionStart",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "structured"
       ]
     }
   ]
