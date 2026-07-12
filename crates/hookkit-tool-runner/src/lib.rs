@@ -433,26 +433,50 @@ pub fn run_common_input(
         }
     }
 
-    if let Some(message) = had_harness_block_message {
-        // Surface harness-block as a CommonHookOutput intent that lowers to
-        // each harness's blocking output (exit code 2 + stderr). This keeps
-        // `run_common_input` composable for tests and embedders — they get
-        // a real Result back instead of having the host process terminated.
-        return Ok(CommonHookOutput::PostToolUse(
-            output.with_harness_block(message),
-        ));
-    }
-
-    if had_hard_failure {
-        return Err(invalid_data(
-            "tool unavailable with missingToolPolicy=hard-failure".into(),
-        ));
-    }
-
-    if is_empty_output(&output) {
-        Ok(CommonHookOutput::empty())
+    let outcome = if let Some(message) = had_harness_block_message {
+        RunnerDomainOutcome::HarnessBlock { message, output }
+    } else if had_hard_failure {
+        RunnerDomainOutcome::OperationalFailure {
+            message: "tool unavailable with missingToolPolicy=hard-failure".into(),
+        }
+    } else if is_empty_output(&output) {
+        RunnerDomainOutcome::Clean
     } else {
-        Ok(CommonHookOutput::PostToolUse(output))
+        RunnerDomainOutcome::Report(output)
+    };
+    lower_domain_outcome(outcome)
+}
+
+/// Runner-owned semantic result. Tool policy and classification deliberately do
+/// not leak into core/common crates.
+#[derive(Debug)]
+pub enum RunnerDomainOutcome {
+    Clean,
+    Report(CommonPostToolUseOutput),
+    HarnessBlock {
+        message: String,
+        output: CommonPostToolUseOutput,
+    },
+    OperationalFailure {
+        message: String,
+    },
+    UnsupportedHarness {
+        harness: String,
+        reason: String,
+    },
+}
+
+fn lower_domain_outcome(outcome: RunnerDomainOutcome) -> hookkit_core::Result<CommonHookOutput> {
+    match outcome {
+        RunnerDomainOutcome::Clean => Ok(CommonHookOutput::empty()),
+        RunnerDomainOutcome::Report(output) => Ok(CommonHookOutput::PostToolUse(output)),
+        RunnerDomainOutcome::HarnessBlock { message, output } => Ok(CommonHookOutput::PostToolUse(
+            output.with_harness_block(message),
+        )),
+        RunnerDomainOutcome::OperationalFailure { message } => Err(invalid_data(message)),
+        RunnerDomainOutcome::UnsupportedHarness { harness, reason } => Err(invalid_data(format!(
+            "post-tool-use runner does not support {harness}: {reason}"
+        ))),
     }
 }
 
@@ -1525,6 +1549,27 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn domain_outcomes_keep_clean_failure_and_unsupported_distinct() {
+        assert!(matches!(
+            lower_domain_outcome(RunnerDomainOutcome::Clean).unwrap(),
+            CommonHookOutput::Empty
+        ));
+        assert!(
+            lower_domain_outcome(RunnerDomainOutcome::OperationalFailure {
+                message: "checker crashed".into(),
+            })
+            .is_err()
+        );
+        assert!(
+            lower_domain_outcome(RunnerDomainOutcome::UnsupportedHarness {
+                harness: "antigravity".into(),
+                reason: "no changed-file data".into(),
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn resolve_worker_count_honors_jobs_setting() {
