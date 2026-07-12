@@ -1,0 +1,41 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r1:session-start:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "SessionStart"
+        },
+        "initialUserMessage": {
+          "type": "string"
+        },
+        "reloadSkills": {
+          "type": "boolean"
+        },
+        "sessionTitle": {
+          "type": "string"
+        },
+        "watchPaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "systemMessage": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

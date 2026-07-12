@@ -1,0 +1,11 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r1:session-end:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "systemMessage": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

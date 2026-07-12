@@ -7,7 +7,7 @@
     "format_version": { "const": 1 },
     "release": { "type": "string", "minLength": 1 },
     "targets": { "type": "array" }
+    ,"defaults": { "type": "array" }
   },
   "additionalProperties": false
 }
-

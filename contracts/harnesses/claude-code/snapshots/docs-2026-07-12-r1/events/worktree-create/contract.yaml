@@ -63,5 +63,5 @@ bindings:
         output_schema: http-response
         sources: [claude-hooks-reference]
         assurance: { confidence: high, verification: source-reviewed }
+handler_kinds: [command, http, mcp_tool]
 fixtures: fixtures.yaml
-

@@ -1,0 +1,77 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r1:subagent-stop:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_transcript_path": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "hook_event_name": {
+      "const": "SubagentStop"
+    },
+    "last_assistant_message": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ]
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "stop_hook_active": {
+      "type": "boolean"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "stop_hook_active",
+    "agent_id",
+    "agent_type",
+    "agent_transcript_path",
+    "last_assistant_message"
+  ],
+  "type": "object"
+}

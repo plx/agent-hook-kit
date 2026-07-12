@@ -1,0 +1,66 @@
+format_version: 1
+input:
+  negative:
+  - expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      trigger: init
+  - expected_pointer: ''
+    id: missing-trigger
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Setup
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Setup
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      trigger: init
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Setup
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      trigger: init
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      additionalContext: Hook-provided context.
+      hookEventName: Setup
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJIb29rLXByb3ZpZGVkIGNvbnRleHQuIiwiaG9va0V2ZW50TmFtZSI6IlNldHVwIn19
+  stdout_sha256: fe29c94b2815b3ddc7518a37d8a836fb6849a1f7d215cf3c921d3b17dee64831

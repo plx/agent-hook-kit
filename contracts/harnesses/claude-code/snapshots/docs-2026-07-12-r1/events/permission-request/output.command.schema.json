@@ -1,0 +1,63 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r1:permission-request:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "type": "boolean"
+    },
+    "decision": {
+      "const": "block"
+    },
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "additionalProperties": false,
+          "properties": {
+            "behavior": {
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "interrupt": {
+              "type": "boolean"
+            },
+            "message": {
+              "type": "string"
+            },
+            "updatedInput": {},
+            "updatedPermissions": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "behavior"
+          ],
+          "type": "object"
+        },
+        "hookEventName": {
+          "const": "PermissionRequest"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "stopReason": {
+      "type": "string"
+    },
+    "suppressOutput": {
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

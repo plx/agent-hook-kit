@@ -1,0 +1,116 @@
+format_version: 1
+input:
+  negative:
+  - expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      command_args: --strict
+      command_name: review
+      command_source: plugin
+      cwd: /repo
+      expansion_type: slash_command
+      hook_event_name: WrongEvent
+      prompt: /review --strict
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - expected_pointer: ''
+    id: missing-expansion_type
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      command_args: --strict
+      command_name: review
+      command_source: plugin
+      cwd: /repo
+      hook_event_name: UserPromptExpansion
+      prompt: /review --strict
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      command_args: --strict
+      command_name: review
+      command_source: plugin
+      cwd: /repo
+      expansion_type: slash_command
+      hook_event_name: UserPromptExpansion
+      prompt: /review --strict
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      command_args: --strict
+      command_name: review
+      command_source: plugin
+      cwd: /repo
+      expansion_type: slash_command
+      hook_event_name: UserPromptExpansion
+      permission_mode: default
+      prompt: /review --strict
+      prompt_id: prompt-1
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    hookSpecificOutput:
+      additionalContext: Use the team checklist.
+      hookEventName: UserPromptExpansion
+    reason: Unavailable.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiVXNlIHRoZSB0ZWFtIGNoZWNrbGlzdC4iLCJob29rRXZlbnROYW1lIjoiVXNlclByb21wdEV4cGFuc2lvbiJ9LCJyZWFzb24iOiJVbmF2YWlsYWJsZS4ifQ==
+  stdout_sha256: 57ecf2c775d4cac2879316227812ea098fb7fa17d92b293453502df8ae5d309c
+- binding: command
+  exit_code: 0
+  id: command-text
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vay1wcm92aWRlZCBjb250ZXh0Lg==
+  stdout_sha256: 5a9a1e0f83d894e72832408640efb2e622b634e35378d402ee8a97c47e5f3456
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiVXNlIHRoZSB0ZWFtIGNoZWNrbGlzdC4iLCJob29rRXZlbnROYW1lIjoiVXNlclByb21wdEV4cGFuc2lvbiJ9LCJyZWFzb24iOiJVbmF2YWlsYWJsZS4ifQ==
+  stdout_sha256: 57ecf2c775d4cac2879316227812ea098fb7fa17d92b293453502df8ae5d309c
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

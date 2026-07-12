@@ -116,6 +116,8 @@ struct Contract {
     event: Event,
     schemas: Schemas,
     bindings: BTreeMap<String, Binding>,
+    #[serde(default)]
+    handler_kinds: Vec<String>,
     fixtures: String,
     #[serde(default)]
     uncertainties: Vec<String>,
@@ -314,12 +316,23 @@ struct Stabilization {
     format_version: u32,
     release: String,
     targets: Vec<Target>,
+    #[serde(default)]
+    defaults: Vec<TargetDefault>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Target {
     contract: String,
+    binding: String,
+    level: String,
+    verification: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetDefault {
+    harness: String,
     binding: String,
     level: String,
     verification: String,
@@ -534,7 +547,11 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
     }
     for loaded in &contracts {
         for binding in loaded.contract.bindings.keys() {
-            if !target_keys.contains(&(loaded.contract.id.as_str(), binding.as_str())) {
+            if !target_keys.contains(&(loaded.contract.id.as_str(), binding.as_str()))
+                && !stabilization.defaults.iter().any(|default| {
+                    default.harness == loaded.contract.harness && default.binding == *binding
+                })
+            {
                 return Err(format!(
                     "missing stabilization target for {} binding {binding}",
                     loaded.contract.id
@@ -570,6 +587,24 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
         }
         if target.verification.is_empty() {
             return Err(format!("{} has empty verification status", target.contract));
+        }
+    }
+    for default in &stabilization.defaults {
+        if !registry.harnesses.contains_key(&default.harness)
+            || !matches!(
+                default.level.as_str(),
+                "catalog-only"
+                    | "native-source-reviewed"
+                    | "command-runtime-beta"
+                    | "command-runtime-stable"
+                    | "unsupported"
+            )
+            || default.verification.is_empty()
+        {
+            return Err(format!(
+                "invalid stabilization default for {}/{}",
+                default.harness, default.binding
+            ));
         }
     }
     let _ = &stabilization.release;
@@ -649,6 +684,17 @@ fn validate_contract(contract: &Contract, dir: &Path, sources: &BTreeSet<&str>) 
             || discriminator.r#const != contract.event.wire_name)
     {
         return Err(format!("{}: invalid discriminator", dir.display()));
+    }
+    for kind in &contract.handler_kinds {
+        if !matches!(
+            kind.as_str(),
+            "command" | "http" | "mcp_tool" | "prompt" | "agent"
+        ) {
+            return Err(format!(
+                "{}: invalid inventoried handler kind {kind}",
+                dir.display()
+            ));
+        }
     }
     let _ = (
         &contract.event.category,
@@ -1038,13 +1084,24 @@ fn render_report(root: &Path, contracts: &[LoadedContract]) -> Result<String> {
                 .targets
                 .iter()
                 .find(|target| target.contract == loaded.contract.id && target.binding == *binding)
+                .map(|target| (target.level.as_str(), target.verification.as_str()))
+                .or_else(|| {
+                    status
+                        .defaults
+                        .iter()
+                        .find(|default| {
+                            default.harness == loaded.contract.harness
+                                && default.binding == *binding
+                        })
+                        .map(|default| (default.level.as_str(), default.verification.as_str()))
+                })
                 .expect("checked target");
             rows.push((
                 loaded.contract.harness.as_str(),
                 loaded.contract.event.wire_name.as_str(),
                 binding.as_str(),
-                target.level.as_str(),
-                target.verification.as_str(),
+                target.0,
+                target.1,
             ));
         }
         let _ = &loaded.dir;

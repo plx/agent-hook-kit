@@ -1,0 +1,23 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r1:permission-denied:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "hookEventName": {
+          "const": "PermissionDenied"
+        },
+        "retry": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "object"
+}

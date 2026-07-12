@@ -1,0 +1,102 @@
+format_version: 1
+input:
+  negative:
+  - expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      prompt: Run the tests
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - expected_pointer: ''
+    id: missing-prompt
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: UserPromptSubmit
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: UserPromptSubmit
+      prompt: Run the tests
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: UserPromptSubmit
+      permission_mode: default
+      prompt: Run the tests
+      prompt_id: prompt-1
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    hookSpecificOutput:
+      additionalContext: Clarify scope.
+      hookEventName: UserPromptSubmit
+      sessionTitle: Clarify
+      suppressOriginalPrompt: true
+    reason: Confirmation required.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiQ2xhcmlmeSBzY29wZS4iLCJob29rRXZlbnROYW1lIjoiVXNlclByb21wdFN1Ym1pdCIsInNlc3Npb25UaXRsZSI6IkNsYXJpZnkiLCJzdXBwcmVzc09yaWdpbmFsUHJvbXB0Ijp0cnVlfSwicmVhc29uIjoiQ29uZmlybWF0aW9uIHJlcXVpcmVkLiJ9
+  stdout_sha256: f128640b0949b703454a01037798b9279e2d730134d12006dbdf29f37f912201
+- binding: command
+  exit_code: 0
+  id: command-text
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vay1wcm92aWRlZCBjb250ZXh0Lg==
+  stdout_sha256: 5a9a1e0f83d894e72832408640efb2e622b634e35378d402ee8a97c47e5f3456
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiQ2xhcmlmeSBzY29wZS4iLCJob29rRXZlbnROYW1lIjoiVXNlclByb21wdFN1Ym1pdCIsInNlc3Npb25UaXRsZSI6IkNsYXJpZnkiLCJzdXBwcmVzc09yaWdpbmFsUHJvbXB0Ijp0cnVlfSwicmVhc29uIjoiQ29uZmlybWF0aW9uIHJlcXVpcmVkLiJ9
+  stdout_sha256: f128640b0949b703454a01037798b9279e2d730134d12006dbdf29f37f912201
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

@@ -11,9 +11,9 @@
     "event": { "type": "object" },
     "schemas": { "type": "object" },
     "bindings": { "type": "object", "minProperties": 1 },
+    "handler_kinds": { "type": "array", "items": { "enum": ["command", "http", "mcp_tool", "prompt", "agent"] }, "uniqueItems": true },
     "fixtures": { "type": "string", "minLength": 1 },
     "uncertainties": { "type": "array", "items": { "type": "string" } }
   },
   "additionalProperties": false
 }
-
