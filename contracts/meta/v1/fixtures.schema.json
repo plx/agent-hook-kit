@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:meta:v1:fixtures",
+  "type": "object",
+  "required": ["format_version", "input", "process"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "input": { "type": "object" },
+    "output": { "type": "array" },
+    "process": { "type": "array", "minItems": 1 }
+  },
+  "additionalProperties": false
+}
+

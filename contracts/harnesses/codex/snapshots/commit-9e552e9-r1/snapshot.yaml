@@ -1,0 +1,11 @@
+format_version: 1
+id: commit-9e552e9-r1
+harness: codex
+state: draft
+retrieved: 2026-07-12
+sources_file: sources.yaml
+events:
+  - wire_name: PreToolUse
+    rust_key: pre_tool_use
+    path: events/pre-tool-use
+

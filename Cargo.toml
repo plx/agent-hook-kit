@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "xtask",
     "crates/hookkit-core",
     "crates/hookkit-runtime",
     "crates/hookkit-claude",
@@ -31,6 +32,11 @@ globset = "0.4"
 minijinja = "2"
 toml = "0.8"
 walkdir = "2"
+base64 = "0.22"
+clap = { version = "4.6", features = ["derive"] }
+jsonschema = { version = "0.47", default-features = false }
+serde_yaml_ng = "0.10"
+sha2 = "0.11"
 
 # workspace crates
 hookkit-core = { path = "crates/hookkit-core" }

@@ -1,0 +1,11 @@
+format_version: 1
+id: commit-f354eeb-r1
+harness: gemini-cli
+state: draft
+retrieved: 2026-07-12
+sources_file: sources.yaml
+events:
+  - wire_name: BeforeToolSelection
+    rust_key: before_tool_selection
+    path: events/before-tool-selection
+

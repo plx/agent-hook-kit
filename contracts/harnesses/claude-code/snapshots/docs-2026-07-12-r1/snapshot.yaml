@@ -1,0 +1,11 @@
+format_version: 1
+id: docs-2026-07-12-r1
+harness: claude-code
+state: draft
+retrieved: 2026-07-12
+sources_file: sources.yaml
+events:
+  - wire_name: WorktreeCreate
+    rust_key: worktree_create
+    path: events/worktree-create
+
