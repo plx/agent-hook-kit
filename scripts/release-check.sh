@@ -9,5 +9,9 @@ cargo xtask contracts check --snapshot current
 cargo xtask contracts report --check
 
 for package in hookkit-core hookkit-claude hookkit-codex hookkit-gemini hookkit-antigravity hookkit-common hookkit-runtime; do
-  cargo package -p "$package" --no-verify
+  cargo package -p "$package" --list >/dev/null
 done
+
+# The first package in the publish order has no unpublished hookkit dependency,
+# so Cargo can fully assemble it before the staged release begins.
+cargo package -p hookkit-core
