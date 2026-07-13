@@ -2,13 +2,64 @@
 
 <!-- markdownlint-disable MD013 MD024 -->
 
-- Status: **required follow-up remediation plan** (the realignment is NOT ready to merge)
-- Prepared: 2026-07-12
+- Status: **RESOLVED** — the remediation (commit `5890c54`) closed all R1–R9 items; the realignment
+  is now ready to merge. See §0 for the re-review resolution and the small residual punch-list.
+- Prepared: 2026-07-12 (original review); **re-reviewed 2026-07-12** after remediation commit `5890c54`.
 - Reviews branch: `plx/contract-first-realignment` (git log shows Phases 0–7 all merged)
 - Controlling plan under review: `planning/hookkit-contract-first-realignment-plan.md`
 - Review method: whole-tree read + execution probes by the integrator, plus a 15-dimension
   skeptical multi-agent review with adversarial per-finding verification (65 agents; 2 findings
   refuted at the verify stage; 44 confirmed actionable findings, ~20 of them blockers).
+
+---
+
+## 0. Re-review resolution (2026-07-12, commit `5890c54`)
+
+The remediation landed as a single 328-file commit (`5890c54 refactor: complete contract-first
+remediation`, +23.5k/−10.3k). A re-review — integrator execution probes plus a 9-dimension
+multi-agent pass with adversarial per-finding verification — finds **every R1–R9 item resolved** and
+recommends **merge**. Ground truth: `fmt`/`clippy` clean, `contracts check` passes ("validated 56
+selected event contracts and all catalog snapshots"), `cargo test` 135 passed / 0 failed / 1 ignored
+(the 259→135 drop is deletion of legacy code + its now-obsolete tests, not lost coverage of the new
+surface).
+
+Verdict per item (✔ = verified against the new code, several by execution):
+
+| Item | Resolution |
+| --- | --- |
+| **R1** legacy removal + SessionStart + migration | ✔ `OutputEnvelope`/`run_native`/`run_common`/`HookEventKey`/`RawPayload`/`CommonHook*`/old `Harness` **deleted** (0 live refs, no shim needed). `hookkit-claude/src/output.rs` gone; discriminators are private `&'static str` stamped inside builders. **Ran** `claude-sessionstart-context` → emits `hookEventName:"SessionStart"`. `validate.rs` behavior relocated into `EventSpec::parse` + typed builders + `validate_command_emission` + aligned harness-arm guard. §8.8 `RuntimeContext` rebuilt in `core/context.rs` (workspace_roots collection, no `.`-default, no casing probes, diagnostics sink). All 5 examples + runner on the new API. |
+| **R2/R3** report honesty | ✔ Descriptors derive from real `EventSpec` (`NativeEventDescriptor::command::<E>()`); conformance is **execution-gated** (`conformance/src/lib.rs` errors on "declared/executed conformance mismatch"). `support.md` now 13 command-runtime-beta / 71 catalog-only (was 56/28). Target↔registry cross-check added. |
+| **R4** native wire bugs | ✔ Codex parses snake_case (**ran** bash-guard → schema-valid `permissionDecision:"deny"`); Codex `block`/`deny` shapes correct; Gemini fictional `shell` contract removed (open `run_shell_command`, string command); Gemini stamps required `hookEventName`; native fixtures + Codex snake_case tests added. |
+| **R5** heuristics out of common | ✔ `hookkit-common/src/semantic.rs` deleted; discovery moved into the runner (`discover_modified_files`/`discover_path_candidates`); aligned enums now `#[non_exhaustive]`. |
+| **R6** negative-output fixtures | ✔ New superseding `docs-2026-07-12-r2` snapshot adds `output_negative` with `inject-step-mutually-exclusive` + `expected_keyword: oneOf`; the fixture format now expresses negative-output fixtures and `contracts check` proves rejection. |
+| **R7** resolution/detector | ✔ `run_harness` (generic) + `dispatch_builtin_harness` (runtime) built; production `identification_descriptors()` + `identification_parity.rs` parity test; 9-rule hint logic with real tests. No `run_auto`. |
+| **R8** gap + checker enforcement | ✔ Gap stale-detection ("assertion … is stale because it now passes"); `contracts check` step 9 both directions; §7.10 10-step checklist intact after the +1005-line xtask rewrite. |
+| **R9** provenance/packaging | ✔ (mostly) examples now `publish = false`; `RUNNER_DESIGN.md` perf claims corrected. Two residual nits below. |
+
+### Residual punch-list (non-blocking follow-ups)
+
+None of these block merge; log them as small follow-ups:
+
+1. **(major, test-coverage)** The runner's rewritten `lower_report` lowering surface — user/agent
+   channel split, Codex/Gemini native arms, `LoweringPolicy` + `harness_block` branches
+   (`hookkit-tool-runner/src/lib.rs:846–926`) — has no hermetic test. It is load-bearing R1.6/R5 code;
+   add a hermetic test that asserts the emitted per-harness bytes for each branch.
+2. **(minor, correctness)** `lower_report` `harness_block` path (`lib.rs:850–865`) returns early with
+   only `blocking_error(message)`, **silently dropping** `notices`/`diagnostics`/`agent_feedback`
+   accumulated from earlier tools when `continue_after_issue` is set. Fold the accumulated context into
+   the block emission (or document the drop).
+3. **(minor, coverage)** `hookkit-core` and `hookkit-common` have **0 direct unit tests**; the
+   `ProcessEmission` validating-constructor error branches and `RuntimeContext::new` harness-mismatch
+   guard are only exercised on happy paths. Add focused negative-branch unit tests.
+4. **(minor, docs)** Mode B (`run_harness`/`dispatch_builtin_harness`) has no runnable example, only a
+   README snippet — add one so all three execution modes ship an example.
+5. **(nit, test)** The SessionStart E2E integration test (`integration.rs:420–433`) asserts context is
+   present but not `hookEventName == "SessionStart"` — assert the exact discriminator at the
+   shipped-binary boundary (it is asserted in the `protocol.rs` unit test).
+6. **(observation, packaging)** `hookkit-pkl-config` and `hookkit-tool-runner` lack `publish = false`
+   despite `RELEASE.md` listing only the seven library crates for publication.
+
+The original findings below (§1–§6) are retained as the historical record of what was fixed.
 
 ---
 
