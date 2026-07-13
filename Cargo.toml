@@ -1,11 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
+    "xtask",
     "crates/hookkit-core",
     "crates/hookkit-runtime",
     "crates/hookkit-claude",
     "crates/hookkit-codex",
     "crates/hookkit-gemini",
+    "crates/hookkit-antigravity",
+    "crates/hookkit-conformance",
     "crates/hookkit-common",
     "crates/hookkit-pkl-config",
     "crates/hookkit-tool-runner",
@@ -13,6 +16,7 @@ members = [
     "examples/gemini-beforetool-policy",
     "examples/claude-sessionstart-context",
     "examples/shared-posttool-autofix",
+    "examples/antigravity-pre-invocation",
 ]
 
 [workspace.package]
@@ -20,6 +24,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/prb/agent-hook-kit"
+rust-version = "1.85"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -31,13 +36,19 @@ globset = "0.4"
 minijinja = "2"
 toml = "0.8"
 walkdir = "2"
+base64 = "0.22"
+clap = { version = "4.6", features = ["derive"] }
+jsonschema = { version = "0.47", default-features = false }
+serde_yaml_ng = "0.10"
+sha2 = "0.11"
 
 # workspace crates
-hookkit-core = { path = "crates/hookkit-core" }
-hookkit-runtime = { path = "crates/hookkit-runtime" }
-hookkit-claude = { path = "crates/hookkit-claude" }
-hookkit-codex = { path = "crates/hookkit-codex" }
-hookkit-gemini = { path = "crates/hookkit-gemini" }
-hookkit-common = { path = "crates/hookkit-common" }
-hookkit-pkl-config = { path = "crates/hookkit-pkl-config" }
-hookkit-tool-runner = { path = "crates/hookkit-tool-runner" }
+hookkit-core = { version = "0.1.0", path = "crates/hookkit-core" }
+hookkit-runtime = { version = "0.1.0", path = "crates/hookkit-runtime" }
+hookkit-claude = { version = "0.1.0", path = "crates/hookkit-claude" }
+hookkit-codex = { version = "0.1.0", path = "crates/hookkit-codex" }
+hookkit-gemini = { version = "0.1.0", path = "crates/hookkit-gemini" }
+hookkit-antigravity = { version = "0.1.0", path = "crates/hookkit-antigravity" }
+hookkit-common = { version = "0.1.0", path = "crates/hookkit-common" }
+hookkit-pkl-config = { version = "0.1.0", path = "crates/hookkit-pkl-config" }
+hookkit-tool-runner = { version = "0.1.0", path = "crates/hookkit-tool-runner" }

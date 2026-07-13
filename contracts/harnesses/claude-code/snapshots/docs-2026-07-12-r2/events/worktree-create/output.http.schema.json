@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r2:worktree-create:http-output",
+  "type": "object",
+  "required": ["hookSpecificOutput"],
+  "properties": {
+    "hookSpecificOutput": {
+      "type": "object",
+      "required": ["hookEventName", "worktreePath"],
+      "properties": {
+        "hookEventName": { "const": "WorktreeCreate" },
+        "worktreePath": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,9 @@
+format_version: 1
+sources:
+  - id: antigravity-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/assets/docs/antigravity-2-0/hooks.md
+    retrieved: 2026-07-12
+    content_sha256: 1d42e45b22596bec959521d698ab220a1bb883986a9998fa27a93c560d75849b
+

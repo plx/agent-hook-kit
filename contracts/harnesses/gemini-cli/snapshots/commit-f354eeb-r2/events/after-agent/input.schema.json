@@ -1,0 +1,42 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:gemini-cli:commit-f354eeb-r2:after-agent:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "AfterAgent"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "prompt_response": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "stop_hook_active": {
+      "type": "boolean"
+    },
+    "timestamp": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "timestamp",
+    "prompt",
+    "prompt_response",
+    "stop_hook_active"
+  ],
+  "type": "object"
+}

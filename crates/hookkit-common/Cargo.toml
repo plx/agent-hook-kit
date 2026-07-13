@@ -1,14 +1,19 @@
 [package]
 name = "hookkit-common"
-description = "Cross-harness wrapper enums and semantic helpers"
+description = "Lossless cross-harness aligned event wrappers and message helpers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["hooks", "agents", "automation"]
+categories = ["development-tools"]
 
 [dependencies]
 hookkit-core = { workspace = true }
 hookkit-claude = { workspace = true }
 hookkit-codex = { workspace = true }
 hookkit-gemini = { workspace = true }
+hookkit-antigravity = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

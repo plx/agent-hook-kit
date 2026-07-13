@@ -1,0 +1,11 @@
+[package]
+name = "antigravity-pre-invocation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+hookkit-core = { workspace = true }
+hookkit-runtime = { workspace = true }
+hookkit-antigravity = { workspace = true }

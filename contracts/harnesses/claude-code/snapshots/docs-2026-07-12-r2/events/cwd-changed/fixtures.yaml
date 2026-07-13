@@ -1,0 +1,86 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      new_cwd: /repo/crate
+      old_cwd: /repo
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-old_cwd
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: CwdChanged
+      new_cwd: /repo/crate
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: CwdChanged
+      new_cwd: /repo/crate
+      old_cwd: /repo
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: CwdChanged
+      new_cwd: /repo/crate
+      old_cwd: /repo
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    systemMessage: Working directory changed.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiV29ya2luZyBkaXJlY3RvcnkgY2hhbmdlZC4ifQ==
+  stdout_sha256: 3a04b7d0debe87be27e4fe4bc9b8666ee4396e2c3443884de0c230f17e01a6c7
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiV29ya2luZyBkaXJlY3RvcnkgY2hhbmdlZC4ifQ==
+  stdout_sha256: 3a04b7d0debe87be27e4fe4bc9b8666ee4396e2c3443884de0c230f17e01a6c7
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

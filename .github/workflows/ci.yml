@@ -13,6 +13,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  msrv:
+    name: Rust 1.85 libraries and runner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Check supported packages on the declared MSRV
+        run: >-
+          cargo check
+          -p hookkit-core
+          -p hookkit-claude
+          -p hookkit-codex
+          -p hookkit-gemini
+          -p hookkit-antigravity
+          -p hookkit-common
+          -p hookkit-runtime
+          -p hookkit-pkl-config
+          -p hookkit-tool-runner
+          --all-targets
+
   check:
     name: Check, lint, test
     runs-on: ${{ matrix.os }}
@@ -27,10 +48,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format check
         run: cargo fmt --check
+      - name: Contract catalog
+        run: |
+          cargo run --quiet -p hookkit-conformance
+          cargo run --quiet -p xtask --bin generate-claude-contracts
+          cargo run --quiet -p xtask --bin generate-codex-contracts
+          cargo run --quiet -p xtask --bin generate-gemini-contracts
+          cargo xtask contracts check --snapshot current
+          cargo xtask contracts report --check
+          cargo xtask contracts verify-vendor
+          git diff --exit-code -- contracts
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Test
+      - name: Hermetic workspace tests
         run: cargo test --workspace
+      - name: Hermetic runner fake-tool smoke
+        if: runner.os != 'Windows'
+        run: cargo test -p hookkit-tool-runner --lib hermetic_fake_executable_smoke
+      - name: Verify publishable package archives
+        run: |
+          for package in hookkit-core hookkit-claude hookkit-codex hookkit-gemini hookkit-antigravity hookkit-common hookkit-runtime; do
+            cargo package -p "$package" --list >/dev/null
+          done
+          cargo package -p hookkit-core
 
   licenses:
     name: Third-party license attribution

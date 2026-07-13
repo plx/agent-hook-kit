@@ -4,6 +4,7 @@ description = "Example: deny/rewrite dangerous tool arguments in Gemini BeforeTo
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [[bin]]
 name = "gemini-beforetool-policy"

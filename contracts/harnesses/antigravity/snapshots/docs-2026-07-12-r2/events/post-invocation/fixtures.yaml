@@ -1,0 +1,44 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0 }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c2, workspacePaths: [/repo, /lib], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 4, initialNumSteps: 12, futureField: retained }
+  negative:
+    - id: missing-workspaces
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0 }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-steps
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: many }
+      expected_pointer: /initialNumSteps
+      expected_keyword: type
+output:
+  - id: default
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference]
+    value: { injectSteps: [], terminationBehavior: "" }
+  - id: force-continue
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { injectSteps: [], terminationBehavior: force_continue }
+process:
+  - id: force-continue
+    binding: command
+    outcome: control
+    exit_code: 0
+    stdout_base64: eyJpbmplY3RTdGVwcyI6W10sInRlcm1pbmF0aW9uQmVoYXZpb3IiOiJmb3JjZV9jb250aW51ZSJ9
+    stdout_sha256: d8fc41b75658104a8baba8e4d74427b67c04968ccda9b150ab3eb7fbfe5c8514
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

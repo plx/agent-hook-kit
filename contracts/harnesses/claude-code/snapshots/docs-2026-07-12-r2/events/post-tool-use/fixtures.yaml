@@ -1,0 +1,109 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_response:
+        stdout: ok
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-tool_name
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PostToolUse
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_response:
+        stdout: ok
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PostToolUse
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_response:
+        stdout: ok
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      duration_ms: 12
+      hook_event_name: PostToolUse
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_response:
+        stdout: ok
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    hookSpecificOutput:
+      additionalContext: Generated files changed.
+      hookEventName: PostToolUse
+      updatedToolOutput:
+        status: redacted
+    reason: Review result.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiR2VuZXJhdGVkIGZpbGVzIGNoYW5nZWQuIiwiaG9va0V2ZW50TmFtZSI6IlBvc3RUb29sVXNlIiwidXBkYXRlZFRvb2xPdXRwdXQiOnsic3RhdHVzIjoicmVkYWN0ZWQifX0sInJlYXNvbiI6IlJldmlldyByZXN1bHQuIn0=
+  stdout_sha256: 68f3b99002476332a1795f3a1a3e84023f7d38185dc5cf26410b51140b5e4f86
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiR2VuZXJhdGVkIGZpbGVzIGNoYW5nZWQuIiwiaG9va0V2ZW50TmFtZSI6IlBvc3RUb29sVXNlIiwidXBkYXRlZFRvb2xPdXRwdXQiOnsic3RhdHVzIjoicmVkYWN0ZWQifX0sInJlYXNvbiI6IlJldmlldyByZXN1bHQuIn0=
+  stdout_sha256: 68f3b99002476332a1795f3a1a3e84023f7d38185dc5cf26410b51140b5e4f86
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

@@ -1,0 +1,37 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:gemini-cli:commit-f354eeb-r2:pre-compress:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "PreCompress"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    },
+    "trigger": {
+      "enum": [
+        "auto",
+        "manual"
+      ]
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "timestamp",
+    "trigger"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:meta:v1:fixtures",
+  "$defs": {
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "origin": {
+      "enum": ["official", "sanitized-live", "synthesized", "regression"]
+    },
+    "positiveInput": {
+      "type": "object",
+      "required": ["id", "origin", "sources", "value"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "origin": { "$ref": "#/$defs/origin" },
+        "sources": { "$ref": "#/$defs/sources" },
+        "value": true
+      },
+      "additionalProperties": false
+    },
+    "negativeInput": {
+      "type": "object",
+      "required": [
+        "id",
+        "origin",
+        "sources",
+        "value",
+        "expected_pointer"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "origin": { "$ref": "#/$defs/origin" },
+        "sources": { "$ref": "#/$defs/sources" },
+        "value": true,
+        "expected_pointer": { "type": "string" },
+        "expected_keyword": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "required": ["id", "schema", "origin", "sources", "value"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "schema": { "type": "string", "minLength": 1 },
+        "origin": { "$ref": "#/$defs/origin" },
+        "sources": { "$ref": "#/$defs/sources" },
+        "value": true
+      },
+      "additionalProperties": false
+    },
+    "negativeOutput": {
+      "type": "object",
+      "required": [
+        "id",
+        "schema",
+        "origin",
+        "sources",
+        "value",
+        "expected_pointer",
+        "expected_keyword"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "schema": { "type": "string", "minLength": 1 },
+        "origin": { "$ref": "#/$defs/origin" },
+        "sources": { "$ref": "#/$defs/sources" },
+        "value": true,
+        "expected_pointer": { "type": "string" },
+        "expected_keyword": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "process": {
+      "type": "object",
+      "required": [
+        "id",
+        "binding",
+        "outcome",
+        "exit_code",
+        "stdout_base64",
+        "stdout_sha256",
+        "stderr_base64",
+        "stderr_sha256"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "binding": { "type": "string", "minLength": 1 },
+        "outcome": { "type": "string", "minLength": 1 },
+        "exit_code": { "type": "integer" },
+        "stdout_base64": { "type": "string" },
+        "stdout_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "stderr_base64": { "type": "string" },
+        "stderr_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["format_version", "input", "process"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "input": {
+      "type": "object",
+      "required": ["positive", "negative"],
+      "properties": {
+        "positive": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/positiveInput" }
+        },
+        "negative": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/negativeInput" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "output": { "type": "array", "items": { "$ref": "#/$defs/output" } },
+    "output_negative": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/negativeOutput" }
+    },
+    "process": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/process" }
+    }
+  },
+  "additionalProperties": false
+}

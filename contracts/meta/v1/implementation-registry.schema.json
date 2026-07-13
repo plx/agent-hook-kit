@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:meta:v1:implementation-registry",
+  "type": "object",
+  "required": ["format_version", "events"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["contract", "harness", "event", "native_input", "native_output", "bindings", "conformance_cases"],
+        "properties": {
+          "contract": { "type": "string", "minLength": 1 },
+          "harness": { "type": "string", "minLength": 1 },
+          "event": { "type": "string", "minLength": 1 },
+          "native_input": { "type": "boolean" },
+          "native_output": { "type": "boolean" },
+          "bindings": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "enum": ["command", "http", "mcp_tool", "prompt", "agent"] }
+          },
+          "conformance_cases": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

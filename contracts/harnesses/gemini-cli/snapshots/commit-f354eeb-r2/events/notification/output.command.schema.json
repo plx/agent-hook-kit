@@ -1,0 +1,11 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:gemini-cli:commit-f354eeb-r2:notification:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "systemMessage": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

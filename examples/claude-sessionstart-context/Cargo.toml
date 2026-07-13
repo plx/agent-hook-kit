@@ -4,6 +4,7 @@ description = "Example: inject additional context at Claude session start"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [[bin]]
 name = "claude-sessionstart-context"

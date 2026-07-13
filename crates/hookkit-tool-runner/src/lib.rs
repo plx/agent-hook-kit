@@ -5,14 +5,11 @@
 //! the configured order, and lowers a unified result to the selected harness.
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use hookkit_common::UserNotice;
-use hookkit_common::input::CommonHookInput;
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
-use hookkit_common::output::{CommonHookOutput, CommonPostToolUseOutput, LoweringPolicy};
-use hookkit_core::{Harness, HookkitError};
+use hookkit_common::{NoticeLevel, PostToolUseInput, PostToolUseOutput, UserNotice};
+use hookkit_core::{HarnessId, HookkitError, RuntimeContext};
 use hookkit_pkl_config::schema as pkl;
-use hookkit_runtime::RuntimeContext;
-use hookkit_runtime::artifacts::ArtifactManager;
+use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
 use minijinja::Environment;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -283,7 +280,7 @@ impl Default for ToolMessages {
 /// CLI options parsed from process args.
 #[derive(Debug, Clone)]
 pub struct Cli {
-    pub harness: Harness,
+    pub harness: HarnessId,
     pub config_path: Option<PathBuf>,
 }
 
@@ -296,9 +293,9 @@ pub fn parse_args() -> Result<Cli, ()> {
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--claude" => harness = Some(set_harness(harness, Harness::Claude)?),
-            "--codex" => harness = Some(set_harness(harness, Harness::Codex)?),
-            "--gemini" => harness = Some(set_harness(harness, Harness::Gemini)?),
+            "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
+            "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
+            "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
             "--config" => {
                 let Some(path) = args.next() else {
                     eprintln!("{}", usage());
@@ -306,7 +303,6 @@ pub fn parse_args() -> Result<Cli, ()> {
                 };
                 config_path = Some(PathBuf::from(path));
             }
-            "--dump-parsed" => {}
             "--help" | "-h" => {
                 eprintln!("{}", usage());
                 return Err(());
@@ -329,7 +325,7 @@ pub fn parse_args() -> Result<Cli, ()> {
     })
 }
 
-fn set_harness(current: Option<Harness>, next: Harness) -> Result<Harness, ()> {
+fn set_harness(current: Option<HarnessId>, next: HarnessId) -> Result<HarnessId, ()> {
     if current.is_some() {
         eprintln!("{}", usage());
         return Err(());
@@ -341,41 +337,368 @@ fn usage() -> String {
     format!("Usage: {BINARY_NAME} --claude|--codex|--gemini [--config PATH]")
 }
 
-/// Run the full post-tool-use hook from parsed CLI args.
-pub fn run_runner(cli: Cli) -> std::process::ExitCode {
-    hookkit_runtime::run_common(cli.harness, move |input, ctx| {
-        run_common_input(input, ctx, cli.config_path.as_deref())
+// ----------------------------------------------------------------------------
+// Runner-owned post-tool observation and path discovery
+// ----------------------------------------------------------------------------
+
+/// The runner deliberately owns these best-effort interpretations of open tool
+/// payloads. They are workflow policy, not cross-harness protocol facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObservedToolStatus {
+    Success,
+    Failure,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy)]
+// Path selection currently needs only `value`; the rest of the observation is
+// kept here because result interpretation is runner policy and is exercised by
+// runner tests rather than exported from `hookkit-common`.
+#[allow(dead_code)]
+struct ToolResultObservation<'a> {
+    value: Option<JsonPayload<'a>>,
+    status: ObservedToolStatus,
+    stdout: Option<&'a str>,
+    stderr: Option<&'a str>,
+    exit_code: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PostToolObservation<'a> {
+    tool_name: Option<&'a str>,
+    tool_input: Option<JsonPayload<'a>>,
+    result: ToolResultObservation<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonPayload<'a> {
+    Value(&'a serde_json::Value),
+    Object(&'a serde_json::Map<String, serde_json::Value>),
+}
+
+fn observe_post_tool(input: &PostToolUseInput) -> Option<PostToolObservation<'_>> {
+    let (tool_name, tool_input, tool_result) = match input {
+        PostToolUseInput::Claude(event) => (
+            event.tool_name.as_str(),
+            JsonPayload::Value(&event.tool_input),
+            JsonPayload::Value(&event.tool_response),
+        ),
+        PostToolUseInput::Codex(event) => (
+            event.tool_name.as_str(),
+            JsonPayload::Value(&event.tool_input),
+            JsonPayload::Value(&event.tool_response),
+        ),
+        PostToolUseInput::Gemini(event) => (
+            event.tool_name.as_str(),
+            JsonPayload::Object(&event.tool_input),
+            JsonPayload::Object(&event.tool_response),
+        ),
+        PostToolUseInput::Antigravity(_) => return None,
+        _ => return None,
+    };
+
+    Some(PostToolObservation {
+        tool_name: Some(tool_name),
+        tool_input: Some(tool_input),
+        result: observe_tool_result(Some(tool_result)),
     })
 }
 
-/// Run a parsed common input through the Pkl-driven runner. Exposed for tests
-/// that prefer to drive the runner without spinning up an entire process.
-pub fn run_common_input(
-    input: CommonHookInput,
-    ctx: &RuntimeContext,
-    config_path: Option<&Path>,
-) -> hookkit_core::Result<CommonHookOutput> {
-    let CommonHookInput::PostToolUse(post_tool) = input else {
-        return Ok(CommonHookOutput::empty());
+fn observe_tool_result(value: Option<JsonPayload<'_>>) -> ToolResultObservation<'_> {
+    ToolResultObservation {
+        value,
+        status: infer_tool_status(value),
+        stdout: find_result_string(value, &["stdout", "standardOutput"]),
+        stderr: find_result_string(value, &["stderr", "standardError"]),
+        exit_code: find_result_i64(value, &["exitCode", "exit_code", "code"]),
+    }
+}
+
+fn infer_tool_status(value: Option<JsonPayload<'_>>) -> ObservedToolStatus {
+    let Some(value) = value else {
+        return ObservedToolStatus::Unknown;
     };
 
-    let cwd = PathBuf::from(ctx.cwd.as_str());
+    if let Some(success) = find_result_bool(Some(value), &["success", "ok"]) {
+        return if success {
+            ObservedToolStatus::Success
+        } else {
+            ObservedToolStatus::Failure
+        };
+    }
+
+    if let Some(exit_code) = find_result_i64(Some(value), &["exitCode", "exit_code"]) {
+        return if exit_code == 0 {
+            ObservedToolStatus::Success
+        } else {
+            ObservedToolStatus::Failure
+        };
+    }
+
+    ObservedToolStatus::Unknown
+}
+
+fn find_result_string<'a>(value: Option<JsonPayload<'a>>, keys: &[&str]) -> Option<&'a str> {
+    match value? {
+        JsonPayload::Value(serde_json::Value::Object(map)) | JsonPayload::Object(map) => {
+            for key in keys {
+                if let Some(found) = map.get(*key).and_then(serde_json::Value::as_str) {
+                    return Some(found);
+                }
+            }
+            map.values()
+                .find_map(|nested| find_result_string(Some(JsonPayload::Value(nested)), keys))
+        }
+        JsonPayload::Value(serde_json::Value::Array(values)) => values
+            .iter()
+            .find_map(|nested| find_result_string(Some(JsonPayload::Value(nested)), keys)),
+        _ => None,
+    }
+}
+
+fn find_result_bool(value: Option<JsonPayload<'_>>, keys: &[&str]) -> Option<bool> {
+    match value? {
+        JsonPayload::Value(serde_json::Value::Object(map)) | JsonPayload::Object(map) => {
+            for key in keys {
+                if let Some(found) = map.get(*key).and_then(serde_json::Value::as_bool) {
+                    return Some(found);
+                }
+            }
+            map.values()
+                .find_map(|nested| find_result_bool(Some(JsonPayload::Value(nested)), keys))
+        }
+        JsonPayload::Value(serde_json::Value::Array(values)) => values
+            .iter()
+            .find_map(|nested| find_result_bool(Some(JsonPayload::Value(nested)), keys)),
+        _ => None,
+    }
+}
+
+fn find_result_i64(value: Option<JsonPayload<'_>>, keys: &[&str]) -> Option<i64> {
+    match value? {
+        JsonPayload::Value(serde_json::Value::Object(map)) | JsonPayload::Object(map) => {
+            for key in keys {
+                if let Some(found) = map.get(*key).and_then(serde_json::Value::as_i64) {
+                    return Some(found);
+                }
+            }
+            map.values()
+                .find_map(|nested| find_result_i64(Some(JsonPayload::Value(nested)), keys))
+        }
+        JsonPayload::Value(serde_json::Value::Array(values)) => values
+            .iter()
+            .find_map(|nested| find_result_i64(Some(JsonPayload::Value(nested)), keys)),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoveredPathRole {
+    ModifiedFile,
+    ReadFile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoveredPathSource {
+    ToolInput(&'static str),
+    ToolResult(&'static str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscoveredPath {
+    absolute_path: PathBuf,
+    role: DiscoveredPathRole,
+    source: DiscoveredPathSource,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OpenPayloadSource {
+    ToolInput,
+    ToolResult,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawDiscoveredPath<'a> {
+    path: &'a str,
+    role: DiscoveredPathRole,
+    source: DiscoveredPathSource,
+}
+
+fn discover_modified_files(input: &PostToolUseInput, cwd: &Path) -> Vec<PathBuf> {
+    discover_path_candidates(input, cwd)
+        .into_iter()
+        .filter(|candidate| candidate.role == DiscoveredPathRole::ModifiedFile)
+        .map(|candidate| candidate.absolute_path)
+        .collect()
+}
+
+fn discover_path_candidates(input: &PostToolUseInput, cwd: &Path) -> Vec<DiscoveredPath> {
+    let Some(observation) = observe_post_tool(input) else {
+        return Vec::new();
+    };
+    let mut raw = Vec::new();
+    if let Some(tool_input) = observation.tool_input {
+        collect_open_payload_paths(
+            tool_input,
+            OpenPayloadSource::ToolInput,
+            observation.tool_name,
+            &mut raw,
+        );
+    }
+    if let Some(tool_result) = observation.result.value {
+        collect_open_payload_paths(
+            tool_result,
+            OpenPayloadSource::ToolResult,
+            observation.tool_name,
+            &mut raw,
+        );
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut candidates = Vec::new();
+    for raw_candidate in raw {
+        let absolute_path = normalize_path(&absolute_from(Path::new(raw_candidate.path), cwd));
+        if !seen.insert(slash_path(&absolute_path)) {
+            continue;
+        }
+        candidates.push(DiscoveredPath {
+            absolute_path,
+            role: raw_candidate.role,
+            source: raw_candidate.source,
+        });
+    }
+    candidates
+}
+
+fn collect_open_payload_paths<'a>(
+    value: JsonPayload<'a>,
+    source: OpenPayloadSource,
+    tool_name: Option<&str>,
+    out: &mut Vec<RawDiscoveredPath<'a>>,
+) {
+    match value {
+        JsonPayload::Value(serde_json::Value::Object(map)) | JsonPayload::Object(map) => {
+            for (key, value) in map {
+                if let Some(path) = value.as_str().filter(|path| !path.trim().is_empty()) {
+                    if let Some(candidate) = path_candidate_from_field(key, path, source, tool_name)
+                    {
+                        out.push(candidate);
+                    }
+                }
+                collect_open_payload_paths(JsonPayload::Value(value), source, tool_name, out);
+            }
+        }
+        JsonPayload::Value(serde_json::Value::Array(values)) => {
+            for value in values {
+                collect_open_payload_paths(JsonPayload::Value(value), source, tool_name, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn path_candidate_from_field<'a>(
+    key: &str,
+    path: &'a str,
+    source: OpenPayloadSource,
+    tool_name: Option<&str>,
+) -> Option<RawDiscoveredPath<'a>> {
+    let is_target_field = matches!(
+        key,
+        "file_path" | "filePath" | "target_file" | "targetFile" | "absolute_path" | "absolutePath"
+    );
+    let is_path_field = key == "path";
+    if !is_target_field && !is_path_field {
+        return None;
+    }
+
+    let tool_writes = tool_name.is_some_and(is_known_file_writing_tool);
+    let role = match (source, is_target_field, is_path_field, tool_writes) {
+        (OpenPayloadSource::ToolInput, true, _, true)
+        | (OpenPayloadSource::ToolInput, false, true, true)
+        | (OpenPayloadSource::ToolResult, _, _, true) => DiscoveredPathRole::ModifiedFile,
+        (OpenPayloadSource::ToolInput, true, _, false)
+        | (OpenPayloadSource::ToolResult, true, _, false) => DiscoveredPathRole::ReadFile,
+        (OpenPayloadSource::ToolInput, false, true, false)
+        | (OpenPayloadSource::ToolResult, false, true, false) => return None,
+        _ => return None,
+    };
+
+    Some(RawDiscoveredPath {
+        path,
+        role,
+        source: match source {
+            OpenPayloadSource::ToolInput => DiscoveredPathSource::ToolInput(static_path_key(key)),
+            OpenPayloadSource::ToolResult => DiscoveredPathSource::ToolResult(static_path_key(key)),
+        },
+    })
+}
+
+fn static_path_key(key: &str) -> &'static str {
+    match key {
+        "file_path" => "file_path",
+        "filePath" => "filePath",
+        "target_file" => "target_file",
+        "targetFile" => "targetFile",
+        "absolute_path" => "absolute_path",
+        "absolutePath" => "absolutePath",
+        "path" => "path",
+        _ => "unknown",
+    }
+}
+
+fn is_known_file_writing_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "write_file" | "replace" | "save_file"
+    )
+}
+
+/// Run the full post-tool-use hook from parsed CLI args.
+pub fn run_runner(cli: Cli) -> std::process::ExitCode {
+    hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PostToolUse, _>(
+        cli.harness,
+        move |input, ctx| run_post_tool_input(input, ctx, cli.config_path.as_deref()),
+    )
+}
+
+/// Run an exact aligned input through the Pkl-driven runner.
+fn run_post_tool_input(
+    post_tool: PostToolUseInput,
+    ctx: &RuntimeContext<'_>,
+    config_path: Option<&Path>,
+) -> hookkit_core::Result<PostToolUseOutput> {
+    let harness = ctx.harness();
+    if matches!(post_tool, PostToolUseInput::Antigravity(_)) {
+        return lower_domain_outcome(
+            harness,
+            RunnerDomainOutcome::UnsupportedHarness {
+                harness: harness.to_string(),
+                reason: "the native event has no tool call or changed-file payload".into(),
+            },
+        );
+    }
+    let cwd = ctx
+        .workspace_roots()
+        .first()
+        .map(|root| PathBuf::from(root.as_str()))
+        .ok_or_else(|| invalid_data("post-tool-use input has no workspace root".into()))?;
     let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path)
         .map_err(|e| invalid_data(e.to_string()))?;
 
     let project_root = normalize_path(&loaded.project_root);
-    let lowering = lowering_from(&loaded.config.settings.lowering_policy);
+    let lowering = loaded.config.settings.lowering_policy;
     let missing_tool_policy = loaded.config.settings.missing_tool_policy;
     let fail_fast = loaded.config.settings.fail_fast;
     let continue_after_issues = loaded.config.settings.continue_after_issues;
 
-    let mut output = CommonPostToolUseOutput::new().with_lowering_policy(lowering);
+    let mut output = RunnerPostToolUseOutput::new(lowering);
     let mut had_hard_failure = false;
     let mut had_harness_block_message: Option<String> = None;
 
     let tools = resolve_run_order(&loaded.config)?;
     if tools.is_empty() {
-        return Ok(CommonHookOutput::empty());
+        return lower_domain_outcome(harness, RunnerDomainOutcome::Clean);
     }
 
     let global_exclude = &loaded.config.settings.exclude;
@@ -392,11 +715,10 @@ pub fn run_common_input(
             global_diagnostics_dir: global_diagnostics_dir.as_deref(),
         };
 
-        let candidates = post_tool.modified_files(&cwd, Some(&project_root));
+        let candidates = discover_modified_files(&post_tool, &cwd);
         let matcher = FileMatcher::new(&spec.file_selection)?;
         let runnable_paths = candidates
             .into_iter()
-            .map(|c| c.absolute_path)
             .filter(|p| p.is_file())
             .filter(|p| matcher.matches(p, &project_root))
             .collect::<BTreeSet<_>>()
@@ -433,45 +755,197 @@ pub fn run_common_input(
         }
     }
 
-    if let Some(message) = had_harness_block_message {
-        // Surface harness-block as a CommonHookOutput intent that lowers to
-        // each harness's blocking output (exit code 2 + stderr). This keeps
-        // `run_common_input` composable for tests and embedders — they get
-        // a real Result back instead of having the host process terminated.
-        return Ok(CommonHookOutput::PostToolUse(
-            output.with_harness_block(message),
-        ));
-    }
-
-    if had_hard_failure {
-        return Err(invalid_data(
-            "tool unavailable with missingToolPolicy=hard-failure".into(),
-        ));
-    }
-
-    if is_empty_output(&output) {
-        Ok(CommonHookOutput::empty())
+    let outcome = if let Some(message) = had_harness_block_message {
+        RunnerDomainOutcome::HarnessBlock { message, output }
+    } else if had_hard_failure {
+        RunnerDomainOutcome::OperationalFailure {
+            message: "tool unavailable with missingToolPolicy=hard-failure".into(),
+        }
+    } else if is_empty_output(&output) {
+        RunnerDomainOutcome::Clean
     } else {
-        Ok(CommonHookOutput::PostToolUse(output))
+        RunnerDomainOutcome::Report(output)
+    };
+    lower_domain_outcome(harness, outcome)
+}
+
+#[derive(Debug, Default)]
+pub struct RunnerPostToolUseOutput {
+    notices: Vec<UserNotice>,
+    agent_feedback: Vec<String>,
+    diagnostics: Vec<DiagnosticReport>,
+    harness_block: Option<String>,
+    lowering: pkl::LoweringPolicy,
+}
+
+impl RunnerPostToolUseOutput {
+    fn new(lowering: pkl::LoweringPolicy) -> Self {
+        Self {
+            lowering,
+            ..Self::default()
+        }
+    }
+
+    fn with_user_notice(mut self, notice: UserNotice) -> Self {
+        self.notices.push(notice);
+        self
+    }
+
+    fn with_agent_feedback(mut self, feedback: impl Into<String>) -> Self {
+        self.agent_feedback.push(feedback.into());
+        self
+    }
+
+    fn with_diagnostic_report(mut self, report: DiagnosticReport) -> Self {
+        self.diagnostics.push(report);
+        self
+    }
+
+    fn with_harness_block(mut self, message: impl Into<String>) -> Self {
+        self.harness_block = Some(message.into());
+        self
     }
 }
 
-fn is_empty_output(output: &CommonPostToolUseOutput) -> bool {
+/// Runner-owned semantic result. Tool policy and classification deliberately do
+/// not leak into core/common crates.
+#[derive(Debug)]
+pub enum RunnerDomainOutcome {
+    Clean,
+    Report(RunnerPostToolUseOutput),
+    HarnessBlock {
+        message: String,
+        output: RunnerPostToolUseOutput,
+    },
+    OperationalFailure {
+        message: String,
+    },
+    UnsupportedHarness {
+        harness: String,
+        reason: String,
+    },
+}
+
+fn lower_domain_outcome(
+    harness: &HarnessId,
+    outcome: RunnerDomainOutcome,
+) -> hookkit_core::Result<PostToolUseOutput> {
+    match outcome {
+        RunnerDomainOutcome::Clean => lower_report(harness, RunnerPostToolUseOutput::default()),
+        RunnerDomainOutcome::Report(output) => lower_report(harness, output),
+        RunnerDomainOutcome::HarnessBlock { message, output } => {
+            lower_report(harness, output.with_harness_block(message))
+        }
+        RunnerDomainOutcome::OperationalFailure { message } => Err(invalid_data(message)),
+        RunnerDomainOutcome::UnsupportedHarness { harness, reason } => Err(invalid_data(format!(
+            "post-tool-use runner does not support {harness}: {reason}"
+        ))),
+    }
+}
+
+fn lower_report(
+    harness: &HarnessId,
+    output: RunnerPostToolUseOutput,
+) -> hookkit_core::Result<PostToolUseOutput> {
+    if let Some(message) = output.harness_block {
+        return match harness.as_str() {
+            "claude-code" => Ok(PostToolUseOutput::Claude(
+                hookkit_claude::protocol::PostToolUseOutput::blocking_error(message),
+            )),
+            "codex" => Ok(PostToolUseOutput::Codex(
+                hookkit_codex::protocol::PostToolUseOutput::blocking_error(message),
+            )),
+            "gemini-cli" => Ok(PostToolUseOutput::Gemini(
+                hookkit_gemini::protocol::AfterToolOutput::blocking_error(message),
+            )),
+            _ => Err(invalid_data(format!(
+                "post-tool-use runner does not support {harness}"
+            ))),
+        };
+    }
+
+    let mut stderr = output
+        .notices
+        .iter()
+        .map(format_notice)
+        .chain(output.diagnostics.iter().map(format_diagnostic))
+        .collect::<Vec<_>>();
+    if !stderr.is_empty() {
+        match output.lowering {
+            pkl::LoweringPolicy::Strict => {
+                return Err(invalid_data(format!(
+                    "{harness} PostToolUse has no structured user-only message channel"
+                )));
+            }
+            pkl::LoweringPolicy::BestEffort => {}
+            pkl::LoweringPolicy::BestEffortWithWarnings => stderr
+                .push("hookkit: redirected user notices and diagnostics to protocol stderr".into()),
+        }
+    }
+    let stderr = (!stderr.is_empty()).then(|| stderr.join("\n"));
+    let context = output.agent_feedback.join("\n");
+
+    match harness.as_str() {
+        "claude-code" => {
+            let native = if context.is_empty() {
+                hookkit_claude::protocol::PostToolUseOutput::no_op()
+            } else {
+                hookkit_claude::protocol::PostToolUseOutput::with_context(context)
+            };
+            Ok(PostToolUseOutput::Claude(match stderr {
+                Some(stderr) => native.with_protocol_stderr(stderr)?,
+                None => native,
+            }))
+        }
+        "codex" => {
+            let native = if context.is_empty() {
+                hookkit_codex::protocol::PostToolUseOutput::no_op()
+            } else {
+                hookkit_codex::protocol::PostToolUseOutput::with_context(context)
+            };
+            Ok(PostToolUseOutput::Codex(match stderr {
+                Some(stderr) => native.with_protocol_stderr(stderr)?,
+                None => native,
+            }))
+        }
+        "gemini-cli" => {
+            let native = if context.is_empty() {
+                hookkit_gemini::protocol::AfterToolOutput::no_op()
+            } else {
+                hookkit_gemini::protocol::AfterToolOutput::with_context(context)
+            };
+            Ok(PostToolUseOutput::Gemini(match stderr {
+                Some(stderr) => native.with_protocol_stderr(stderr)?,
+                None => native,
+            }))
+        }
+        _ => Err(invalid_data(format!(
+            "post-tool-use runner does not support {harness}"
+        ))),
+    }
+}
+
+fn format_notice(notice: &UserNotice) -> String {
+    match notice.level {
+        NoticeLevel::Info => notice.text.clone(),
+        NoticeLevel::Warning => format!("warning: {}", notice.text),
+        NoticeLevel::Error => format!("error: {}", notice.text),
+    }
+}
+
+fn format_diagnostic(diagnostic: &DiagnosticReport) -> String {
+    let mut rendered = format!("{}:\n{}", diagnostic.title, diagnostic.text.trim());
+    if let Some(artifact) = &diagnostic.artifact {
+        rendered.push_str(&format!("\nartifact: {}", artifact.absolute_path.display()));
+    }
+    rendered
+}
+
+fn is_empty_output(output: &RunnerPostToolUseOutput) -> bool {
     output.notices.is_empty()
         && output.agent_feedback.is_empty()
         && output.diagnostics.is_empty()
-        && output.replace_tool_result.is_none()
-        && output.tail_tool_call.is_none()
-        && output.session_control.is_none()
         && output.harness_block.is_none()
-}
-
-fn lowering_from(policy: &pkl::LoweringPolicy) -> LoweringPolicy {
-    match policy {
-        pkl::LoweringPolicy::Strict => LoweringPolicy::Strict,
-        pkl::LoweringPolicy::BestEffort => LoweringPolicy::BestEffort,
-        pkl::LoweringPolicy::BestEffortWithWarnings => LoweringPolicy::BestEffortWithWarnings,
-    }
 }
 
 /// Resolve the `run` list to ordered tool specs.
@@ -527,10 +1001,10 @@ fn ordered_phases(spec: &pkl::ToolSpec) -> Vec<(String, &pkl::Phase)> {
 
     // Honor explicit phase order first.
     for id in &spec.phase_order {
-        if let Some(phase) = spec.phases.get(id)
-            && seen.insert(id.clone())
-        {
-            out.push((id.clone(), phase));
+        if let Some(phase) = spec.phases.get(id) {
+            if seen.insert(id.clone()) {
+                out.push((id.clone(), phase));
+            }
         }
     }
 
@@ -1138,9 +1612,9 @@ fn walk_files(base: &Path) -> Vec<PathBuf> {
 fn accumulate_outcomes(
     outcomes: Vec<ToolRunOutcome>,
     context: &ToolContext<'_>,
-    ctx: &RuntimeContext,
+    ctx: &RuntimeContext<'_>,
     missing_tool_policy: pkl::MissingToolPolicy,
-    output: &mut CommonPostToolUseOutput,
+    output: &mut RunnerPostToolUseOutput,
     had_hard_failure: &mut bool,
     had_harness_block_message: &mut Option<String>,
 ) -> hookkit_core::Result<ToolBatchStatus> {
@@ -1201,15 +1675,6 @@ fn accumulate_outcomes(
                 }
             }
             pkl::MissingToolPolicy::HardFailure => {
-                if let Some((phase, executable, install_hint)) = unavailable.first() {
-                    let message = render_unavailable_message(
-                        context,
-                        phase,
-                        executable,
-                        install_hint.as_deref(),
-                    )?;
-                    eprintln!("{message}");
-                }
                 *had_hard_failure = true;
                 return Ok(status);
             }
@@ -1401,7 +1866,7 @@ fn write_diagnostics(
     label: &str,
     diagnostics: &str,
     context: &ToolContext<'_>,
-    ctx: &RuntimeContext,
+    ctx: &RuntimeContext<'_>,
 ) -> hookkit_core::Result<PathBuf> {
     let base_dir = match (
         context.spec.diagnostics_directory.as_deref(),
@@ -1414,10 +1879,26 @@ fn write_diagnostics(
     let manager = ArtifactManager::new(base_dir)?;
     manager
         .write_text(
-            &ctx.artifact_key(format!("{}-{label}", context.spec.id)),
+            &runner_artifact_key(ctx, format!("{}-{label}", context.spec.id)),
             diagnostics,
         )
         .map_err(Into::into)
+}
+
+fn runner_artifact_key(ctx: &RuntimeContext<'_>, label: String) -> ArtifactKey {
+    let session = ctx
+        .session_id()
+        .map(ToString::to_string)
+        .or_else(|| ctx.conversation_id().map(ToString::to_string))
+        .unwrap_or_else(|| "unknown-session".to_string());
+    let mut key = ArtifactKey::new(session, label);
+    if let Some(turn) = ctx.turn_id() {
+        key = key.with_turn(turn.to_string());
+    }
+    if let Some(tool_call) = ctx.tool_call_id() {
+        key = key.with_tool_use(tool_call.to_string());
+    }
+    key
 }
 
 fn report_with_artifact(
@@ -1523,6 +2004,144 @@ fn invalid_data(message: String) -> HookkitError {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    fn claude_post_tool(
+        tool_name: &str,
+        tool_input: serde_json::Value,
+        tool_response: serde_json::Value,
+    ) -> PostToolUseInput {
+        PostToolUseInput::Claude(hookkit_claude::protocol::PostToolUseInput {
+            session_id: "r5-test".into(),
+            transcript_path: "/tmp/r5-transcript.jsonl".into(),
+            cwd: "/hookkit-r5-root".into(),
+            hook_event_name: "PostToolUse".into(),
+            tool_name: tool_name.into(),
+            tool_input,
+            tool_use_id: "tool-r5".into(),
+            tool_response,
+            agent_id: None,
+            agent_type: None,
+            duration_ms: None,
+            effort: None,
+            permission_mode: None,
+            prompt_id: None,
+            extra: BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn runner_discovers_nested_writer_paths_and_deduplicates_payload_spellings() {
+        let root = Path::new("/hookkit-r5-root");
+        let input = claude_post_tool(
+            "Write",
+            serde_json::json!({
+                "wrapper": [{"file_path": "src/./app.py"}],
+                "duplicate": {"filePath": "src/app.py"}
+            }),
+            serde_json::json!({
+                "nested": {
+                    "targetFile": "/hookkit-r5-root/src/app.py",
+                    "absolute_path": "/hookkit-r5-root/src/generated.py"
+                }
+            }),
+        );
+
+        let candidates = discover_path_candidates(&input, root);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].absolute_path, root.join("src/app.py"));
+        assert_eq!(candidates[0].role, DiscoveredPathRole::ModifiedFile);
+        assert!(
+            matches!(
+                candidates[0].source,
+                DiscoveredPathSource::ToolInput("file_path" | "filePath")
+            ),
+            "first occurrence should come from the tool input: {candidates:?}"
+        );
+        assert_eq!(
+            candidates[1],
+            DiscoveredPath {
+                absolute_path: root.join("src/generated.py"),
+                role: DiscoveredPathRole::ModifiedFile,
+                source: DiscoveredPathSource::ToolResult("absolute_path"),
+            }
+        );
+        assert_eq!(
+            discover_modified_files(&input, root),
+            vec![root.join("src/app.py"), root.join("src/generated.py")]
+        );
+    }
+
+    #[test]
+    fn runner_does_not_treat_read_tool_paths_as_modified() {
+        let root = Path::new("/hookkit-r5-root");
+        let input = claude_post_tool(
+            "Read",
+            serde_json::json!({"nested": {"file_path": "src/app.py"}}),
+            serde_json::json!({"content": "def f(): pass\n"}),
+        );
+
+        assert_eq!(
+            discover_path_candidates(&input, root),
+            vec![DiscoveredPath {
+                absolute_path: root.join("src/app.py"),
+                role: DiscoveredPathRole::ReadFile,
+                source: DiscoveredPathSource::ToolInput("file_path"),
+            }]
+        );
+        assert!(discover_modified_files(&input, root).is_empty());
+    }
+
+    #[test]
+    fn runner_owns_recursive_tool_result_observation() {
+        let input = claude_post_tool(
+            "Write",
+            serde_json::json!({}),
+            serde_json::json!({
+                "wrapper": [{
+                    "ok": false,
+                    "standardOutput": "partial output",
+                    "standardError": "write failed",
+                    "exit_code": 7
+                }]
+            }),
+        );
+
+        let observation = observe_post_tool(&input).unwrap().result;
+        assert_eq!(observation.status, ObservedToolStatus::Failure);
+        assert_eq!(observation.stdout, Some("partial output"));
+        assert_eq!(observation.stderr, Some("write failed"));
+        assert_eq!(observation.exit_code, Some(7));
+    }
+
+    #[test]
+    fn domain_outcomes_keep_clean_failure_and_unsupported_distinct() {
+        assert!(matches!(
+            lower_domain_outcome(&HarnessId::CLAUDE_CODE, RunnerDomainOutcome::Clean).unwrap(),
+            PostToolUseOutput::Claude(_)
+        ));
+        assert!(
+            lower_domain_outcome(
+                &HarnessId::CLAUDE_CODE,
+                RunnerDomainOutcome::OperationalFailure {
+                    message: "checker crashed".into(),
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            lower_domain_outcome(
+                &HarnessId::ANTIGRAVITY,
+                RunnerDomainOutcome::UnsupportedHarness {
+                    harness: "antigravity".into(),
+                    reason: "no changed-file data".into(),
+                }
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn resolve_worker_count_honors_jobs_setting() {
         // auto (0) is reserved for future use and runs serially for now.
@@ -1583,5 +2202,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hermetic_fake_executable_smoke() {
+        let root =
+            std::env::temp_dir().join(format!("hookkit-hermetic-smoke-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create smoke directory");
+
+        let fake = root.join("fake-checker");
+        std::fs::write(&fake, "#!/bin/sh\nprintf 'fake checker clean\\n'\n")
+            .expect("write fake executable");
+        let mut permissions = std::fs::metadata(&fake)
+            .expect("read fake executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake, permissions).expect("make fake executable runnable");
+
+        let target = root.join("input.rs");
+        std::fs::write(&target, "fn main() {}\n").expect("write smoke input");
+        let spec = ToolSpec::new("fake", "Fake checker", fake.to_string_lossy().into_owned())
+            .with_phase(
+                ToolPhase::new("verify", PhaseMode::Verify).with_args([CommandArgTemplate::Files]),
+            );
+        let context = ToolContext {
+            spec: &spec,
+            project_root: &root,
+            global_diagnostics_dir: None,
+        };
+        let job = job_with_file(&root, "input.rs");
+
+        let outcome = run_job(&job, &context);
+        let ToolRunOutcome::Completed(completed) = outcome else {
+            panic!("expected completed fake-tool run");
+        };
+        assert_eq!(completed.issues, IssueState::Clean);
+        assert!(matches!(completed.changes, ChangeState::Unchanged));
+        assert!(completed.diagnostics.contains("fake checker clean"));
+
+        std::fs::remove_dir_all(&root).expect("remove smoke directory");
     }
 }

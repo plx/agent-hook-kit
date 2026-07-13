@@ -1,0 +1,76 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r1:config-change:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "file_path": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "ConfigChange"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ]
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "user_settings",
+        "project_settings",
+        "local_settings",
+        "policy_settings",
+        "skills"
+      ]
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "source"
+  ],
+  "type": "object"
+}

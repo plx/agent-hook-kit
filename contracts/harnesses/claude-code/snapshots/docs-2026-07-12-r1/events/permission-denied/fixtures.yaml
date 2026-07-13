@@ -1,0 +1,98 @@
+format_version: 1
+input:
+  negative:
+  - expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      reason: Auto mode denied
+      session_id: s1
+      tool_input:
+        command: rm -rf /tmp/build
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - expected_pointer: ''
+    id: missing-tool_name
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PermissionDenied
+      reason: Auto mode denied
+      session_id: s1
+      tool_input:
+        command: rm -rf /tmp/build
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PermissionDenied
+      reason: Auto mode denied
+      session_id: s1
+      tool_input:
+        command: rm -rf /tmp/build
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PermissionDenied
+      permission_mode: default
+      prompt_id: prompt-1
+      reason: Auto mode denied
+      session_id: s1
+      tool_input:
+        command: rm -rf /tmp/build
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      hookEventName: PermissionDenied
+      retry: true
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlBlcm1pc3Npb25EZW5pZWQiLCJyZXRyeSI6dHJ1ZX19
+  stdout_sha256: d6a6975219bb32afa8797733116b6f2eb05e743cd0f0a39c6556455fb37741ad
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlBlcm1pc3Npb25EZW5pZWQiLCJyZXRyeSI6dHJ1ZX19
+  stdout_sha256: d6a6975219bb32afa8797733116b6f2eb05e743cd0f0a39c6556455fb37741ad
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

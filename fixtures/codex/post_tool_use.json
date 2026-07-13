@@ -1,14 +1,19 @@
 {
-  "sessionId": "codex-sess-001",
+  "session_id": "codex-sess-001",
+  "transcript_path": "/tmp/codex/transcript-001.jsonl",
   "cwd": "/home/user/project",
-  "hookEventName": "PostToolUse",
-  "toolName": "Bash",
-  "toolInput": {
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-test",
+  "turn_id": "codex-turn-001",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_use_id": "codex-call-001",
+  "tool_input": {
     "command": "cargo fmt"
   },
-  "toolResult": {
+  "tool_response": {
     "stdout": "",
     "stderr": "",
-    "exitCode": 0
+    "exit_code": 0
   }
 }

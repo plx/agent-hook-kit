@@ -35,13 +35,13 @@ pub enum DiscoveredKind {
 pub fn discover(cwd: &Path) -> Vec<DiscoveredConfig> {
     let mut chain = Vec::new();
 
-    if let Some(home) = home_config_path()
-        && home.is_file()
-    {
-        chain.push(DiscoveredConfig {
-            path: home,
-            kind: DiscoveredKind::Home,
-        });
+    if let Some(home) = home_config_path() {
+        if home.is_file() {
+            chain.push(DiscoveredConfig {
+                path: home,
+                kind: DiscoveredKind::Home,
+            });
+        }
     }
 
     // Walk ancestors root-first so child configs override parent configs.

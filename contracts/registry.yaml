@@ -1,0 +1,10 @@
+format_version: 1
+harnesses:
+  antigravity:
+    current: docs-2026-07-12-r2
+  claude-code:
+    current: docs-2026-07-12-r2
+  codex:
+    current: commit-9e552e9-r2
+  gemini-cli:
+    current: commit-f354eeb-r2

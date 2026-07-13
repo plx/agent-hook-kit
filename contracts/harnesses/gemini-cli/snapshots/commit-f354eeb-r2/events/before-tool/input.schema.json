@@ -1,0 +1,44 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:gemini-cli:commit-f354eeb-r2:before-tool:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "BeforeTool"
+    },
+    "mcp_context": {
+      "type": "object"
+    },
+    "original_request_name": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string"
+    },
+    "tool_input": {
+      "type": "object"
+    },
+    "tool_name": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "timestamp",
+    "tool_name",
+    "tool_input"
+  ],
+  "type": "object"
+}

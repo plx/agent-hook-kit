@@ -1,0 +1,67 @@
+format_version: 1
+id: claude-code/docs-2026-07-12-r1/WorktreeCreate
+harness: claude-code
+snapshot: docs-2026-07-12-r1
+event:
+  wire_name: WorktreeCreate
+  rust_key: worktree_create
+  category: workspace
+  identification:
+    inferability: definitive
+    discriminator:
+      json_pointer: /hook_event_name
+      const: WorktreeCreate
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources: [claude-hooks-reference]
+    assurance: { confidence: high, verification: source-reviewed }
+  outputs:
+    - id: http-response
+      file: output.http.schema.json
+      origin: derived
+      sources: [claude-hooks-reference]
+      assurance: { confidence: high, verification: source-reviewed }
+bindings:
+  command:
+    kind: process
+    request: { channel: stdin, framing: single-document-at-eof, content_kind: json }
+    outcomes:
+      - id: created
+        effect: provide-value
+        exit: { exact: 0 }
+        stdout:
+          presence: required
+          role: protocol-value
+          content_kind: text
+          encoding: utf-8
+          semantic_format: absolute-path
+          trailing_newline: allowed
+        stderr: { presence: optional, role: diagnostics, content_kind: text, encoding: utf-8 }
+        sources: [claude-hooks-reference]
+        assurance: { confidence: high, verification: source-reviewed }
+      - id: failed
+        effect: fail
+        exit: { range: { min: 1, max: 255 } }
+        stdout: { presence: forbidden, role: none, content_kind: empty }
+        stderr: { presence: optional, role: user-message, content_kind: text, encoding: utf-8 }
+        sources: [claude-hooks-reference]
+        assurance: { confidence: high, verification: source-reviewed }
+  http:
+    kind: http
+    method: POST
+    request_content_type: application/json
+    response_content_type: application/json
+    request: { channel: body, framing: one-http-message, content_kind: json }
+    outcomes:
+      - id: created
+        effect: provide-value
+        exit: { range: { min: 200, max: 299 } }
+        stdout: { presence: required, role: http-body, content_kind: json }
+        stderr: { presence: forbidden, role: none, content_kind: empty }
+        output_schema: http-response
+        sources: [claude-hooks-reference]
+        assurance: { confidence: high, verification: source-reviewed }
+handler_kinds: [command, http, mcp_tool]
+fixtures: fixtures.yaml

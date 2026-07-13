@@ -1,0 +1,86 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      compact_summary: Summary
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      trigger: auto
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-trigger
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      compact_summary: Summary
+      cwd: /repo
+      hook_event_name: PostCompact
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      compact_summary: Summary
+      cwd: /repo
+      hook_event_name: PostCompact
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      trigger: auto
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      compact_summary: Summary
+      cwd: /repo
+      hook_event_name: PostCompact
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      trigger: auto
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    systemMessage: Compaction complete.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiQ29tcGFjdGlvbiBjb21wbGV0ZS4ifQ==
+  stdout_sha256: a91f8e6d69a1fbe0d389ed8d43a49c234ab68dd1b68369cf969dd2be0bd109b1
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiQ29tcGFjdGlvbiBjb21wbGV0ZS4ifQ==
+  stdout_sha256: a91f8e6d69a1fbe0d389ed8d43a49c234ab68dd1b68369cf969dd2be0bd109b1
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

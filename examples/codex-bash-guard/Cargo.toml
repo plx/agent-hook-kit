@@ -4,6 +4,7 @@ description = "Example: deny destructive Bash commands in Codex PreToolUse"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [[bin]]
 name = "codex-bash-guard"

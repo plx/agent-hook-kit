@@ -1,0 +1,84 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      source: startup
+      transcript_path: null
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-source
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: SessionStart
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: null
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: SessionStart
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      source: startup
+      transcript_path: null
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: SessionStart
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      source: startup
+      transcript_path: /tmp/transcript.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - codex-hooks-reference
+  - codex-generated-schemas
+  value:
+    hookSpecificOutput:
+      additionalContext: Load repository conventions.
+      hookEventName: SessionStart
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJMb2FkIHJlcG9zaXRvcnkgY29udmVudGlvbnMuIiwiaG9va0V2ZW50TmFtZSI6IlNlc3Npb25TdGFydCJ9fQ==
+  stdout_sha256: 8d2edb7b43c0d4173c51e16b985e5ff99a53be2e724f41d71ab142e75429aac9
+- binding: command
+  exit_code: 0
+  id: text-context
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vay1wcm92aWRlZCBkZXZlbG9wZXIgY29udGV4dC4=
+  stdout_sha256: 257968890493fe977d24259bbcfbaa99ba8f0dbd137766751454b0ec557e07fc

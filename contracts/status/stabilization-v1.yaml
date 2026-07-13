@@ -1,0 +1,76 @@
+format_version: 1
+release: stabilization-v1
+defaults:
+  - harness: antigravity
+    binding: command
+    level: catalog-only
+    verification: source-reviewed
+  - harness: claude-code
+    binding: command
+    level: catalog-only
+    verification: source-reviewed
+  - harness: claude-code
+    binding: http
+    level: catalog-only
+    verification: source-reviewed
+  - harness: codex
+    binding: command
+    level: catalog-only
+    verification: source-reviewed
+  - harness: gemini-cli
+    binding: command
+    level: catalog-only
+    verification: source-reviewed
+targets:
+  - contract: antigravity/docs-2026-07-12-r2/PreInvocation
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r2/PostInvocation
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r2/PreToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r2/PostToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: antigravity/docs-2026-07-12-r2/Stop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/SessionStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/WorktreeCreate
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/PostToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/PreToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/PostToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/BeforeToolSelection
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/BeforeTool
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/AfterTool
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed

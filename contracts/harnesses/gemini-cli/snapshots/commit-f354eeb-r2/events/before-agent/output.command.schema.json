@@ -1,0 +1,45 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:gemini-cli:commit-f354eeb-r2:before-agent:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "type": "boolean"
+    },
+    "decision": {
+      "enum": [
+        "allow",
+        "deny",
+        "block"
+      ]
+    },
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "BeforeAgent"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "stopReason": {
+      "type": "string"
+    },
+    "suppressOutput": {
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

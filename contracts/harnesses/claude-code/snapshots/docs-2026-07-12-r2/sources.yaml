@@ -1,0 +1,11 @@
+format_version: 1
+sources:
+  - id: claude-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://code.claude.com/docs/en/hooks
+    retrieved: 2026-07-12
+    content_sha256: e94e721874efc802248a7808e35ac917306088c5eaada2aa21e1def3fecc32e1
+    reproducibility: unreproducible
+    limitations:
+      - The remote documentation hash has no checked-in capture or deterministic retrieval recipe.

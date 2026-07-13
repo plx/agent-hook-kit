@@ -1,0 +1,74 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-07-12-r2:post-compact:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "compact_summary": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "hook_event_name": {
+      "const": "PostCompact"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ]
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    },
+    "trigger": {
+      "enum": [
+        "manual",
+        "auto"
+      ]
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "trigger",
+    "compact_summary"
+  ],
+  "type": "object"
+}

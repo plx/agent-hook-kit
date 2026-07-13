@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-07-12-r1:post-invocation:input",
+  "type": "object",
+  "required": ["conversationId", "workspacePaths", "transcriptPath", "artifactDirectoryPath", "invocationNum", "initialNumSteps"],
+  "properties": {
+    "conversationId": { "type": "string" },
+    "workspacePaths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "transcriptPath": { "type": "string" },
+    "artifactDirectoryPath": { "type": "string" },
+    "invocationNum": { "type": "integer", "minimum": 0 },
+    "initialNumSteps": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}
+

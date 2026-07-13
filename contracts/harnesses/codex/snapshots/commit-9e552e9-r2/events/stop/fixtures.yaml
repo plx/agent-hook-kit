@@ -1,0 +1,91 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      last_assistant_message: null
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      stop_hook_active: false
+      transcript_path: null
+      turn_id: turn-1
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-last_assistant_message
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: Stop
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      stop_hook_active: false
+      transcript_path: null
+      turn_id: turn-1
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: Stop
+      last_assistant_message: null
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      stop_hook_active: false
+      transcript_path: null
+      turn_id: turn-1
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: Stop
+      last_assistant_message: null
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      stop_hook_active: false
+      transcript_path: /tmp/transcript.jsonl
+      turn_id: turn-1
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - codex-hooks-reference
+  - codex-generated-schemas
+  value:
+    decision: block
+    reason: Run the failing tests again.
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiUnVuIHRoZSBmYWlsaW5nIHRlc3RzIGFnYWluLiJ9
+  stdout_sha256: 8e4cb066ca007d956c18ac1050477a0e88cfeb707a82e396aac48a8f482ab33b
+- binding: command
+  exit_code: 2
+  id: exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

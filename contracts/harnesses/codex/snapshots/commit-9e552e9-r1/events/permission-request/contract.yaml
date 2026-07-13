@@ -1,0 +1,82 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - codex-hooks-reference
+      - codex-generated-schemas
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: deny
+      exit:
+        exact: 2
+      id: exit-2
+      sources:
+      - codex-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: agent-context
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: tool
+  identification:
+    discriminator:
+      const: PermissionRequest
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: permission_request
+  wire_name: PermissionRequest
+fixtures: fixtures.yaml
+format_version: 1
+harness: codex
+id: codex/commit-9e552e9-r1/PermissionRequest
+schemas:
+  input:
+    assurance:
+      confidence: high
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+  outputs:
+  - assurance:
+      confidence: high
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+snapshot: commit-9e552e9-r1
+uncertainties:
+- The official generated schema includes parsed compatibility fields; runtime support restrictions from the hooks reference remain controlling.

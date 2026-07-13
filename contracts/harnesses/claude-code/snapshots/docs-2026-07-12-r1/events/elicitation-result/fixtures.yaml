@@ -1,0 +1,104 @@
+format_version: 1
+input:
+  negative:
+  - expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      action: accept
+      cwd: /repo
+      elicitation_id: e1
+      hook_event_name: WrongEvent
+      mcp_server_name: forms
+      mode: form
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - expected_pointer: ''
+    id: missing-mcp_server_name
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      action: accept
+      cwd: /repo
+      elicitation_id: e1
+      hook_event_name: ElicitationResult
+      mode: form
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      action: accept
+      cwd: /repo
+      elicitation_id: e1
+      hook_event_name: ElicitationResult
+      mcp_server_name: forms
+      mode: form
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      action: accept
+      content:
+        name: Ada
+      cwd: /repo
+      elicitation_id: e1
+      hook_event_name: ElicitationResult
+      mcp_server_name: forms
+      mode: form
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      action: decline
+      hookEventName: ElicitationResult
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWN0aW9uIjoiZGVjbGluZSIsImhvb2tFdmVudE5hbWUiOiJFbGljaXRhdGlvblJlc3VsdCJ9fQ==
+  stdout_sha256: d8a84fcfa65e191f985735a50bc927b2ddc2611ccd9a0e138a3c04e12fe06af3
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWN0aW9uIjoiZGVjbGluZSIsImhvb2tFdmVudE5hbWUiOiJFbGljaXRhdGlvblJlc3VsdCJ9fQ==
+  stdout_sha256: d8a84fcfa65e191f985735a50bc927b2ddc2611ccd9a0e138a3c04e12fe06af3
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

@@ -1,0 +1,102 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      error: exit status 1
+      hook_event_name: WrongEvent
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-tool_name
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      error: exit status 1
+      hook_event_name: PostToolUseFailure
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      error: exit status 1
+      hook_event_name: PostToolUseFailure
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      duration_ms: 12
+      error: exit status 1
+      hook_event_name: PostToolUseFailure
+      is_interrupt: false
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      additionalContext: Hook-provided context.
+      hookEventName: PostToolUseFailure
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJIb29rLXByb3ZpZGVkIGNvbnRleHQuIiwiaG9va0V2ZW50TmFtZSI6IlBvc3RUb29sVXNlRmFpbHVyZSJ9fQ==
+  stdout_sha256: 5ce683fda2bc17da22faea7829fcff296331f4243ea7cf063a75f16f235cdc7b
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJIb29rLXByb3ZpZGVkIGNvbnRleHQuIiwiaG9va0V2ZW50TmFtZSI6IlBvc3RUb29sVXNlRmFpbHVyZSJ9fQ==
+  stdout_sha256: 5ce683fda2bc17da22faea7829fcff296331f4243ea7cf063a75f16f235cdc7b
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

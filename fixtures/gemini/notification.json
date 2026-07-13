@@ -1,6 +1,10 @@
 {
-  "sessionId": "gemini-sess-001",
+  "session_id": "gemini-sess-001",
+  "transcript_path": "/tmp/gemini/transcript-001.json",
   "cwd": "/home/user/project",
-  "hookEventName": "Notification",
-  "message": "Context approaching limit"
+  "hook_event_name": "Notification",
+  "timestamp": "2026-07-12T00:00:00Z",
+  "notification_type": "ToolPermission",
+  "message": "Permission required",
+  "details": {"tool": "run_shell_command"}
 }

@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "post-tool-use-agent-hook"
@@ -15,6 +16,9 @@ camino = { workspace = true }
 globset = { workspace = true }
 hookkit-common = { workspace = true }
 hookkit-core = { workspace = true }
+hookkit-claude = { workspace = true }
+hookkit-codex = { workspace = true }
+hookkit-gemini = { workspace = true }
 hookkit-pkl-config = { workspace = true }
 hookkit-runtime = { workspace = true }
 minijinja = { workspace = true }

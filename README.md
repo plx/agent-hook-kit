@@ -1,6 +1,7 @@
 # agent-hook-kit
 
-Rust plumbing for agent hooks across Claude, Codex, and Gemini.
+Contract-first Rust plumbing for agent hooks across Claude Code, Codex, Gemini
+CLI, and Antigravity.
 
 ## What This Repository Provides
 
@@ -8,7 +9,8 @@ Rust plumbing for agent hooks across Claude, Codex, and Gemini.
   - `hookkit-claude`
   - `hookkit-codex`
   - `hookkit-gemini`
-- Cross-harness wrapper layer:
+  - `hookkit-antigravity`
+- Lossless cross-harness aligned event wrappers:
   - `hookkit-common`
 - Runtime stdin/stdout/exit-code plumbing:
   - `hookkit-runtime`
@@ -17,11 +19,15 @@ Rust plumbing for agent hooks across Claude, Codex, and Gemini.
   - `hookkit-tool-runner` (ships the `post-tool-use-agent-hook` binary)
 - Shared core error/types:
   - `hookkit-core`
+- Versioned upstream protocol ledger and generated support matrix:
+  - [`contracts/`](contracts/README.md)
+  - [`contracts/status/support.md`](contracts/status/support.md)
 - Runnable examples:
   - `examples/claude-sessionstart-context`
   - `examples/codex-bash-guard`
   - `examples/gemini-beforetool-policy`
   - `examples/shared-posttool-autofix`
+  - `examples/antigravity-pre-invocation`
 
 ## Workspace Layout
 
@@ -32,6 +38,7 @@ crates/
   hookkit-claude/
   hookkit-codex/
   hookkit-gemini/
+  hookkit-antigravity/
   hookkit-common/
   hookkit-pkl-config/
   hookkit-tool-runner/
@@ -52,71 +59,141 @@ planning/
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets
+cargo run -p hookkit-conformance -- --check
+cargo xtask contracts check
+cargo xtask contracts report --check
+cargo xtask contracts verify-vendor
 ```
 
 The `hookkit-pkl-config` and `hookkit-tool-runner` integration tests skip
 themselves when `pkl` is not on `$PATH`, so the test suite still passes in
 build environments without Pkl installed.
 
-## Quick Start: Native Runtime (`run_native`)
+## Quick Start: Exact Typed Runtime
 
-Minimal pattern:
-
-```rust
-use hookkit_core::Harness;
-use hookkit_runtime::{NativeHookInput, NativeHookOutput, RuntimeContext};
-
-fn main() -> std::process::ExitCode {
-    hookkit_runtime::run_native(Harness::Claude, handle)
-}
-
-fn handle(
-    input: NativeHookInput,
-    _ctx: &RuntimeContext,
-) -> hookkit_core::Result<NativeHookOutput> {
-    match input {
-        _ => Ok(NativeHookOutput::Claude(hookkit_claude::ClaudeHookOutput::Empty)),
-    }
-}
-```
-
-## Quick Start: Common Runtime (`run_common`)
-
-Use when shared logic should run across harnesses:
+Use `run_event` when a hook executable handles one exact event. The event type
+fixes the harness, selected contract snapshot, wire event, and only valid output
+type:
 
 ```rust
-use hookkit_common::input::CommonHookInput;
-use hookkit_common::output::CommonHookOutput;
-use hookkit_core::Harness;
+use hookkit_claude::protocol::{SessionStart, SessionStartOutput};
 
 fn main() -> std::process::ExitCode {
-    hookkit_runtime::run_common(Harness::Claude, |input, _ctx| {
-        match input {
-            CommonHookInput::PostToolUse(_) => Ok(CommonHookOutput::empty()),
-            _ => Ok(CommonHookOutput::empty()),
-        }
+    hookkit_runtime::run_event::<SessionStart, _>(|input, context| {
+        assert_eq!(context.event().name(), "SessionStart");
+        Ok(SessionStartOutput::with_context(format!(
+            "Session {} loaded",
+            input.session_id
+        )))
     })
 }
 ```
 
-### Common `PostToolUse` Helpers
+The handler returns `SessionStartOutput`, not raw bytes or a generic envelope, so
+it cannot emit another event's discriminator. `WorktreeCreate` demonstrates the
+same typed contract with a non-JSON result: its output emits an absolute path as
+exact plain text.
 
-`hookkit-common` exposes a semantic post-tool view for formatter/linter-style
-hooks. Hook logic can use normalized tool/result accessors and candidate
-modified paths without inspecting harness JSON directly:
+## Quick Start: Aligned `PostToolUse`
+
+Use `run_aligned_event` for genuinely shared lifecycle logic. Its enums retain
+the complete native values, and the handler must return the matching native
+output arm:
 
 ```rust
-let view = post_tool.view_with_raw(&ctx.raw_input);
-let paths = view.modified_files(ctx.cwd.as_std_path(), Some(project_root));
+use hookkit_common::{PostToolUseInput, PostToolUseOutput};
+use hookkit_core::HarnessId;
+use hookkit_runtime::aligned::{PostToolUse, run_aligned_event};
+
+fn main() -> std::process::ExitCode {
+    run_aligned_event::<PostToolUse, _>(
+        HarnessId::CLAUDE_CODE,
+        |input, _context| match input {
+            PostToolUseInput::Claude(_) => Ok(PostToolUseOutput::Claude(
+                hookkit_claude::protocol::PostToolUseOutput::no_op(),
+            )),
+            _ => Err(std::io::Error::other("selected harness changed").into()),
+        },
+    )
+}
 ```
 
-`CommonPostToolUseOutput` also supports semantic user notices, agent feedback,
-diagnostics, and a lowering policy. Claude and Gemini receive agent feedback as
-additional context. Codex currently cannot receive post-tool additional
-context, so best-effort lowering drops that optional intent and can emit a
-warning on `stderr` without contaminating hook JSON on `stdout`.
+For a multi-harness executable, select a `HarnessId` from trusted CLI or
+configuration input and match every supported `PostToolUseInput` arm. There is no
+universal output lowering: each arm constructs the native response its harness
+actually supports. See `examples/shared-posttool-autofix` for the complete
+pattern.
+
+## Exact, Selected, and Aligned Execution
+
+Choose the narrowest execution mode that fits the executable:
+
+| Need | Entry point | Identity and output safety |
+| --- | --- | --- |
+| One exact event | `run_event::<E>` / `execute_typed::<E>` | `E: EventSpec` fixes harness, snapshot, event, contract, input, and output. |
+| One compile-time-selected harness, event chosen from input | `run_harness::<H>` / `execute_harness::<H>` | `H: HarnessSpec` resolves only its declared events and rejects a different output event arm. |
+| A runtime-selected built-in harness | `dispatch_builtin_harness` / `execute_builtin_harness` | `BuiltinHarness` selects the adapter; the runtime rejects cross-harness and cross-event output arms. |
+| One aligned lifecycle concept | `run_aligned_event::<K>` / `execute_aligned_event::<K>` | Lossless native arms are preserved and checked against the explicitly selected `HarnessId`. |
+
+Compile-time selected harnesses use native selectors such as
+`hookkit_claude::protocol::Event`. Runtime-selected built-ins use a
+harness-scoped `EventId` hint. A hint is validated against the selected harness
+and payload; it does not force a mismatched parser. Candidate detection is an
+inspection API and never authorizes execution of a guessed contract.
+
+The main identity types are deliberately distinct:
+
+- `HarnessId` is an open harness identifier; `BuiltinHarness` is the convenience
+  selector for the four bundled adapters.
+- `SnapshotId` identifies the immutable catalog snapshot used to parse input.
+- `EventId` is always scoped by `HarnessId`; an event name alone is not an exact
+  identity.
+- `ContractId` identifies the exact event/binding emission contract.
+- `AlignedEventKind` names only a shared lifecycle concept and never substitutes
+  for an `EventId`.
+
+Every handler receives an exact `RuntimeContext`. It exposes the identities and
+resolution provenance above, the original `RawInvocation`, workspace roots, and
+only those typed session/conversation/turn/tool-call paths or identifiers that
+the native event supplied. It does not probe alternate key casing, recursively
+mine arbitrary JSON, or invent a current directory.
+
+### Diagnostics and process streams
+
+Protocol emission and application diagnostics are separate:
+
+- `stdout` contains only the exact command response bytes produced by the event
+  contract. Empty bytes, `{}`, JSON `null`, and text are intentionally distinct,
+  and the runtime does not append a newline.
+- Protocol-defined `stderr` and exit status are constructed by event-specific
+  output APIs, such as `with_protocol_stderr` or a blocking-error constructor.
+- Runtime and handler diagnostics go to a `DiagnosticsSink`. The convenience
+  runners use `DISABLED_DIAGNOSTICS`; pass a sink to
+  `run_event_with_diagnostics` or `execute_harness_with_diagnostics` when the
+  application needs out-of-band records.
+- Parse, resolution, or handler errors return a nonzero adapter exit status; the
+  runtime does not turn them into protocol decisions or automatically print
+  them on protocol streams.
+
+For example, a handler can record an application diagnostic without changing
+its wire response:
+
+```rust
+use hookkit_core::{Diagnostic, DiagnosticLevel};
+
+context.diagnostics().record(Diagnostic::new(
+    DiagnosticLevel::Info,
+    "policy cache hit",
+));
+```
+
+Native event output types remain the authority for any user- or agent-visible
+message. This keeps diagnostic logging from contaminating hook JSON.
+Handler code must likewise avoid uncontrolled `println!` or `eprintln!` calls:
+either can corrupt a harness protocol stream even when the returned output is
+otherwise valid.
 
 ## Run The Examples With Fixtures
 
@@ -141,7 +218,14 @@ cat fixtures/gemini/before_tool.json \
   | cargo run -q -p gemini-beforetool-policy
 ```
 
-Shared post-tool autofix (common runtime):
+Antigravity pre-invocation reminder:
+
+```bash
+cat fixtures/antigravity/pre_invocation.json \
+  | cargo run -q -p antigravity-pre-invocation
+```
+
+Shared post-tool autofix (aligned runtime):
 
 ```bash
 cat fixtures/claude/post_tool_use.json \
@@ -241,18 +325,6 @@ Pkl config that selects the same tool. For example:
 …with `.agent-hook-kit/post-tool-use.pkl` referencing `Builtins.ruff` and any
 overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
 
-## `--dump-parsed` Debug Mode
-
-All runtimes support parsed-event debug dumps to `stderr`:
-
-```bash
-cat fixtures/codex/pre_tool_use.json \
-  | cargo run -q -p codex-bash-guard -- --dump-parsed
-```
-
-This prints a structured JSON line with harness, event, and parsed payload
-without contaminating `stdout` hook output.
-
 ## Example Behavior Summary
 
 - `claude-sessionstart-context`:
@@ -263,17 +335,17 @@ without contaminating `stdout` hook output.
   - denies or rewrites risky tool invocations in `BeforeTool`.
 - `shared-posttool-autofix`:
   - runs a formatter/linter-autofix pipeline when applicable,
-  - stays quiet on clean success,
+  - emits each harness's exact native no-op response on clean success,
   - prints concise user status to `stderr` when autofix/manual work occurs,
   - writes verbose manual diagnostics to a temp artifact and gives concise agent guidance when supported.
 - `post-tool-use-agent-hook`:
   - loads merged Pkl config plus embedded builtin tool catalog,
-  - selects modified files from the common post-tool semantic view,
+  - discovers candidate paths from exact native input arms using runner-local tool policy,
   - runs each tool's phases for format/fix/verify commands,
   - classifies clean versus issues and changed versus unchanged from exit policies plus file snapshots,
   - reports missing tools and operational failures per `missingToolPolicy`,
   - writes remaining diagnostics to artifacts,
-  - uses common output lowering so Codex limitations stay centralized.
+  - lowers every result through an explicit Claude, Codex, or Gemini native output arm.
 
 ## License
 

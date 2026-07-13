@@ -4,6 +4,10 @@ description = "Example: cross-harness post-tool autofix using common wrappers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
+
+[features]
+test-support = []
 
 [[bin]]
 name = "shared-posttool-autofix"

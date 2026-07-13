@@ -1,6 +1,6 @@
 # agent-hook-kit
 
-Rust 2024 library plus a CLI stub for writing fast, maintainable smart hooks for coding agents (Claude, Codex, Gemini).
+Rust 2024 libraries and a Pkl-configured CLI for writing fast, maintainable smart hooks for Claude Code, Codex, Gemini CLI, and Antigravity.
 
 ## Why
 
@@ -20,9 +20,9 @@ These wrappers are typically written in bash as a lowest-common-denominator, but
 ## Layout
 
 - `crates/hookkit-core` — shared error and primitive types.
-- `crates/hookkit-runtime` — stdin/stdout/exit-code plumbing; entry points like `run_native` and `run_common`.
-- `crates/hookkit-{claude,codex,gemini}` — per-harness input/output models.
-- `crates/hookkit-common` — cross-harness wrapper layer for hooks that should behave the same everywhere.
+- `crates/hookkit-runtime` — exact typed (`run_event`), selected-harness (`run_harness`/`dispatch_builtin_harness`), and aligned (`run_aligned_event`) stdin/stdout/exit-code plumbing.
+- `crates/hookkit-{claude,codex,gemini,antigravity}` — event-scoped native input/output contracts.
+- `crates/hookkit-common` — lossless native-arm wrappers for genuinely aligned lifecycle events.
 - `crates/hookkit-pkl-config` — Pkl evaluation, embedded builtin tool catalog, multi-file config merge, and discovery for the post-tool-use runner.
 - `crates/hookkit-tool-runner` — ships the `post-tool-use-agent-hook` binary that drives a Pkl-configured pipeline of formatter/linter/checker tools.
 - `examples/` — runnable hook stubs paired with `fixtures/` JSON for each harness.
