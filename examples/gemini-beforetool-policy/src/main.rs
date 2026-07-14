@@ -1,7 +1,7 @@
 use hookkit_gemini::protocol::{BeforeTool, BeforeToolOutput};
 
 fn main() -> std::process::ExitCode {
-    hookkit_runtime::typed::run_typed::<BeforeTool, _>(|input, _ctx| {
+    hookkit_runtime::typed::run_typed::<BeforeTool, _>(|input, _environment, _ctx| {
         if input.tool_name != "run_shell_command" {
             return Ok(BeforeToolOutput::no_op());
         }

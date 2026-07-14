@@ -26,8 +26,10 @@ fn fixture_bytes(harness: &str, name: &str) -> Vec<u8> {
 fn run_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::process::Output {
     ensure_built(binary);
     let binary_path = format!("{}/target/debug/{binary}", workspace_root());
-    Command::new(&binary_path)
-        .args(extra_args)
+    let mut command = Command::new(&binary_path);
+    command.args(extra_args);
+    configure_hook_environment(&mut command, binary, fixture, extra_args);
+    command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -38,6 +40,96 @@ fn run_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::proces
             child.wait_with_output()
         })
         .unwrap_or_else(|e| panic!("failed to run {binary_path}: {e}"))
+}
+
+fn configure_hook_environment(
+    command: &mut Command,
+    binary: &str,
+    fixture: &[u8],
+    extra_args: &[&str],
+) {
+    clear_modeled_hook_environment(command);
+    let harness = extra_args
+        .iter()
+        .find_map(|argument| argument.strip_prefix("--"))
+        .or_else(|| binary.split_once('-').map(|(prefix, _)| prefix));
+
+    let Some(harness @ ("claude" | "gemini")) = harness else {
+        return;
+    };
+    let input: serde_json::Value = serde_json::from_slice(fixture)
+        .unwrap_or_else(|error| panic!("invalid {harness} integration fixture: {error}"));
+    let field = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| input.get(*name).and_then(serde_json::Value::as_str))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{harness} integration fixture is missing string field {}",
+                    names.join(" or ")
+                )
+            })
+    };
+    let session_id = field(&["session_id", "sessionId"]);
+    let project_dir = field(&["cwd"]);
+
+    match harness {
+        "claude" => {
+            command
+                .env("CLAUDECODE", "1")
+                .env("CLAUDE_CODE_CHILD_SESSION", "1")
+                .env("CLAUDE_CODE_SESSION_ID", session_id)
+                .env("CLAUDE_PROJECT_DIR", project_dir);
+
+            let event = field(&["hook_event_name", "hookEventName"]);
+            if matches!(
+                event,
+                "SessionStart" | "Setup" | "CwdChanged" | "FileChanged"
+            ) {
+                command.env("CLAUDE_ENV_FILE", format!("{project_dir}/.claude-hook-env"));
+            }
+        }
+        "gemini" => {
+            command
+                .env("GEMINI_PROJECT_DIR", project_dir)
+                .env("GEMINI_PLANS_DIR", format!("{project_dir}/.gemini/plans"))
+                .env("GEMINI_CWD", project_dir)
+                .env("GEMINI_SESSION_ID", session_id)
+                .env("CLAUDE_PROJECT_DIR", project_dir);
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn clear_modeled_hook_environment(command: &mut Command) {
+    const EXACT_NAMES: &[&str] = &[
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_PROJECT_DIR",
+        "CLAUDE_ENV_FILE",
+        "CLAUDE_EFFORT",
+        "TRACEPARENT",
+        "CLAUDE_CODE_REMOTE",
+        "CLAUDE_CODE_REMOTE_SESSION_ID",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_DATA",
+        "PLUGIN_ROOT",
+        "PLUGIN_DATA",
+        "GEMINI_PROJECT_DIR",
+        "GEMINI_PLANS_DIR",
+        "GEMINI_CWD",
+        "GEMINI_SESSION_ID",
+    ];
+    for name in EXACT_NAMES {
+        command.env_remove(name);
+    }
+    for name in std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()) {
+        if name.starts_with("CLAUDE_PLUGIN_OPTION_") {
+            command.env_remove(name);
+        }
+    }
 }
 
 fn temp_project(name: &str) -> PathBuf {

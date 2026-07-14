@@ -10,6 +10,9 @@ CLI, and Antigravity.
   - `hookkit-codex`
   - `hookkit-gemini`
   - `hookkit-antigravity`
+- First-class command-hook environment models, including deterministic map-based
+  parsing and automatic capture in stdin/stdout runners:
+  - [`docs/command-environments.md`](docs/command-environments.md)
 - Lossless cross-harness aligned event wrappers:
   - `hookkit-common`
 - Runtime stdin/stdout/exit-code plumbing:
@@ -81,13 +84,19 @@ type:
 use hookkit_claude::protocol::{SessionStart, SessionStartOutput};
 
 fn main() -> std::process::ExitCode {
-    hookkit_runtime::run_event::<SessionStart, _>(|input, context| {
-        assert_eq!(context.event().name(), "SessionStart");
-        Ok(SessionStartOutput::with_context(format!(
-            "Session {} loaded",
-            input.session_id
-        )))
-    })
+    hookkit_runtime::run_event::<SessionStart, _>(
+        |input, environment, context| {
+            assert_eq!(context.event().name(), "SessionStart");
+            assert_eq!(
+                environment.session_id.as_str(),
+                input.session_id.as_str()
+            );
+            Ok(SessionStartOutput::with_context(format!(
+                "Session {} loaded",
+                input.session_id
+            )))
+        },
+    )
 }
 ```
 
@@ -110,11 +119,14 @@ use hookkit_runtime::aligned::{PostToolUse, run_aligned_event};
 fn main() -> std::process::ExitCode {
     run_aligned_event::<PostToolUse, _>(
         HarnessId::CLAUDE_CODE,
-        |input, _context| match input {
-            PostToolUseInput::Claude(_) => Ok(PostToolUseOutput::Claude(
-                hookkit_claude::protocol::PostToolUseOutput::no_op(),
-            )),
-            _ => Err(std::io::Error::other("selected harness changed").into()),
+        |input, environment, _context| {
+            assert_eq!(input.harness(), environment.harness());
+            match input {
+                PostToolUseInput::Claude(_) => Ok(PostToolUseOutput::Claude(
+                    hookkit_claude::protocol::PostToolUseOutput::no_op(),
+                )),
+                _ => Err(std::io::Error::other("selected harness changed").into()),
+            }
         },
     )
 }
@@ -130,12 +142,16 @@ pattern.
 
 Choose the narrowest execution mode that fits the executable:
 
-| Need | Entry point | Identity and output safety |
+<!-- markdownlint-disable MD013 -->
+
+| Need | Entry point | Identity, environment, and output safety |
 | --- | --- | --- |
-| One exact event | `run_event::<E>` / `execute_typed::<E>` | `E: EventSpec` fixes harness, snapshot, event, contract, input, and output. |
-| One compile-time-selected harness, event chosen from input | `run_harness::<H>` / `execute_harness::<H>` | `H: HarnessSpec` resolves only its declared events and rejects a different output event arm. |
-| A runtime-selected built-in harness | `dispatch_builtin_harness` / `execute_builtin_harness` | `BuiltinHarness` selects the adapter; the runtime rejects cross-harness and cross-event output arms. |
-| One aligned lifecycle concept | `run_aligned_event::<K>` / `execute_aligned_event::<K>` | Lossless native arms are preserved and checked against the explicitly selected `HarnessId`. |
+| One exact event | `run_event::<E>` / `execute_typed::<E>` | `E: EventSpec` fixes harness, snapshot, event, contract, input, command environment, and output. |
+| One compile-time-selected harness, event chosen from input | `run_harness::<H>` / `execute_harness::<H>` | `H: HarnessSpec` resolves only its declared events, parses `H::CommandEnvironment`, and rejects a different output event arm. |
+| A runtime-selected built-in harness | `dispatch_builtin_harness` / `execute_builtin_harness` | `BuiltinHarness` selects matching input, command-environment, and output arms; the runtime rejects cross-harness and cross-event results. |
+| One aligned lifecycle concept | `run_aligned_event::<K>` / `execute_aligned_event::<K>` | Lossless native input, command-environment, and output arms are preserved and checked against the explicitly selected `HarnessId`. |
+
+<!-- markdownlint-enable MD013 -->
 
 Compile-time selected harnesses use native selectors such as
 `hookkit_claude::protocol::Event`. Runtime-selected built-ins use a
@@ -154,11 +170,19 @@ The main identity types are deliberately distinct:
 - `AlignedEventKind` names only a shared lifecycle concept and never substitutes
   for an `EventId`.
 
-Every handler receives an exact `RuntimeContext`. It exposes the identities and
-resolution provenance above, the original `RawInvocation`, workspace roots, and
-only those typed session/conversation/turn/tool-call paths or identifiers that
-the native event supplied. It does not probe alternate key casing, recursively
-mine arbitrary JSON, or invent a current directory.
+Every command handler receives its parsed command environment as the second
+argument and an exact `RuntimeContext` as the third. The context exposes the
+identities and resolution provenance above, the original `RawInvocation`,
+workspace roots, and only those typed session/conversation/turn/tool-call paths
+or identifiers that the native event supplied. It does not probe alternate key
+casing, recursively mine arbitrary JSON, or invent a current directory.
+
+The `run_*` adapters capture only the environment names declared by the selected
+harness type. In-memory `execute_*` APIs instead accept an explicit
+`EnvironmentVariables` map, keeping tests deterministic and free of
+process-global environment mutation. See the
+[command-hook environment reference](docs/command-environments.md) for the full
+56-event matrix, handler-binding boundary, and migration notes.
 
 ### Diagnostics and process streams
 

@@ -5,6 +5,9 @@
 - Added a frozen, source-provenance-aware contract catalog for 56 events across
   Claude Code, Codex, Gemini CLI, and Antigravity.
 - Added event-associated typed command APIs and exact byte/process emission.
+- Added harness-native command-environment types for all 56 catalog events,
+  deterministic map-based parsing, selective process capture, redundant input
+  validation, and explicit environment parameters on every command handler.
 - Added selected-harness resolution, optional hints, and a non-executing detector.
 - Added a distinct Antigravity crate and lossless four-harness PostToolUse arms.
 - Split hermetic required tests from opt-in real-tool and live-harness lanes.

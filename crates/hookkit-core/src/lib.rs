@@ -1,5 +1,6 @@
 //! Core types and error model for hookkit.
 mod context;
+mod environment;
 mod error;
 mod event;
 mod identity;
@@ -11,6 +12,7 @@ pub use context::{
     DisabledDiagnostics, NativeContext, ResolutionProvenance, RuntimeContext, SessionId,
     ToolCallId, TurnId,
 };
+pub use environment::{CommandEnvironmentSpec, EnvironmentVariables, NoCommandEnvironment};
 pub use error::HookkitError;
 pub use event::{
     EventCategory, EventSelector, EventSpec, HandlerKind, HarnessSpec, IdentificationDescriptor,

@@ -50,6 +50,8 @@ enum ContractsCommand {
     VerifyVendor,
     /// Freeze a reviewed snapshot with a deterministic SHA-256 manifest.
     Freeze { harness: String, snapshot: String },
+    /// Freeze a reviewed command-environment supplement.
+    FreezeCommandEnvironments { supplement: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,12 +59,19 @@ enum ContractsCommand {
 struct Registry {
     format_version: u32,
     harnesses: BTreeMap<String, RegistryHarness>,
+    supplements: RegistrySupplements,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RegistryHarness {
     current: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistrySupplements {
+    command_environments: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,6 +111,70 @@ struct SnapshotEvent {
 struct Sources {
     format_version: u32,
     sources: Vec<Source>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CommandEnvironmentSupplement {
+    format_version: u32,
+    id: String,
+    state: String,
+    retrieved: String,
+    sources_file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manifest_file: Option<String>,
+    harnesses: BTreeMap<String, CommandEnvironmentHarness>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CommandEnvironmentHarness {
+    snapshot: String,
+    sources: Vec<String>,
+    assurance: Assurance,
+    profiles: Vec<CommandEnvironmentProfile>,
+    event_profiles: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CommandEnvironmentProfile {
+    id: String,
+    activation: CommandEnvironmentActivation,
+    completeness: String,
+    variables: Vec<CommandEnvironmentVariable>,
+    sources: Vec<String>,
+    assurance: Assurance,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CommandEnvironmentActivation {
+    kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    condition: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CommandEnvironmentVariable {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prefix: Option<String>,
+    value: CommandEnvironmentValue,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CommandEnvironmentValue {
+    kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    literal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allow_empty: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,7 +267,7 @@ struct OutputSchemaClaim {
     assurance: Assurance,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Assurance {
     confidence: String,
@@ -439,7 +512,7 @@ fn run() -> Result<()> {
             let _ = snapshot;
             let contracts = check_catalog(&root)?;
             println!(
-                "validated {} selected event contracts and all catalog snapshots",
+                "validated {} selected event contracts, all catalog snapshots, and command-environment supplements",
                 contracts.len()
             );
             Ok(())
@@ -457,6 +530,9 @@ fn run() -> Result<()> {
         Command::Contracts {
             command: ContractsCommand::Freeze { harness, snapshot },
         } => freeze_snapshot(&root, &harness, &snapshot),
+        Command::Contracts {
+            command: ContractsCommand::FreezeCommandEnvironments { supplement },
+        } => freeze_command_environment_supplement(&root, &supplement),
         Command::Contracts {
             command: ContractsCommand::Report { write, check },
         } => {
@@ -559,6 +635,7 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
     if selected_snapshots.len() != registry.harnesses.len() {
         return Err("one or more registry-selected snapshots were not found".to_string());
     }
+    validate_command_environment_supplements(&catalog, &meta, &registry)?;
 
     let target_keys: BTreeSet<_> = stabilization
         .targets
@@ -796,6 +873,279 @@ fn validate_snapshot(
         ));
     }
     Ok((snapshot, loaded))
+}
+
+fn validate_command_environment_supplements(
+    catalog: &Path,
+    meta: &Path,
+    registry: &Registry,
+) -> Result<()> {
+    let root = catalog.join("supplements/command-environments");
+    let mut paths: Vec<_> = walkdir::WalkDir::new(&root)
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to enumerate command-environment supplements: {error}"))?
+        .into_iter()
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "supplement.yaml")
+        .map(|entry| entry.into_path())
+        .collect();
+    paths.sort();
+
+    let mut ids = BTreeSet::new();
+    let mut selected_found = false;
+    for path in paths {
+        let directory = path
+            .parent()
+            .expect("supplement.yaml has a parent directory");
+        validate_yaml_metadata(
+            &path,
+            &meta.join("command-environment-supplement.schema.json"),
+        )?;
+        let supplement: CommandEnvironmentSupplement = read_yaml(&path)?;
+        require_version(supplement.format_version, "command-environment supplement")?;
+        let directory_id = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("{}: invalid supplement directory", directory.display()))?;
+        if supplement.id != directory_id || !ids.insert(supplement.id.clone()) {
+            return Err(format!(
+                "{}: duplicate or mismatched supplement identity",
+                directory.display()
+            ));
+        }
+        let selected = supplement.id == registry.supplements.command_environments;
+        selected_found |= selected;
+        if selected && supplement.state != "frozen" {
+            return Err(format!(
+                "{}: registry-selected supplement must be frozen",
+                directory.display()
+            ));
+        }
+        if supplement.state == "frozen" {
+            let manifest = supplement.manifest_file.as_deref().ok_or_else(|| {
+                format!(
+                    "{}: frozen supplement needs manifest_file",
+                    directory.display()
+                )
+            })?;
+            verify_content_manifest(directory, manifest)?;
+        } else if supplement.state == "draft" {
+            if supplement.manifest_file.is_some() {
+                return Err(format!(
+                    "{}: draft supplement must not have manifest_file",
+                    directory.display()
+                ));
+            }
+        } else {
+            return Err(format!(
+                "{}: state must be draft or frozen",
+                directory.display()
+            ));
+        }
+        if supplement.retrieved.is_empty() {
+            return Err(format!(
+                "{}: retrieval date is required",
+                directory.display()
+            ));
+        }
+
+        let sources_path = safe_join(directory, &supplement.sources_file)?;
+        validate_yaml_metadata(&sources_path, &meta.join("sources.schema.json"))?;
+        let sources: Sources = read_yaml(&sources_path)?;
+        require_version(sources.format_version, "command-environment sources")?;
+        let source_ids: BTreeSet<_> = sources
+            .sources
+            .iter()
+            .map(|source| source.id.as_str())
+            .collect();
+        if source_ids.len() != sources.sources.len() {
+            return Err(format!("{}: duplicate source id", directory.display()));
+        }
+        for source in &sources.sources {
+            validate_source(source, directory, true)?;
+        }
+
+        if selected {
+            let expected_harnesses: BTreeSet<_> =
+                registry.harnesses.keys().map(String::as_str).collect();
+            let actual_harnesses: BTreeSet<_> =
+                supplement.harnesses.keys().map(String::as_str).collect();
+            if actual_harnesses != expected_harnesses {
+                return Err(format!(
+                    "{}: selected supplement harness inventory differs from registry",
+                    directory.display()
+                ));
+            }
+        }
+        for (harness_id, harness) in &supplement.harnesses {
+            if selected
+                && registry
+                    .harnesses
+                    .get(harness_id)
+                    .is_none_or(|entry| entry.current != harness.snapshot)
+            {
+                return Err(format!(
+                    "{}: selected supplement targets non-current snapshot {harness_id}/{}",
+                    directory.display(),
+                    harness.snapshot
+                ));
+            }
+            validate_sources(&harness.sources, &source_ids, directory)?;
+            validate_assurance(&harness.assurance, directory)?;
+            let snapshot_path = catalog
+                .join("harnesses")
+                .join(harness_id)
+                .join("snapshots")
+                .join(&harness.snapshot)
+                .join("snapshot.yaml");
+            let snapshot: Snapshot = read_yaml(&snapshot_path)?;
+            if snapshot.harness != *harness_id || snapshot.id != harness.snapshot {
+                return Err(format!(
+                    "{}: supplement base snapshot identity mismatch for {harness_id}",
+                    directory.display()
+                ));
+            }
+            let expected_events: BTreeSet<_> = snapshot
+                .events
+                .iter()
+                .map(|event| event.wire_name.as_str())
+                .collect();
+            validate_command_environment_harness(
+                harness,
+                &expected_events,
+                &source_ids,
+                directory,
+            )?;
+        }
+    }
+    if !selected_found {
+        return Err(format!(
+            "registry-selected command-environment supplement {} was not found",
+            registry.supplements.command_environments
+        ));
+    }
+    Ok(())
+}
+
+fn validate_command_environment_harness(
+    harness: &CommandEnvironmentHarness,
+    expected_events: &BTreeSet<&str>,
+    sources: &BTreeSet<&str>,
+    directory: &Path,
+) -> Result<()> {
+    let actual_events: BTreeSet<_> = harness.event_profiles.keys().map(String::as_str).collect();
+    if &actual_events != expected_events {
+        return Err(format!(
+            "{}: command-environment event coverage differs from base snapshot",
+            directory.display()
+        ));
+    }
+
+    let exact_names: BTreeSet<_> = harness
+        .profiles
+        .iter()
+        .flat_map(|profile| profile.variables.iter())
+        .filter_map(|variable| variable.name.as_deref())
+        .collect();
+    let mut profile_ids = BTreeSet::new();
+    let mut selectors = BTreeSet::new();
+    for profile in &harness.profiles {
+        if !profile_ids.insert(profile.id.as_str()) {
+            return Err(format!(
+                "{}: duplicate command-environment profile {}",
+                directory.display(),
+                profile.id
+            ));
+        }
+        validate_sources(&profile.sources, sources, directory)?;
+        validate_assurance(&profile.assurance, directory)?;
+        if !matches!(profile.completeness.as_str(), "all-or-none" | "independent") {
+            return Err(format!(
+                "{}: invalid completeness for profile {}",
+                directory.display(),
+                profile.id
+            ));
+        }
+        match (
+            profile.activation.kind.as_str(),
+            &profile.activation.condition,
+        ) {
+            ("always" | "optional", None) => {}
+            ("conditional", Some(condition)) if !condition.is_empty() => {}
+            _ => {
+                return Err(format!(
+                    "{}: invalid activation for profile {}",
+                    directory.display(),
+                    profile.id
+                ));
+            }
+        }
+        for variable in &profile.variables {
+            let selector = match (&variable.name, &variable.prefix) {
+                (Some(name), None) => format!("name:{name}"),
+                (None, Some(prefix)) => format!("prefix:{prefix}"),
+                _ => {
+                    return Err(format!(
+                        "{}: profile {} variable needs exactly one selector",
+                        directory.display(),
+                        profile.id
+                    ));
+                }
+            };
+            if !selectors.insert(selector) {
+                return Err(format!(
+                    "{}: environment selector is claimed by multiple profiles",
+                    directory.display()
+                ));
+            }
+            let value = &variable.value;
+            match value.kind.as_str() {
+                "literal" if value.literal.is_some() && value.reference.is_none() => {}
+                "input-field"
+                    if value.literal.is_none()
+                        && value
+                            .reference
+                            .as_deref()
+                            .is_some_and(|value| value.starts_with('/')) => {}
+                "environment-variable"
+                    if value.literal.is_none()
+                        && value
+                            .reference
+                            .as_deref()
+                            .is_some_and(|value| exact_names.contains(value)) => {}
+                "opaque" | "path" if value.literal.is_none() && value.reference.is_none() => {}
+                _ => {
+                    return Err(format!(
+                        "{}: invalid value contract for profile {}",
+                        directory.display(),
+                        profile.id
+                    ));
+                }
+            }
+            let _ = value.allow_empty;
+        }
+    }
+
+    let mut referenced_profiles = BTreeSet::new();
+    for (event, profiles) in &harness.event_profiles {
+        let mut unique = BTreeSet::new();
+        for profile in profiles {
+            if !unique.insert(profile.as_str()) || !profile_ids.contains(profile.as_str()) {
+                return Err(format!(
+                    "{}: event {event} has a duplicate or unknown environment profile {profile}",
+                    directory.display()
+                ));
+            }
+            referenced_profiles.insert(profile.as_str());
+        }
+    }
+    if referenced_profiles != profile_ids {
+        return Err(format!(
+            "{}: one or more command-environment profiles are unused",
+            directory.display()
+        ));
+    }
+    Ok(())
 }
 
 fn uses_legacy_snapshot_semantics(harness: &str, snapshot: &str) -> bool {
@@ -1603,6 +1953,39 @@ fn freeze_snapshot(root: &Path, harness: &str, snapshot_id: &str) -> Result<()> 
     Ok(())
 }
 
+fn freeze_command_environment_supplement(root: &Path, supplement_id: &str) -> Result<()> {
+    let directory = root
+        .join("contracts/supplements/command-environments")
+        .join(supplement_id);
+    let supplement_path = directory.join("supplement.yaml");
+    let mut supplement: CommandEnvironmentSupplement = read_yaml(&supplement_path)?;
+    if supplement.id != supplement_id {
+        return Err(format!(
+            "{}: supplement identity mismatch",
+            directory.display()
+        ));
+    }
+    if supplement.state != "draft" {
+        return Err(format!(
+            "{}: only draft supplements can be frozen",
+            directory.display()
+        ));
+    }
+    let manifest_name = "MANIFEST.sha256";
+    supplement.state = "frozen".to_string();
+    supplement.manifest_file = Some(manifest_name.to_string());
+    let yaml = serde_yaml_ng::to_string(&supplement)
+        .map_err(|error| format!("{}: {error}", supplement_path.display()))?;
+    fs::write(&supplement_path, yaml)
+        .map_err(|error| format!("{}: {error}", supplement_path.display()))?;
+    let manifest = content_manifest(&directory, manifest_name)?;
+    fs::write(directory.join(manifest_name), manifest)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    verify_content_manifest(&directory, manifest_name)?;
+    println!("froze command-environment supplement {supplement_id}");
+    Ok(())
+}
+
 fn content_manifest(directory: &Path, manifest_name: &str) -> Result<String> {
     let mut paths: Vec<_> = walkdir::WalkDir::new(directory)
         .into_iter()
@@ -1637,7 +2020,7 @@ fn verify_content_manifest(directory: &Path, manifest_name: &str) -> Result<()> 
     let expected = content_manifest(directory, manifest_name)?;
     if actual != expected {
         return Err(format!(
-            "{}: frozen snapshot content differs from deterministic manifest",
+            "{}: frozen catalog content differs from deterministic manifest",
             directory.display()
         ));
     }
@@ -2413,5 +2796,33 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn command_environment_profiles_require_exact_event_coverage() {
+        let mut harness = CommandEnvironmentHarness {
+            snapshot: "snapshot".into(),
+            sources: vec!["source".into()],
+            assurance: Assurance {
+                confidence: "low".into(),
+                verification: "source-reviewed".into(),
+            },
+            profiles: vec![],
+            event_profiles: BTreeMap::from([("OnlyEvent".into(), vec![])]),
+        };
+        let events = BTreeSet::from(["OnlyEvent"]);
+        let sources = BTreeSet::from(["source"]);
+        validate_command_environment_harness(&harness, &events, &sources, Path::new("supplement"))
+            .expect("an explicit empty environment covers the event");
+
+        harness.event_profiles.clear();
+        let error = validate_command_environment_harness(
+            &harness,
+            &events,
+            &sources,
+            Path::new("supplement"),
+        )
+        .expect_err("omitting an event must fail");
+        assert!(error.contains("event coverage differs"));
     }
 }

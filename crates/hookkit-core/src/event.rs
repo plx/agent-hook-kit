@@ -1,4 +1,7 @@
-use crate::{ContractId, EventId, HarnessId, NativeContext, RawInvocation, SnapshotId};
+use crate::{
+    CommandEnvironmentSpec, ContractId, EventId, HarnessId, NativeContext, RawInvocation,
+    SnapshotId,
+};
 
 /// Cross-harness lifecycle category. This is never an exact protocol identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -134,6 +137,7 @@ impl ProcessEmission {
 /// from being returned by another event's typed runner.
 pub trait EventSpec {
     type Input;
+    type CommandEnvironment: CommandEnvironmentSpec;
     type CommandOutput;
 
     const HARNESS: HarnessId;
@@ -144,6 +148,16 @@ pub trait EventSpec {
 
     fn parse(invocation: &RawInvocation) -> crate::Result<Self::Input>;
     fn emit(output: Self::CommandOutput) -> crate::Result<ProcessEmission>;
+
+    /// Validate redundant native-input and command-environment state before a
+    /// handler is called. Harness adapters can override this for fields that
+    /// are not part of [`NativeContext`].
+    fn validate_command_environment(
+        input: &Self::Input,
+        environment: &Self::CommandEnvironment,
+    ) -> crate::Result<()> {
+        environment.validate_context(&Self::EVENT, &Self::context(input))
+    }
 
     /// Extract only fields the exact native input contract supplies.
     fn context(_input: &Self::Input) -> NativeContext {
@@ -343,6 +357,7 @@ pub trait EventSelector {
 /// exact event arm so the runtime can reject a mismatch before emission.
 pub trait HarnessSpec {
     type AnyInput;
+    type CommandEnvironment: CommandEnvironmentSpec;
     type AnyCommandOutput;
     type EventSelector: EventSelector;
 
@@ -352,6 +367,13 @@ pub trait HarnessSpec {
     fn identification_descriptors() -> Vec<IdentificationDescriptor>;
     fn decode(event: &EventId, raw: &RawInvocation) -> crate::Result<Self::AnyInput>;
     fn input_event(input: &Self::AnyInput) -> EventId;
+    fn validate_command_environment(
+        input: &Self::AnyInput,
+        environment: &Self::CommandEnvironment,
+    ) -> crate::Result<()> {
+        let event = Self::input_event(input);
+        environment.validate_context(&event, &Self::context(input))
+    }
     fn output_event(output: &Self::AnyCommandOutput) -> EventId;
     /// Checked dynamic encoding. The triggering event is mandatory so a caller
     /// cannot emit an arbitrary output arm without the same agreement check the

@@ -17,3 +17,11 @@ When drift is confirmed:
 
 Live observations belong under `contracts/status/observations/`. They create a new
 snapshot only when they change the interpreted protocol contract.
+
+For command-environment-only drift, create a new draft under
+`contracts/supplements/command-environments/`, update its source evidence and
+complete event/profile matrix, freeze it with `cargo xtask contracts
+freeze-command-environments <supplement-id>`, then select it in `registry.yaml`.
+Do not edit a frozen supplement. If the same drift changes JSON payload or
+process-output semantics, follow the full successor snapshot workflow above as
+well.

@@ -14,7 +14,7 @@ const DENY_PATTERNS: &[&str] = &[
 ];
 
 fn main() -> std::process::ExitCode {
-    hookkit_runtime::typed::run_typed::<PreToolUse, _>(|input, _ctx| {
+    hookkit_runtime::typed::run_typed::<PreToolUse, _>(|input, _environment, _ctx| {
         let command = if input.tool_name == "Bash" {
             input
                 .tool_input

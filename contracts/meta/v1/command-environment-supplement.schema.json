@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:meta:v1:command-environment-supplement",
+  "$defs": {
+    "assurance": {
+      "type": "object",
+      "required": ["confidence", "verification"],
+      "properties": {
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "verification": {
+          "enum": ["unverified", "fixture-validated", "source-reviewed", "live-observed"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "activation": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["always", "optional", "conditional"] },
+        "condition": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "conditional" } } },
+          "then": { "required": ["condition"] },
+          "else": { "not": { "required": ["condition"] } }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "value": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["literal", "opaque", "path", "input-field", "environment-variable"]
+        },
+        "literal": { "type": "string" },
+        "reference": { "type": "string", "minLength": 1 },
+        "allow_empty": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "literal" } } },
+          "then": { "required": ["literal"], "not": { "required": ["reference"] } },
+          "else": { "not": { "required": ["literal"] } }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": { "enum": ["input-field", "environment-variable"] }
+            }
+          },
+          "then": { "required": ["reference"] },
+          "else": { "not": { "required": ["reference"] } }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "variable": {
+      "type": "object",
+      "required": ["value"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+        "prefix": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*_$" },
+        "value": { "$ref": "#/$defs/value" }
+      },
+      "oneOf": [
+        { "required": ["name"], "not": { "required": ["prefix"] } },
+        { "required": ["prefix"], "not": { "required": ["name"] } }
+      ],
+      "additionalProperties": false
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id", "activation", "completeness", "variables", "sources", "assurance"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "activation": { "$ref": "#/$defs/activation" },
+        "completeness": { "enum": ["all-or-none", "independent"] },
+        "variables": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/variable" }
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "assurance": { "$ref": "#/$defs/assurance" }
+      },
+      "additionalProperties": false
+    },
+    "harness": {
+      "type": "object",
+      "required": ["snapshot", "sources", "assurance", "profiles", "event_profiles"],
+      "properties": {
+        "snapshot": { "type": "string", "minLength": 1 },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "assurance": { "$ref": "#/$defs/assurance" },
+        "profiles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/profile" }
+        },
+        "event_profiles": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "format_version",
+    "id",
+    "state",
+    "retrieved",
+    "sources_file",
+    "harnesses"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^command-environments-[a-z0-9-]+$" },
+    "state": { "enum": ["draft", "frozen"] },
+    "retrieved": { "type": "string", "format": "date" },
+    "sources_file": { "type": "string", "minLength": 1 },
+    "manifest_file": { "const": "MANIFEST.sha256" },
+    "harnesses": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/harness" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "frozen" } } },
+      "then": { "required": ["manifest_file"] },
+      "else": { "not": { "required": ["manifest_file"] } }
+    }
+  ],
+  "additionalProperties": false
+}

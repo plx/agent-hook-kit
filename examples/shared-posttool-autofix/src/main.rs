@@ -1,4 +1,4 @@
-use hookkit_common::{PostToolUseInput, PostToolUseOutput};
+use hookkit_common::{PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput};
 use hookkit_core::{HarnessId, RuntimeContext};
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
 use std::path::Path;
@@ -45,6 +45,7 @@ fn main() -> std::process::ExitCode {
 
 fn handle_post_tool(
     post_tool: PostToolUseInput,
+    _environment: &PostToolUseCommandEnvironment,
     ctx: &RuntimeContext<'_>,
 ) -> hookkit_core::Result<PostToolUseOutput> {
     let tool_name = match &post_tool {
