@@ -6,7 +6,9 @@
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
-use hookkit_common::{NoticeLevel, PostToolUseInput, PostToolUseOutput, UserNotice};
+use hookkit_common::{
+    NoticeLevel, PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput, UserNotice,
+};
 use hookkit_core::{HarnessId, HookkitError, RuntimeContext};
 use hookkit_pkl_config::schema as pkl;
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
@@ -658,13 +660,16 @@ fn is_known_file_writing_tool(tool_name: &str) -> bool {
 pub fn run_runner(cli: Cli) -> std::process::ExitCode {
     hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PostToolUse, _>(
         cli.harness,
-        move |input, ctx| run_post_tool_input(input, ctx, cli.config_path.as_deref()),
+        move |input, environment, ctx| {
+            run_post_tool_input(input, environment, ctx, cli.config_path.as_deref())
+        },
     )
 }
 
 /// Run an exact aligned input through the Pkl-driven runner.
 fn run_post_tool_input(
     post_tool: PostToolUseInput,
+    _environment: &PostToolUseCommandEnvironment,
     ctx: &RuntimeContext<'_>,
     config_path: Option<&Path>,
 ) -> hookkit_core::Result<PostToolUseOutput> {

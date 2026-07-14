@@ -8,3 +8,5 @@ harnesses:
     current: commit-9e552e9-r2
   gemini-cli:
     current: commit-f354eeb-r2
+supplements:
+  command_environments: command-environments-2026-07-13-r1

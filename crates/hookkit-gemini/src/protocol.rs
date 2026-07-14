@@ -5,6 +5,8 @@ use hookkit_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::GeminiCommandEnvironment;
+
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("commit-f354eeb-r2");
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -208,6 +210,7 @@ pub enum BeforeTool {}
 
 impl EventSpec for BeforeTool {
     type Input = BeforeToolInput;
+    type CommandEnvironment = GeminiCommandEnvironment;
     type CommandOutput = BeforeToolOutput;
     const HARNESS: HarnessId = HarnessId::GEMINI_CLI;
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
@@ -466,6 +469,7 @@ pub enum AfterTool {}
 
 impl EventSpec for AfterTool {
     type Input = AfterToolInput;
+    type CommandEnvironment = GeminiCommandEnvironment;
     type CommandOutput = AfterToolOutput;
     const HARNESS: HarnessId = HarnessId::GEMINI_CLI;
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
@@ -614,6 +618,7 @@ pub enum BeforeToolSelection {}
 
 impl EventSpec for BeforeToolSelection {
     type Input = BeforeToolSelectionInput;
+    type CommandEnvironment = GeminiCommandEnvironment;
     type CommandOutput = BeforeToolSelectionOutput;
     const HARNESS: HarnessId = HarnessId::GEMINI_CLI;
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
@@ -707,6 +712,7 @@ pub enum GeminiCli {}
 
 impl HarnessSpec for GeminiCli {
     type AnyInput = AnyInput;
+    type CommandEnvironment = GeminiCommandEnvironment;
     type AnyCommandOutput = AnyCommandOutput;
     type EventSelector = Event;
 

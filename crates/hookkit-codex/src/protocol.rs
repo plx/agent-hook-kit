@@ -6,6 +6,8 @@ use hookkit_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::CodexCommandEnvironment;
+
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("commit-9e552e9-r2");
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -136,6 +138,7 @@ pub enum PreToolUse {}
 
 impl EventSpec for PreToolUse {
     type Input = PreToolUseInput;
+    type CommandEnvironment = CodexCommandEnvironment;
     type CommandOutput = PreToolUseOutput;
     const HARNESS: HarnessId = HarnessId::CODEX;
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
@@ -404,6 +407,7 @@ pub enum PostToolUse {}
 
 impl EventSpec for PostToolUse {
     type Input = PostToolUseInput;
+    type CommandEnvironment = CodexCommandEnvironment;
     type CommandOutput = PostToolUseOutput;
     const HARNESS: HarnessId = HarnessId::CODEX;
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
@@ -530,6 +534,7 @@ pub enum Codex {}
 
 impl HarnessSpec for Codex {
     type AnyInput = AnyInput;
+    type CommandEnvironment = CodexCommandEnvironment;
     type AnyCommandOutput = AnyCommandOutput;
     type EventSelector = Event;
 

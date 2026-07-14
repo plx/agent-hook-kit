@@ -522,8 +522,10 @@ fn synthesize_hook_event(harness: &str, project: &Path, entry_rel: &Path) -> Vec
 fn run_binary(harness: &str, fixture_json: &[u8]) -> Result<std::process::Output, String> {
     let binary = env!("CARGO_BIN_EXE_post-tool-use-agent-hook");
     let flag = format!("--{harness}");
-    let mut child = Command::new(binary)
-        .arg(&flag)
+    let mut command = Command::new(binary);
+    command.arg(&flag);
+    configure_hook_environment(&mut command, harness, fixture_json)?;
+    let mut child = command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -539,6 +541,84 @@ fn run_binary(harness: &str, fixture_json: &[u8]) -> Result<std::process::Output
     child
         .wait_with_output()
         .map_err(|e| format!("wait_with_output: {e}"))
+}
+
+fn configure_hook_environment(
+    command: &mut Command,
+    harness: &str,
+    fixture_json: &[u8],
+) -> Result<(), String> {
+    clear_modeled_hook_environment(command);
+    let input: serde_json::Value = serde_json::from_slice(fixture_json)
+        .map_err(|error| format!("parse {harness} fixture for hook environment: {error}"))?;
+    let field = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| input.get(*name).and_then(serde_json::Value::as_str))
+            .ok_or_else(|| {
+                format!(
+                    "{harness} fixture is missing string field {}",
+                    names.join(" or ")
+                )
+            })
+    };
+
+    match harness {
+        "claude" => {
+            let session_id = field(&["session_id", "sessionId"])?;
+            let project_dir = field(&["cwd"])?;
+            command
+                .env("CLAUDECODE", "1")
+                .env("CLAUDE_CODE_CHILD_SESSION", "1")
+                .env("CLAUDE_CODE_SESSION_ID", session_id)
+                .env("CLAUDE_PROJECT_DIR", project_dir);
+        }
+        "gemini" => {
+            let session_id = field(&["session_id", "sessionId"])?;
+            let project_dir = field(&["cwd"])?;
+            command
+                .env("GEMINI_PROJECT_DIR", project_dir)
+                .env("GEMINI_PLANS_DIR", format!("{project_dir}/.gemini/plans"))
+                .env("GEMINI_CWD", project_dir)
+                .env("GEMINI_SESSION_ID", session_id)
+                .env("CLAUDE_PROJECT_DIR", project_dir);
+        }
+        "codex" | "antigravity" => {}
+        _ => return Err(format!("unknown harness {harness}")),
+    }
+
+    Ok(())
+}
+
+fn clear_modeled_hook_environment(command: &mut Command) {
+    const EXACT_NAMES: &[&str] = &[
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_PROJECT_DIR",
+        "CLAUDE_ENV_FILE",
+        "CLAUDE_EFFORT",
+        "TRACEPARENT",
+        "CLAUDE_CODE_REMOTE",
+        "CLAUDE_CODE_REMOTE_SESSION_ID",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_DATA",
+        "PLUGIN_ROOT",
+        "PLUGIN_DATA",
+        "GEMINI_PROJECT_DIR",
+        "GEMINI_PLANS_DIR",
+        "GEMINI_CWD",
+        "GEMINI_SESSION_ID",
+    ];
+    for name in EXACT_NAMES {
+        command.env_remove(name);
+    }
+    for name in std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()) {
+        if name.starts_with("CLAUDE_PLUGIN_OPTION_") {
+            command.env_remove(name);
+        }
+    }
 }
 
 fn normalize(text: &str, project_aliases: &[String]) -> String {

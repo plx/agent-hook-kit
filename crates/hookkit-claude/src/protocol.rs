@@ -8,6 +8,8 @@ use hookkit_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::ClaudeCommandEnvironment;
+
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-07-12-r2");
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -134,6 +136,18 @@ pub enum EffortLevel {
     Max,
 }
 
+impl EffortLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SessionStartOutput {
     Structured(StructuredSessionStartOutput),
@@ -243,6 +257,7 @@ pub enum SessionStart {}
 
 impl EventSpec for SessionStart {
     type Input = SessionStartInput;
+    type CommandEnvironment = ClaudeCommandEnvironment;
     type CommandOutput = SessionStartOutput;
     const HARNESS: HarnessId = HarnessId::CLAUDE_CODE;
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
@@ -264,6 +279,17 @@ impl EventSpec for SessionStart {
                 Ok(ProcessEmission::command_text(Self::CONTRACT, context))
             }
         }
+    }
+
+    fn validate_command_environment(
+        input: &Self::Input,
+        environment: &Self::CommandEnvironment,
+    ) -> hookkit_core::Result<()> {
+        environment.validate_input(
+            &Self::EVENT,
+            &input.session_id,
+            input.effort.as_ref().map(|effort| effort.level.as_str()),
+        )
     }
 
     fn context(input: &Self::Input) -> NativeContext {
@@ -467,6 +493,7 @@ pub enum PostToolUse {}
 
 impl EventSpec for PostToolUse {
     type Input = PostToolUseInput;
+    type CommandEnvironment = ClaudeCommandEnvironment;
     type CommandOutput = PostToolUseOutput;
     const HARNESS: HarnessId = HarnessId::CLAUDE_CODE;
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
@@ -522,6 +549,17 @@ impl EventSpec for PostToolUse {
                 ))
             }
         }
+    }
+
+    fn validate_command_environment(
+        input: &Self::Input,
+        environment: &Self::CommandEnvironment,
+    ) -> hookkit_core::Result<()> {
+        environment.validate_input(
+            &Self::EVENT,
+            &input.session_id,
+            input.effort.as_ref().map(|effort| effort.level.as_str()),
+        )
     }
 
     fn context(input: &Self::Input) -> NativeContext {
@@ -602,6 +640,7 @@ pub enum WorktreeCreate {}
 
 impl EventSpec for WorktreeCreate {
     type Input = WorktreeCreateInput;
+    type CommandEnvironment = ClaudeCommandEnvironment;
     type CommandOutput = WorktreeCreateOutput;
     const HARNESS: HarnessId = HarnessId::CLAUDE_CODE;
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
@@ -709,6 +748,7 @@ pub enum ClaudeCode {}
 
 impl HarnessSpec for ClaudeCode {
     type AnyInput = AnyInput;
+    type CommandEnvironment = ClaudeCommandEnvironment;
     type AnyCommandOutput = AnyCommandOutput;
     type EventSelector = Event;
 
@@ -736,6 +776,23 @@ impl HarnessSpec for ClaudeCode {
             AnyInput::SessionStart(_) => SessionStart::EVENT,
             AnyInput::PostToolUse(_) => PostToolUse::EVENT,
             AnyInput::WorktreeCreate(_) => WorktreeCreate::EVENT,
+        }
+    }
+
+    fn validate_command_environment(
+        input: &Self::AnyInput,
+        environment: &Self::CommandEnvironment,
+    ) -> hookkit_core::Result<()> {
+        match input {
+            AnyInput::SessionStart(input) => {
+                SessionStart::validate_command_environment(input, environment)
+            }
+            AnyInput::PostToolUse(input) => {
+                PostToolUse::validate_command_environment(input, environment)
+            }
+            AnyInput::WorktreeCreate(input) => {
+                WorktreeCreate::validate_command_environment(input, environment)
+            }
         }
     }
 

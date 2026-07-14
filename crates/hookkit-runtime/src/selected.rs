@@ -1,7 +1,8 @@
 use crate::resolution::resolve_event;
 use hookkit_core::{
-    BuiltinHarness, DISABLED_DIAGNOSTICS, DiagnosticsSink, EventId, EventSelector, HarnessSpec,
-    ProcessEmission, RawInvocation, RuntimeContext,
+    BuiltinHarness, CommandEnvironmentSpec, DISABLED_DIAGNOSTICS, DiagnosticsSink,
+    EnvironmentVariables, EventId, EventSelector, HarnessSpec, ProcessEmission, RawInvocation,
+    RuntimeContext,
 };
 use std::io::Read;
 
@@ -9,28 +10,39 @@ use std::io::Read;
 pub fn execute_harness<H, F>(
     bytes: impl Into<Vec<u8>>,
     hint: Option<H::EventSelector>,
+    variables: &EnvironmentVariables,
     handler: F,
 ) -> hookkit_core::Result<ProcessEmission>
 where
     H: HarnessSpec,
-    F: FnOnce(H::AnyInput, &RuntimeContext<'_>) -> hookkit_core::Result<H::AnyCommandOutput>,
+    F: FnOnce(
+        H::AnyInput,
+        &H::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
-    execute_harness_with_diagnostics::<H, _>(bytes, hint, &DISABLED_DIAGNOSTICS, handler)
+    execute_harness_with_diagnostics::<H, _>(bytes, hint, variables, &DISABLED_DIAGNOSTICS, handler)
 }
 
 pub fn execute_harness_with_diagnostics<H, F>(
     bytes: impl Into<Vec<u8>>,
     hint: Option<H::EventSelector>,
+    variables: &EnvironmentVariables,
     diagnostics: &dyn DiagnosticsSink,
     handler: F,
 ) -> hookkit_core::Result<ProcessEmission>
 where
     H: HarnessSpec,
-    F: FnOnce(H::AnyInput, &RuntimeContext<'_>) -> hookkit_core::Result<H::AnyCommandOutput>,
+    F: FnOnce(
+        H::AnyInput,
+        &H::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
     execute_harness_with_event_id::<H, _>(
         bytes,
         hint.as_ref().map(EventSelector::event_id),
+        variables,
         diagnostics,
         handler,
     )
@@ -39,12 +51,17 @@ where
 fn execute_harness_with_event_id<H, F>(
     bytes: impl Into<Vec<u8>>,
     hint: Option<EventId>,
+    variables: &EnvironmentVariables,
     diagnostics: &dyn DiagnosticsSink,
     handler: F,
 ) -> hookkit_core::Result<ProcessEmission>
 where
     H: HarnessSpec,
-    F: FnOnce(H::AnyInput, &RuntimeContext<'_>) -> hookkit_core::Result<H::AnyCommandOutput>,
+    F: FnOnce(
+        H::AnyInput,
+        &H::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
     if let Some(hint) = hint.as_ref().filter(|hint| hint.harness() != &H::ID) {
         return Err(hookkit_core::HookkitError::HintHarnessMismatch {
@@ -62,6 +79,9 @@ where
             output: input_event,
         });
     }
+    let environment =
+        <H::CommandEnvironment as CommandEnvironmentSpec>::from_variables(&input_event, variables)?;
+    H::validate_command_environment(&input, &environment)?;
     let context = RuntimeContext::new(
         H::ID,
         resolved.snapshot,
@@ -72,7 +92,7 @@ where
         H::context(&input),
         diagnostics,
     )?;
-    let output = handler(input, &context)?;
+    let output = handler(input, &environment, &context)?;
     let output_event = H::output_event(&output);
     if output_event != input_event {
         return Err(hookkit_core::HookkitError::OutputEventMismatch {
@@ -90,13 +110,22 @@ where
 pub fn run_harness<H, F>(hint: Option<H::EventSelector>, handler: F) -> std::process::ExitCode
 where
     H: HarnessSpec,
-    F: FnOnce(H::AnyInput, &RuntimeContext<'_>) -> hookkit_core::Result<H::AnyCommandOutput>,
+    F: FnOnce(
+        H::AnyInput,
+        &H::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
     let mut bytes = Vec::new();
     if std::io::stdin().read_to_end(&mut bytes).is_err() {
         return std::process::ExitCode::from(1);
     }
-    match execute_harness::<H, _>(bytes, hint, handler) {
+    let variables = match crate::environment::capture_command_environment::<H::CommandEnvironment>()
+    {
+        Ok(variables) => variables,
+        Err(_) => return std::process::ExitCode::from(1),
+    };
+    match execute_harness::<H, _>(bytes, hint, &variables, handler) {
         Ok(emission) => crate::typed::write_emission(&emission),
         Err(_) => std::process::ExitCode::from(1),
     }
@@ -118,15 +147,28 @@ pub enum BuiltinOutput {
     Antigravity(hookkit_antigravity::AnyCommandOutput),
 }
 
+#[derive(Debug, Clone)]
+pub enum BuiltinCommandEnvironment {
+    Claude(hookkit_claude::ClaudeCommandEnvironment),
+    Codex(hookkit_codex::CodexCommandEnvironment),
+    Gemini(hookkit_gemini::GeminiCommandEnvironment),
+    Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
+}
+
 /// Execute through the separate runtime-selected built-in umbrella model.
 pub fn execute_builtin_harness<F>(
     harness: BuiltinHarness,
     bytes: impl Into<Vec<u8>>,
     hint: Option<EventId>,
+    variables: &EnvironmentVariables,
     handler: F,
 ) -> hookkit_core::Result<ProcessEmission>
 where
-    F: FnOnce(BuiltinInput, &RuntimeContext<'_>) -> hookkit_core::Result<BuiltinOutput>,
+    F: FnOnce(
+        BuiltinInput,
+        &BuiltinCommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<BuiltinOutput>,
 {
     let bytes = bytes.into();
     match harness {
@@ -134,10 +176,14 @@ where
             execute_harness_with_event_id::<hookkit_claude::protocol::ClaudeCode, _>(
                 bytes,
                 hint,
+                variables,
                 &DISABLED_DIAGNOSTICS,
-                |input, context| match handler(BuiltinInput::Claude(input), context)? {
-                    BuiltinOutput::Claude(output) => Ok(output),
-                    output => Err(builtin_harness_mismatch(context, &output)),
+                |input, environment, context| {
+                    let environment = BuiltinCommandEnvironment::Claude(environment.clone());
+                    match handler(BuiltinInput::Claude(input), &environment, context)? {
+                        BuiltinOutput::Claude(output) => Ok(output),
+                        output => Err(builtin_harness_mismatch(context, &output)),
+                    }
                 },
             )
         }
@@ -145,10 +191,14 @@ where
             execute_harness_with_event_id::<hookkit_codex::protocol::Codex, _>(
                 bytes,
                 hint,
+                variables,
                 &DISABLED_DIAGNOSTICS,
-                |input, context| match handler(BuiltinInput::Codex(input), context)? {
-                    BuiltinOutput::Codex(output) => Ok(output),
-                    output => Err(builtin_harness_mismatch(context, &output)),
+                |input, environment, context| {
+                    let environment = BuiltinCommandEnvironment::Codex(environment.clone());
+                    match handler(BuiltinInput::Codex(input), &environment, context)? {
+                        BuiltinOutput::Codex(output) => Ok(output),
+                        output => Err(builtin_harness_mismatch(context, &output)),
+                    }
                 },
             )
         }
@@ -156,10 +206,14 @@ where
             execute_harness_with_event_id::<hookkit_gemini::protocol::GeminiCli, _>(
                 bytes,
                 hint,
+                variables,
                 &DISABLED_DIAGNOSTICS,
-                |input, context| match handler(BuiltinInput::Gemini(input), context)? {
-                    BuiltinOutput::Gemini(output) => Ok(output),
-                    output => Err(builtin_harness_mismatch(context, &output)),
+                |input, environment, context| {
+                    let environment = BuiltinCommandEnvironment::Gemini(environment.clone());
+                    match handler(BuiltinInput::Gemini(input), &environment, context)? {
+                        BuiltinOutput::Gemini(output) => Ok(output),
+                        output => Err(builtin_harness_mismatch(context, &output)),
+                    }
                 },
             )
         }
@@ -167,10 +221,14 @@ where
             execute_harness_with_event_id::<hookkit_antigravity::Antigravity, _>(
                 bytes,
                 hint,
+                variables,
                 &DISABLED_DIAGNOSTICS,
-                |input, context| match handler(BuiltinInput::Antigravity(input), context)? {
-                    BuiltinOutput::Antigravity(output) => Ok(output),
-                    output => Err(builtin_harness_mismatch(context, &output)),
+                |input, environment, context| {
+                    let environment = BuiltinCommandEnvironment::Antigravity(*environment);
+                    match handler(BuiltinInput::Antigravity(input), &environment, context)? {
+                        BuiltinOutput::Antigravity(output) => Ok(output),
+                        output => Err(builtin_harness_mismatch(context, &output)),
+                    }
                 },
             )
         }
@@ -187,15 +245,45 @@ pub fn dispatch_builtin_harness<F>(
     handler: F,
 ) -> std::process::ExitCode
 where
-    F: FnOnce(BuiltinInput, &RuntimeContext<'_>) -> hookkit_core::Result<BuiltinOutput>,
+    F: FnOnce(
+        BuiltinInput,
+        &BuiltinCommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<BuiltinOutput>,
 {
     let mut bytes = Vec::new();
     if std::io::stdin().read_to_end(&mut bytes).is_err() {
         return std::process::ExitCode::from(1);
     }
-    match execute_builtin_harness(harness, bytes, hint, handler) {
+    let variables = match capture_builtin_command_environment(&harness) {
+        Ok(variables) => variables,
+        Err(_) => return std::process::ExitCode::from(1),
+    };
+    match execute_builtin_harness(harness, bytes, hint, &variables, handler) {
         Ok(emission) => crate::typed::write_emission(&emission),
         Err(_) => std::process::ExitCode::from(1),
+    }
+}
+
+fn capture_builtin_command_environment(
+    harness: &BuiltinHarness,
+) -> hookkit_core::Result<EnvironmentVariables> {
+    match harness {
+        BuiltinHarness::ClaudeCode => crate::environment::capture_command_environment::<
+            hookkit_claude::ClaudeCommandEnvironment,
+        >(),
+        BuiltinHarness::Codex => crate::environment::capture_command_environment::<
+            hookkit_codex::CodexCommandEnvironment,
+        >(),
+        BuiltinHarness::GeminiCli => crate::environment::capture_command_environment::<
+            hookkit_gemini::GeminiCommandEnvironment,
+        >(),
+        BuiltinHarness::Antigravity => crate::environment::capture_command_environment::<
+            hookkit_antigravity::AntigravityCommandEnvironment,
+        >(),
+        _ => Err(hookkit_core::HookkitError::UnsupportedBuiltinHarness(
+            *harness,
+        )),
     }
 }
 
@@ -243,7 +331,9 @@ mod tests {
         let emission = execute_harness::<hookkit_codex::protocol::Codex, _>(
             codex_pre_tool_use(),
             None,
-            |input, context| {
+            &EnvironmentVariables::new(),
+            |input, environment, context| {
+                assert!(environment.plugin.is_none());
                 let hookkit_codex::protocol::AnyInput::PreToolUse(input) = input else {
                     panic!("resolved the wrong Codex event")
                 };
@@ -291,7 +381,8 @@ mod tests {
         let error = execute_harness::<hookkit_codex::protocol::Codex, _>(
             codex_pre_tool_use(),
             None,
-            |_input, _context| {
+            &EnvironmentVariables::new(),
+            |_input, _environment, _context| {
                 Ok(hookkit_codex::protocol::AnyCommandOutput::PostToolUse(
                     hookkit_codex::protocol::PostToolUseOutput::no_op(),
                 ))
@@ -328,8 +419,10 @@ mod tests {
             BuiltinHarness::Codex,
             codex_pre_tool_use(),
             None,
-            |input, context| {
+            &EnvironmentVariables::new(),
+            |input, environment, context| {
                 assert_eq!(context.harness(), &HarnessId::CODEX);
+                assert!(matches!(environment, BuiltinCommandEnvironment::Codex(_)));
                 assert!(matches!(
                     input,
                     BuiltinInput::Codex(hookkit_codex::protocol::AnyInput::PreToolUse(_))
@@ -353,7 +446,8 @@ mod tests {
             BuiltinHarness::Codex,
             codex_pre_tool_use(),
             None,
-            |_input, _context| {
+            &EnvironmentVariables::new(),
+            |_input, _environment, _context| {
                 Ok(BuiltinOutput::Gemini(
                     hookkit_gemini::protocol::AnyCommandOutput::BeforeTool(
                         hookkit_gemini::protocol::BeforeToolOutput::no_op(),
@@ -377,7 +471,10 @@ mod tests {
             BuiltinHarness::Codex,
             b"not json".to_vec(),
             Some(EventId::builtin(HarnessId::CLAUDE_CODE, "SessionStart")),
-            |_input, _context| unreachable!("a foreign hint must fail before parsing"),
+            &EnvironmentVariables::new(),
+            |_input, _environment, _context| {
+                unreachable!("a foreign hint must fail before parsing")
+            },
         )
         .unwrap_err();
 
@@ -404,7 +501,8 @@ mod tests {
         let error = execute_harness::<hookkit_antigravity::Antigravity, _>(
             payload.clone(),
             None,
-            |_input, _context| {
+            &EnvironmentVariables::new(),
+            |_input, _environment, _context| {
                 Ok(hookkit_antigravity::AnyCommandOutput::PreInvocation(
                     hookkit_antigravity::PreInvocationOutput::no_op(),
                 ))
@@ -420,7 +518,8 @@ mod tests {
         let emission = execute_harness::<hookkit_antigravity::Antigravity, _>(
             payload,
             Some(hookkit_antigravity::Event::PreInvocation),
-            |input, context| {
+            &EnvironmentVariables::new(),
+            |input, _environment, context| {
                 assert!(matches!(
                     input,
                     hookkit_antigravity::AnyInput::PreInvocation(_)

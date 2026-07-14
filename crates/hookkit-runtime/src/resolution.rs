@@ -332,7 +332,8 @@ fn pointer_value<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a 
 mod tests {
     use super::*;
     use hookkit_core::{
-        ContractId, EventCategory, EventSpec, NativeContext, ProcessEmission, SnapshotId,
+        ContractId, EventCategory, EventSpec, NativeContext, NoCommandEnvironment, ProcessEmission,
+        SnapshotId,
     };
 
     macro_rules! test_event {
@@ -340,6 +341,7 @@ mod tests {
             struct $type;
             impl EventSpec for $type {
                 type Input = serde_json::Value;
+                type CommandEnvironment = NoCommandEnvironment;
                 type CommandOutput = ();
                 const HARNESS: HarnessId = HarnessId::builtin($harness);
                 const SNAPSHOT: SnapshotId = SnapshotId::builtin("v1");

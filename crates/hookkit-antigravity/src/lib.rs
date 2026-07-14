@@ -1,5 +1,9 @@
 //! Native Antigravity hook contracts.
 
+pub mod environment;
+
+pub use environment::AntigravityCommandEnvironment;
+
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSelector, EventSpec, HarnessId, HarnessSpec,
     IdentificationDescriptor, NativeContext, NativeEventDescriptor, ProcessEmission, RawInvocation,
@@ -84,6 +88,7 @@ pub enum PreInvocation {}
 
 impl EventSpec for PreInvocation {
     type Input = PreInvocationInput;
+    type CommandEnvironment = AntigravityCommandEnvironment;
     type CommandOutput = PreInvocationOutput;
 
     const HARNESS: HarnessId = HarnessId::ANTIGRAVITY;
@@ -129,6 +134,7 @@ pub enum PostInvocation {}
 
 impl EventSpec for PostInvocation {
     type Input = PostInvocationInput;
+    type CommandEnvironment = AntigravityCommandEnvironment;
     type CommandOutput = PostInvocationOutput;
     const HARNESS: HarnessId = HarnessId::ANTIGRAVITY;
     const SNAPSHOT: SnapshotId = SNAPSHOT;
@@ -198,6 +204,7 @@ pub struct PreToolUseOutput {
 pub enum PreToolUse {}
 impl EventSpec for PreToolUse {
     type Input = PreToolUseInput;
+    type CommandEnvironment = AntigravityCommandEnvironment;
     type CommandOutput = PreToolUseOutput;
     const HARNESS: HarnessId = HarnessId::ANTIGRAVITY;
     const SNAPSHOT: SnapshotId = SNAPSHOT;
@@ -253,6 +260,7 @@ pub struct PostToolUseOutput {}
 pub enum PostToolUse {}
 impl EventSpec for PostToolUse {
     type Input = PostToolUseInput;
+    type CommandEnvironment = AntigravityCommandEnvironment;
     type CommandOutput = PostToolUseOutput;
     const HARNESS: HarnessId = HarnessId::ANTIGRAVITY;
     const SNAPSHOT: SnapshotId = SNAPSHOT;
@@ -303,6 +311,7 @@ pub struct StopOutput {
 pub enum Stop {}
 impl EventSpec for Stop {
     type Input = StopInput;
+    type CommandEnvironment = AntigravityCommandEnvironment;
     type CommandOutput = StopOutput;
     const HARNESS: HarnessId = HarnessId::ANTIGRAVITY;
     const SNAPSHOT: SnapshotId = SNAPSHOT;
@@ -400,6 +409,7 @@ pub enum Antigravity {}
 
 impl HarnessSpec for Antigravity {
     type AnyInput = AnyInput;
+    type CommandEnvironment = AntigravityCommandEnvironment;
     type AnyCommandOutput = AnyCommandOutput;
     type EventSelector = Event;
 

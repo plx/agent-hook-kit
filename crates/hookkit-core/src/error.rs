@@ -13,6 +13,21 @@ pub enum HookkitError {
     #[error("invalid process emission: {0}")]
     InvalidProcessEmission(&'static str),
 
+    #[error("environment variable `{variable}` is not valid UTF-8")]
+    NonUnicodeEnvironmentVariable { variable: String },
+
+    #[error("invalid hook environment for `{event}`: {message}")]
+    InvalidHookEnvironment {
+        event: crate::EventId,
+        message: String,
+    },
+
+    #[error("hook environment does not match `{event}` input: {message}")]
+    EnvironmentContextMismatch {
+        event: crate::EventId,
+        message: String,
+    },
+
     #[error("missing hook_event_name in payload")]
     MissingHookEventName,
 
