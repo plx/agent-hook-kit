@@ -51,7 +51,12 @@ fn configure_hook_environment(
     clear_modeled_hook_environment(command);
     let harness = extra_args
         .iter()
-        .find_map(|argument| argument.strip_prefix("--"))
+        .find_map(|argument| {
+            argument.strip_prefix("--harness=").or_else(|| {
+                matches!(*argument, "--claude" | "--codex" | "--gemini")
+                    .then(|| argument.trim_start_matches("--"))
+            })
+        })
         .or_else(|| binary.split_once('-').map(|(prefix, _)| prefix));
 
     let Some(harness @ ("claude" | "gemini")) = harness else {
@@ -641,6 +646,181 @@ fn shared_autofix_codex_manual_mode_emits_agent_context() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Diagnostics:"));
+}
+
+// --- codex-claude-rules ---
+
+#[test]
+fn codex_claude_rules_injects_each_matching_rule_once() {
+    let project = temp_project("codex-claude-rules");
+    let rules_dir = project.join(".claude/rules");
+    let state_dir = project.join("state");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+    std::fs::write(
+        rules_dir.join("rust.md"),
+        "---\npaths: '**/*.rs'\n---\nUse the repository's Rust conventions.\n",
+    )
+    .unwrap();
+    let fixture = serde_json::to_vec(&serde_json::json!({
+        "session_id": "rules-session",
+        "transcript_path": null,
+        "cwd": project.to_string_lossy(),
+        "hook_event_name": "PreToolUse",
+        "model": "gpt-test",
+        "turn_id": "rules-turn",
+        "permission_mode": "default",
+        "tool_name": "apply_patch",
+        "tool_use_id": "rules-call",
+        "tool_input": {"patch": "*** Update File: src/lib.rs\n"}
+    }))
+    .unwrap();
+    let project_arg = project.to_string_lossy().into_owned();
+    let empty_home_arg = project
+        .join("empty-claude-home")
+        .to_string_lossy()
+        .into_owned();
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let args = [
+        "--project-root",
+        project_arg.as_str(),
+        "--claude-home",
+        empty_home_arg.as_str(),
+        "--state-dir",
+        state_arg.as_str(),
+    ];
+
+    let first = run_example("codex-claude-rules", &fixture, &args);
+    assert!(first.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert!(
+        json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("Use the repository's Rust conventions")
+    );
+
+    let second = run_example("codex-claude-rules", &fixture, &args);
+    assert!(second.status.success());
+    assert!(
+        second.stdout.is_empty(),
+        "the rule must not be injected twice"
+    );
+}
+
+// --- forbidden-file-guard ---
+
+#[test]
+fn forbidden_file_guard_emits_codex_native_deny() {
+    let project = temp_project("forbidden-file-guard");
+    let config = project.join("forbidden-files.yaml");
+    std::fs::write(&config, "patterns: ['.env', '**/.env']\n").unwrap();
+    let fixture = serde_json::to_vec(&serde_json::json!({
+        "session_id": "guard-session",
+        "transcript_path": null,
+        "cwd": project.to_string_lossy(),
+        "hook_event_name": "PreToolUse",
+        "model": "gpt-test",
+        "turn_id": "guard-turn",
+        "permission_mode": "default",
+        "tool_name": "mcp__filesystem__read_file",
+        "tool_use_id": "guard-call",
+        "tool_input": {"path": ".env"}
+    }))
+    .unwrap();
+    let config_arg = config.to_string_lossy().into_owned();
+    let output = run_example(
+        "forbidden-file-guard",
+        &fixture,
+        &["--harness=codex", "--config", config_arg.as_str()],
+    );
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn forbidden_file_guard_emits_gemini_and_antigravity_native_denies() {
+    let project = temp_project("forbidden-file-guard-cross-harness");
+    let config = project.join("forbidden-files.yaml");
+    std::fs::write(&config, "patterns: ['.env']\n").unwrap();
+    let config_arg = config.to_string_lossy().into_owned();
+    let fixtures = [
+        (
+            "gemini",
+            serde_json::json!({
+                "session_id": "guard-gemini-session",
+                "transcript_path": "/tmp/guard-gemini.json",
+                "cwd": project.to_string_lossy(),
+                "hook_event_name": "BeforeTool",
+                "timestamp": "2026-07-12T00:00:00Z",
+                "tool_name": "read_file",
+                "tool_input": {"path": ".env"}
+            }),
+        ),
+        (
+            "antigravity",
+            serde_json::json!({
+                "conversationId": "guard-antigravity-session",
+                "workspacePaths": [project.to_string_lossy()],
+                "transcriptPath": "/tmp/guard-antigravity.jsonl",
+                "artifactDirectoryPath": "/tmp/guard-antigravity-artifacts",
+                "toolCall": {"name": "read_file", "args": {"path": ".env"}},
+                "stepIdx": 1
+            }),
+        ),
+    ];
+
+    for (harness, fixture) in fixtures {
+        let harness_arg = format!("--harness={harness}");
+        let output = run_example(
+            "forbidden-file-guard",
+            &serde_json::to_vec(&fixture).unwrap(),
+            &[harness_arg.as_str(), "--config", config_arg.as_str()],
+        );
+        assert!(output.status.success(), "{harness} guard should succeed");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["decision"], "deny", "{harness} should deny");
+    }
+}
+
+// --- session-modified-file-tracker ---
+
+#[test]
+fn session_modified_file_tracker_records_all_supported_posttool_paths() {
+    let project = temp_project("session-modified-file-tracker");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let harnesses = [
+        ("claude", "claude-code", "claude-ruff-test"),
+        ("codex", "codex", "codex-ruff-test"),
+        ("gemini", "gemini-cli", "gemini-ruff-test"),
+    ];
+
+    for (harness, harness_id, session) in harnesses {
+        let fixture = post_tool_use_fixture(harness, &project, "src/main.rs");
+        let harness_arg = format!("--harness={harness}");
+        let output = run_example(
+            "session-modified-file-tracker",
+            &fixture,
+            &[harness_arg.as_str(), "--state-dir", state_arg.as_str()],
+        );
+        assert!(output.status.success(), "{harness} tracker should succeed");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+            serde_json::json!({})
+        );
+
+        let markers =
+            std::fs::read_dir(state_dir.join(format!("{harness_id}/{session}/modified-files")))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(markers[0].path()).unwrap(),
+            format!("{}\n", project.join("src/main.rs").display())
+        );
+    }
 }
 
 // --- post-tool-use-agent-hook driven by Pkl configs ---

@@ -1,0 +1,24 @@
+[package]
+name = "codex-claude-rules"
+description = "Example: lazily inject Claude Code path-scoped rules into Codex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "codex-claude-rules"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+dirs = { workspace = true }
+globset = { workspace = true }
+hookkit-codex = { workspace = true }
+hookkit-core = { workspace = true }
+hookkit-runtime = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+sha2 = { workspace = true }
+walkdir = { workspace = true }

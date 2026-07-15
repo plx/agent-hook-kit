@@ -1,0 +1,13 @@
+{
+  "conversationId": "antigravity-guard-example",
+  "workspacePaths": ["/repo"],
+  "transcriptPath": "/tmp/antigravity-transcript.jsonl",
+  "artifactDirectoryPath": "/tmp/antigravity-artifacts",
+  "toolCall": {
+    "name": "read_file",
+    "args": {
+      "path": "/repo/.env"
+    }
+  },
+  "stepIdx": 1
+}

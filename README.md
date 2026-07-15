@@ -31,6 +31,9 @@ CLI, and Antigravity.
   - `examples/gemini-beforetool-policy`
   - `examples/shared-posttool-autofix`
   - `examples/antigravity-pre-invocation`
+  - [`examples/codex-claude-rules`](examples/codex-claude-rules/README.md)
+  - [`examples/forbidden-file-guard`](examples/forbidden-file-guard/README.md)
+  - [`examples/session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
 
 ## Workspace Layout
 
@@ -256,6 +259,18 @@ cat fixtures/claude/post_tool_use.json \
   | cargo run -q -p shared-posttool-autofix -- --claude
 ```
 
+The three stateful/policy examples have their own setup, state-layout, and
+limitation notes:
+
+- [`codex-claude-rules`](examples/codex-claude-rules/README.md) lazily injects
+  path-scoped files from Claude Code's user and project rules directories.
+- [`forbidden-file-guard`](examples/forbidden-file-guard/README.md) selects a
+  native pre-tool contract with `--harness=codex|gemini|antigravity` and merges
+  home/project YAML policy.
+- [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
+  selects `--harness=claude|codex|gemini` and writes atomic per-session path
+  markers without consulting Git.
+
 ## `post-tool-use-agent-hook`
 
 The reusable post-tool-use formatter/linter runner ships as a single binary
@@ -362,6 +377,18 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - emits each harness's exact native no-op response on clean success,
   - prints concise user status to `stderr` when autofix/manual work occurs,
   - writes verbose manual diagnostics to a temp artifact and gives concise agent guidance when supported.
+- `codex-claude-rules`:
+  - discovers Claude Code rule files recursively in user-before-project order,
+  - evaluates `paths` frontmatter against file paths observable in Codex tool input,
+  - atomically claims each matched rule once per Codex session before injecting its body as additional context.
+- `forbidden-file-guard`:
+  - uses clap to select Codex, Gemini, or Antigravity native pre-tool handling,
+  - merges additive YAML glob policy from home and workspace configuration,
+  - emits the selected harness's native deny output for matching structured paths, patch paths, or obvious shell path tokens.
+- `session-modified-file-tracker`:
+  - uses the aligned post-tool API for Claude, Codex, and Gemini,
+  - infers direct modifications from native open tool payloads and never shells out to Git,
+  - records one atomic marker per normalized path and session so duplicate or concurrent observations are harmless.
 - `post-tool-use-agent-hook`:
   - loads merged Pkl config plus embedded builtin tool catalog,
   - discovers candidate paths from exact native input arms using runner-local tool policy,

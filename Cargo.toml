@@ -17,6 +17,9 @@ members = [
     "examples/claude-sessionstart-context",
     "examples/shared-posttool-autofix",
     "examples/antigravity-pre-invocation",
+    "examples/codex-claude-rules",
+    "examples/forbidden-file-guard",
+    "examples/session-modified-file-tracker",
 ]
 
 [workspace.package]

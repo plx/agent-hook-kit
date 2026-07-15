@@ -1,0 +1,11 @@
+# Patterns are matched against both absolute paths and paths relative to each
+# workspace root. Home and project config files are additive.
+patterns:
+  - ".env"
+  - "**/.env"
+  - "**/.env.*"
+  - "~/.ssh/**"
+
+# Shell commands are strings rather than structured file operations. Enable
+# this to fail closed by denying every shell command while this policy is active.
+block_shell_commands: true
