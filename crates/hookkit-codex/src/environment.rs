@@ -57,10 +57,10 @@ impl CommandEnvironmentSpec for CodexCommandEnvironment {
             return Ok(Self::default());
         }
         if values.iter().any(Option::is_none) {
-            return Err(invalid(
-                event,
-                "plugin hooks require PLUGIN_ROOT, PLUGIN_DATA, CLAUDE_PLUGIN_ROOT, and CLAUDE_PLUGIN_DATA together",
-            ));
+            // Codex inherits the parent process environment for every hook, so a
+            // partial set can be unrelated ambient state. Only the complete
+            // all-or-none injection identifies a hook discovered from a plugin.
+            return Ok(Self::default());
         }
 
         let [Some(root), Some(data), Some(claude_root), Some(claude_data)] = values else {
@@ -141,13 +141,30 @@ mod tests {
     }
 
     #[test]
-    fn partial_or_conflicting_plugin_state_is_rejected() {
-        let partial = EnvironmentVariables::from_pairs([("PLUGIN_ROOT", "/plugins/demo")]);
-        assert!(matches!(
-            CodexCommandEnvironment::from_map(&event("Stop"), &partial),
-            Err(HookkitError::InvalidHookEnvironment { .. })
-        ));
+    fn partial_ambient_plugin_state_is_ignored() {
+        let names = [
+            "PLUGIN_ROOT",
+            "PLUGIN_DATA",
+            "CLAUDE_PLUGIN_ROOT",
+            "CLAUDE_PLUGIN_DATA",
+        ];
+        for present in 1_u8..0b1111 {
+            let variables = EnvironmentVariables::from_pairs(
+                names
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| present & (1 << index) != 0)
+                    .map(|(_, name)| (*name, "/ambient/value")),
+            );
+            assert_eq!(
+                CodexCommandEnvironment::from_map(&event("Stop"), &variables).unwrap(),
+                CodexCommandEnvironment::default(),
+            );
+        }
+    }
 
+    #[test]
+    fn complete_conflicting_plugin_state_is_rejected() {
         let conflicting = EnvironmentVariables::from_pairs([
             ("PLUGIN_ROOT", "/plugins/demo"),
             ("PLUGIN_DATA", "/data/demo"),
