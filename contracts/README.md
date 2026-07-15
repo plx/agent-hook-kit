@@ -17,6 +17,20 @@ supplement. Frozen snapshot and supplement evidence is immutable. Implementation
 targets and later observations live under `status/` and can evolve without
 rewriting protocol history.
 
+## Implementation scope
+
+Catalog breadth is not implementation scope. Snapshots preserve every binding
+documented by an upstream harness when the available evidence supports an exact
+contract, including Claude Code HTTP bindings. HookKit itself implements only
+the `command` binding in this iteration.
+
+`status/stabilization-v1.yaml` is the machine-readable boundary: command
+bindings can progress from `catalog-only` to native/runtime support, while
+non-command bindings are `unsupported`. Unsupported bindings remain in the
+ledger for provenance and upstream drift analysis, but they are not missing
+HookKit vertical slices. Supporting one later requires a new explicit scope
+decision and a status-target revision; a similar body schema is not sufficient.
+
 Run:
 
 ```sh

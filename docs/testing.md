@@ -67,9 +67,12 @@ match an arbitrary developer `PATH`.
 ### 5. Live harness conformance
 
 Run only in an isolated, non-sensitive temporary workspace. Record exact harness
-version, platform, event/binding, sanitized invocation, stdout/stderr/body bytes,
-and status. Command, HTTP, and other bindings are distinct observations. Store
-results under `contracts/status/observations/`; frozen snapshots are immutable.
+version, platform, command event, sanitized invocation, stdout/stderr bytes, and
+status. HookKit live-support observations target command bindings only. HTTP and
+other non-command bindings may still appear as upstream catalog evidence, but
+they are outside the implementation and live-conformance lanes for this
+iteration. Store results under `contracts/status/observations/`; frozen
+snapshots are immutable.
 
 ### 6. Upstream drift discovery
 
