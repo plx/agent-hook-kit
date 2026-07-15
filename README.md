@@ -1,11 +1,24 @@
 # agent-hook-kit
 
-Contract-first Rust plumbing for agent hooks across Claude Code, Codex, Gemini
-CLI, and Antigravity.
+Contract-first Rust plumbing for command hooks across Claude Code, Codex,
+Gemini CLI, and Antigravity.
+
+## Scope
+
+HookKit implements command-handler hooks: a hook process receives native input
+and a declared process environment, then emits the harness-specific stdout,
+stderr, and exit status. HTTP, prompt, agent, MCP, and other non-command hook
+bindings are outside the implementation scope for this iteration.
+
+The contract catalog can still record non-command bindings when an upstream
+harness documents them. Those records preserve protocol evidence; they are not
+HookKit implementation targets or missing vertical slices. Adding a
+non-command runtime later requires an explicit scope decision and support-target
+change.
 
 ## What This Repository Provides
 
-- Native input/output models per harness:
+- Native input/output models for implemented command-hook events per harness:
   - `hookkit-claude`
   - `hookkit-codex`
   - `hookkit-gemini`

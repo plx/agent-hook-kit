@@ -1,6 +1,6 @@
 # ADR 0010: Stabilization implements command runtime first
 
-- Status: accepted
+- Status: superseded by [ADR 018](018-command-only-runtime-scope.md)
 - Date: 2026-07-12
 - Phase: 0; target entries finalized with Phase 1 inventory
 

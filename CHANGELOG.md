@@ -12,6 +12,8 @@
 - Added a distinct Antigravity crate and lossless four-harness PostToolUse arms.
 - Split hermetic required tests from opt-in real-tool and live-harness lanes.
 - Added generated Rust/catalog parity and support reporting.
+- Defined HookKit's runtime scope as command bindings; catalogued HTTP and other
+  non-command bindings are explicit unsupported implementation targets.
 - Removed the legacy generic native/common runners and protocol-invalid output
   envelopes; use `run_event`, `run_harness`/`dispatch_builtin_harness`, or
   `run_aligned_event`.

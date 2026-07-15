@@ -7,6 +7,12 @@
 - Repository baseline: `a997d480a62245f6718cd44b9c7f50d52b635612`
 - Initial library version: `0.1.0`
 
+Scope amendment (2026-07-15): ADR 018 supersedes this plan's earlier
+non-command binding policy. HookKit implementation work is limited to command
+bindings in the current iteration. Non-command bindings remain catalogued as
+upstream evidence but are explicit unsupported targets, not implementation
+backlog.
+
 ## 1. Status, authority, and how to use this plan
 
 This document turns the July 2026 repository audit and the clarified product intent into an implementation plan that can be executed across multiple sessions and pull requests.
@@ -139,8 +145,8 @@ The stabilization work should not:
 - force concrete event-specific binaries to supply redundant event hints;
 - claim compatibility between harnesses merely because one copied another;
 - generate the public Rust API directly from JSON Schema before that approach proves beneficial;
-- implement every inventoried non-command binding in Rust/runtime before command
-  hooks work correctly;
+- implement inventoried non-command bindings in Rust/runtime during this
+  iteration;
 - eliminate reasonable harness-specific matches from concrete hook lowering;
 - put formatter/linter policy or recursive file-discovery heuristics in core/common crates;
 - redesign Pkl configuration while core protocol work is underway;
@@ -1338,10 +1344,11 @@ Every event is complete only when:
 10. live verification status is recorded in the mutable observation overlay.
 
 The default stabilization scope is: catalog every documented binding, implement
-native input plus command-output/runtime support where the target selects it, and
-leave other handler bindings catalog-only unless the stabilization-v1 target
-explicitly promotes them. Phase 3 must not fabricate Rust support for a
-non-command binding merely because its body schema resembles command output.
+native input plus command-output/runtime support where the target selects it,
+and mark other handler bindings unsupported. A future iteration may reconsider
+that boundary through a new explicit scope decision. Phase 3 must not fabricate
+Rust support for a non-command binding merely because its body schema resembles
+command output.
 
 #### Work package 3A: Claude Code
 
@@ -1818,7 +1825,7 @@ These decisions should be settled by the named phase rather than assumed indefin
 | --- | --- | --- |
 | Exact YAML field spelling/meta-schema structure | Use the model in section 7 after the four-case spike | Phase 1A |
 | Schema-to-Rust generation | Do not use initially | Reconsider after Phase 3 |
-| HTTP and non-command runtime adapters | Inventory now; implement only with a concrete consumer | Phase 0/2 ADR |
+| HTTP and non-command runtime adapters | Out of the current implementation scope; retain catalog evidence | Reconsider only through a later ADR |
 | Raw unchecked emission | Provide only if required, explicitly named/feature-gated | Phase 2 |
 | Built-in harness enum versus open ID | Offer both convenience enum and open stable ID | Phase 2 |
 | Stable common semantic intentions | None required initially; runner-local first | Phase 5 |

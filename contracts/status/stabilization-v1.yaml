@@ -9,9 +9,11 @@ defaults:
     binding: command
     level: catalog-only
     verification: source-reviewed
+  # Preserve documented HTTP contracts in the protocol ledger, but do not
+  # treat non-command bindings as HookKit implementation targets.
   - harness: claude-code
     binding: http
-    level: catalog-only
+    level: unsupported
     verification: source-reviewed
   - harness: codex
     binding: command

@@ -15,8 +15,9 @@ stdin bytes + declared environment variables
 This page describes the selected 56-event inventory. The contract is scoped to
 the **command handler binding**. HTTP handlers receive request data, not a hook
 subprocess environment; Claude HTTP header interpolation is a separate,
-allowlisted configuration feature. Prompt, agent, and MCP handlers likewise do
-not acquire a per-invocation process environment through this API.
+allowlisted configuration feature. HTTP, prompt, agent, MCP, and other
+non-command bindings are outside HookKit's implementation scope for this
+iteration, not alternate runtime paths supplied elsewhere in the workspace.
 
 ## Contract boundary
 
