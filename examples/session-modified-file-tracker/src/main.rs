@@ -210,13 +210,16 @@ fn collect_shell_modified_paths(command: &str, out: &mut Vec<String>) {
         .collect::<Vec<_>>();
 
     for (index, token) in tokens.iter().enumerate() {
-        if matches!(*token, ">" | ">>")
-            && let Some(path) = tokens
-                .get(index + 1)
-                .filter(|path| !is_shell_operator(path))
-        {
-            out.push((*path).to_string());
+        if !matches!(*token, ">" | ">>") {
+            continue;
         }
+        let Some(path) = tokens
+            .get(index + 1)
+            .filter(|path| !is_shell_operator(path))
+        else {
+            continue;
+        };
+        out.push((*path).to_string());
     }
 
     for segment in tokens.split(|token| matches!(*token, ";" | "&&" | "||" | "|")) {
