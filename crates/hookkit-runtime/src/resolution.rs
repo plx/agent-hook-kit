@@ -483,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_detector_covers_catalog_only_events_without_authorizing_them() {
+    fn builtin_detector_covers_every_selected_event_with_a_native_parser() {
         let descriptors = builtin_descriptors();
         assert_eq!(descriptors.len(), 56);
         assert_eq!(
@@ -491,7 +491,7 @@ mod tests {
                 .iter()
                 .filter(|descriptor| descriptor.has_native_parser())
                 .count(),
-            13
+            56
         );
 
         let raw = RawInvocation::parse(
@@ -510,11 +510,17 @@ mod tests {
             report.candidates[0].event,
             EventId::builtin(HarnessId::CODEX, "SessionStart")
         );
-        assert!(!report.candidates[0].native_parser);
+        assert!(report.candidates[0].native_parser);
+        assert!(
+            report
+                .validation_failures
+                .iter()
+                .any(|(event, _)| event == &EventId::builtin(HarnessId::CODEX, "SessionStart"))
+        );
     }
 
     #[test]
-    fn catalog_only_authoritative_event_contradicts_an_implemented_hint() {
+    fn authoritative_event_discriminator_contradicts_a_different_hint() {
         let raw = RawInvocation::parse(
             br#"{"session_id":"s","hook_event_name":"SessionStart"}"#.to_vec(),
         )

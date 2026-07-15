@@ -13,7 +13,7 @@ use crate::ClaudeCommandEnvironment;
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-07-12-r2");
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
-    vec![
+    let mut events = vec![
         hookkit_core::NativeEventDescriptor::command::<SessionStart>(&[
             "command-structured",
             "command-text",
@@ -23,56 +23,22 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
             "command-created",
             "command-failed",
         ]),
-    ]
+    ];
+    events.extend(crate::catalog::events());
+    events
 }
 
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
-    macro_rules! catalog {
-        ($event:literal) => {
-            IdentificationDescriptor::catalog_definitive(
-                EventId::builtin(HarnessId::CLAUDE_CODE, $event),
-                SNAPSHOT_ID,
-                ContractId::builtin(concat!("claude-code/docs-2026-07-12-r2/", $event)),
-                "/hook_event_name",
-                $event,
-            )
-        };
-    }
-    vec![
+    let mut descriptors = vec![
         IdentificationDescriptor::definitive::<SessionStart>("/hook_event_name", "SessionStart"),
-        catalog!("Setup"),
-        catalog!("InstructionsLoaded"),
-        catalog!("UserPromptSubmit"),
-        catalog!("UserPromptExpansion"),
-        catalog!("MessageDisplay"),
-        catalog!("PreToolUse"),
-        catalog!("PermissionRequest"),
         IdentificationDescriptor::definitive::<PostToolUse>("/hook_event_name", "PostToolUse"),
-        catalog!("PostToolUseFailure"),
-        catalog!("PostToolBatch"),
-        catalog!("PermissionDenied"),
-        catalog!("Notification"),
-        catalog!("SubagentStart"),
-        catalog!("SubagentStop"),
-        catalog!("TaskCreated"),
-        catalog!("TaskCompleted"),
-        catalog!("Stop"),
-        catalog!("StopFailure"),
-        catalog!("TeammateIdle"),
-        catalog!("ConfigChange"),
-        catalog!("CwdChanged"),
-        catalog!("FileChanged"),
         IdentificationDescriptor::definitive::<WorktreeCreate>(
             "/hook_event_name",
             "WorktreeCreate",
         ),
-        catalog!("WorktreeRemove"),
-        catalog!("PreCompact"),
-        catalog!("PostCompact"),
-        catalog!("SessionEnd"),
-        catalog!("Elicitation"),
-        catalog!("ElicitationResult"),
-    ]
+    ];
+    descriptors.extend(crate::catalog::identification_descriptors());
+    descriptors
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -689,7 +655,10 @@ impl EventSpec for WorktreeCreate {
     }
 }
 
-fn require_event(invocation: &RawInvocation, expected: &'static str) -> hookkit_core::Result<()> {
+pub(crate) fn require_event(
+    invocation: &RawInvocation,
+    expected: &'static str,
+) -> hookkit_core::Result<()> {
     let actual = invocation
         .json()
         .get("hook_event_name")
@@ -717,6 +686,33 @@ pub enum Event {
     SessionStart,
     PostToolUse,
     WorktreeCreate,
+    ConfigChange,
+    CwdChanged,
+    Elicitation,
+    ElicitationResult,
+    FileChanged,
+    InstructionsLoaded,
+    MessageDisplay,
+    Notification,
+    PermissionDenied,
+    PermissionRequest,
+    PostCompact,
+    PostToolBatch,
+    PostToolUseFailure,
+    PreCompact,
+    PreToolUse,
+    SessionEnd,
+    Setup,
+    Stop,
+    StopFailure,
+    SubagentStart,
+    SubagentStop,
+    TaskCompleted,
+    TaskCreated,
+    TeammateIdle,
+    UserPromptExpansion,
+    UserPromptSubmit,
+    WorktreeRemove,
 }
 
 impl EventSelector for Event {
@@ -725,6 +721,33 @@ impl EventSelector for Event {
             Self::SessionStart => "SessionStart",
             Self::PostToolUse => "PostToolUse",
             Self::WorktreeCreate => "WorktreeCreate",
+            Self::ConfigChange => "ConfigChange",
+            Self::CwdChanged => "CwdChanged",
+            Self::Elicitation => "Elicitation",
+            Self::ElicitationResult => "ElicitationResult",
+            Self::FileChanged => "FileChanged",
+            Self::InstructionsLoaded => "InstructionsLoaded",
+            Self::MessageDisplay => "MessageDisplay",
+            Self::Notification => "Notification",
+            Self::PermissionDenied => "PermissionDenied",
+            Self::PermissionRequest => "PermissionRequest",
+            Self::PostCompact => "PostCompact",
+            Self::PostToolBatch => "PostToolBatch",
+            Self::PostToolUseFailure => "PostToolUseFailure",
+            Self::PreCompact => "PreCompact",
+            Self::PreToolUse => "PreToolUse",
+            Self::SessionEnd => "SessionEnd",
+            Self::Setup => "Setup",
+            Self::Stop => "Stop",
+            Self::StopFailure => "StopFailure",
+            Self::SubagentStart => "SubagentStart",
+            Self::SubagentStop => "SubagentStop",
+            Self::TaskCompleted => "TaskCompleted",
+            Self::TaskCreated => "TaskCreated",
+            Self::TeammateIdle => "TeammateIdle",
+            Self::UserPromptExpansion => "UserPromptExpansion",
+            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::WorktreeRemove => "WorktreeRemove",
         };
         EventId::builtin(HarnessId::CLAUDE_CODE, name)
     }
@@ -735,6 +758,7 @@ pub enum AnyInput {
     SessionStart(SessionStartInput),
     PostToolUse(PostToolUseInput),
     WorktreeCreate(WorktreeCreateInput),
+    Catalog(crate::catalog::CatalogInput),
 }
 
 #[derive(Debug, Clone)]
@@ -742,6 +766,7 @@ pub enum AnyCommandOutput {
     SessionStart(SessionStartOutput),
     PostToolUse(PostToolUseOutput),
     WorktreeCreate(WorktreeCreateOutput),
+    Catalog(crate::catalog::CatalogOutput),
 }
 
 pub enum ClaudeCode {}
@@ -764,10 +789,12 @@ impl HarnessSpec for ClaudeCode {
             "SessionStart" => SessionStart::parse(raw).map(AnyInput::SessionStart),
             "PostToolUse" => PostToolUse::parse(raw).map(AnyInput::PostToolUse),
             "WorktreeCreate" => WorktreeCreate::parse(raw).map(AnyInput::WorktreeCreate),
-            _ => Err(hookkit_core::HookkitError::UnrecognizedEvent {
-                harness: Self::ID,
-                message: event.name().to_string(),
-            }),
+            _ => crate::catalog::decode(event, raw)?
+                .map(AnyInput::Catalog)
+                .ok_or_else(|| hookkit_core::HookkitError::UnrecognizedEvent {
+                    harness: Self::ID,
+                    message: event.name().to_string(),
+                }),
         }
     }
 
@@ -776,6 +803,7 @@ impl HarnessSpec for ClaudeCode {
             AnyInput::SessionStart(_) => SessionStart::EVENT,
             AnyInput::PostToolUse(_) => PostToolUse::EVENT,
             AnyInput::WorktreeCreate(_) => WorktreeCreate::EVENT,
+            AnyInput::Catalog(input) => input.event_id(),
         }
     }
 
@@ -793,6 +821,7 @@ impl HarnessSpec for ClaudeCode {
             AnyInput::WorktreeCreate(input) => {
                 WorktreeCreate::validate_command_environment(input, environment)
             }
+            AnyInput::Catalog(input) => input.validate_environment(environment),
         }
     }
 
@@ -801,6 +830,7 @@ impl HarnessSpec for ClaudeCode {
             AnyCommandOutput::SessionStart(_) => SessionStart::EVENT,
             AnyCommandOutput::PostToolUse(_) => PostToolUse::EVENT,
             AnyCommandOutput::WorktreeCreate(_) => WorktreeCreate::EVENT,
+            AnyCommandOutput::Catalog(output) => output.event_id(),
         }
     }
 
@@ -811,6 +841,7 @@ impl HarnessSpec for ClaudeCode {
             AnyCommandOutput::SessionStart(output) => SessionStart::emit(output),
             AnyCommandOutput::PostToolUse(output) => PostToolUse::emit(output),
             AnyCommandOutput::WorktreeCreate(output) => WorktreeCreate::emit(output),
+            AnyCommandOutput::Catalog(output) => output.emit(),
         }
     }
 
@@ -819,6 +850,7 @@ impl HarnessSpec for ClaudeCode {
             AnyInput::SessionStart(input) => SessionStart::context(input),
             AnyInput::PostToolUse(input) => PostToolUse::context(input),
             AnyInput::WorktreeCreate(input) => WorktreeCreate::context(input),
+            AnyInput::Catalog(input) => input.context(),
         }
     }
 }

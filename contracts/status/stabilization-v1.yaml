@@ -76,3 +76,175 @@ targets:
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/ConfigChange
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/CwdChanged
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/Elicitation
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/ElicitationResult
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/FileChanged
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/InstructionsLoaded
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/MessageDisplay
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/Notification
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/PermissionDenied
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/PermissionRequest
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/PostCompact
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/PostToolBatch
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/PostToolUseFailure
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/PreCompact
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/PreToolUse
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/SessionEnd
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/Setup
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/Stop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/StopFailure
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/SubagentStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/SubagentStop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/TaskCompleted
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/TaskCreated
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/TeammateIdle
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/UserPromptExpansion
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/UserPromptSubmit
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-07-12-r2/WorktreeRemove
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/PermissionRequest
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/PostCompact
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/PreCompact
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/SessionStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/Stop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/SubagentStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/SubagentStop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-9e552e9-r2/UserPromptSubmit
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/AfterAgent
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/AfterModel
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/BeforeAgent
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/BeforeModel
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/Notification
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/PreCompress
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/SessionEnd
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: gemini-cli/commit-f354eeb-r2/SessionStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
