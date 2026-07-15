@@ -236,6 +236,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-claude-rules"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dirs",
+ "globset",
+ "hookkit-codex",
+ "hookkit-core",
+ "hookkit-runtime",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "walkdir",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -356,6 +373,23 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "forbidden-file-guard"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dirs",
+ "globset",
+ "hookkit-antigravity",
+ "hookkit-codex",
+ "hookkit-core",
+ "hookkit-gemini",
+ "hookkit-runtime",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+]
 
 [[package]]
 name = "fraction"
@@ -1158,6 +1192,21 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
+]
+
+[[package]]
+name = "session-modified-file-tracker"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hookkit-claude",
+ "hookkit-codex",
+ "hookkit-common",
+ "hookkit-core",
+ "hookkit-gemini",
+ "hookkit-runtime",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

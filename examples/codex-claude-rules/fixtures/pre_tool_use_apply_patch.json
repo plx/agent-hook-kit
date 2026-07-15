@@ -1,0 +1,14 @@
+{
+  "session_id": "codex-rules-example",
+  "transcript_path": null,
+  "cwd": "/workspace",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-test",
+  "turn_id": "turn-1",
+  "permission_mode": "default",
+  "tool_name": "apply_patch",
+  "tool_use_id": "call-1",
+  "tool_input": {
+    "patch": "*** Update File: src/lib.rs\n@@\n-old\n+new\n"
+  }
+}
