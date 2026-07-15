@@ -202,29 +202,93 @@ fn collect_patch_paths(patch: &str, out: &mut Vec<String>) {
 }
 
 fn collect_shell_modified_paths(command: &str, out: &mut Vec<String>) {
-    let tokens = command
-        .split_whitespace()
+    let tokens = shell_tokens(command);
+    let tokens = tokens
+        .iter()
         .map(|token| token.trim_matches(shell_punctuation))
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
 
     for (index, token) in tokens.iter().enumerate() {
-        if matches!(*token, ">" | ">>") {
-            if let Some(path) = tokens.get(index + 1) {
-                out.push((*path).to_string());
-            }
-        } else if let Some(path) = token
-            .strip_prefix(">>")
-            .or_else(|| token.strip_prefix('>'))
-            .filter(|path| !path.is_empty())
+        if matches!(*token, ">" | ">>")
+            && let Some(path) = tokens
+                .get(index + 1)
+                .filter(|path| !is_shell_operator(path))
         {
-            out.push(path.to_string());
+            out.push((*path).to_string());
         }
     }
 
     for segment in tokens.split(|token| matches!(*token, ";" | "&&" | "||" | "|")) {
         collect_mutating_command_segment(segment, out);
     }
+}
+
+fn shell_tokens(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut characters = command.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+
+        if let Some(delimiter) = quote {
+            match character {
+                character if character == delimiter => quote = None,
+                '\\' if delimiter != '\'' => escaped = true,
+                _ => current.push(character),
+            }
+            continue;
+        }
+
+        match character {
+            '\\' => escaped = true,
+            '\'' | '"' | '`' => quote = Some(character),
+            '\n' | '\r' => {
+                push_shell_word(&mut tokens, &mut current);
+                tokens.push(";".to_string());
+            }
+            character if character.is_whitespace() => {
+                push_shell_word(&mut tokens, &mut current);
+            }
+            ';' | '|' | '&' | '<' | '>' => {
+                push_shell_word(&mut tokens, &mut current);
+                let mut operator = character.to_string();
+                if matches!(character, '|' | '&' | '<' | '>')
+                    && characters.peek() == Some(&character)
+                {
+                    operator.push(characters.next().expect("peeked character must exist"));
+                }
+                tokens.push(operator);
+            }
+            _ => current.push(character),
+        }
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    push_shell_word(&mut tokens, &mut current);
+    tokens
+}
+
+fn push_shell_word(tokens: &mut Vec<String>, current: &mut String) {
+    if !current.is_empty() {
+        tokens.push(std::mem::take(current));
+    }
+}
+
+fn is_shell_operator(token: &&str) -> bool {
+    matches!(
+        *token,
+        ";" | "|" | "||" | "&" | "&&" | "<" | "<<" | ">" | ">>"
+    )
 }
 
 fn collect_mutating_command_segment(segment: &[&str], out: &mut Vec<String>) {
@@ -450,6 +514,19 @@ mod tests {
                 PathBuf::from("/repo/Makefile"),
                 PathBuf::from("/repo/old.txt"),
                 PathBuf::from("/repo/tmp/new.txt")
+            ])
+        );
+
+        let paths = modified_paths(
+            "Bash",
+            &serde_json::json!({"command": "echo hi > out.txt; touch src/new.rs"}),
+            Path::new("/repo"),
+        );
+        assert_eq!(
+            paths.into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                PathBuf::from("/repo/out.txt"),
+                PathBuf::from("/repo/src/new.rs")
             ])
         );
     }

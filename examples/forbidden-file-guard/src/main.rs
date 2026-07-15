@@ -342,15 +342,75 @@ fn collect_patch_paths(patch: &str, out: &mut Vec<String>) {
 }
 
 fn collect_shell_path_tokens(command: &str, out: &mut Vec<String>) {
-    for token in command.split_whitespace() {
+    for token in shell_tokens(command) {
         let token = token
             .trim_matches(shell_punctuation)
             .rsplit_once('=')
-            .map_or(token, |(_, value)| value)
+            .map_or(token.as_str(), |(_, value)| value)
             .trim_matches(shell_punctuation);
         if looks_like_path(token) {
             out.push(token.to_string());
         }
+    }
+}
+
+fn shell_tokens(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut characters = command.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+
+        if let Some(delimiter) = quote {
+            match character {
+                character if character == delimiter => quote = None,
+                '\\' if delimiter != '\'' => escaped = true,
+                _ => current.push(character),
+            }
+            continue;
+        }
+
+        match character {
+            '\\' => escaped = true,
+            '\'' | '"' | '`' => quote = Some(character),
+            '\n' | '\r' => {
+                push_shell_word(&mut tokens, &mut current);
+                tokens.push(";".to_string());
+            }
+            character if character.is_whitespace() => {
+                push_shell_word(&mut tokens, &mut current);
+            }
+            ';' | '|' | '&' | '<' | '>' => {
+                push_shell_word(&mut tokens, &mut current);
+                let mut operator = character.to_string();
+                if matches!(character, '|' | '&' | '<' | '>')
+                    && characters.peek() == Some(&character)
+                {
+                    operator.push(characters.next().expect("peeked character must exist"));
+                }
+                tokens.push(operator);
+            }
+            _ => current.push(character),
+        }
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    push_shell_word(&mut tokens, &mut current);
+    tokens
+}
+
+fn push_shell_word(tokens: &mut Vec<String>, current: &mut String) {
+    if !current.is_empty() {
+        tokens.push(std::mem::take(current));
     }
 }
 
@@ -487,6 +547,15 @@ mod tests {
                 &inspect,
                 "Bash",
                 &serde_json::json!({"command": "cat .env"}),
+                &roots
+            )
+            .is_some()
+        );
+        assert!(
+            evaluate(
+                &inspect,
+                "Bash",
+                &serde_json::json!({"command": "cat .env;echo ok"}),
                 &roots
             )
             .is_some()
