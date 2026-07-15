@@ -50,6 +50,9 @@ pub fn verified_descriptors() -> Result<Vec<NativeEventDescriptor>, String> {
 }
 
 fn verify_all_negative_inputs() -> Result<(), String> {
+    verify_claude_catalog_negative_inputs()?;
+    verify_codex_catalog_negative_inputs()?;
+    verify_gemini_catalog_negative_inputs()?;
     verify_negative_inputs::<hookkit_claude::protocol::SessionStart>(
         "claude-code",
         "docs-2026-07-12-r2",
@@ -119,7 +122,7 @@ fn verify_all_negative_inputs() -> Result<(), String> {
 }
 
 pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
-    let mut executed = Vec::new();
+    let mut executed = execute_catalog_cases()?;
 
     executed.push(verify_case::<hookkit_claude::protocol::SessionStart>(
         "claude-code",
@@ -321,6 +324,613 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
             reason: Some("Not done yet".into()),
         },
     )?);
+
+    Ok(executed)
+}
+
+fn verify_claude_catalog_negative_inputs() -> Result<(), String> {
+    macro_rules! verify {
+        ($event:ident, $path:literal) => {
+            verify_negative_inputs::<hookkit_claude::catalog::$event>(
+                "claude-code",
+                "docs-2026-07-12-r2",
+                $path,
+            )?;
+        };
+    }
+    verify!(ConfigChange, "config-change");
+    verify!(CwdChanged, "cwd-changed");
+    verify!(Elicitation, "elicitation");
+    verify!(ElicitationResult, "elicitation-result");
+    verify!(FileChanged, "file-changed");
+    verify!(InstructionsLoaded, "instructions-loaded");
+    verify!(MessageDisplay, "message-display");
+    verify!(Notification, "notification");
+    verify!(PermissionDenied, "permission-denied");
+    verify!(PermissionRequest, "permission-request");
+    verify!(PostCompact, "post-compact");
+    verify!(PostToolBatch, "post-tool-batch");
+    verify!(PostToolUseFailure, "post-tool-use-failure");
+    verify!(PreCompact, "pre-compact");
+    verify!(PreToolUse, "pre-tool-use");
+    verify!(SessionEnd, "session-end");
+    verify!(Setup, "setup");
+    verify!(Stop, "stop");
+    verify!(StopFailure, "stop-failure");
+    verify!(SubagentStart, "subagent-start");
+    verify!(SubagentStop, "subagent-stop");
+    verify!(TaskCompleted, "task-completed");
+    verify!(TaskCreated, "task-created");
+    verify!(TeammateIdle, "teammate-idle");
+    verify!(UserPromptExpansion, "user-prompt-expansion");
+    verify!(UserPromptSubmit, "user-prompt-submit");
+    verify!(WorktreeRemove, "worktree-remove");
+    Ok(())
+}
+
+fn verify_codex_catalog_negative_inputs() -> Result<(), String> {
+    macro_rules! verify {
+        ($event:ident, $path:literal) => {
+            verify_negative_inputs::<hookkit_codex::catalog::$event>(
+                "codex",
+                "commit-9e552e9-r2",
+                $path,
+            )?;
+        };
+    }
+    verify!(PermissionRequest, "permission-request");
+    verify!(PostCompact, "post-compact");
+    verify!(PreCompact, "pre-compact");
+    verify!(SessionStart, "session-start");
+    verify!(Stop, "stop");
+    verify!(SubagentStart, "subagent-start");
+    verify!(SubagentStop, "subagent-stop");
+    verify!(UserPromptSubmit, "user-prompt-submit");
+    Ok(())
+}
+
+fn verify_gemini_catalog_negative_inputs() -> Result<(), String> {
+    macro_rules! verify {
+        ($event:ident, $path:literal) => {
+            verify_negative_inputs::<hookkit_gemini::catalog::$event>(
+                "gemini-cli",
+                "commit-f354eeb-r2",
+                $path,
+            )?;
+        };
+    }
+    verify!(AfterAgent, "after-agent");
+    verify!(AfterModel, "after-model");
+    verify!(BeforeAgent, "before-agent");
+    verify!(BeforeModel, "before-model");
+    verify!(Notification, "notification");
+    verify!(PreCompress, "pre-compress");
+    verify!(SessionEnd, "session-end");
+    verify!(SessionStart, "session-start");
+    Ok(())
+}
+
+fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
+    let mut executed = Vec::new();
+    macro_rules! claude_case {
+        ($event:ident, $path:literal, $case:literal, $output:expr) => {
+            executed.push(verify_case::<hookkit_claude::catalog::$event>(
+                "claude-code",
+                "docs-2026-07-12-r2",
+                $path,
+                $case,
+                $output,
+            )?);
+        };
+    }
+    macro_rules! codex_case {
+        ($event:ident, $path:literal, $case:literal, $output:expr) => {
+            executed.push(verify_case::<hookkit_codex::catalog::$event>(
+                "codex",
+                "commit-9e552e9-r2",
+                $path,
+                $case,
+                $output,
+            )?);
+        };
+    }
+    macro_rules! gemini_case {
+        ($event:ident, $path:literal, $case:literal, $output:expr) => {
+            executed.push(verify_case::<hookkit_gemini::catalog::$event>(
+                "gemini-cli",
+                "commit-f354eeb-r2",
+                $path,
+                $case,
+                $output,
+            )?);
+        };
+    }
+
+    claude_case!(
+        ConfigChange,
+        "config-change",
+        "command-structured",
+        hookkit_claude::catalog::ConfigChangeOutput::block("Configuration change rejected.")
+    );
+    claude_case!(
+        ConfigChange,
+        "config-change",
+        "command-exit-2",
+        hookkit_claude::catalog::ConfigChangeOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        CwdChanged,
+        "cwd-changed",
+        "command-structured",
+        hookkit_claude::catalog::CwdChangedOutput::with_system_message(
+            "Working directory changed.",
+        )
+    );
+    claude_case!(
+        Elicitation,
+        "elicitation",
+        "command-structured",
+        hookkit_claude::catalog::ElicitationOutput::accept(serde_json::json!({"name": "Ada"}))
+    );
+    claude_case!(
+        Elicitation,
+        "elicitation",
+        "command-exit-2",
+        hookkit_claude::catalog::ElicitationOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        ElicitationResult,
+        "elicitation-result",
+        "command-structured",
+        hookkit_claude::catalog::ElicitationResultOutput::decline()
+    );
+    claude_case!(
+        ElicitationResult,
+        "elicitation-result",
+        "command-exit-2",
+        hookkit_claude::catalog::ElicitationResultOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        FileChanged,
+        "file-changed",
+        "command-structured",
+        hookkit_claude::catalog::FileChangedOutput::with_system_message("Watched file changed.")
+    );
+    claude_case!(
+        InstructionsLoaded,
+        "instructions-loaded",
+        "command-structured",
+        hookkit_claude::catalog::InstructionsLoadedOutput::no_op()
+    );
+    claude_case!(
+        MessageDisplay,
+        "message-display",
+        "command-structured",
+        hookkit_claude::catalog::MessageDisplayOutput::display("Here is the plan:")
+    );
+    claude_case!(
+        Notification,
+        "notification",
+        "command-structured",
+        hookkit_claude::catalog::NotificationOutput::with_system_message(
+            "Permission notification emitted.",
+        )
+    );
+    claude_case!(
+        PermissionDenied,
+        "permission-denied",
+        "command-structured",
+        hookkit_claude::catalog::PermissionDeniedOutput::retry(true)
+    );
+    claude_case!(
+        PermissionRequest,
+        "permission-request",
+        "command-structured",
+        hookkit_claude::catalog::PermissionRequestOutput::decide(
+            hookkit_claude::catalog::PermissionRequestBehavior::Deny,
+            Some("Blocked by policy.".into()),
+            Some(false),
+        )
+    );
+    claude_case!(
+        PermissionRequest,
+        "permission-request",
+        "command-exit-2",
+        hookkit_claude::catalog::PermissionRequestOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        PostCompact,
+        "post-compact",
+        "command-structured",
+        hookkit_claude::catalog::PostCompactOutput::with_system_message("Compaction complete.")
+    );
+    claude_case!(
+        PostToolBatch,
+        "post-tool-batch",
+        "command-structured",
+        hookkit_claude::catalog::PostToolBatchOutput::with_context("Hook-provided context.")
+    );
+    claude_case!(
+        PostToolBatch,
+        "post-tool-batch",
+        "command-exit-2",
+        hookkit_claude::catalog::PostToolBatchOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        PostToolUseFailure,
+        "post-tool-use-failure",
+        "command-structured",
+        hookkit_claude::catalog::PostToolUseFailureOutput::with_context("Hook-provided context.",)
+    );
+    claude_case!(
+        PreCompact,
+        "pre-compact",
+        "command-structured",
+        hookkit_claude::catalog::PreCompactOutput::block("Save state first.")
+    );
+    claude_case!(
+        PreCompact,
+        "pre-compact",
+        "command-exit-2",
+        hookkit_claude::catalog::PreCompactOutput::blocking_error("blocked by hook")
+    );
+    let updated_input = serde_json::Map::from_iter([(
+        "command".into(),
+        serde_json::Value::String("cargo test".into()),
+    )]);
+    claude_case!(
+        PreToolUse,
+        "pre-tool-use",
+        "command-structured",
+        hookkit_claude::catalog::PreToolUseOutput::decide(
+            hookkit_claude::catalog::PreToolPermissionDecision::Ask,
+            Some("Review command.".into()),
+            Some(updated_input),
+            Some("Production environment.".into()),
+        )
+    );
+    claude_case!(
+        PreToolUse,
+        "pre-tool-use",
+        "command-exit-2",
+        hookkit_claude::catalog::PreToolUseOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        SessionEnd,
+        "session-end",
+        "command-structured",
+        hookkit_claude::catalog::SessionEndOutput::with_system_message("Session ended.")
+    );
+    claude_case!(
+        Setup,
+        "setup",
+        "command-structured",
+        hookkit_claude::catalog::SetupOutput::with_context("Hook-provided context.")
+    );
+    claude_case!(
+        StopFailure,
+        "stop-failure",
+        "command-structured",
+        hookkit_claude::catalog::StopFailureOutput::no_op()
+    );
+    claude_case!(
+        Stop,
+        "stop",
+        "command-structured",
+        hookkit_claude::catalog::StopOutput::block_with_context(
+            "Run tests again.",
+            "Focus on failures.",
+        )
+    );
+    claude_case!(
+        Stop,
+        "stop",
+        "command-exit-2",
+        hookkit_claude::catalog::StopOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        SubagentStart,
+        "subagent-start",
+        "command-structured",
+        hookkit_claude::catalog::SubagentStartOutput::with_context("Hook-provided context.")
+    );
+    claude_case!(
+        SubagentStop,
+        "subagent-stop",
+        "command-structured",
+        hookkit_claude::catalog::SubagentStopOutput::block_with_context(
+            "Run another pass.",
+            "Check edge cases.",
+        )
+    );
+    claude_case!(
+        SubagentStop,
+        "subagent-stop",
+        "command-exit-2",
+        hookkit_claude::catalog::SubagentStopOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        TaskCompleted,
+        "task-completed",
+        "command-structured",
+        hookkit_claude::catalog::TaskCompletedOutput::block("Verification is incomplete.")
+    );
+    claude_case!(
+        TaskCompleted,
+        "task-completed",
+        "command-exit-2",
+        hookkit_claude::catalog::TaskCompletedOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        TaskCreated,
+        "task-created",
+        "command-structured",
+        hookkit_claude::catalog::TaskCreatedOutput::block("Task needs an owner.")
+    );
+    claude_case!(
+        TaskCreated,
+        "task-created",
+        "command-exit-2",
+        hookkit_claude::catalog::TaskCreatedOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        TeammateIdle,
+        "teammate-idle",
+        "command-structured",
+        hookkit_claude::catalog::TeammateIdleOutput::block("Continue reviewing.")
+    );
+    claude_case!(
+        TeammateIdle,
+        "teammate-idle",
+        "command-exit-2",
+        hookkit_claude::catalog::TeammateIdleOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        UserPromptExpansion,
+        "user-prompt-expansion",
+        "command-structured",
+        hookkit_claude::catalog::UserPromptExpansionOutput::block_with_context(
+            "Unavailable.",
+            "Use the team checklist.",
+            None,
+            None,
+        )
+    );
+    claude_case!(
+        UserPromptExpansion,
+        "user-prompt-expansion",
+        "command-text",
+        hookkit_claude::catalog::UserPromptExpansionOutput::text_context("Hook-provided context.",)
+    );
+    claude_case!(
+        UserPromptExpansion,
+        "user-prompt-expansion",
+        "command-exit-2",
+        hookkit_claude::catalog::UserPromptExpansionOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        UserPromptSubmit,
+        "user-prompt-submit",
+        "command-structured",
+        hookkit_claude::catalog::UserPromptSubmitOutput::block_with_context(
+            "Confirmation required.",
+            "Clarify scope.",
+            Some("Clarify".into()),
+            Some(true),
+        )
+    );
+    claude_case!(
+        UserPromptSubmit,
+        "user-prompt-submit",
+        "command-text",
+        hookkit_claude::catalog::UserPromptSubmitOutput::text_context("Hook-provided context.")
+    );
+    claude_case!(
+        UserPromptSubmit,
+        "user-prompt-submit",
+        "command-exit-2",
+        hookkit_claude::catalog::UserPromptSubmitOutput::blocking_error("blocked by hook")
+    );
+    claude_case!(
+        WorktreeRemove,
+        "worktree-remove",
+        "command-structured",
+        hookkit_claude::catalog::WorktreeRemoveOutput::no_op()
+    );
+
+    codex_case!(
+        PermissionRequest,
+        "permission-request",
+        "structured",
+        hookkit_codex::catalog::PermissionRequestOutput::deny("Blocked by policy.")
+    );
+    codex_case!(
+        PermissionRequest,
+        "permission-request",
+        "exit-2",
+        hookkit_codex::catalog::PermissionRequestOutput::blocking_error("blocked by hook")
+    );
+    codex_case!(
+        PostCompact,
+        "post-compact",
+        "structured",
+        hookkit_codex::catalog::PostCompactOutput::no_op()
+            .with_system_message("Compaction completed.")
+            .map_err(|error| error.to_string())?
+    );
+    codex_case!(
+        PreCompact,
+        "pre-compact",
+        "structured",
+        hookkit_codex::catalog::PreCompactOutput::stop("Save state before compacting.")
+    );
+    codex_case!(
+        PreCompact,
+        "pre-compact",
+        "exit-2",
+        hookkit_codex::catalog::PreCompactOutput::blocking_error("blocked by hook")
+    );
+    codex_case!(
+        SessionStart,
+        "session-start",
+        "structured",
+        hookkit_codex::catalog::SessionStartOutput::with_context("Load repository conventions.")
+    );
+    codex_case!(
+        SessionStart,
+        "session-start",
+        "text-context",
+        hookkit_codex::catalog::SessionStartOutput::text_context(
+            "Hook-provided developer context.",
+        )
+    );
+    codex_case!(
+        Stop,
+        "stop",
+        "structured",
+        hookkit_codex::catalog::StopOutput::block("Run the failing tests again.")
+    );
+    codex_case!(
+        Stop,
+        "stop",
+        "exit-2",
+        hookkit_codex::catalog::StopOutput::blocking_error("blocked by hook")
+    );
+    codex_case!(
+        SubagentStart,
+        "subagent-start",
+        "structured",
+        hookkit_codex::catalog::SubagentStartOutput::with_context("Review test conventions.")
+    );
+    codex_case!(
+        SubagentStart,
+        "subagent-start",
+        "text-context",
+        hookkit_codex::catalog::SubagentStartOutput::text_context(
+            "Hook-provided developer context.",
+        )
+    );
+    codex_case!(
+        SubagentStop,
+        "subagent-stop",
+        "structured",
+        hookkit_codex::catalog::SubagentStopOutput::block("Run another focused pass.")
+    );
+    codex_case!(
+        SubagentStop,
+        "subagent-stop",
+        "exit-2",
+        hookkit_codex::catalog::SubagentStopOutput::blocking_error("blocked by hook")
+    );
+    codex_case!(
+        UserPromptSubmit,
+        "user-prompt-submit",
+        "structured",
+        hookkit_codex::catalog::UserPromptSubmitOutput::block_with_context(
+            "Ask for confirmation.",
+            "Clarify the reproduction.",
+        )
+    );
+    codex_case!(
+        UserPromptSubmit,
+        "user-prompt-submit",
+        "text-context",
+        hookkit_codex::catalog::UserPromptSubmitOutput::text_context(
+            "Hook-provided developer context.",
+        )
+    );
+    codex_case!(
+        UserPromptSubmit,
+        "user-prompt-submit",
+        "exit-2",
+        hookkit_codex::catalog::UserPromptSubmitOutput::blocking_error("blocked by hook")
+    );
+
+    gemini_case!(
+        AfterAgent,
+        "after-agent",
+        "structured",
+        hookkit_gemini::catalog::AfterAgentOutput::deny("Verify the result again.", false)
+    );
+    gemini_case!(
+        AfterAgent,
+        "after-agent",
+        "exit-2",
+        hookkit_gemini::catalog::AfterAgentOutput::blocking_error("blocked by hook")
+    );
+    gemini_case!(
+        AfterModel,
+        "after-model",
+        "structured",
+        hookkit_gemini::catalog::AfterModelOutput::replace_response(
+            serde_json::json!({"candidates": []}),
+        )
+    );
+    gemini_case!(
+        AfterModel,
+        "after-model",
+        "exit-2",
+        hookkit_gemini::catalog::AfterModelOutput::blocking_error("blocked by hook")
+    );
+    gemini_case!(
+        BeforeAgent,
+        "before-agent",
+        "structured",
+        hookkit_gemini::catalog::BeforeAgentOutput::with_context("Use repository conventions.")
+    );
+    gemini_case!(
+        BeforeAgent,
+        "before-agent",
+        "exit-2",
+        hookkit_gemini::catalog::BeforeAgentOutput::blocking_error("blocked by hook")
+    );
+    gemini_case!(
+        BeforeModel,
+        "before-model",
+        "structured",
+        hookkit_gemini::catalog::BeforeModelOutput::replace_request(serde_json::json!({
+            "config": {"temperature": 0.0},
+            "messages": [],
+            "model": "gemini-test",
+        }))
+    );
+    gemini_case!(
+        BeforeModel,
+        "before-model",
+        "exit-2",
+        hookkit_gemini::catalog::BeforeModelOutput::blocking_error("blocked by hook")
+    );
+    gemini_case!(
+        Notification,
+        "notification",
+        "structured",
+        hookkit_gemini::catalog::NotificationOutput::with_system_message(
+            "A permission notification was emitted.",
+        )
+    );
+    gemini_case!(
+        PreCompress,
+        "pre-compress",
+        "structured",
+        hookkit_gemini::catalog::PreCompressOutput::with_system_message(
+            "Saving state before compression.",
+        )
+    );
+    gemini_case!(
+        SessionEnd,
+        "session-end",
+        "structured",
+        hookkit_gemini::catalog::SessionEndOutput::with_system_message("Session cleanup complete.",)
+    );
+    gemini_case!(
+        SessionStart,
+        "session-start",
+        "structured",
+        hookkit_gemini::catalog::SessionStartOutput::with_context_and_system_message(
+            "Read repository conventions.",
+            "Loading session context.",
+        )
+    );
 
     Ok(executed)
 }

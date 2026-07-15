@@ -11,40 +11,25 @@ use crate::CodexCommandEnvironment;
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("commit-9e552e9-r2");
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
-    vec![
+    let mut events = vec![
         hookkit_core::NativeEventDescriptor::command::<PreToolUse>(&[
             "no-op",
             "deny-json",
             "deny-stderr",
         ]),
         hookkit_core::NativeEventDescriptor::command::<PostToolUse>(&["structured", "exit-2"]),
-    ]
+    ];
+    events.extend(crate::catalog::events());
+    events
 }
 
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
-    macro_rules! catalog {
-        ($event:literal) => {
-            IdentificationDescriptor::catalog_definitive(
-                EventId::builtin(HarnessId::CODEX, $event),
-                SNAPSHOT_ID,
-                ContractId::builtin(concat!("codex/commit-9e552e9-r2/", $event)),
-                "/hook_event_name",
-                $event,
-            )
-        };
-    }
-    vec![
-        catalog!("SessionStart"),
-        catalog!("SubagentStart"),
+    let mut descriptors = vec![
         IdentificationDescriptor::definitive::<PreToolUse>("/hook_event_name", "PreToolUse"),
-        catalog!("PermissionRequest"),
         IdentificationDescriptor::definitive::<PostToolUse>("/hook_event_name", "PostToolUse"),
-        catalog!("PreCompact"),
-        catalog!("PostCompact"),
-        catalog!("UserPromptSubmit"),
-        catalog!("SubagentStop"),
-        catalog!("Stop"),
-    ]
+    ];
+    descriptors.extend(crate::catalog::identification_descriptors());
+    descriptors
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -471,7 +456,10 @@ impl EventSpec for PostToolUse {
     }
 }
 
-fn require_event(invocation: &RawInvocation, expected: &'static str) -> hookkit_core::Result<()> {
+pub(crate) fn require_event(
+    invocation: &RawInvocation,
+    expected: &'static str,
+) -> hookkit_core::Result<()> {
     if invocation
         .json()
         .get("hook_event_name")
@@ -487,7 +475,7 @@ fn require_event(invocation: &RawInvocation, expected: &'static str) -> hookkit_
     })
 }
 
-fn require_field(
+pub(crate) fn require_field(
     invocation: &RawInvocation,
     field: &str,
     event: &'static str,
@@ -506,6 +494,14 @@ fn require_field(
 pub enum Event {
     PreToolUse,
     PostToolUse,
+    PermissionRequest,
+    PostCompact,
+    PreCompact,
+    SessionStart,
+    Stop,
+    SubagentStart,
+    SubagentStop,
+    UserPromptSubmit,
 }
 
 impl EventSelector for Event {
@@ -513,6 +509,14 @@ impl EventSelector for Event {
         let name = match self {
             Self::PreToolUse => "PreToolUse",
             Self::PostToolUse => "PostToolUse",
+            Self::PermissionRequest => "PermissionRequest",
+            Self::PostCompact => "PostCompact",
+            Self::PreCompact => "PreCompact",
+            Self::SessionStart => "SessionStart",
+            Self::Stop => "Stop",
+            Self::SubagentStart => "SubagentStart",
+            Self::SubagentStop => "SubagentStop",
+            Self::UserPromptSubmit => "UserPromptSubmit",
         };
         EventId::builtin(HarnessId::CODEX, name)
     }
@@ -522,12 +526,14 @@ impl EventSelector for Event {
 pub enum AnyInput {
     PreToolUse(PreToolUseInput),
     PostToolUse(PostToolUseInput),
+    Catalog(crate::catalog::CatalogInput),
 }
 
 #[derive(Debug, Clone)]
 pub enum AnyCommandOutput {
     PreToolUse(PreToolUseOutput),
     PostToolUse(PostToolUseOutput),
+    Catalog(crate::catalog::CatalogOutput),
 }
 
 pub enum Codex {}
@@ -549,10 +555,12 @@ impl HarnessSpec for Codex {
         match event.name() {
             "PreToolUse" => PreToolUse::parse(raw).map(AnyInput::PreToolUse),
             "PostToolUse" => PostToolUse::parse(raw).map(AnyInput::PostToolUse),
-            _ => Err(hookkit_core::HookkitError::UnrecognizedEvent {
-                harness: Self::ID,
-                message: event.name().to_string(),
-            }),
+            _ => crate::catalog::decode(event, raw)?
+                .map(AnyInput::Catalog)
+                .ok_or_else(|| hookkit_core::HookkitError::UnrecognizedEvent {
+                    harness: Self::ID,
+                    message: event.name().to_string(),
+                }),
         }
     }
 
@@ -560,6 +568,7 @@ impl HarnessSpec for Codex {
         match input {
             AnyInput::PreToolUse(_) => PreToolUse::EVENT,
             AnyInput::PostToolUse(_) => PostToolUse::EVENT,
+            AnyInput::Catalog(input) => input.event_id(),
         }
     }
 
@@ -567,6 +576,7 @@ impl HarnessSpec for Codex {
         match output {
             AnyCommandOutput::PreToolUse(_) => PreToolUse::EVENT,
             AnyCommandOutput::PostToolUse(_) => PostToolUse::EVENT,
+            AnyCommandOutput::Catalog(output) => output.event_id(),
         }
     }
 
@@ -576,6 +586,7 @@ impl HarnessSpec for Codex {
         match output {
             AnyCommandOutput::PreToolUse(output) => PreToolUse::emit(output),
             AnyCommandOutput::PostToolUse(output) => PostToolUse::emit(output),
+            AnyCommandOutput::Catalog(output) => output.emit(),
         }
     }
 
@@ -583,6 +594,7 @@ impl HarnessSpec for Codex {
         match input {
             AnyInput::PreToolUse(input) => PreToolUse::context(input),
             AnyInput::PostToolUse(input) => PostToolUse::context(input),
+            AnyInput::Catalog(input) => input.context(),
         }
     }
 }

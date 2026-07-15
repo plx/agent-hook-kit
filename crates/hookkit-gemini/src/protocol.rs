@@ -10,44 +10,29 @@ use crate::GeminiCommandEnvironment;
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("commit-f354eeb-r2");
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
-    vec![
+    let mut events = vec![
         hookkit_core::NativeEventDescriptor::command::<BeforeTool>(&["structured", "exit-2"]),
         hookkit_core::NativeEventDescriptor::command::<AfterTool>(&["structured", "exit-2"]),
         hookkit_core::NativeEventDescriptor::command::<BeforeToolSelection>(&[
             "no-op",
             "disable-tools",
         ]),
-    ]
+    ];
+    events.extend(crate::catalog::events());
+    events
 }
 
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
-    macro_rules! catalog {
-        ($event:literal) => {
-            IdentificationDescriptor::catalog_definitive(
-                EventId::builtin(HarnessId::GEMINI_CLI, $event),
-                SNAPSHOT_ID,
-                ContractId::builtin(concat!("gemini-cli/commit-f354eeb-r2/", $event)),
-                "/hook_event_name",
-                $event,
-            )
-        };
-    }
-    vec![
-        catalog!("SessionStart"),
-        catalog!("BeforeAgent"),
-        catalog!("BeforeModel"),
+    let mut descriptors = vec![
         IdentificationDescriptor::definitive::<BeforeToolSelection>(
             "/hook_event_name",
             "BeforeToolSelection",
         ),
         IdentificationDescriptor::definitive::<BeforeTool>("/hook_event_name", "BeforeTool"),
         IdentificationDescriptor::definitive::<AfterTool>("/hook_event_name", "AfterTool"),
-        catalog!("AfterModel"),
-        catalog!("AfterAgent"),
-        catalog!("Notification"),
-        catalog!("PreCompress"),
-        catalog!("SessionEnd"),
-    ]
+    ];
+    descriptors.extend(crate::catalog::identification_descriptors());
+    descriptors
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -530,7 +515,10 @@ impl EventSpec for AfterTool {
     }
 }
 
-fn require_event(invocation: &RawInvocation, expected: &'static str) -> hookkit_core::Result<()> {
+pub(crate) fn require_event(
+    invocation: &RawInvocation,
+    expected: &'static str,
+) -> hookkit_core::Result<()> {
     if invocation
         .json()
         .get("hook_event_name")
@@ -681,6 +669,14 @@ pub enum Event {
     BeforeTool,
     AfterTool,
     BeforeToolSelection,
+    AfterAgent,
+    AfterModel,
+    BeforeAgent,
+    BeforeModel,
+    Notification,
+    PreCompress,
+    SessionEnd,
+    SessionStart,
 }
 
 impl EventSelector for Event {
@@ -689,6 +685,14 @@ impl EventSelector for Event {
             Self::BeforeTool => "BeforeTool",
             Self::AfterTool => "AfterTool",
             Self::BeforeToolSelection => "BeforeToolSelection",
+            Self::AfterAgent => "AfterAgent",
+            Self::AfterModel => "AfterModel",
+            Self::BeforeAgent => "BeforeAgent",
+            Self::BeforeModel => "BeforeModel",
+            Self::Notification => "Notification",
+            Self::PreCompress => "PreCompress",
+            Self::SessionEnd => "SessionEnd",
+            Self::SessionStart => "SessionStart",
         };
         EventId::builtin(HarnessId::GEMINI_CLI, name)
     }
@@ -699,6 +703,7 @@ pub enum AnyInput {
     BeforeTool(BeforeToolInput),
     AfterTool(AfterToolInput),
     BeforeToolSelection(BeforeToolSelectionInput),
+    Catalog(crate::catalog::CatalogInput),
 }
 
 #[derive(Debug, Clone)]
@@ -706,6 +711,7 @@ pub enum AnyCommandOutput {
     BeforeTool(BeforeToolOutput),
     AfterTool(AfterToolOutput),
     BeforeToolSelection(BeforeToolSelectionOutput),
+    Catalog(crate::catalog::CatalogOutput),
 }
 
 pub enum GeminiCli {}
@@ -730,10 +736,12 @@ impl HarnessSpec for GeminiCli {
             "BeforeToolSelection" => {
                 BeforeToolSelection::parse(raw).map(AnyInput::BeforeToolSelection)
             }
-            _ => Err(hookkit_core::HookkitError::UnrecognizedEvent {
-                harness: Self::ID,
-                message: event.name().to_string(),
-            }),
+            _ => crate::catalog::decode(event, raw)?
+                .map(AnyInput::Catalog)
+                .ok_or_else(|| hookkit_core::HookkitError::UnrecognizedEvent {
+                    harness: Self::ID,
+                    message: event.name().to_string(),
+                }),
         }
     }
 
@@ -742,6 +750,7 @@ impl HarnessSpec for GeminiCli {
             AnyInput::BeforeTool(_) => BeforeTool::EVENT,
             AnyInput::AfterTool(_) => AfterTool::EVENT,
             AnyInput::BeforeToolSelection(_) => BeforeToolSelection::EVENT,
+            AnyInput::Catalog(input) => input.event_id(),
         }
     }
 
@@ -750,6 +759,7 @@ impl HarnessSpec for GeminiCli {
             AnyCommandOutput::BeforeTool(_) => BeforeTool::EVENT,
             AnyCommandOutput::AfterTool(_) => AfterTool::EVENT,
             AnyCommandOutput::BeforeToolSelection(_) => BeforeToolSelection::EVENT,
+            AnyCommandOutput::Catalog(output) => output.event_id(),
         }
     }
 
@@ -760,6 +770,7 @@ impl HarnessSpec for GeminiCli {
             AnyCommandOutput::BeforeTool(output) => BeforeTool::emit(output),
             AnyCommandOutput::AfterTool(output) => AfterTool::emit(output),
             AnyCommandOutput::BeforeToolSelection(output) => BeforeToolSelection::emit(output),
+            AnyCommandOutput::Catalog(output) => output.emit(),
         }
     }
 
@@ -768,6 +779,7 @@ impl HarnessSpec for GeminiCli {
             AnyInput::BeforeTool(input) => BeforeTool::context(input),
             AnyInput::AfterTool(input) => AfterTool::context(input),
             AnyInput::BeforeToolSelection(input) => BeforeToolSelection::context(input),
+            AnyInput::Catalog(input) => input.context(),
         }
     }
 }
