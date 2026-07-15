@@ -3,7 +3,7 @@
 
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSpec, HarnessId, NativeContext, ProcessEmission,
-    RawInvocation, SessionId,
+    RawInvocation, SessionId, ToolCallId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -48,6 +48,11 @@ impl CatalogInput {
             workspace_roots: vec![self.cwd.clone()],
             session_id: SessionId::new(&self.session_id).ok(),
             transcript_path: Some(self.transcript_path.clone()),
+            tool_call_id: self
+                .fields
+                .get("tool_use_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| ToolCallId::new(id).ok()),
             ..NativeContext::default()
         }
     }
@@ -421,35 +426,35 @@ system_event!(
     CwdChangedOutput,
     "CwdChanged",
     Context,
-    ["old_cwd"]
+    ["old_cwd", "new_cwd"]
 );
 system_event!(
     FileChanged,
     FileChangedOutput,
     "FileChanged",
     Context,
-    ["file_path"]
+    ["file_path", "event"]
 );
 system_event!(
     InstructionsLoaded,
     InstructionsLoadedOutput,
     "InstructionsLoaded",
     Context,
-    ["file_path"]
+    ["file_path", "memory_type", "load_reason"]
 );
 system_event!(
     Notification,
     NotificationOutput,
     "Notification",
     Other,
-    ["message"]
+    ["message", "notification_type"]
 );
 system_event!(
     PostCompact,
     PostCompactOutput,
     "PostCompact",
     Context,
-    ["trigger"]
+    ["trigger", "compact_summary"]
 );
 system_event!(
     SessionEnd,
@@ -492,7 +497,7 @@ context_event!(
     PostToolUseFailureOutput,
     "PostToolUseFailure",
     Tool,
-    ["tool_name"]
+    ["tool_name", "tool_input", "tool_use_id", "error"]
 );
 blocking_context_event!(
     PreCompact,
@@ -502,41 +507,65 @@ blocking_context_event!(
     ["trigger"]
 );
 context_event!(Setup, SetupOutput, "Setup", Session, ["trigger"]);
-blocking_context_event!(Stop, StopOutput, "Stop", Agent, ["stop_hook_active"]);
+blocking_context_event!(
+    Stop,
+    StopOutput,
+    "Stop",
+    Agent,
+    ["stop_hook_active", "last_assistant_message"]
+);
 context_event!(
     SubagentStart,
     SubagentStartOutput,
     "SubagentStart",
     Agent,
-    ["agent_id"]
+    ["agent_id", "agent_type"]
 );
 blocking_context_event!(
     SubagentStop,
     SubagentStopOutput,
     "SubagentStop",
     Agent,
-    ["stop_hook_active"]
+    [
+        "stop_hook_active",
+        "agent_id",
+        "agent_type",
+        "agent_transcript_path",
+        "last_assistant_message"
+    ]
 );
 blocking_context_event!(
     TaskCompleted,
     TaskCompletedOutput,
     "TaskCompleted",
     Agent,
-    ["task_id"]
+    [
+        "task_id",
+        "task_subject",
+        "task_description",
+        "teammate_name",
+        "team_name"
+    ]
 );
 blocking_context_event!(
     TaskCreated,
     TaskCreatedOutput,
     "TaskCreated",
     Agent,
-    ["task_id"]
+    [
+        "task_id",
+        "task_subject",
+        "task_description",
+        "teammate_name",
+        "team_name"
+    ]
 );
 blocking_context_event!(
     TeammateIdle,
     TeammateIdleOutput,
     "TeammateIdle",
     Agent,
-    ["teammate_name"]
+    ["teammate_name", "team_name"]
 );
 
 #[derive(Debug, Clone)]
@@ -580,7 +609,7 @@ event_spec!(
     ElicitationOutput,
     "Elicitation",
     Other,
-    ["mcp_server_name"]
+    ["mcp_server_name", "message", "mode", "elicitation_id"]
 );
 
 #[derive(Debug, Clone)]
@@ -630,7 +659,7 @@ event_spec!(
     ElicitationResultOutput,
     "ElicitationResult",
     Other,
-    ["mcp_server_name"]
+    ["mcp_server_name", "action", "mode", "elicitation_id"]
 );
 
 #[derive(Debug, Clone)]
@@ -656,7 +685,7 @@ event_spec!(
     MessageDisplayOutput,
     "MessageDisplay",
     Other,
-    ["turn_id"]
+    ["turn_id", "message_id", "index", "final", "delta"]
 );
 
 #[derive(Debug, Clone)]
@@ -682,7 +711,7 @@ event_spec!(
     PermissionDeniedOutput,
     "PermissionDenied",
     Tool,
-    ["tool_name"]
+    ["tool_name", "tool_input", "tool_use_id", "reason"]
 );
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -776,7 +805,7 @@ event_spec!(
     PermissionRequestOutput,
     "PermissionRequest",
     Tool,
-    ["tool_name"]
+    ["tool_name", "tool_input", "permission_suggestions"]
 );
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -854,11 +883,11 @@ event_spec!(
     PreToolUseOutput,
     "PreToolUse",
     Tool,
-    ["tool_name"]
+    ["tool_name", "tool_input", "tool_use_id"]
 );
 
 macro_rules! prompt_event {
-    ($event:ident, $output:ident, $name:literal, $required:literal) => {
+    ($event:ident, $output:ident, $name:literal, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
         pub struct $output(CatalogOutput);
 
@@ -898,7 +927,7 @@ macro_rules! prompt_event {
             }
         }
 
-        event_spec!($event, $output, $name, Prompt, [$required]);
+        event_spec!($event, $output, $name, Prompt, [$($required),*]);
     };
 }
 
@@ -906,13 +935,19 @@ prompt_event!(
     UserPromptExpansion,
     UserPromptExpansionOutput,
     "UserPromptExpansion",
-    "expansion_type"
+    [
+        "expansion_type",
+        "command_name",
+        "command_args",
+        "command_source",
+        "prompt"
+    ]
 );
 prompt_event!(
     UserPromptSubmit,
     UserPromptSubmitOutput,
     "UserPromptSubmit",
-    "prompt"
+    ["prompt"]
 );
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -1145,6 +1180,38 @@ mod tests {
         let input = ConfigChange::parse(&raw).unwrap();
         assert_eq!(input.field("source"), Some(&serde_json::json!("skills")));
         assert_eq!(input.field("future"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn catalog_context_retains_tool_use_id() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"},"tool_use_id":"toolu_1"}"#.to_vec(),
+        )
+        .unwrap();
+        let input = PreToolUse::parse(&raw).unwrap();
+
+        assert_eq!(
+            input
+                .context()
+                .tool_call_id
+                .as_ref()
+                .map(ToolCallId::as_str),
+            Some("toolu_1")
+        );
+    }
+
+    #[test]
+    fn catalog_parser_rejects_missing_new_cwd() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"CwdChanged","old_cwd":"/repo"}"#.to_vec(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            CwdChanged::parse(&raw),
+            Err(hookkit_core::HookkitError::InvalidInputForHint { message, .. })
+                if message == "missing required field new_cwd"
+        ));
     }
 
     #[test]

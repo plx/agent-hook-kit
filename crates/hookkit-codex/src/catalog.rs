@@ -292,7 +292,7 @@ event_spec!(
     PermissionRequestOutput,
     "PermissionRequest",
     Tool,
-    ["tool_input"]
+    ["turn_id", "permission_mode", "tool_input", "tool_name"]
 );
 
 #[derive(Debug, Clone)]
@@ -304,7 +304,7 @@ event_spec!(
     PostCompactOutput,
     "PostCompact",
     Context,
-    ["trigger"]
+    ["turn_id", "trigger"]
 );
 
 #[derive(Debug, Clone)]
@@ -328,11 +328,11 @@ event_spec!(
     PreCompactOutput,
     "PreCompact",
     Context,
-    ["trigger"]
+    ["turn_id", "trigger"]
 );
 
 macro_rules! context_text_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, $required:literal) => {
+    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
         pub struct $output(CatalogOutput);
 
@@ -351,7 +351,7 @@ macro_rules! context_text_event {
 
         common_controls!($output, $name);
 
-        event_spec!($event, $output, $name, $category, [$required]);
+        event_spec!($event, $output, $name, $category, [$($required),*]);
     };
 }
 
@@ -360,18 +360,18 @@ context_text_event!(
     SessionStartOutput,
     "SessionStart",
     Session,
-    "source"
+    ["permission_mode", "source"]
 );
 context_text_event!(
     SubagentStart,
     SubagentStartOutput,
     "SubagentStart",
     Agent,
-    "agent_id"
+    ["turn_id", "permission_mode", "agent_id", "agent_type"]
 );
 
 macro_rules! blocking_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, $required:literal) => {
+    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
         pub struct $output(CatalogOutput);
 
@@ -387,17 +387,36 @@ macro_rules! blocking_event {
 
         common_controls!($output, $name);
 
-        event_spec!($event, $output, $name, $category, [$required]);
+        event_spec!($event, $output, $name, $category, [$($required),*]);
     };
 }
 
-blocking_event!(Stop, StopOutput, "Stop", Agent, "last_assistant_message");
+blocking_event!(
+    Stop,
+    StopOutput,
+    "Stop",
+    Agent,
+    [
+        "turn_id",
+        "permission_mode",
+        "last_assistant_message",
+        "stop_hook_active"
+    ]
+);
 blocking_event!(
     SubagentStop,
     SubagentStopOutput,
     "SubagentStop",
     Agent,
-    "agent_id"
+    [
+        "turn_id",
+        "permission_mode",
+        "agent_id",
+        "agent_type",
+        "agent_transcript_path",
+        "last_assistant_message",
+        "stop_hook_active"
+    ]
 );
 
 #[derive(Debug, Clone)]
@@ -433,7 +452,7 @@ event_spec!(
     UserPromptSubmitOutput,
     "UserPromptSubmit",
     Prompt,
-    ["prompt"]
+    ["turn_id", "permission_mode", "prompt"]
 );
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -524,6 +543,20 @@ mod tests {
         let input = SessionStart::parse(&raw).unwrap();
         assert_eq!(input.field("source"), Some(&serde_json::json!("startup")));
         assert_eq!(input.field("future"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn catalog_parser_requires_schema_required_optional_envelope_fields() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"SessionStart","model":"gpt-test","source":"startup"}"#.to_vec(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            SessionStart::parse(&raw),
+            Err(hookkit_core::HookkitError::InvalidForHint { message, .. })
+                if message == "missing required field permission_mode"
+        ));
     }
 
     #[test]

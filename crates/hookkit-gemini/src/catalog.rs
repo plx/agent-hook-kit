@@ -255,7 +255,7 @@ macro_rules! common_controls {
 }
 
 macro_rules! system_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, $required:literal) => {
+    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
         pub struct $output(CatalogOutput);
 
@@ -272,7 +272,7 @@ macro_rules! system_event {
             }
         }
 
-        event_spec!($event, $output, $name, $category, [$required]);
+        event_spec!($event, $output, $name, $category, [$($required),*]);
     };
 }
 
@@ -281,21 +281,21 @@ system_event!(
     NotificationOutput,
     "Notification",
     Other,
-    "notification_type"
+    ["notification_type", "message", "details"]
 );
 system_event!(
     PreCompress,
     PreCompressOutput,
     "PreCompress",
     Context,
-    "trigger"
+    ["trigger"]
 );
 system_event!(
     SessionEnd,
     SessionEndOutput,
     "SessionEnd",
     Session,
-    "reason"
+    ["reason"]
 );
 
 #[derive(Debug, Clone)]
@@ -425,7 +425,7 @@ event_spec!(
     AfterModelOutput,
     "AfterModel",
     Model,
-    ["llm_request"]
+    ["llm_request", "llm_response"]
 );
 
 #[derive(Debug, Clone)]
@@ -453,7 +453,7 @@ event_spec!(
     AfterAgentOutput,
     "AfterAgent",
     Agent,
-    ["prompt"]
+    ["prompt", "prompt_response", "stop_hook_active"]
 );
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -534,6 +534,20 @@ mod tests {
         let input = BeforeAgent::parse(&raw).unwrap();
         assert_eq!(input.field("prompt"), Some(&serde_json::json!("review")));
         assert_eq!(input.field("future"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn catalog_parser_requires_llm_response() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"AfterModel","timestamp":"2026-07-12T00:00:00Z","llm_request":{}}"#.to_vec(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            AfterModel::parse(&raw),
+            Err(hookkit_core::HookkitError::InvalidInputForHint { message, .. })
+                if message == "missing required field llm_response"
+        ));
     }
 
     #[test]
