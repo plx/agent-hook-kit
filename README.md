@@ -28,6 +28,8 @@ change.
   - [`docs/command-environments.md`](docs/command-environments.md)
 - Lossless cross-harness aligned event wrappers:
   - `hookkit-common`
+- Opt-in, bounded Bash syntax analysis and file-access inference for native shell tool calls:
+  - [`hookkit-shell`](crates/hookkit-shell/README.md)
 - Runtime stdin/stdout/exit-code plumbing:
   - `hookkit-runtime`
 - Pkl-driven post-tool-use runner with embedded tool catalog:
@@ -59,6 +61,7 @@ crates/
   hookkit-gemini/
   hookkit-antigravity/
   hookkit-common/
+  hookkit-shell/
   hookkit-pkl-config/
   hookkit-tool-runner/
 examples/

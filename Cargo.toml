@@ -10,6 +10,7 @@ members = [
     "crates/hookkit-antigravity",
     "crates/hookkit-conformance",
     "crates/hookkit-common",
+    "crates/hookkit-shell",
     "crates/hookkit-pkl-config",
     "crates/hookkit-tool-runner",
     "examples/codex-bash-guard",
@@ -44,6 +45,8 @@ clap = { version = "4.6", features = ["derive"] }
 jsonschema = { version = "0.47", default-features = false }
 serde_yaml_ng = "0.10"
 sha2 = "0.11"
+tree-sitter = "0.25.10"
+tree-sitter-bash = "0.25.0"
 
 # workspace crates
 hookkit-core = { version = "0.1.0", path = "crates/hookkit-core" }
@@ -53,5 +56,6 @@ hookkit-codex = { version = "0.1.0", path = "crates/hookkit-codex" }
 hookkit-gemini = { version = "0.1.0", path = "crates/hookkit-gemini" }
 hookkit-antigravity = { version = "0.1.0", path = "crates/hookkit-antigravity" }
 hookkit-common = { version = "0.1.0", path = "crates/hookkit-common" }
+hookkit-shell = { version = "0.1.0", path = "crates/hookkit-shell" }
 hookkit-pkl-config = { version = "0.1.0", path = "crates/hookkit-pkl-config" }
 hookkit-tool-runner = { version = "0.1.0", path = "crates/hookkit-tool-runner" }

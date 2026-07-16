@@ -1,0 +1,34 @@
+[package]
+name = "hookkit-shell"
+description = "Opt-in shell tool-call extraction, bounded Bash analysis, and file-access inference for agent hooks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["hooks", "agents", "bash", "shell"]
+categories = ["development-tools", "parser-implementations"]
+
+[features]
+default = []
+serde = ["dep:serde"]
+claude = ["dep:hookkit-claude"]
+codex = ["dep:hookkit-codex"]
+gemini = ["dep:hookkit-gemini"]
+antigravity = ["dep:hookkit-antigravity"]
+all-harnesses = ["claude", "codex", "gemini", "antigravity"]
+
+[dependencies]
+hookkit-core = { workspace = true }
+hookkit-claude = { workspace = true, optional = true }
+hookkit-codex = { workspace = true, optional = true }
+hookkit-gemini = { workspace = true, optional = true }
+hookkit-antigravity = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

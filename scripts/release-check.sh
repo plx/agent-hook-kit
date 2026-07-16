@@ -16,12 +16,13 @@ cargo +1.85.0 check \
   -p hookkit-gemini \
   -p hookkit-antigravity \
   -p hookkit-common \
+  -p hookkit-shell \
   -p hookkit-runtime \
   -p hookkit-pkl-config \
   -p hookkit-tool-runner \
   --all-targets
 
-for package in hookkit-core hookkit-claude hookkit-codex hookkit-gemini hookkit-antigravity hookkit-common hookkit-runtime; do
+for package in hookkit-core hookkit-claude hookkit-codex hookkit-gemini hookkit-antigravity hookkit-common hookkit-shell hookkit-runtime; do
   cargo package -p "$package" --list >/dev/null
 done
 

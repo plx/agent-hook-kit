@@ -1,0 +1,9 @@
+hookkit-shell includes logic adapted from the OpenAI Codex project:
+
+  https://github.com/openai/codex/blob/9e552e9d15ba52bed7077d5357f3e18e330f8f38/codex-rs/shell-command/src/bash.rs
+
+OpenAI Codex is licensed under the Apache License, Version 2.0. The adapted
+logic has been modified for HookKit to retain per-command uncertainty, source
+spans, structural context, redirections, bounded traversal, and partial-result
+status. A copy of the Apache License, Version 2.0 is available in this
+repository as LICENSE-APACHE.

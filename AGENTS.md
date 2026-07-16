@@ -23,6 +23,7 @@ These wrappers are typically written in bash as a lowest-common-denominator, but
 - `crates/hookkit-runtime` — exact typed (`run_event`), selected-harness (`run_harness`/`dispatch_builtin_harness`), and aligned (`run_aligned_event`) stdin/stdout/exit-code plumbing.
 - `crates/hookkit-{claude,codex,gemini,antigravity}` — event-scoped native input/output contracts.
 - `crates/hookkit-common` — lossless native-arm wrappers for genuinely aligned lifecycle events.
+- `crates/hookkit-shell` — opt-in native shell-tool extraction, bounded Bash syntax analysis, semantic file-access inference, and best-effort inspection summaries.
 - `crates/hookkit-pkl-config` — Pkl evaluation, embedded builtin tool catalog, multi-file config merge, and discovery for the post-tool-use runner.
 - `crates/hookkit-tool-runner` — ships the `post-tool-use-agent-hook` binary that drives a Pkl-configured pipeline of formatter/linter/checker tools.
 - `examples/` — runnable hook stubs paired with `fixtures/` JSON for each harness.
