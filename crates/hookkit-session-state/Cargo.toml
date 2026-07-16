@@ -1,0 +1,19 @@
+[package]
+name = "hookkit-session-state"
+description = "Concurrent session-scoped state primitives for hookkit hooks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["hooks", "agents", "state"]
+categories = ["development-tools"]
+
+[dependencies]
+hookkit-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+fs2 = { workspace = true }
+time = { workspace = true }

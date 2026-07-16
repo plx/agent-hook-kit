@@ -1,11 +1,12 @@
 use clap::Parser;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_codex::protocol::{PreToolUse, PreToolUseOutput};
+use hookkit_session_state::{
+    EntityId, EntityMode, FamilyId, InsertResult, SessionState, StateRoot,
+};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::fs::OpenOptions;
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -20,7 +21,7 @@ struct Cli {
     #[arg(long)]
     claude_home: Option<PathBuf>,
 
-    /// Override the directory used for per-session loaded-rule markers.
+    /// Override the common root used for versioned per-session state.
     #[arg(long)]
     state_dir: Option<PathBuf>,
 }
@@ -55,7 +56,7 @@ impl PathPatterns {
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
-    hookkit_runtime::typed::run_typed::<PreToolUse, _>(move |input, _environment, _ctx| {
+    hookkit_runtime::typed::run_typed::<PreToolUse, _>(move |input, _environment, runtime| {
         let project_root = absolute_path(
             cli.project_root
                 .as_deref()
@@ -65,10 +66,11 @@ fn main() -> std::process::ExitCode {
             .claude_home
             .clone()
             .or_else(|| dirs::home_dir().map(|home| home.join(".claude")));
-        let state_dir = cli
+        let state_root = cli
             .state_dir
             .clone()
-            .unwrap_or_else(|| std::env::temp_dir().join("agent-hook-kit/codex-claude-rules"));
+            .map(StateRoot::new)
+            .unwrap_or_default();
 
         let paths = referenced_paths(&input.tool_name, &input.tool_input, &project_root);
         if paths.is_empty() {
@@ -76,10 +78,15 @@ fn main() -> std::process::ExitCode {
         }
 
         let rules = discover_rules(claude_home.as_deref(), &project_root)?;
-        let session_dir = state_dir.join(sanitize_component(&input.session_id));
-        std::fs::create_dir_all(&session_dir)?;
+        let loaded_rules = SessionState::ensure(runtime, state_root)
+            .and_then(|state| state.family(FamilyId::new("agent-hook-kit.codex-claude-rules", 1)?))
+            .and_then(|family| family.session_scope())
+            .and_then(|scope| {
+                scope.set::<String>(EntityId::new("loaded-rules", 1)?, EntityMode::Monotonic)
+            })
+            .map_err(state_error)?;
 
-        let mut context = Vec::new();
+        let mut additional_context = Vec::new();
         for rule in rules {
             if !paths
                 .iter()
@@ -87,8 +94,13 @@ fn main() -> std::process::ExitCode {
             {
                 continue;
             }
-            if claim_rule(&session_dir, &rule.source)? {
-                context.push(format!(
+            let key = slash_path(&rule.source);
+            if loaded_rules
+                .insert_once(&key, key.clone())
+                .map_err(state_error)?
+                == InsertResult::Inserted
+            {
+                additional_context.push(format!(
                     "# Claude Code rule: {}\n\n{}",
                     rule.source.display(),
                     rule.body.trim()
@@ -96,10 +108,12 @@ fn main() -> std::process::ExitCode {
             }
         }
 
-        if context.is_empty() {
+        if additional_context.is_empty() {
             Ok(PreToolUseOutput::no_op())
         } else {
-            Ok(PreToolUseOutput::with_context(context.join("\n\n---\n\n")))
+            Ok(PreToolUseOutput::with_context(
+                additional_context.join("\n\n---\n\n"),
+            ))
         }
     })
 }
@@ -212,25 +226,6 @@ fn rule_matches(rule: &Rule, path: &Path, project_root: &Path) -> bool {
         .strip_prefix(root)
         .ok()
         .is_some_and(|relative| rule.patterns.is_match(slash_path(relative)))
-}
-
-fn claim_rule(session_dir: &Path, source: &Path) -> std::io::Result<bool> {
-    let marker = session_dir.join(format!("{}.loaded", sha256(&slash_path(source))));
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&marker)
-    {
-        Ok(mut file) => {
-            if let Err(error) = writeln!(file, "{}", source.display()) {
-                let _ = std::fs::remove_file(marker);
-                return Err(error);
-            }
-            Ok(true)
-        }
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false),
-        Err(error) => Err(error),
-    }
 }
 
 fn referenced_paths(tool_name: &str, input: &serde_json::Value, cwd: &Path) -> Vec<PathBuf> {
@@ -464,26 +459,12 @@ fn slash_string(value: &str) -> String {
     value.replace('\\', "/")
 }
 
-fn sha256(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn sanitize_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::new(ErrorKind::InvalidData, error.to_string())
+}
+
+fn state_error(error: hookkit_session_state::StateError) -> std::io::Error {
+    std::io::Error::other(error)
 }
 
 #[cfg(test)]
@@ -577,11 +558,28 @@ mod tests {
     }
 
     #[test]
-    fn claims_each_rule_only_once_per_session() {
+    fn journal_set_inserts_each_rule_only_once_per_session() {
         let directory = test_dir("rules-claim");
-        std::fs::create_dir_all(&directory).unwrap();
-        assert!(claim_rule(&directory, Path::new("/repo/.claude/rules/rust.md")).unwrap());
-        assert!(!claim_rule(&directory, Path::new("/repo/.claude/rules/rust.md")).unwrap());
+        let loaded_rules = SessionState::open(
+            hookkit_core::HarnessId::CODEX,
+            hookkit_session_state::SessionIdentity::Session("session-1".into()),
+            StateRoot::new(&directory),
+        )
+        .and_then(|state| state.family(FamilyId::new("agent-hook-kit.codex-claude-rules", 1)?))
+        .and_then(|family| family.session_scope())
+        .and_then(|scope| {
+            scope.set::<String>(EntityId::new("loaded-rules", 1)?, EntityMode::Monotonic)
+        })
+        .unwrap();
+        let key = slash_path(Path::new("/repo/.claude/rules/rust.md"));
+        assert_eq!(
+            loaded_rules.insert_once(&key, key.clone()).unwrap(),
+            InsertResult::Inserted
+        );
+        assert_eq!(
+            loaded_rules.insert_once(&key, key.clone()).unwrap(),
+            InsertResult::AlreadyPresent
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -14,21 +14,32 @@ headers, and recognizes a small set of direct shell mutations and redirections.
 It normalizes every candidate relative to the native workspace root and records
 it without invoking `git`, diffing the workspace, or snapshotting the tree.
 
-By default, state is stored as:
+By default, state is stored as a windowed `ModifiedFiles` entity whose event
+log uses rotated NDJSON generations:
 
 ```text
-$TMPDIR/agent-hook-kit/session-modified-files/
-  <harness>/
-    <session>/
-      modified-files/
-        <sha256-of-normalized-path>.path
+$TMPDIR/agent-hook-kit/session-state/v1/
+  <harness>/session/<identity-hash>/families/
+    agent-hook-kit.modified-files/v1/scopes/session/
+      entities/dirty-files/v1/
+        active-generation.json
+        generations/<generation-id>.ndjson
+        projection-cache.json
 ```
 
-Each marker contains the normalized path as one line. Creating markers with
-`create_new` makes repeated and concurrent observations idempotent without a
-read/modify/write race. Pass `--state-dir PATH` to choose another root. A future
-stop-time linter can enumerate the marker contents to recover the accumulated
-set.
+Each NDJSON line contains the normalized path plus its hook event and optional
+tool-call identity. The entity projection supplies the consumer with a set of
+paths while retaining detailed source events. A short append lock makes
+concurrent writes safe. Pass `--state-dir PATH` to choose another common state
+root.
+
+The shipped `turn-completion-agent-hook` seals an exact generation window and runs all
+matching Pkl-configured formatter/linter phases at turn completion. A clean or
+fully auto-corrected batch is acknowledged quietly. Manual findings retain the
+exact snapshot for a retry and point the agent and user at committed detailed
+logs. Entries appended while a batch is running go to a new generation and are
+not part of its acknowledgement. Retained retries load a cached set and fold
+only newly arrived generations.
 
 Checked-in Codex and Gemini fixtures make the state layout easy to inspect. For
 example:
@@ -52,8 +63,10 @@ than assuming a nonzero result means no change.
 - Antigravity is not offered as a mode: its `PostToolUse` payload has no tool
   call or arguments, while observing `PreToolUse` would require returning a
   permission decision and would record attempts rather than completed calls.
-- Stop-time linting cannot yet be added cross-harness. Antigravity has a typed
-  `Stop`, but the selected Claude, Codex, and Gemini adapters only catalog their
-  stop events; there is no aligned stop input/output API.
-- There is no shared session-state/update primitive, so this example owns an
-  atomic marker layout and leaves retention/cleanup to a future stop phase.
+- Aligned `TurnCompletion` maps Claude/Codex `Stop`, Gemini `AfterAgent`, and
+  Antigravity `Stop` without erasing their native contracts. Antigravity still
+  cannot contribute modified paths because its `PostToolUse` omits the tool
+  call.
+- The tracker and consumer coordinate only through the versioned
+  `agent-hook-kit.modified-files` family; unrelated hook families remain
+  isolated.

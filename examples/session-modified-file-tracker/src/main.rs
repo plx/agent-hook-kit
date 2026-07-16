@@ -1,10 +1,11 @@
 use clap::{Parser, ValueEnum};
 use hookkit_common::{PostToolUseInput, PostToolUseOutput};
 use hookkit_core::{HarnessId, RuntimeContext};
-use sha2::{Digest, Sha256};
+use hookkit_session_state::{
+    EntityId, EntityMode, FamilyId, ModifiedFileEvent, ModifiedFiles, SessionState, StateRoot,
+};
 use std::collections::BTreeSet;
-use std::fs::OpenOptions;
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -358,36 +359,26 @@ fn record_paths(
     if paths.is_empty() {
         return Ok(());
     }
-    let session = context
-        .session_id()
-        .map(ToString::to_string)
-        .or_else(|| context.conversation_id().map(ToString::to_string))
-        .ok_or_else(|| std::io::Error::other("missing session or conversation id"))?;
-    let state_dir = state_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("agent-hook-kit/session-modified-files"));
-    let files_dir = state_dir
-        .join(sanitize_component(context.harness().as_str()))
-        .join(sanitize_component(&session))
-        .join("modified-files");
-    std::fs::create_dir_all(&files_dir)?;
+    let state_root = state_dir.map(StateRoot::new).unwrap_or_default();
+    let journal = SessionState::ensure(context, state_root)
+        .and_then(|state| state.family(FamilyId::new("agent-hook-kit.modified-files", 1)?))
+        .and_then(|family| family.session_scope())
+        .and_then(|scope| {
+            scope.entity::<ModifiedFiles>(EntityId::new("dirty-files", 1)?, EntityMode::Windowed)
+        })
+        .map_err(state_error)?;
+    let invocation = String::from_utf8_lossy(context.raw().bytes());
 
     for path in paths {
-        let marker = files_dir.join(format!("{}.path", sha256(&slash_path(path))));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&marker)
-        {
-            Ok(mut file) => {
-                if let Err(error) = writeln!(file, "{}", path.display()) {
-                    let _ = std::fs::remove_file(marker);
-                    return Err(error.into());
-                }
-            }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
+        let path = slash_path(path);
+        let observation = ModifiedFileEvent {
+            path: hookkit_core::Utf8PathBuf::from(path.clone()),
+            event: Some(context.event().name().to_string()),
+            tool_call_id: context.tool_call_id().map(ToString::to_string),
+        };
+        journal
+            .append(&format!("{invocation}\0{path}"), &observation)
+            .map_err(state_error)?;
     }
     Ok(())
 }
@@ -438,22 +429,8 @@ fn slash_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn sha256(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn sanitize_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
+fn state_error(error: hookkit_session_state::StateError) -> std::io::Error {
+    std::io::Error::other(error)
 }
 
 #[cfg(test)]
@@ -535,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn records_unique_atomic_path_markers() {
+    fn aggregates_repeated_observations_into_a_file_set() {
         let directory = test_dir("modified-state");
         let invocation =
             RawInvocation::parse(serde_json::to_vec(&serde_json::json!({})).unwrap()).unwrap();
@@ -558,17 +535,31 @@ mod tests {
         record_paths(&context, Some(&directory), &paths).unwrap();
         record_paths(&context, Some(&directory), &paths).unwrap();
 
-        let files = std::fs::read_dir(directory.join("codex/session-1/modified-files"))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
+        let journal = SessionState::open(
+            HarnessId::CODEX,
+            hookkit_session_state::SessionIdentity::Session("session-1".into()),
+            StateRoot::new(&directory),
+        )
+        .and_then(|state| state.family(FamilyId::new("agent-hook-kit.modified-files", 1)?))
+        .and_then(|family| family.session_scope())
+        .and_then(|scope| {
+            scope.entity::<ModifiedFiles>(EntityId::new("dirty-files", 1)?, EntityMode::Windowed)
+        })
+        .unwrap();
+        journal
+            .with_entity(|view| {
+                assert_eq!(view.state().paths().len(), 2);
+                assert_eq!(
+                    view.state()
+                        .paths()
+                        .iter()
+                        .map(|path| path.as_str())
+                        .collect::<BTreeSet<_>>(),
+                    BTreeSet::from(["/repo/a.rs", "/repo/b.rs"])
+                );
+                Ok(hookkit_session_state::EntityOutcome::retain(()))
+            })
             .unwrap();
-        assert_eq!(files.len(), 2);
-        let contents = files
-            .iter()
-            .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
-            .collect::<String>();
-        assert!(contents.contains("/repo/a.rs\n"));
-        assert!(contents.contains("/repo/b.rs\n"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

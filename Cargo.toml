@@ -12,6 +12,7 @@ members = [
     "crates/hookkit-common",
     "crates/hookkit-pkl-config",
     "crates/hookkit-tool-runner",
+    "crates/hookkit-session-state",
     "examples/codex-bash-guard",
     "examples/gemini-beforetool-policy",
     "examples/claude-sessionstart-context",
@@ -44,6 +45,8 @@ clap = { version = "4.6", features = ["derive"] }
 jsonschema = { version = "0.47", default-features = false }
 serde_yaml_ng = "0.10"
 sha2 = "0.11"
+fs2 = "0.4"
+time = { version = "=0.3.36", features = ["formatting", "parsing"] }
 
 # workspace crates
 hookkit-core = { version = "0.1.0", path = "crates/hookkit-core" }
@@ -55,3 +58,4 @@ hookkit-antigravity = { version = "0.1.0", path = "crates/hookkit-antigravity" }
 hookkit-common = { version = "0.1.0", path = "crates/hookkit-common" }
 hookkit-pkl-config = { version = "0.1.0", path = "crates/hookkit-pkl-config" }
 hookkit-tool-runner = { version = "0.1.0", path = "crates/hookkit-tool-runner" }
+hookkit-session-state = { version = "0.1.0", path = "crates/hookkit-session-state" }

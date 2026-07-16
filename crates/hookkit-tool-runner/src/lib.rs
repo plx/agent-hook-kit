@@ -1,18 +1,27 @@
-//! Reusable runner for the `post-tool-use-agent-hook` CLI.
+//! Reusable runners for immediate post-tool and session-batched completion hooks.
 //!
 //! The runner reads a harness-native post-tool-use event from stdin, loads the
 //! Pkl-driven tool catalog through [`hookkit_pkl_config`], runs each tool in
 //! the configured order, and lowers a unified result to the selected harness.
+//! The completion runner consumes exact snapshots from
+//! [`hookkit_session_state`] and commits detailed run bundles before deciding
+//! whether a turn may stop.
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
 use hookkit_common::{
-    NoticeLevel, PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput, UserNotice,
+    NoticeLevel, PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput,
+    TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput, UserNotice,
 };
 use hookkit_core::{HarnessId, HookkitError, RuntimeContext};
 use hookkit_pkl_config::schema as pkl;
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
+use hookkit_session_state::{
+    EntityId, EntityMode, EntityOperationError, EntityOutcome, EntityView, FamilyId, ModifiedFiles,
+    SessionState, StateFamily, StateRoot,
+};
 use minijinja::Environment;
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -25,6 +34,10 @@ const DEFAULT_ISSUES_AGENT: &str =
 const DEFAULT_ISSUES_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}.";
 
 const BINARY_NAME: &str = "post-tool-use-agent-hook";
+const TURN_COMPLETION_BINARY_NAME: &str = "turn-completion-agent-hook";
+const SESSION_START_BINARY_NAME: &str = "session-start-state-agent-hook";
+const MODIFIED_FILES_FAMILY: &str = "agent-hook-kit.modified-files";
+const BATCHED_TOOLS_FAMILY: &str = "agent-hook-kit.batched-tools";
 
 // ----------------------------------------------------------------------------
 // Public runtime types
@@ -286,6 +299,21 @@ pub struct Cli {
     pub config_path: Option<PathBuf>,
 }
 
+/// CLI options for the stop-time batch runner.
+#[derive(Debug, Clone)]
+pub struct TurnCompletionCli {
+    pub harness: HarnessId,
+    pub config_path: Option<PathBuf>,
+    pub state_dir: Option<PathBuf>,
+}
+
+/// CLI options for the library-owned precise session-start observer.
+#[derive(Debug, Clone)]
+pub struct SessionStartCli {
+    pub harness: HarnessId,
+    pub state_dir: Option<PathBuf>,
+}
+
 /// Parse `--claude|--codex|--gemini [--config PATH]` from `std::env::args`.
 #[allow(clippy::result_unit_err)]
 pub fn parse_args() -> Result<Cli, ()> {
@@ -327,6 +355,91 @@ pub fn parse_args() -> Result<Cli, ()> {
     })
 }
 
+/// Parse the aligned turn-completion runner's harness, config, and state root.
+#[allow(clippy::result_unit_err)]
+pub fn parse_turn_completion_args() -> Result<TurnCompletionCli, ()> {
+    let mut harness = None;
+    let mut config_path = None;
+    let mut state_dir = None;
+    let mut args = std::env::args().skip(1);
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
+            "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
+            "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
+            "--antigravity" => harness = Some(set_harness(harness, HarnessId::ANTIGRAVITY)?),
+            "--config" => {
+                let Some(path) = args.next() else {
+                    eprintln!("{}", turn_completion_usage());
+                    return Err(());
+                };
+                config_path = Some(PathBuf::from(path));
+            }
+            "--state-dir" => {
+                let Some(path) = args.next() else {
+                    eprintln!("{}", turn_completion_usage());
+                    return Err(());
+                };
+                state_dir = Some(PathBuf::from(path));
+            }
+            "--help" | "-h" => {
+                eprintln!("{}", turn_completion_usage());
+                return Err(());
+            }
+            _ => {
+                eprintln!("{}", turn_completion_usage());
+                return Err(());
+            }
+        }
+    }
+
+    let Some(harness) = harness else {
+        eprintln!("{}", turn_completion_usage());
+        return Err(());
+    };
+    Ok(TurnCompletionCli {
+        harness,
+        config_path,
+        state_dir,
+    })
+}
+
+/// Parse a supported native SessionStart harness and optional state root.
+#[allow(clippy::result_unit_err)]
+pub fn parse_session_start_args() -> Result<SessionStartCli, ()> {
+    let mut harness = None;
+    let mut state_dir = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
+            "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
+            "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
+            "--state-dir" => {
+                let Some(path) = args.next() else {
+                    eprintln!("{}", session_start_usage());
+                    return Err(());
+                };
+                state_dir = Some(PathBuf::from(path));
+            }
+            "--help" | "-h" => {
+                eprintln!("{}", session_start_usage());
+                return Err(());
+            }
+            _ => {
+                eprintln!("{}", session_start_usage());
+                return Err(());
+            }
+        }
+    }
+    let Some(harness) = harness else {
+        eprintln!("{}", session_start_usage());
+        return Err(());
+    };
+    Ok(SessionStartCli { harness, state_dir })
+}
+
 fn set_harness(current: Option<HarnessId>, next: HarnessId) -> Result<HarnessId, ()> {
     if current.is_some() {
         eprintln!("{}", usage());
@@ -337,6 +450,16 @@ fn set_harness(current: Option<HarnessId>, next: HarnessId) -> Result<HarnessId,
 
 fn usage() -> String {
     format!("Usage: {BINARY_NAME} --claude|--codex|--gemini [--config PATH]")
+}
+
+fn session_start_usage() -> String {
+    format!("Usage: {SESSION_START_BINARY_NAME} --claude|--codex|--gemini [--state-dir PATH]")
+}
+
+fn turn_completion_usage() -> String {
+    format!(
+        "Usage: {TURN_COMPLETION_BINARY_NAME} --claude|--codex|--gemini|--antigravity [--config PATH] [--state-dir PATH]"
+    )
 }
 
 // ----------------------------------------------------------------------------
@@ -664,6 +787,441 @@ pub fn run_runner(cli: Cli) -> std::process::ExitCode {
             run_post_tool_input(input, environment, ctx, cli.config_path.as_deref())
         },
     )
+}
+
+/// Run the stop-time batch hook from parsed CLI args.
+pub fn run_turn_completion_runner(cli: TurnCompletionCli) -> std::process::ExitCode {
+    hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::TurnCompletion, _>(
+        cli.harness,
+        move |input, environment, ctx| {
+            run_turn_completion_input(
+                input,
+                environment,
+                ctx,
+                cli.config_path.as_deref(),
+                cli.state_dir.as_deref(),
+            )
+        },
+    )
+}
+
+/// Run the small, library-owned lifecycle observer used when precise native
+/// session-start timing is desired even before another stateful hook runs.
+pub fn run_session_start_observer(cli: SessionStartCli) -> std::process::ExitCode {
+    let state_dir = cli.state_dir;
+    match cli.harness.as_str() {
+        "claude-code" => hookkit_runtime::typed::run_typed::<
+            hookkit_claude::protocol::SessionStart,
+            _,
+        >(move |_, _, ctx| {
+            ensure_session_metadata(ctx, state_dir.as_deref())?;
+            Ok(hookkit_claude::protocol::SessionStartOutput::no_op())
+        }),
+        "codex" => hookkit_runtime::typed::run_typed::<hookkit_codex::catalog::SessionStart, _>(
+            move |_, _, ctx| {
+                ensure_session_metadata(ctx, state_dir.as_deref())?;
+                Ok(hookkit_codex::catalog::SessionStartOutput::no_op())
+            },
+        ),
+        "gemini-cli" => {
+            hookkit_runtime::typed::run_typed::<hookkit_gemini::catalog::SessionStart, _>(
+                move |_, _, ctx| {
+                    ensure_session_metadata(ctx, state_dir.as_deref())?;
+                    Ok(hookkit_gemini::catalog::SessionStartOutput::no_op())
+                },
+            )
+        }
+        _ => std::process::ExitCode::from(1),
+    }
+}
+
+fn ensure_session_metadata(
+    ctx: &RuntimeContext<'_>,
+    state_dir: Option<&Path>,
+) -> hookkit_core::Result<()> {
+    let root = state_dir.map(StateRoot::new).unwrap_or_default();
+    SessionState::ensure(ctx, root).map_err(state_error)?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchToolSummary {
+    tool_id: String,
+    file_count: usize,
+    issues: bool,
+    operational_failure: bool,
+    log: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchRunSummary {
+    status: &'static str,
+    source_entry_count: usize,
+    source_entry_ids: Vec<String>,
+    files: Vec<String>,
+    tools: Vec<BatchToolSummary>,
+    acknowledged: bool,
+}
+
+fn run_turn_completion_input(
+    _turn_completion: TurnCompletionInput,
+    _environment: &TurnCompletionCommandEnvironment,
+    ctx: &RuntimeContext<'_>,
+    config_path: Option<&Path>,
+    state_dir: Option<&Path>,
+) -> hookkit_core::Result<TurnCompletionOutput> {
+    let cwd = ctx
+        .workspace_roots()
+        .first()
+        .map(|root| PathBuf::from(root.as_str()))
+        .ok_or_else(|| invalid_data("turn-completion input has no workspace root".into()))?;
+    let state_root = state_dir.map(StateRoot::new).unwrap_or_default();
+    let state = SessionState::ensure(ctx, state_root).map_err(state_error)?;
+    let source_family = state
+        .family(FamilyId::new(MODIFIED_FILES_FAMILY, 1).map_err(state_error)?)
+        .map_err(state_error)?;
+    let runner_family = state
+        .family(FamilyId::new(BATCHED_TOOLS_FAMILY, 1).map_err(state_error)?)
+        .map_err(state_error)?;
+
+    // Two concurrent stop hooks must not run formatters against the same
+    // sealed window at once. Post-tool producers do not take this lock; exact
+    // generation acknowledgement preserves observations appended while we run.
+    let _runner_lock = runner_family
+        .exclusive_lock("turn-completion")
+        .map_err(state_error)?;
+    let modified_files = source_family
+        .session_scope()
+        .and_then(|scope| {
+            scope.entity::<ModifiedFiles>(EntityId::new("dirty-files", 1)?, EntityMode::Windowed)
+        })
+        .map_err(state_error)?;
+    modified_files
+        .try_with_entity(|view| {
+            run_turn_completion_view(ctx, config_path, &runner_family, &cwd, view)
+        })
+        .map_err(|error| match error {
+            EntityOperationError::State(error) => state_error(error),
+            EntityOperationError::Operation(error) => error,
+        })
+}
+
+fn run_turn_completion_view(
+    ctx: &RuntimeContext<'_>,
+    config_path: Option<&Path>,
+    runner_family: &StateFamily,
+    cwd: &Path,
+    view: &EntityView<'_, ModifiedFiles>,
+) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+    if view.events().is_empty() {
+        return Ok(EntityOutcome::retain(lower_turn_completion(
+            ctx.harness(),
+            None,
+        )?));
+    }
+
+    let mut candidates = view
+        .state()
+        .paths()
+        .iter()
+        .map(|path| normalize_path(&absolute_from(path.as_std_path(), cwd)))
+        .filter(|path| path.is_file())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    candidates.sort();
+    let source_entry_count = view.events().len();
+    let source_entry_ids = view
+        .events()
+        .iter()
+        .map(|entry| entry.id().to_string())
+        .collect::<Vec<_>>();
+    let mut run = Some(
+        runner_family
+            .start_run("turn-completion")
+            .map_err(state_error)?,
+    );
+
+    let loaded = match hookkit_pkl_config::discover_and_load(cwd, config_path) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            let run = run.take().expect("run bundle is available");
+            run.write_text("config-error.log", &error.to_string())
+                .map_err(state_error)?;
+            let summary_path = run
+                .commit(&BatchRunSummary {
+                    status: "operational-failure",
+                    source_entry_count,
+                    source_entry_ids: source_entry_ids.clone(),
+                    files: candidates.iter().map(|path| slash_path(path)).collect(),
+                    tools: Vec::new(),
+                    acknowledged: false,
+                })
+                .map_err(state_error)?;
+            return Ok(EntityOutcome::retain(lower_turn_completion(
+                ctx.harness(),
+                Some(&summary_path),
+            )?));
+        }
+    };
+
+    let project_root = normalize_path(&loaded.project_root);
+    let tools = match resolve_run_order(&loaded.config) {
+        Ok(tools) => tools,
+        Err(error) => {
+            let run = run.take().expect("run bundle is available");
+            run.write_text("config-error.log", &error.to_string())
+                .map_err(state_error)?;
+            let summary_path = run
+                .commit(&BatchRunSummary {
+                    status: "operational-failure",
+                    source_entry_count,
+                    source_entry_ids: source_entry_ids.clone(),
+                    files: candidates.iter().map(|path| slash_path(path)).collect(),
+                    tools: Vec::new(),
+                    acknowledged: false,
+                })
+                .map_err(state_error)?;
+            return Ok(EntityOutcome::retain(lower_turn_completion(
+                ctx.harness(),
+                Some(&summary_path),
+            )?));
+        }
+    };
+
+    let global_exclude = &loaded.config.settings.exclude;
+    let global_diagnostics_dir = loaded.config.settings.diagnostics_directory.as_deref();
+    let mut summaries = Vec::new();
+    let mut has_issues = false;
+    let mut has_operational_failure = false;
+
+    for (index, schema_spec) in tools.into_iter().enumerate() {
+        if !schema_spec.enabled {
+            continue;
+        }
+        let spec = convert_tool_spec(schema_spec, global_exclude);
+        let context = ToolContext {
+            spec: &spec,
+            project_root: &project_root,
+            global_diagnostics_dir,
+        };
+        let matcher = FileMatcher::new(&spec.file_selection)?;
+        let runnable_paths = candidates
+            .iter()
+            .filter(|path| matcher.matches(path, &project_root))
+            .cloned()
+            .collect::<Vec<_>>();
+        if runnable_paths.is_empty() {
+            continue;
+        }
+        let jobs = build_jobs(&runnable_paths, &project_root, &spec);
+        if jobs.is_empty() {
+            continue;
+        }
+
+        let outcomes = run_jobs(&jobs, &context, loaded.config.settings.jobs);
+        let status = batch_outcome_status(&outcomes);
+        let log_path = format!("tools/{index:03}.log");
+        run.as_ref()
+            .expect("run bundle is available")
+            .write_text(&log_path, &format_batch_outcomes(&outcomes))
+            .map_err(state_error)?;
+        summaries.push(BatchToolSummary {
+            tool_id: spec.id.clone(),
+            file_count: runnable_paths.len(),
+            issues: status.issues,
+            operational_failure: status.operational_failure,
+            log: log_path,
+        });
+        has_issues |= status.issues;
+        has_operational_failure |= status.operational_failure;
+
+        if (loaded.config.settings.fail_fast && status.operational_failure)
+            || (!loaded.config.settings.continue_after_issues && status.issues)
+        {
+            break;
+        }
+    }
+
+    let should_block = has_issues || has_operational_failure;
+    let status = if has_operational_failure {
+        "operational-failure"
+    } else if has_issues {
+        "issues"
+    } else {
+        "clean"
+    };
+    let run = run.take().expect("run bundle is available");
+    let summary_path = run
+        .commit(&BatchRunSummary {
+            status,
+            source_entry_count,
+            source_entry_ids,
+            files: candidates.iter().map(|path| slash_path(path)).collect(),
+            tools: summaries,
+            acknowledged: !should_block,
+        })
+        .map_err(state_error)?;
+
+    if should_block {
+        Ok(EntityOutcome::retain(lower_turn_completion(
+            ctx.harness(),
+            Some(&summary_path),
+        )?))
+    } else {
+        Ok(EntityOutcome::acknowledge(lower_turn_completion(
+            ctx.harness(),
+            None,
+        )?))
+    }
+}
+
+fn batch_outcome_status(outcomes: &[ToolRunOutcome]) -> ToolBatchStatus {
+    let mut status = ToolBatchStatus {
+        operational_failure: false,
+        issues: false,
+    };
+    for outcome in outcomes {
+        match outcome {
+            ToolRunOutcome::Completed(completed) => {
+                status.issues |= completed.issues == IssueState::Issues;
+            }
+            ToolRunOutcome::ToolUnavailable { .. } | ToolRunOutcome::ToolFailed { .. } => {
+                status.operational_failure = true;
+            }
+        }
+    }
+    status
+}
+
+fn format_batch_outcomes(outcomes: &[ToolRunOutcome]) -> String {
+    let mut output = String::new();
+    for (index, outcome) in outcomes.iter().enumerate() {
+        output.push_str(&format!("== job {} ==\n", index + 1));
+        match outcome {
+            ToolRunOutcome::Completed(completed) => {
+                output.push_str(&format!(
+                    "result: {:?}\nfiles: {}\n",
+                    completed.issues,
+                    completed
+                        .files
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                output.push_str(&completed.diagnostics);
+            }
+            ToolRunOutcome::ToolUnavailable {
+                phase,
+                executable,
+                install_hint,
+                changed_files,
+            } => {
+                output.push_str(&format!(
+                    "result: unavailable\nphase: {phase}\nexecutable: {executable}\nchanged files: {}\n",
+                    changed_files
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                if let Some(hint) = install_hint {
+                    output.push_str(&format!("install hint: {hint}\n"));
+                }
+            }
+            ToolRunOutcome::ToolFailed {
+                phase,
+                exit_code,
+                diagnostics,
+                changed_files,
+            } => {
+                output.push_str(&format!(
+                    "result: failure\nphase: {phase}\nexit code: {exit_code:?}\nchanged files: {}\n",
+                    changed_files
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                output.push_str(diagnostics);
+            }
+        }
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn lower_turn_completion(
+    harness: &HarnessId,
+    problem_summary: Option<&Path>,
+) -> hookkit_core::Result<TurnCompletionOutput> {
+    let Some(summary) = problem_summary else {
+        return match harness.as_str() {
+            "claude-code" => Ok(TurnCompletionOutput::Claude(
+                hookkit_claude::catalog::StopOutput::no_op(),
+            )),
+            "codex" => Ok(TurnCompletionOutput::Codex(
+                hookkit_codex::catalog::StopOutput::no_op(),
+            )),
+            "gemini-cli" => Ok(TurnCompletionOutput::Gemini(
+                hookkit_gemini::catalog::AfterAgentOutput::no_op(),
+            )),
+            "antigravity" => Ok(TurnCompletionOutput::Antigravity(
+                hookkit_antigravity::StopOutput {
+                    decision: "stop".into(),
+                    reason: None,
+                },
+            )),
+            _ => Err(invalid_data(format!(
+                "turn-completion runner does not support {harness}"
+            ))),
+        };
+    };
+
+    let agent_message = format!(
+        "Do not stop yet: session-batched checks need manual attention. Inspect {} and the referenced tool logs, fix the problems, then try to stop again.",
+        summary.display()
+    );
+    let user_message = format!(
+        "Some session-batched formatter/linter checks still need attention. Details: {}",
+        summary.display()
+    );
+    match harness.as_str() {
+        "claude-code" => Ok(TurnCompletionOutput::Claude(
+            hookkit_claude::catalog::StopOutput::block_with_context(
+                agent_message.clone(),
+                agent_message,
+            )
+            .with_system_message(user_message)?,
+        )),
+        "codex" => Ok(TurnCompletionOutput::Codex(
+            hookkit_codex::catalog::StopOutput::block(agent_message)
+                .with_system_message(user_message)?,
+        )),
+        "gemini-cli" => Ok(TurnCompletionOutput::Gemini(
+            hookkit_gemini::catalog::AfterAgentOutput::deny(agent_message, false)
+                .with_system_message(user_message)?,
+        )),
+        "antigravity" => Ok(TurnCompletionOutput::Antigravity(
+            hookkit_antigravity::StopOutput {
+                decision: "continue".into(),
+                reason: Some(agent_message),
+            },
+        )),
+        _ => Err(invalid_data(format!(
+            "turn-completion runner does not support {harness}"
+        ))),
+    }
+}
+
+fn state_error(error: hookkit_session_state::StateError) -> HookkitError {
+    std::io::Error::other(error).into()
 }
 
 /// Run an exact aligned input through the Pkl-driven runner.

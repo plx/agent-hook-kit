@@ -9,8 +9,8 @@ mod raw;
 
 pub use context::{
     ConversationId, DISABLED_DIAGNOSTICS, Diagnostic, DiagnosticLevel, DiagnosticsSink,
-    DisabledDiagnostics, NativeContext, ResolutionProvenance, RuntimeContext, SessionId,
-    ToolCallId, TurnId,
+    DisabledDiagnostics, NativeContext, ResolutionProvenance, RuntimeContext,
+    SessionBoundaryContext, SessionBoundaryKind, SessionId, ToolCallId, TurnId,
 };
 pub use environment::{CommandEnvironmentSpec, EnvironmentVariables, NoCommandEnvironment};
 pub use error::HookkitError;

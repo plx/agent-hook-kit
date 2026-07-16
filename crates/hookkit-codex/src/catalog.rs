@@ -2,7 +2,7 @@
 
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSpec, HarnessId, NativeContext, ProcessEmission,
-    RawInvocation, SessionId, ToolCallId, TurnId,
+    RawInvocation, SessionBoundaryContext, SessionBoundaryKind, SessionId, ToolCallId, TurnId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -38,6 +38,15 @@ impl CatalogInput {
     }
 
     pub(crate) fn context(&self) -> NativeContext {
+        let session_boundary = (self.hook_event_name == "SessionStart").then(|| {
+            let kind = match self.field("source").and_then(serde_json::Value::as_str) {
+                Some("resume") => SessionBoundaryKind::Resume,
+                Some("clear") => SessionBoundaryKind::Clear,
+                Some("compact") => SessionBoundaryKind::Compact,
+                _ => SessionBoundaryKind::Startup,
+            };
+            SessionBoundaryContext::observed(kind)
+        });
         NativeContext {
             workspace_roots: vec![self.cwd.clone()],
             session_id: SessionId::new(&self.session_id).ok(),
@@ -48,6 +57,7 @@ impl CatalogInput {
                 .get("tool_use_id")
                 .and_then(serde_json::Value::as_str)
                 .and_then(|id| ToolCallId::new(id).ok()),
+            session_boundary,
             ..NativeContext::default()
         }
     }
@@ -543,6 +553,10 @@ mod tests {
         let input = SessionStart::parse(&raw).unwrap();
         assert_eq!(input.field("source"), Some(&serde_json::json!("startup")));
         assert_eq!(input.field("future"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            SessionStart::context(&input).session_boundary.unwrap().kind,
+            SessionBoundaryKind::Startup
+        );
     }
 
     #[test]
