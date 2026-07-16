@@ -30,11 +30,15 @@ change.
   - `hookkit-common`
 - Opt-in, bounded Bash syntax analysis and file-access inference for native shell tool calls:
   - [`hookkit-shell`](crates/hookkit-shell/README.md)
+- Concurrent, versioned session-scoped state primitives:
+  - [`hookkit-session-state`](crates/hookkit-session-state/README.md)
 - Runtime stdin/stdout/exit-code plumbing:
   - `hookkit-runtime`
-- Pkl-driven post-tool-use runner with embedded tool catalog:
+- Pkl-driven post-tool and batched turn-completion runners with embedded tool catalog:
   - `hookkit-pkl-config` (Pkl evaluation, builtin specs, multi-file merge)
-  - `hookkit-tool-runner` (ships the `post-tool-use-agent-hook` binary)
+  - `hookkit-tool-runner` (ships `post-tool-use-agent-hook`,
+    `turn-completion-agent-hook`, and the precise
+    `session-start-state-agent-hook` metadata observer)
 - Shared core error/types:
   - `hookkit-core`
 - Versioned upstream protocol ledger and generated support matrix:
@@ -64,6 +68,7 @@ crates/
   hookkit-shell/
   hookkit-pkl-config/
   hookkit-tool-runner/
+  hookkit-session-state/
 examples/
 fixtures/
 planning/
@@ -284,8 +289,8 @@ limitation notes:
   native pre-tool contract with `--harness=codex|gemini|antigravity` and merges
   home/project YAML policy.
 - [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
-  selects `--harness=claude|codex|gemini` and writes atomic per-session path
-  markers without consulting Git.
+  selects `--harness=claude|codex|gemini` and appends per-session
+  modified-file entity events without consulting Git.
 
 ## `post-tool-use-agent-hook`
 
@@ -299,6 +304,34 @@ cat fixtures/claude/post_tool_use.json \
 
 The CLI accepts `--claude`, `--codex`, or `--gemini` to choose the harness,
 and `--config PATH` to load a single Pkl file directly (bypassing discovery).
+
+The companion `turn-completion-agent-hook` consumes the NDJSON-backed
+`ModifiedFiles` entity at Claude/Codex `Stop` or Gemini `AfterAgent`, runs the same
+configured tools over the whole session batch, and stays quiet when everything
+is clean or auto-corrected:
+
+```bash
+cargo run -q -p hookkit-tool-runner --bin turn-completion-agent-hook -- \
+  --claude --state-dir .context/hookkit-state
+```
+
+Use the same `--state-dir` for `session-modified-file-tracker`. Manual
+issues block the stop attempt, retain the sealed generations and cached set for retry, and point
+to detailed logs committed below the versioned session state. See the
+[session-state walkthrough](crates/hookkit-session-state/README.md).
+
+For precise automatic start metadata even before another stateful hook runs,
+bind the no-op observer to the harness's native `SessionStart` event:
+
+```bash
+cargo run -q -p hookkit-tool-runner --bin session-start-state-agent-hook -- \
+  --claude --state-dir .context/hookkit-state
+```
+
+Codex and Gemini use `--codex` and `--gemini`. Every later
+`SessionState::ensure` still refreshes typed project metadata automatically;
+without a start binding, the timestamp is explicitly marked as a
+first-observed fallback.
 
 ### Configuration discovery
 
@@ -396,7 +429,7 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
 - `codex-claude-rules`:
   - discovers Claude Code rule files recursively in user-before-project order,
   - evaluates `paths` frontmatter against file paths observable in Codex tool input,
-  - atomically claims each matched rule once per Codex session before injecting its body as additional context.
+  - atomically inserts each matched rule into a monotonic journal-derived set before injecting its body as additional context.
 - `forbidden-file-guard`:
   - uses clap to select Codex, Gemini, or Antigravity native pre-tool handling,
   - merges additive YAML glob policy from home and workspace configuration,
@@ -404,7 +437,7 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
 - `session-modified-file-tracker`:
   - uses the aligned post-tool API for Claude, Codex, and Gemini,
   - infers direct modifications from native open tool payloads and never shells out to Git,
-  - records one atomic marker per normalized path and session so duplicate or concurrent observations are harmless.
+  - appends detailed observations to rotated NDJSON generations whose projection is a versioned per-session path set.
 - `post-tool-use-agent-hook`:
   - loads merged Pkl config plus embedded builtin tool catalog,
   - discovers candidate paths from exact native input arms using runner-local tool policy,
@@ -413,6 +446,12 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - reports missing tools and operational failures per `missingToolPolicy`,
   - writes remaining diagnostics to artifacts,
   - lowers every result through an explicit Claude, Codex, or Gemini native output arm.
+- `turn-completion-agent-hook`:
+  - seals the current modified-file generations under an exclusive entity consumer lock,
+  - dispatches the same Pkl-configured phases across the accumulated file set,
+  - commits detailed per-tool logs and a summary before producing its decision,
+  - acknowledges only clean or fully auto-corrected snapshots,
+  - retains manual findings for retry and emits each harness's native continue-working signal.
 
 ## License
 

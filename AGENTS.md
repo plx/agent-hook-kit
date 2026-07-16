@@ -24,8 +24,9 @@ These wrappers are typically written in bash as a lowest-common-denominator, but
 - `crates/hookkit-{claude,codex,gemini,antigravity}` — event-scoped native input/output contracts.
 - `crates/hookkit-common` — lossless native-arm wrappers for genuinely aligned lifecycle events.
 - `crates/hookkit-shell` — opt-in native shell-tool extraction, bounded Bash syntax analysis, semantic file-access inference, and best-effort inspection summaries.
+- `crates/hookkit-session-state` — automatic typed session metadata plus concurrent, versioned claims, content-addressed record journals, NDJSON-backed aggregate entities, run bundles, scopes, observations, locks, and cleanup.
 - `crates/hookkit-pkl-config` — Pkl evaluation, embedded builtin tool catalog, multi-file config merge, and discovery for the post-tool-use runner.
-- `crates/hookkit-tool-runner` — ships the `post-tool-use-agent-hook` binary that drives a Pkl-configured pipeline of formatter/linter/checker tools.
+- `crates/hookkit-tool-runner` — ships the immediate `post-tool-use-agent-hook`, session-batched `turn-completion-agent-hook`, and precise `session-start-state-agent-hook` metadata observer.
 - `examples/` — runnable hook stubs paired with `fixtures/` JSON for each harness.
 - `planning/` — design notes; not shipped.
 

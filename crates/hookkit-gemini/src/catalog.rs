@@ -2,7 +2,7 @@
 
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSpec, HarnessId, NativeContext, ProcessEmission,
-    RawInvocation, SessionId,
+    RawInvocation, SessionBoundaryContext, SessionBoundaryKind, SessionId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -34,10 +34,22 @@ impl CatalogInput {
     }
 
     pub(crate) fn context(&self) -> NativeContext {
+        let session_boundary = (self.hook_event_name == "SessionStart").then(|| {
+            let kind = match self.field("source").and_then(serde_json::Value::as_str) {
+                Some("resume") => SessionBoundaryKind::Resume,
+                Some("clear") => SessionBoundaryKind::Clear,
+                Some("compact") => SessionBoundaryKind::Compact,
+                _ => SessionBoundaryKind::Startup,
+            };
+            SessionBoundaryContext::observed(kind)
+                .with_native_timestamp(&self.timestamp)
+                .with_occurrence_key(format!("{}\0{}", self.timestamp, self.session_id))
+        });
         NativeContext {
             workspace_roots: vec![self.cwd.clone()],
             session_id: SessionId::new(&self.session_id).ok(),
             transcript_path: Some(self.transcript_path.clone()),
+            session_boundary,
             ..NativeContext::default()
         }
     }
@@ -255,7 +267,7 @@ macro_rules! common_controls {
 }
 
 macro_rules! system_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, $required:literal) => {
+    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
         pub struct $output(CatalogOutput);
 
@@ -272,7 +284,7 @@ macro_rules! system_event {
             }
         }
 
-        event_spec!($event, $output, $name, $category, [$required]);
+        event_spec!($event, $output, $name, $category, [$($required),*]);
     };
 }
 
@@ -281,21 +293,21 @@ system_event!(
     NotificationOutput,
     "Notification",
     Other,
-    "notification_type"
+    ["notification_type", "message", "details"]
 );
 system_event!(
     PreCompress,
     PreCompressOutput,
     "PreCompress",
     Context,
-    "trigger"
+    ["trigger"]
 );
 system_event!(
     SessionEnd,
     SessionEndOutput,
     "SessionEnd",
     Session,
-    "reason"
+    ["reason"]
 );
 
 #[derive(Debug, Clone)]
@@ -425,7 +437,7 @@ event_spec!(
     AfterModelOutput,
     "AfterModel",
     Model,
-    ["llm_request"]
+    ["llm_request", "llm_response"]
 );
 
 #[derive(Debug, Clone)]
@@ -453,7 +465,7 @@ event_spec!(
     AfterAgentOutput,
     "AfterAgent",
     Agent,
-    ["prompt"]
+    ["prompt", "prompt_response", "stop_hook_active"]
 );
 
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -534,6 +546,36 @@ mod tests {
         let input = BeforeAgent::parse(&raw).unwrap();
         assert_eq!(input.field("prompt"), Some(&serde_json::json!("review")));
         assert_eq!(input.field("future"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn session_start_context_retains_native_timestamp() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"SessionStart","timestamp":"2026-07-12T00:00:00Z","source":"startup"}"#.to_vec(),
+        )
+        .unwrap();
+        let context = SessionStart::context(&SessionStart::parse(&raw).unwrap());
+        let boundary = context.session_boundary.unwrap();
+        assert_eq!(boundary.kind, SessionBoundaryKind::Startup);
+        assert_eq!(
+            boundary.native_timestamp.as_deref(),
+            Some("2026-07-12T00:00:00Z")
+        );
+        assert!(boundary.occurrence_key.is_some());
+    }
+
+    #[test]
+    fn catalog_parser_requires_llm_response() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"AfterModel","timestamp":"2026-07-12T00:00:00Z","llm_request":{}}"#.to_vec(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            AfterModel::parse(&raw),
+            Err(hookkit_core::HookkitError::InvalidInputForHint { message, .. })
+                if message == "missing required field llm_response"
+        ));
     }
 
     #[test]

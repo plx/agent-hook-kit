@@ -85,6 +85,49 @@ string_identifier!(ConversationId);
 string_identifier!(TurnId);
 string_identifier!(ToolCallId);
 
+/// A native lifecycle boundary that starts a new session epoch.
+///
+/// Adapters populate this only from typed, documented event fields. The
+/// timestamp remains a string here so protocol crates do not need to agree on
+/// a date-time library; session-state validates and normalizes it when present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionBoundaryContext {
+    pub kind: SessionBoundaryKind,
+    pub native_timestamp: Option<String>,
+    pub occurrence_key: Option<String>,
+}
+
+impl SessionBoundaryContext {
+    pub fn observed(kind: SessionBoundaryKind) -> Self {
+        Self {
+            kind,
+            native_timestamp: None,
+            occurrence_key: None,
+        }
+    }
+
+    pub fn with_native_timestamp(mut self, timestamp: impl Into<String>) -> Self {
+        self.native_timestamp = Some(timestamp.into());
+        self
+    }
+
+    pub fn with_occurrence_key(mut self, key: impl Into<String>) -> Self {
+        self.occurrence_key = Some(key.into());
+        self
+    }
+}
+
+/// Harness-neutral session-start causes retained by [`NativeContext`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SessionBoundaryKind {
+    Startup,
+    Resume,
+    Clear,
+    Compact,
+    InvocationStart,
+}
+
 /// Exact optional context populated by a native event adapter.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeContext {
@@ -95,6 +138,7 @@ pub struct NativeContext {
     pub transcript_path: Option<Utf8PathBuf>,
     pub tool_call_id: Option<ToolCallId>,
     pub artifact_directory: Option<Utf8PathBuf>,
+    pub session_boundary: Option<SessionBoundaryContext>,
 }
 
 /// Exact runtime context. No path or identifier is inferred from arbitrary JSON.
@@ -186,6 +230,10 @@ impl<'a> RuntimeContext<'a> {
 
     pub fn artifact_directory(&self) -> Option<&crate::Utf8Path> {
         self.native.artifact_directory.as_deref()
+    }
+
+    pub fn session_boundary(&self) -> Option<&SessionBoundaryContext> {
+        self.native.session_boundary.as_ref()
     }
 
     pub fn diagnostics(&self) -> &dyn DiagnosticsSink {

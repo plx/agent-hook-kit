@@ -18,5 +18,6 @@ hookkit-common = { workspace = true }
 hookkit-core = { workspace = true }
 hookkit-gemini = { workspace = true }
 hookkit-runtime = { workspace = true }
+hookkit-session-state = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }

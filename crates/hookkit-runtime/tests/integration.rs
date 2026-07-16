@@ -331,6 +331,87 @@ fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u
     serde_json::to_vec(&fixture).unwrap()
 }
 
+fn turn_completion_fixture(harness: &str, project: &Path) -> Vec<u8> {
+    let fixture = match harness {
+        "claude" => serde_json::json!({
+            "session_id": "claude-ruff-test",
+            "transcript_path": "/tmp/claude-ruff-test.jsonl",
+            "cwd": project.to_string_lossy(),
+            "hook_event_name": "Stop",
+            "stop_hook_active": false,
+            "last_assistant_message": "done"
+        }),
+        "codex" => serde_json::json!({
+            "session_id": "codex-ruff-test",
+            "transcript_path": "/tmp/codex-ruff-test.jsonl",
+            "cwd": project.to_string_lossy(),
+            "hook_event_name": "Stop",
+            "model": "gpt-test",
+            "turn_id": "codex-ruff-turn",
+            "permission_mode": "default",
+            "stop_hook_active": false,
+            "last_assistant_message": "done"
+        }),
+        "gemini" => serde_json::json!({
+            "session_id": "gemini-ruff-test",
+            "transcript_path": "/tmp/gemini-ruff-test.json",
+            "cwd": project.to_string_lossy(),
+            "hook_event_name": "AfterAgent",
+            "timestamp": "2026-07-15T00:00:00Z",
+            "prompt": "do it",
+            "prompt_response": "done",
+            "stop_hook_active": false
+        }),
+        _ => panic!("unknown harness {harness}"),
+    };
+    serde_json::to_vec(&fixture).unwrap()
+}
+
+fn session_journal_len(state_dir: &Path, harness: &str, session: &str) -> usize {
+    hookkit_session_state::SessionState::open(
+        hookkit_core::HarnessId::new(harness).unwrap(),
+        hookkit_session_state::SessionIdentity::Session(session.into()),
+        hookkit_session_state::StateRoot::new(state_dir),
+    )
+    .and_then(|state| {
+        state.family(
+            hookkit_session_state::FamilyId::new("agent-hook-kit.modified-files", 1).unwrap(),
+        )
+    })
+    .and_then(|family| family.session_scope())
+    .and_then(|scope| {
+        scope.entity::<hookkit_session_state::ModifiedFiles>(
+            hookkit_session_state::EntityId::new("dirty-files", 1)?,
+            hookkit_session_state::EntityMode::Windowed,
+        )
+    })
+    .and_then(|entity| {
+        entity.with_entity(|view| {
+            Ok(hookkit_session_state::EntityOutcome::retain(
+                view.events().len(),
+            ))
+        })
+    })
+    .unwrap()
+}
+
+fn files_named(root: &Path, name: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return found;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files_named(&path, name));
+        } else if path.file_name().and_then(|value| value.to_str()) == Some(name) {
+            found.push(path);
+        }
+    }
+    found.sort();
+    found
+}
+
 fn ensure_built(binary: &str) {
     static BUILT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     let built = BUILT.get_or_init(|| Mutex::new(HashSet::new()));
@@ -343,7 +424,7 @@ fn ensure_built(binary: &str) {
     }
 
     let package = match binary {
-        "post-tool-use-agent-hook" => "hookkit-tool-runner",
+        "post-tool-use-agent-hook" | "turn-completion-agent-hook" => "hookkit-tool-runner",
         _ => binary,
     };
 
@@ -810,17 +891,152 @@ fn session_modified_file_tracker_records_all_supported_posttool_paths() {
             serde_json::json!({})
         );
 
-        let markers =
-            std::fs::read_dir(state_dir.join(format!("{harness_id}/{session}/modified-files")))
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-        assert_eq!(markers.len(), 1);
-        assert_eq!(
-            std::fs::read_to_string(markers[0].path()).unwrap(),
-            format!("{}\n", project.join("src/main.rs").display())
-        );
+        let state = hookkit_session_state::SessionState::open(
+            hookkit_core::HarnessId::new(harness_id).unwrap(),
+            hookkit_session_state::SessionIdentity::Session(session.into()),
+            hookkit_session_state::StateRoot::new(&state_dir),
+        )
+        .unwrap();
+        let entity = state
+            .family(
+                hookkit_session_state::FamilyId::new("agent-hook-kit.modified-files", 1).unwrap(),
+            )
+            .and_then(|family| family.session_scope())
+            .and_then(|scope| {
+                scope.entity::<hookkit_session_state::ModifiedFiles>(
+                    hookkit_session_state::EntityId::new("dirty-files", 1)?,
+                    hookkit_session_state::EntityMode::Windowed,
+                )
+            })
+            .unwrap();
+        entity
+            .with_entity(|view| {
+                assert_eq!(view.events().len(), 1);
+                assert!(view.state().paths().contains(
+                    &hookkit_core::Utf8PathBuf::from_path_buf(project.join("src/main.rs")).unwrap()
+                ));
+                Ok(hookkit_session_state::EntityOutcome::retain(()))
+            })
+            .unwrap();
     }
+}
+
+// --- turn-completion-agent-hook consuming session state ---
+
+#[test]
+fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
+    require_pkl!();
+    let project = temp_project("turn-completion-autofix");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/dirty.py");
+    std::fs::write(&file, "import os  # unused_import\nprint('needs_format')\n").unwrap();
+
+    let tracked = run_example(
+        "session-modified-file-tracker",
+        &post_tool_use_fixture("claude", &project, "src/dirty.py"),
+        &["--harness=claude", "--state-dir", state_arg.as_str()],
+    );
+    assert!(tracked.status.success());
+    assert_eq!(
+        session_journal_len(&state_dir, "claude-code", "claude-ruff-test"),
+        1
+    );
+
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("claude", &project),
+        &["--claude", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&stopped.stdout).unwrap(),
+        serde_json::json!({})
+    );
+    let rewritten = std::fs::read_to_string(file).unwrap();
+    assert!(rewritten.contains("formatted"));
+    assert!(!rewritten.contains("unused_import"));
+    assert_eq!(
+        session_journal_len(&state_dir, "claude-code", "claude-ruff-test"),
+        0
+    );
+    let summaries = files_named(&state_dir, "summary.json");
+    assert_eq!(summaries.len(), 1);
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
+    assert_eq!(summary["status"], "clean");
+    assert_eq!(summary["acknowledged"], true);
+}
+
+#[test]
+fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
+    require_pkl!();
+    let project = temp_project("turn-completion-issues");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/broken.py");
+    std::fs::write(&file, "print(manual_issue)\n").unwrap();
+
+    let tracked = run_example(
+        "session-modified-file-tracker",
+        &post_tool_use_fixture("codex", &project, "src/broken.py"),
+        &["--harness=codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(tracked.status.success());
+
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block");
+    assert!(
+        response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("still need attention")
+    );
+    assert_eq!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
+        1
+    );
+    let summaries = files_named(&state_dir, "summary.json");
+    assert_eq!(summaries.len(), 1);
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
+    assert_eq!(summary["status"], "issues");
+    assert_eq!(summary["acknowledged"], false);
+    let logs = files_named(&state_dir, "000.log");
+    assert_eq!(logs.len(), 1);
+    assert!(
+        std::fs::read_to_string(&logs[0])
+            .unwrap()
+            .contains("F821 undefined name manual_issue")
+    );
+
+    std::fs::write(&file, "print('fixed')\n").unwrap();
+    let retried = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(retried.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&retried.stdout).unwrap(),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
+        0
+    );
 }
 
 // --- post-tool-use-agent-hook driven by Pkl configs ---

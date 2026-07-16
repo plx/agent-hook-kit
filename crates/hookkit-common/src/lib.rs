@@ -7,7 +7,10 @@
 pub mod aligned;
 pub mod message;
 
-pub use aligned::{PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput};
+pub use aligned::{
+    PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput,
+    TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput,
+};
 pub use message::{
     AgentFeedback, DiagnosticArtifact, DiagnosticReport, FeedbackSeverity, MessageAudience,
     NoticeLevel, UserNotice,

@@ -2,8 +2,8 @@
 
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSelector, EventSpec, HarnessId, HarnessSpec,
-    IdentificationDescriptor, NativeContext, ProcessEmission, RawInvocation, SessionId, SnapshotId,
-    ToolCallId,
+    IdentificationDescriptor, NativeContext, ProcessEmission, RawInvocation,
+    SessionBoundaryContext, SessionBoundaryKind, SessionId, SnapshotId, ToolCallId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -259,10 +259,17 @@ impl EventSpec for SessionStart {
     }
 
     fn context(input: &Self::Input) -> NativeContext {
+        let boundary_kind = match input.source {
+            SessionSource::Startup => SessionBoundaryKind::Startup,
+            SessionSource::Resume => SessionBoundaryKind::Resume,
+            SessionSource::Clear => SessionBoundaryKind::Clear,
+            SessionSource::Compact => SessionBoundaryKind::Compact,
+        };
         NativeContext {
             workspace_roots: vec![input.cwd.clone()],
             session_id: SessionId::new(&input.session_id).ok(),
             transcript_path: Some(input.transcript_path.clone()),
+            session_boundary: Some(SessionBoundaryContext::observed(boundary_kind)),
             ..NativeContext::default()
         }
     }
@@ -864,6 +871,19 @@ mod tests {
         let emission = SessionStart::emit(SessionStartOutput::with_context("ctx")).unwrap();
         let value: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
         assert_eq!(value["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    }
+
+    #[test]
+    fn session_start_context_exposes_typed_boundary_cause() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"SessionStart","source":"resume"}"#.to_vec(),
+        )
+        .unwrap();
+        let context = SessionStart::context(&SessionStart::parse(&raw).unwrap());
+        assert_eq!(
+            context.session_boundary.unwrap().kind,
+            SessionBoundaryKind::Resume
+        );
     }
 
     #[test]

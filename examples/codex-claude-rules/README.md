@@ -12,12 +12,14 @@ frontmatter `paths` string or list are handled; Claude Code loads unscoped rules
 at session start, which is outside this example's purpose.
 
 For every path visible in the Codex tool input, the hook matches the path
-relative to the project root. A newly matched rule is claimed with an atomic
-per-session marker, then its markdown body is returned through
-`PreToolUseOutput::with_context`. Concurrent hook processes therefore cannot
-inject one rule twice. By default, markers live under
-`$TMPDIR/agent-hook-kit/codex-claude-rules/<session>/`; `--state-dir` overrides
-the root.
+relative to the project root. A newly matched rule is inserted with the shared
+monotonic `SetJournal`, then its markdown body is returned through
+`PreToolUseOutput::with_context`. The set is reconstructed from its checkpoint,
+projection cache, and NDJSON generations; its consumer lock means concurrent
+hook processes cannot both decide one rule is new. By default, state lives in the versioned
+`agent-hook-kit.codex-claude-rules` family below
+`$TMPDIR/agent-hook-kit/session-state/`; `--state-dir` overrides the common
+state root. Session identifiers are hashed rather than used as path components.
 
 Build and inspect the CLI:
 
@@ -72,6 +74,6 @@ substitution, or a script can hide the eventual path. This example therefore
 implements the observable subset and does not claim that every Codex file
 action triggers a rule.
 
-The exercise also exposes the absence of a hookkit session-state abstraction.
-The binary owns its SHA-256 marker layout because `ArtifactManager` can read or
-replace an artifact, but cannot atomically claim a per-session key.
+The example uses `SetJournal::insert_once`, so it is also a concrete example of
+building a monotonic entity from journal events and caching/compacting the
+aggregate without sharing files with unrelated hook families.
