@@ -1,6 +1,6 @@
 [package]
 name = "hookkit-tool-runner"
-description = "Pkl-driven post-tool-use runner for the agent-hook-kit"
+description = "Pkl-driven immediate and session-batched tool runners for agent-hook-kit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,16 +11,26 @@ rust-version.workspace = true
 name = "post-tool-use-agent-hook"
 path = "src/bin/post-tool-use-agent-hook.rs"
 
+[[bin]]
+name = "turn-completion-agent-hook"
+path = "src/bin/turn-completion-agent-hook.rs"
+
+[[bin]]
+name = "session-start-state-agent-hook"
+path = "src/bin/session-start-state-agent-hook.rs"
+
 [dependencies]
 camino = { workspace = true }
 globset = { workspace = true }
 hookkit-common = { workspace = true }
 hookkit-core = { workspace = true }
+hookkit-antigravity = { workspace = true }
 hookkit-claude = { workspace = true }
 hookkit-codex = { workspace = true }
 hookkit-gemini = { workspace = true }
 hookkit-pkl-config = { workspace = true }
 hookkit-runtime = { workspace = true }
+hookkit-session-state = { workspace = true }
 minijinja = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

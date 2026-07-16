@@ -343,11 +343,21 @@ impl EventSpec for Stop {
 }
 
 fn invocation_context(input: &PreInvocationInput) -> NativeContext {
+    let session_boundary = (input.invocation_num == 0).then(|| {
+        hookkit_core::SessionBoundaryContext::observed(
+            hookkit_core::SessionBoundaryKind::InvocationStart,
+        )
+        .with_occurrence_key(format!(
+            "{}\0{}",
+            input.conversation_id, input.invocation_num
+        ))
+    });
     NativeContext {
         workspace_roots: input.workspace_paths.clone(),
         conversation_id: hookkit_core::ConversationId::new(input.conversation_id.clone()).ok(),
         transcript_path: Some(input.transcript_path.clone()),
         artifact_directory: Some(input.artifact_directory_path.clone()),
+        session_boundary,
         ..NativeContext::default()
     }
 }
@@ -489,6 +499,13 @@ mod tests {
         .unwrap();
         let input = PreInvocation::parse(&raw).unwrap();
         assert_eq!(input.extra["future"], true);
+        assert_eq!(
+            PreInvocation::context(&input)
+                .session_boundary
+                .unwrap()
+                .kind,
+            hookkit_core::SessionBoundaryKind::InvocationStart
+        );
     }
 
     #[test]

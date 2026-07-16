@@ -2,7 +2,7 @@
 
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSpec, HarnessId, NativeContext, ProcessEmission,
-    RawInvocation, SessionId,
+    RawInvocation, SessionBoundaryContext, SessionBoundaryKind, SessionId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -34,10 +34,22 @@ impl CatalogInput {
     }
 
     pub(crate) fn context(&self) -> NativeContext {
+        let session_boundary = (self.hook_event_name == "SessionStart").then(|| {
+            let kind = match self.field("source").and_then(serde_json::Value::as_str) {
+                Some("resume") => SessionBoundaryKind::Resume,
+                Some("clear") => SessionBoundaryKind::Clear,
+                Some("compact") => SessionBoundaryKind::Compact,
+                _ => SessionBoundaryKind::Startup,
+            };
+            SessionBoundaryContext::observed(kind)
+                .with_native_timestamp(&self.timestamp)
+                .with_occurrence_key(format!("{}\0{}", self.timestamp, self.session_id))
+        });
         NativeContext {
             workspace_roots: vec![self.cwd.clone()],
             session_id: SessionId::new(&self.session_id).ok(),
             transcript_path: Some(self.transcript_path.clone()),
+            session_boundary,
             ..NativeContext::default()
         }
     }
@@ -534,6 +546,22 @@ mod tests {
         let input = BeforeAgent::parse(&raw).unwrap();
         assert_eq!(input.field("prompt"), Some(&serde_json::json!("review")));
         assert_eq!(input.field("future"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn session_start_context_retains_native_timestamp() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"SessionStart","timestamp":"2026-07-12T00:00:00Z","source":"startup"}"#.to_vec(),
+        )
+        .unwrap();
+        let context = SessionStart::context(&SessionStart::parse(&raw).unwrap());
+        let boundary = context.session_boundary.unwrap();
+        assert_eq!(boundary.kind, SessionBoundaryKind::Startup);
+        assert_eq!(
+            boundary.native_timestamp.as_deref(),
+            Some("2026-07-12T00:00:00Z")
+        );
+        assert!(boundary.occurrence_key.is_some());
     }
 
     #[test]
