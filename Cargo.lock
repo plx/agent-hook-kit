@@ -256,6 +256,7 @@ dependencies = [
  "hookkit-core",
  "hookkit-runtime",
  "hookkit-session-state",
+ "hookkit-shell",
  "serde",
  "serde_json",
  "serde_yaml_ng",

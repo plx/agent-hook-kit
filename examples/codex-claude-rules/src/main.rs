@@ -1,14 +1,19 @@
 use clap::Parser;
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use hookkit_codex::protocol::{PreToolUse, PreToolUseOutput};
-use hookkit_session_state::{
-    EntityId, EntityMode, FamilyId, InsertResult, SessionState, StateRoot,
+use hookkit_codex::protocol::{PreToolUse, PreToolUseInput, PreToolUseOutput};
+use hookkit_session_state::{ClaimResult, FamilyId, SessionState, StateRoot};
+use hookkit_shell::{
+    BashAnalyzer, FileAccessAnalyzer, FileInferenceContext, FileTarget, ShellToolCallExt,
+    ShellToolCallMatch, UnresolvedFileAccessReason,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
+
+const STATE_FAMILY: &str = "agent-hook-kit.codex-claude-rules";
+const STATE_FAMILY_VERSION: u32 = 2;
 
 #[derive(Debug, Parser)]
 #[command(about = "Inject path-scoped Claude Code rules into Codex on first match")]
@@ -56,7 +61,7 @@ impl PathPatterns {
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
-    hookkit_runtime::typed::run_typed::<PreToolUse, _>(move |input, _environment, runtime| {
+    hookkit_runtime::typed::run_event::<PreToolUse, _>(move |input, _environment, runtime| {
         let project_root = absolute_path(
             cli.project_root
                 .as_deref()
@@ -72,18 +77,15 @@ fn main() -> std::process::ExitCode {
             .map(StateRoot::new)
             .unwrap_or_default();
 
-        let paths = referenced_paths(&input.tool_name, &input.tool_input, &project_root);
+        let paths = referenced_paths(&input);
         if paths.is_empty() {
             return Ok(PreToolUseOutput::no_op());
         }
 
         let rules = discover_rules(claude_home.as_deref(), &project_root)?;
         let loaded_rules = SessionState::ensure(runtime, state_root)
-            .and_then(|state| state.family(FamilyId::new("agent-hook-kit.codex-claude-rules", 1)?))
-            .and_then(|family| family.session_scope())
-            .and_then(|scope| {
-                scope.set::<String>(EntityId::new("loaded-rules", 1)?, EntityMode::Monotonic)
-            })
+            .and_then(|state| state.family(FamilyId::new(STATE_FAMILY, STATE_FAMILY_VERSION)?))
+            .and_then(|family| family.claims("loaded-rules"))
             .map_err(state_error)?;
 
         let mut additional_context = Vec::new();
@@ -95,11 +97,7 @@ fn main() -> std::process::ExitCode {
                 continue;
             }
             let key = slash_path(&rule.source);
-            if loaded_rules
-                .insert_once(&key, key.clone())
-                .map_err(state_error)?
-                == InsertResult::Inserted
-            {
+            if loaded_rules.try_claim(&key).map_err(state_error)? == ClaimResult::Claimed {
                 additional_context.push(format!(
                     "# Claude Code rule: {}\n\n{}",
                     rule.source.display(),
@@ -228,40 +226,38 @@ fn rule_matches(rule: &Rule, path: &Path, project_root: &Path) -> bool {
         .is_some_and(|relative| rule.patterns.is_match(slash_path(relative)))
 }
 
-fn referenced_paths(tool_name: &str, input: &serde_json::Value, cwd: &Path) -> Vec<PathBuf> {
+fn referenced_paths(input: &PreToolUseInput) -> Vec<PathBuf> {
     let mut raw = Vec::new();
-    collect_path_fields(input, None, &mut raw);
+    collect_path_fields(&input.tool_input, &mut raw);
 
-    if let Some(patch) = tool_name
+    if let Some(patch) = input
+        .tool_name
         .eq_ignore_ascii_case("apply_patch")
-        .then(|| find_string(input, &["patch", "input"]))
+        .then(|| find_string(&input.tool_input, &["patch", "input"]))
         .flatten()
     {
         collect_patch_paths(patch, &mut raw);
     }
-    if let Some(command) = is_shell_tool(tool_name)
-        .then(|| find_string(input, &["command", "cmd"]))
-        .flatten()
-    {
-        collect_shell_path_tokens(command, &mut raw);
-    }
 
     let mut seen = BTreeSet::new();
-    raw.into_iter()
+    let structured = raw
+        .into_iter()
         .filter(|path| !path.trim().is_empty())
         .map(|path| {
             let path = PathBuf::from(path);
             normalize_path(if path.is_absolute() {
                 path
             } else {
-                cwd.join(path)
+                input.cwd.as_std_path().join(path)
             })
-        })
+        });
+    structured
+        .chain(shell_referenced_paths(input))
         .filter(|path| seen.insert(slash_path(path)))
         .collect()
 }
 
-fn collect_path_fields(value: &serde_json::Value, parent_key: Option<&str>, out: &mut Vec<String>) {
+fn collect_path_fields(value: &serde_json::Value, out: &mut Vec<String>) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, value) in map {
@@ -276,17 +272,15 @@ fn collect_path_fields(value: &serde_json::Value, parent_key: Option<&str>, out:
                         ),
                         _ => {}
                     }
+                } else {
+                    collect_path_fields(value, out);
                 }
-                collect_path_fields(value, Some(key), out);
             }
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                collect_path_fields(value, parent_key, out);
+                collect_path_fields(value, out);
             }
-        }
-        serde_json::Value::String(path) if parent_key.is_some_and(is_path_key) => {
-            out.push(path.clone());
         }
         _ => {}
     }
@@ -328,77 +322,73 @@ fn collect_patch_paths(patch: &str, out: &mut Vec<String>) {
     }
 }
 
-fn collect_shell_path_tokens(command: &str, out: &mut Vec<String>) {
-    for token in shell_tokens(command) {
-        let token = token
-            .trim_matches(|character: char| "'\"`;|&(){}[]<>".contains(character))
-            .rsplit_once('=')
-            .map_or(token.as_str(), |(_, value)| value)
-            .trim_matches(|character: char| "'\"`;|&(){}[]<>".contains(character));
-        if looks_like_path(token) {
-            out.push(token.to_string());
+fn shell_referenced_paths(input: &PreToolUseInput) -> Vec<PathBuf> {
+    let ShellToolCallMatch::Matched(call) = input.shell_tool_call() else {
+        return Vec::new();
+    };
+    let analysis = BashAnalyzer::default().analyze(call.command);
+    let report =
+        FileAccessAnalyzer::default().infer(&analysis, FileInferenceContext::new(call.cwd));
+    let mut paths = report
+        .candidates
+        .iter()
+        .filter_map(|candidate| match &candidate.target {
+            FileTarget::Path { expression, .. } => expression
+                .resolved
+                .as_ref()
+                .map(|path| path.as_std_path().to_path_buf()),
+            FileTarget::Workspace { root: Some(root) } => Some(root.as_std_path().to_path_buf()),
+            FileTarget::Workspace { root: None } => {
+                call.cwd.map(|path| path.as_std_path().to_path_buf())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let Some(parsed) = analysis.analysis() else {
+        return paths;
+    };
+    let fallback_commands = report
+        .unresolved
+        .iter()
+        .filter(|gap| needs_literal_operand_fallback(&gap.reason))
+        .filter_map(|gap| gap.command_index)
+        .collect::<BTreeSet<_>>();
+    let cwd = call.cwd.unwrap_or(input.cwd.as_path());
+    for command_index in fallback_commands {
+        // Preserve useful coverage for commands outside HookKit's bounded
+        // semantics table without returning to a hand-written shell lexer.
+        let Some(argv) = parsed
+            .commands
+            .get(command_index)
+            .and_then(|command| command.literal_argv())
+        else {
+            continue;
+        };
+        for argument in argv.iter().skip(1) {
+            let candidate = argument
+                .rsplit_once('=')
+                .map_or(argument.as_str(), |(_, value)| value);
+            if looks_like_path(candidate) {
+                let path = PathBuf::from(candidate);
+                paths.push(normalize_path(if path.is_absolute() {
+                    path
+                } else {
+                    cwd.as_std_path().join(path)
+                }));
+            }
         }
     }
+    paths
 }
 
-fn shell_tokens(command: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    let mut characters = command.chars().peekable();
-
-    while let Some(character) = characters.next() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-            continue;
-        }
-
-        if let Some(delimiter) = quote {
-            match character {
-                character if character == delimiter => quote = None,
-                '\\' if delimiter != '\'' => escaped = true,
-                _ => current.push(character),
-            }
-            continue;
-        }
-
-        match character {
-            '\\' => escaped = true,
-            '\'' | '"' | '`' => quote = Some(character),
-            '\n' | '\r' => {
-                push_shell_word(&mut tokens, &mut current);
-                tokens.push(";".to_string());
-            }
-            character if character.is_whitespace() => {
-                push_shell_word(&mut tokens, &mut current);
-            }
-            ';' | '|' | '&' | '<' | '>' => {
-                push_shell_word(&mut tokens, &mut current);
-                let mut operator = character.to_string();
-                if matches!(character, '|' | '&' | '<' | '>')
-                    && characters.peek() == Some(&character)
-                {
-                    operator.push(characters.next().expect("peeked character must exist"));
-                }
-                tokens.push(operator);
-            }
-            _ => current.push(character),
-        }
-    }
-
-    if escaped {
-        current.push('\\');
-    }
-    push_shell_word(&mut tokens, &mut current);
-    tokens
-}
-
-fn push_shell_word(tokens: &mut Vec<String>, current: &mut String) {
-    if !current.is_empty() {
-        tokens.push(std::mem::take(current));
-    }
+fn needs_literal_operand_fallback(reason: &UnresolvedFileAccessReason) -> bool {
+    matches!(
+        reason,
+        UnresolvedFileAccessReason::UnknownCommandSemantics { .. }
+            | UnresolvedFileAccessReason::AmbiguousArguments { .. }
+            | UnresolvedFileAccessReason::IndirectEvaluation { .. }
+    )
 }
 
 fn looks_like_path(value: &str) -> bool {
@@ -411,13 +401,6 @@ fn find_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a st
     let map = value.as_object()?;
     keys.iter()
         .find_map(|key| map.get(*key).and_then(serde_json::Value::as_str))
-}
-
-fn is_shell_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "Bash" | "run_shell_command" | "shell" | "exec_command"
-    )
 }
 
 fn normalize_path(path: PathBuf) -> PathBuf {
@@ -482,6 +465,22 @@ mod tests {
         ))
     }
 
+    fn pre_tool_input(tool_name: &str, tool_input: serde_json::Value) -> PreToolUseInput {
+        serde_json::from_value(serde_json::json!({
+            "session_id": "session-1",
+            "transcript_path": null,
+            "cwd": "/repo",
+            "hook_event_name": "PreToolUse",
+            "model": "gpt-test",
+            "turn_id": "turn-1",
+            "permission_mode": "default",
+            "tool_name": tool_name,
+            "tool_use_id": "call-1",
+            "tool_input": tool_input
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn parses_list_and_single_path_frontmatter() {
         let list = parse_rule(
@@ -529,12 +528,15 @@ mod tests {
 
     #[test]
     fn extracts_structured_patch_and_shell_paths() {
-        let input = serde_json::json!({
-            "patch": "*** Update File: src/lib.rs\n*** Add File: tests/new.rs\n",
-            "nested": {"file_path": "README.md"},
-            "command": "sed -i '' src/main.rs"
-        });
-        let paths = referenced_paths("apply_patch", &input, Path::new("/repo"));
+        let input = pre_tool_input(
+            "apply_patch",
+            serde_json::json!({
+                "patch": "*** Update File: src/lib.rs\n*** Add File: tests/new.rs\n",
+                "nested": {"file_path": "README.md"},
+                "command": "sed -i '' src/main.rs"
+            }),
+        );
+        let paths = referenced_paths(&input);
         let paths = paths
             .iter()
             .map(|path| slash_path(path))
@@ -543,42 +545,57 @@ mod tests {
         assert!(paths.contains("/repo/tests/new.rs"));
         assert!(paths.contains("/repo/README.md"));
 
-        let paths = referenced_paths(
+        let input = pre_tool_input(
             "Bash",
-            &serde_json::json!({"command": "cat src/main.rs;cat tests/unit.rs"}),
-            Path::new("/repo"),
+            serde_json::json!({
+                "command": "cat 'src/file with spaces.rs'; sed -n '1,20p' tests/unit.rs > build/out.txt"
+            }),
         );
+        let paths = referenced_paths(&input)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
         assert_eq!(
             paths,
-            vec![
-                PathBuf::from("/repo/src/main.rs"),
-                PathBuf::from("/repo/tests/unit.rs")
-            ]
+            BTreeSet::from([
+                PathBuf::from("/repo/build/out.txt"),
+                PathBuf::from("/repo/src/file with spaces.rs"),
+                PathBuf::from("/repo/tests/unit.rs"),
+            ])
         );
     }
 
     #[test]
-    fn journal_set_inserts_each_rule_only_once_per_session() {
+    fn shell_extraction_is_exact_and_does_not_treat_search_queries_as_paths() {
+        let input = pre_tool_input(
+            "Bash",
+            serde_json::json!({"command": "rg 'src/not-a-target.rs' src"}),
+        );
+        let paths = referenced_paths(&input);
+        assert_eq!(paths, vec![PathBuf::from("/repo/src")]);
+
+        let alias = pre_tool_input(
+            "exec_command",
+            serde_json::json!({"command": "cat src/main.rs"}),
+        );
+        assert!(referenced_paths(&alias).is_empty());
+    }
+
+    #[test]
+    fn claims_each_rule_only_once_per_session() {
         let directory = test_dir("rules-claim");
         let loaded_rules = SessionState::open(
             hookkit_core::HarnessId::CODEX,
             hookkit_session_state::SessionIdentity::Session("session-1".into()),
             StateRoot::new(&directory),
         )
-        .and_then(|state| state.family(FamilyId::new("agent-hook-kit.codex-claude-rules", 1)?))
-        .and_then(|family| family.session_scope())
-        .and_then(|scope| {
-            scope.set::<String>(EntityId::new("loaded-rules", 1)?, EntityMode::Monotonic)
-        })
+        .and_then(|state| state.family(FamilyId::new(STATE_FAMILY, STATE_FAMILY_VERSION)?))
+        .and_then(|family| family.claims("loaded-rules"))
         .unwrap();
         let key = slash_path(Path::new("/repo/.claude/rules/rust.md"));
+        assert_eq!(loaded_rules.try_claim(&key).unwrap(), ClaimResult::Claimed);
         assert_eq!(
-            loaded_rules.insert_once(&key, key.clone()).unwrap(),
-            InsertResult::Inserted
-        );
-        assert_eq!(
-            loaded_rules.insert_once(&key, key.clone()).unwrap(),
-            InsertResult::AlreadyPresent
+            loaded_rules.try_claim(&key).unwrap(),
+            ClaimResult::AlreadyClaimed
         );
         std::fs::remove_dir_all(directory).unwrap();
     }

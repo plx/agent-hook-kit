@@ -11,13 +11,19 @@ User rules are considered before project rules. Only files with a YAML
 frontmatter `paths` string or list are handled; Claude Code loads unscoped rules
 at session start, which is outside this example's purpose.
 
-For every path visible in the Codex tool input, the hook matches the path
-relative to the project root. A newly matched rule is inserted with the shared
-monotonic `SetJournal`, then its markdown body is returned through
-`PreToolUseOutput::with_context`. The set is reconstructed from its checkpoint,
-projection cache, and NDJSON generations; its consumer lock means concurrent
-hook processes cannot both decide one rule is new. By default, state lives in the versioned
-`agent-hook-kit.codex-claude-rules` family below
+For structured and patch tools, the hook resolves visible path fields and patch
+headers against the native working directory. For `Bash`, HookKit's exact Codex
+adapter extracts `/command`, its bounded Bash parser recovers commands and
+redirections, and its file-access analyzer supplies semantically classified
+path candidates. Commands outside the analyzer's built-in table fall back to
+path-like operands from HookKit's recovered literal argv; the example no longer
+maintains its own shell lexer.
+
+Each candidate is matched relative to the project root. A newly matched rule is
+claimed through the shared session-scoped `ClaimSet`, then its markdown body is
+returned through `PreToolUseOutput::with_context`. Atomic claims mean concurrent
+hook processes cannot both decide one rule is new. By default, state lives in
+the versioned `agent-hook-kit.codex-claude-rules` family below
 `$TMPDIR/agent-hook-kit/session-state/`; `--state-dir` overrides the common
 state root. Session identifiers are hashed rather than used as path components.
 
@@ -68,12 +74,26 @@ same state directory and session emits the native empty no-op.
 An exact clone of Claude Code's behavior is not possible with the current Codex
 hook surface. Codex `PreToolUse` currently observes Bash, `apply_patch`, and MCP
 tool calls rather than every internal file open. Structured `path`/`file_path`
-arguments and patch headers are reliable enough to match; shell commands are
-only lexically inspected, so indirection through variables, command
-substitution, or a script can hide the eventual path. This example therefore
-implements the observable subset and does not claim that every Codex file
-action triggers a rule.
+arguments and patch headers are reliable enough to match. Shell analysis is
+bounded and static: variables, command substitutions, sourced/generated code,
+executables' internal behavior, and runtime filesystem effects can still hide
+the eventual path. Unsupported commands use a deliberately broad fallback over
+literal operands, which can also over-report path-looking arguments.
 
-The example uses `SetJournal::insert_once`, so it is also a concrete example of
-building a monotonic entity from journal events and caching/compacting the
-aggregate without sharing files with unrelated hook families.
+The file-access analyzer retains exact/descendant/glob/workspace target scope,
+but this example can only reuse its resolved path and does not expand scoped
+targets into the files a command will eventually touch. A broad directory read
+can therefore miss a descendant-only rule until Codex exposes a more specific
+path. The hook implements the observable subset and does not claim that every
+Codex file action triggers a rule.
+
+`ClaimSet` fits the immediate first-writer-wins decision here better than an
+NDJSON entity journal: this hook does not consume event history or need a
+materialized loaded-rule projection.
+
+## Refactoring notes
+
+- [`WHAT_CHANGED.md`](WHAT_CHANGED.md) records the completed refactor and its
+  behavioral impact.
+- [`FUTURE_REFINEMENTS.md`](FUTURE_REFINEMENTS.md) captures the HookKit API
+  opportunities exposed by the example.

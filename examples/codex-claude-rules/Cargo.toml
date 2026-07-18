@@ -18,6 +18,7 @@ hookkit-codex = { workspace = true }
 hookkit-core = { workspace = true }
 hookkit-runtime = { workspace = true }
 hookkit-session-state = { workspace = true }
+hookkit-shell = { workspace = true, features = ["codex"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
