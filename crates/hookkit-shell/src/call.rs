@@ -354,6 +354,7 @@ fn unescape_pointer_token(token: &str) -> Option<Cow<'_, str>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn exact_profile_distinguishes_non_shell_and_malformed_calls() {
@@ -409,5 +410,51 @@ mod tests {
             ShellToolProfile::new("shell", "/bad~2token"),
             Err(ShellToolProfileError::InvalidJsonPointer(_))
         ));
+    }
+
+    proptest! {
+        /// Property: profile extraction follows RFC 6901 rather than treating
+        /// `/` and `~` inside object keys as path syntax. Value-backed and
+        /// object-backed extraction must agree on the borrowed command.
+        #[test]
+        fn profiles_resolve_escaped_top_level_keys(
+            key in "[a-z]{1,6}[/~][a-z]{0,6}",
+            command in any::<String>(),
+        ) {
+            let pointer = format!("/{}", key.replace('~', "~0").replace('/', "~1"));
+            let profile = ShellToolProfile::new("shell", pointer).unwrap();
+            let input = serde_json::json!({key: command.clone()});
+            let event = EventId::builtin(HarnessId::builtin("property"), "BeforeTool");
+
+            let ShellToolCallMatch::Matched(from_value) = profile.extract_from_value(
+                event.clone(), ToolPhase::Pre, "shell", &input, None, None,
+            ) else {
+                return Err(TestCaseError::fail("value-backed profile did not match"));
+            };
+            let ShellToolCallMatch::Matched(from_object) = profile.extract_from_object(
+                event, ToolPhase::Pre, "shell", input.as_object().unwrap(), None, None,
+            ) else {
+                return Err(TestCaseError::fail("object-backed profile did not match"));
+            };
+
+            prop_assert_eq!(from_value.command, command.as_str());
+            prop_assert_eq!(from_object.command, command.as_str());
+        }
+
+        /// Property: changing only the native tool name changes a valid shell
+        /// payload from matched to NotShell, never to malformed.
+        #[test]
+        fn tool_name_matching_is_exact(command in any::<String>(), other in any::<String>()) {
+            let profile = ShellToolProfile::new("shell", "/command").unwrap();
+            let input = serde_json::json!({"command": command});
+            let event = EventId::builtin(HarnessId::builtin("property"), "BeforeTool");
+            let result = profile.extract_from_value(event, ToolPhase::Pre, &other, &input, None, None);
+
+            if other == "shell" {
+                prop_assert!(matches!(result, ShellToolCallMatch::Matched(_)));
+            } else {
+                prop_assert!(matches!(result, ShellToolCallMatch::NotShell));
+            }
+        }
     }
 }

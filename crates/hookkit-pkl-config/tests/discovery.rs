@@ -268,6 +268,9 @@ fn explicit_config_anchors_project_root_on_cwd() {
 amends "Config.pkl"
 import "Builtins.pkl"
 
+merge {
+  resetAll = true
+}
 tools {
   ["ruff"] = Builtins.ruff
 }
@@ -280,6 +283,10 @@ run = new Listing<String> { "ruff" }
     assert_eq!(
         loaded.project_root, cwd,
         "explicit --config PATH should anchor project_root on cwd, not on the override file's parents"
+    );
+    assert!(
+        !loaded.config.merge.reset_all,
+        "one-shot merge directives must be consumed even for an explicit single-file config"
     );
 
     std::fs::remove_dir_all(&cwd).ok();

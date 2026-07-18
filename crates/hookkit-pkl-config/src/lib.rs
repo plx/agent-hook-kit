@@ -53,7 +53,7 @@ pub fn discover_and_load(
     override_path: Option<&Path>,
 ) -> Result<Loaded, PklConfigError> {
     if let Some(path) = override_path {
-        let config = evaluate_pkl_file_patch(path)?.into_config();
+        let config = merge::merge_patch_chain(std::iter::once(evaluate_pkl_file_patch(path)?));
         // `--config PATH` accepts arbitrary locations (e.g. `/tmp/custom.pkl`),
         // so we cannot infer a project root from the file's parents; anchor on
         // cwd as documented in `discovery::project_root_for`.

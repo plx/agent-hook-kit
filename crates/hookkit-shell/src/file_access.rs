@@ -1227,6 +1227,7 @@ fn normalize_utf8(path: &Utf8Path) -> Utf8PathBuf {
 mod tests {
     use super::*;
     use crate::bash::{BashAnalyzer, BashAnalyzerLimits};
+    use proptest::prelude::*;
 
     fn infer(source: &str) -> FileAccessReport {
         let outcome = BashAnalyzer::default().analyze(source);
@@ -1504,5 +1505,48 @@ mod tests {
         let value = serde_json::to_value(infer("cat input > output")).unwrap();
         assert!(value.get("candidates").is_some());
         assert!(value.get("unresolved").is_some());
+    }
+
+    proptest! {
+        /// Property: lexical path normalization is idempotent and removes all
+        /// current-directory components. Parent traversal may remain only for
+        /// relative paths that genuinely attempt to escape their starting point.
+        #[test]
+        fn path_normalization_is_idempotent(
+            absolute in any::<bool>(),
+            segments in prop::collection::vec(prop_oneof![Just(".".to_owned()), Just("..".to_owned()), "[a-z]{1,8}"], 0..30),
+        ) {
+            let mut source = if absolute { "/".to_owned() } else { String::new() };
+            source.push_str(&segments.join("/"));
+            let once = normalize_utf8(Utf8Path::new(&source));
+            let twice = normalize_utf8(&once);
+
+            prop_assert_eq!(&once, &twice);
+            prop_assert!(!once.as_std_path().components().any(|component| matches!(component, std::path::Component::CurDir)));
+            if absolute {
+                prop_assert!(once.is_absolute());
+                prop_assert!(!once.as_std_path().components().any(|component| matches!(component, std::path::Component::ParentDir)));
+            }
+        }
+
+        /// Property: output redirection to a literal relative path always
+        /// denotes a direct modification resolved beneath the supplied cwd.
+        #[test]
+        fn literal_output_redirection_is_a_direct_write(path in "[a-z][a-z0-9_-]{0,10}\\.txt") {
+            let source = format!("printf data > {path}");
+            let report = FileAccessAnalyzer::default().infer(
+                &BashAnalyzer::default().analyze(&source),
+                FileInferenceContext::new(Some(Utf8Path::new("/workspace"))),
+            );
+            let expected = Utf8Path::new("/workspace").join(&path);
+
+            let has_direct_write = report.candidates.iter().any(|candidate| {
+                candidate.access == FileAccessKind::Modify
+                    && candidate.certainty == FileAccessCertainty::Direct
+                    && matches!(&candidate.target, FileTarget::Path { expression, scope: FileTargetScope::Exact }
+                        if expression.resolved.as_ref() == Some(&expected))
+            });
+            prop_assert!(has_direct_write);
+        }
     }
 }

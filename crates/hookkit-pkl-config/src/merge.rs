@@ -82,8 +82,8 @@ pub fn merge_patch(acc: &mut RunnerConfig, incoming: RunnerConfigPatch) {
 
 /// Fold a chain of configs together. The first config is the base; subsequent
 /// configs are merged over it in order.
-pub fn merge_chain(mut chain: impl Iterator<Item = RunnerConfig>) -> RunnerConfig {
-    let mut acc = chain.next().unwrap_or_default();
+pub fn merge_chain(chain: impl Iterator<Item = RunnerConfig>) -> RunnerConfig {
+    let mut acc = RunnerConfig::default();
     for next in chain {
         merge(&mut acc, next);
     }
@@ -91,11 +91,8 @@ pub fn merge_chain(mut chain: impl Iterator<Item = RunnerConfig>) -> RunnerConfi
 }
 
 /// Fold a chain of field-preserving Pkl config patches together.
-pub fn merge_patch_chain(mut chain: impl Iterator<Item = RunnerConfigPatch>) -> RunnerConfig {
-    let mut acc = chain
-        .next()
-        .map(RunnerConfigPatch::into_config)
-        .unwrap_or_default();
+pub fn merge_patch_chain(chain: impl Iterator<Item = RunnerConfigPatch>) -> RunnerConfig {
+    let mut acc = RunnerConfig::default();
     for next in chain {
         merge_patch(&mut acc, next);
     }
@@ -105,7 +102,8 @@ pub fn merge_patch_chain(mut chain: impl Iterator<Item = RunnerConfigPatch>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{MergeResetKey, ToolSpec};
+    use crate::schema::{MergeResetKey, Settings, SettingsPatch, ToolSpec};
+    use proptest::prelude::*;
 
     fn tool(id: &str) -> ToolSpec {
         ToolSpec {
@@ -207,5 +205,95 @@ mod tests {
 
         assert!(!acc.tools.contains_key("ruff"));
         assert!(acc.tools.contains_key("prettier"));
+    }
+
+    fn tool_map(
+        ids: impl IntoIterator<Item = String>,
+    ) -> std::collections::BTreeMap<String, ToolSpec> {
+        ids.into_iter().map(|id| (id.clone(), tool(&id))).collect()
+    }
+
+    proptest! {
+        /// Property: ordinary merge is a right-biased tool-map union. A later
+        /// definition replaces the same identifier, unrelated earlier tools
+        /// remain, and an empty incoming run list means “inherit”.
+        #[test]
+        fn ordinary_merge_is_right_biased_and_inherits_empty_run(
+            base_ids in prop::collection::btree_set("[a-z]{1,8}", 0..20),
+            incoming_ids in prop::collection::btree_set("[a-z]{1,8}", 0..20),
+            base_run in prop::collection::vec("[a-z]{1,8}", 0..20),
+            incoming_run in prop::collection::vec("[a-z]{1,8}", 0..20),
+        ) {
+            let mut base = RunnerConfig {
+                tools: tool_map(base_ids.iter().cloned()),
+                run: base_run.clone(),
+                ..RunnerConfig::default()
+            };
+            let incoming = RunnerConfig {
+                tools: tool_map(incoming_ids.iter().cloned()),
+                run: incoming_run.clone(),
+                ..RunnerConfig::default()
+            };
+            merge(&mut base, incoming);
+
+            let expected_ids = base_ids.union(&incoming_ids).cloned().collect::<Vec<_>>();
+            prop_assert_eq!(base.tools.keys().cloned().collect::<Vec<_>>(), expected_ids);
+            prop_assert_eq!(base.run, if incoming_run.is_empty() { base_run } else { incoming_run });
+            prop_assert!(!base.merge.reset_all);
+            prop_assert!(base.merge.reset.is_empty());
+            prop_assert!(base.merge.reset_tools.is_empty());
+        }
+
+        /// Property: an omitted settings patch is an identity operation for
+        /// every independently configurable scalar and list field.
+        #[test]
+        fn empty_settings_patch_preserves_all_settings(
+            jobs in any::<u32>(),
+            fail_fast in any::<bool>(),
+            continue_after_issues in any::<bool>(),
+            exclude in prop::collection::vec(any::<String>(), 0..20),
+            diagnostics in proptest::option::of(any::<String>()),
+        ) {
+            let mut settings = Settings {
+                jobs,
+                fail_fast,
+                continue_after_issues,
+                exclude: exclude.clone(),
+                diagnostics_directory: diagnostics.clone(),
+                ..Settings::default()
+            };
+            SettingsPatch::default().apply_to(&mut settings);
+
+            prop_assert_eq!(settings.jobs, jobs);
+            prop_assert_eq!(settings.fail_fast, fail_fast);
+            prop_assert_eq!(settings.continue_after_issues, continue_after_issues);
+            prop_assert_eq!(settings.exclude, exclude);
+            prop_assert_eq!(settings.diagnostics_directory, diagnostics);
+        }
+
+        /// Property: folding helpers are exactly repeated single-step merges,
+        /// including for a one-element chain. Per-file reset directives are
+        /// consumed and never leak into the resolved configuration.
+        #[test]
+        fn merge_chain_consumes_every_steps_directives(
+            ids in prop::collection::vec("[a-z]{1,8}", 0..20),
+            reset_all in any::<bool>(),
+        ) {
+            let config = RunnerConfig {
+                merge: Merge { reset_all, reset: vec![MergeResetKey::Run], reset_tools: ids.clone() },
+                tools: tool_map(ids),
+                run: vec!["final".into()],
+                ..RunnerConfig::default()
+            };
+            let mut expected = RunnerConfig::default();
+            merge(&mut expected, config.clone());
+            let actual = merge_chain(std::iter::once(config));
+
+            prop_assert_eq!(actual.tools.keys().collect::<Vec<_>>(), expected.tools.keys().collect::<Vec<_>>());
+            prop_assert_eq!(actual.run, expected.run);
+            prop_assert!(!actual.merge.reset_all);
+            prop_assert!(actual.merge.reset.is_empty());
+            prop_assert!(actual.merge.reset_tools.is_empty());
+        }
     }
 }

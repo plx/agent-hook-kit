@@ -486,7 +486,7 @@ fn observe_structured_tool(
             collect_patch_paths(patch, &mut paths);
         }
     } else if is_structured_writer(&lower) {
-        collect_path_fields(tool_input, None, &mut paths);
+        collect_path_fields(tool_input, &mut paths);
     } else {
         return ActivityReport::default();
     }
@@ -528,34 +528,35 @@ fn is_structured_writer(lower_tool_name: &str) -> bool {
     .any(|verb| lower_tool_name.contains(verb))
 }
 
-fn collect_path_fields(value: &serde_json::Value, parent_key: Option<&str>, out: &mut Vec<String>) {
+fn collect_path_fields(value: &serde_json::Value, out: &mut Vec<String>) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, value) in map {
                 if is_path_key(key) {
-                    match value {
-                        serde_json::Value::String(path) => out.push(path.clone()),
-                        serde_json::Value::Array(paths) => out.extend(
-                            paths
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .map(str::to_owned),
-                        ),
-                        _ => {}
-                    }
+                    collect_path_values(value, out);
+                } else {
+                    collect_path_fields(value, out);
                 }
-                collect_path_fields(value, Some(key), out);
             }
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                collect_path_fields(value, parent_key, out);
+                collect_path_fields(value, out);
             }
         }
-        serde_json::Value::String(path) if parent_key.is_some_and(is_path_key) => {
-            out.push(path.clone());
-        }
         _ => {}
+    }
+}
+
+fn collect_path_values(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(path) => out.push(path.clone()),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_path_values(value, out);
+            }
+        }
+        value => collect_path_fields(value, out),
     }
 }
 
@@ -1142,6 +1143,7 @@ mod tests {
     use super::*;
     use hookkit_core::HarnessId;
     use hookkit_session_state::{EntityOutcome, SessionIdentity};
+    use proptest::prelude::*;
     use std::time::UNIX_EPOCH;
 
     fn temporary_directory(label: &str) -> PathBuf {
@@ -1338,5 +1340,87 @@ mod tests {
             .unwrap();
 
         std::fs::remove_dir_all(project).unwrap();
+    }
+
+    proptest! {
+        /// Property: recursive structured-tool discovery returns each spelling
+        /// exactly once. Path-key arrays and nested objects are traversed, but
+        /// values under unrelated keys are not guessed to be paths.
+        #[test]
+        fn structured_path_collection_is_recursive_without_duplicates(
+            direct in any::<String>(),
+            array in prop::collection::vec(any::<String>(), 0..20),
+            nested in any::<String>(),
+            unrelated in any::<String>(),
+        ) {
+            let value = serde_json::json!({
+                "path": direct.clone(),
+                "wrapper": [{"paths": array.clone()}, {"deeper": {"filePath": nested.clone()}}],
+                "message": unrelated,
+            });
+            let mut actual = Vec::new();
+            collect_path_fields(&value, &mut actual);
+            let expected = std::iter::once(direct)
+                .chain(array)
+                .chain(std::iter::once(nested))
+                .collect::<Vec<_>>();
+
+            prop_assert_eq!(actual, expected);
+        }
+
+        /// Property: patch path extraction is line-oriented and order
+        /// preserving across every supported patch header spelling.
+        #[test]
+        fn patch_headers_extract_trimmed_paths(
+            paths in prop::collection::vec("[a-z][a-z0-9_./-]{0,20}", 0..30),
+        ) {
+            const PREFIXES: [&str; 6] = [
+                "*** Add File: ", "*** Update File: ", "*** Delete File: ",
+                "*** Move to: ", "+++ b/", "--- a/",
+            ];
+            let patch = paths.iter().enumerate()
+                .map(|(index, path)| format!("{}  {path}  ", PREFIXES[index % PREFIXES.len()]))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut actual = Vec::new();
+            collect_patch_paths(&patch, &mut actual);
+
+            prop_assert_eq!(actual, paths);
+        }
+
+        /// Property: reconciliation cursors are a monotonic maximum. Event
+        /// order and duplicate timestamps cannot move the cursor backwards.
+        #[test]
+        fn reconciliation_cursor_is_the_maximum_observed_time(
+            seconds in prop::collection::vec(0u32..2_000_000_000, 0..100),
+        ) {
+            let timestamps = seconds.into_iter()
+                .map(|second| UtcTimestamp::from_system_time(UNIX_EPOCH + Duration::from_secs(second.into())))
+                .collect::<Vec<_>>();
+            let mut cursor = ReconciliationCursor::empty();
+            for timestamp in &timestamps {
+                cursor.apply(timestamp);
+            }
+
+            prop_assert_eq!(cursor.reconciled_through, timestamps.into_iter().max());
+        }
+
+        /// Property: lexical normalization is idempotent and absolute paths
+        /// never retain traversal above their filesystem root.
+        #[test]
+        fn normalized_activity_paths_are_stable(
+            segments in prop::collection::vec(prop_oneof![Just(".".to_owned()), Just("..".to_owned()), "[a-z]{1,8}"], 0..30),
+        ) {
+            let source = Utf8PathBuf::from(format!("/{}", segments.join("/")));
+            let once = normalize_utf8(source);
+            let twice = normalize_utf8(once.clone());
+
+            prop_assert_eq!(&once, &twice);
+            prop_assert!(once.is_absolute());
+            let contains_traversal = once.as_std_path().components().any(|component| {
+                matches!(component, Component::CurDir | Component::ParentDir)
+            });
+            prop_assert!(!contains_traversal);
+        }
     }
 }
