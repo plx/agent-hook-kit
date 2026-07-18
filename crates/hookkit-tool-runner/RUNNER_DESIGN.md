@@ -29,8 +29,10 @@ add a dedicated benchmark/measurement lane before publishing performance claims.
 ## Turn-completion batching
 
 turn-completion-agent-hook reuses the same Pkl catalog and execution engine,
-but obtains candidate files from the session-state `ModifiedFiles` entity maintained by
-session-modified-file-tracker. The aligned lifecycle is Claude/Codex Stop,
+but obtains candidate files from the `hookkit-file-activity` pending entity
+maintained by session-modified-file-tracker. Before taking the entity view, it
+reconciles workspace mtimes from the prior durable cursor, using current-session
+start metadata only as the first lower bound. The aligned lifecycle is Claude/Codex Stop,
 Gemini AfterAgent, or Antigravity Stop; Antigravity normally has no batch
 because its post-tool payload cannot feed the tracker.
 

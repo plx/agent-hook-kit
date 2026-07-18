@@ -14,11 +14,15 @@ use hookkit_common::{
     TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput, UserNotice,
 };
 use hookkit_core::{HarnessId, HookkitError, RuntimeContext};
+use hookkit_file_activity::{
+    FileActivityStore, PendingFileActivity, ReconciliationOptions, ResolveOptions, VcsFallback,
+    reconcile, resolve_files,
+};
 use hookkit_pkl_config::schema as pkl;
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
 use hookkit_session_state::{
-    EntityId, EntityMode, EntityOperationError, EntityOutcome, EntityView, FamilyId, ModifiedFiles,
-    SessionState, StateFamily, StateRoot,
+    EntityOperationError, EntityOutcome, EntityView, FamilyId, SessionState, StateFamily,
+    StateRoot, UtcTimestamp,
 };
 use minijinja::Environment;
 use serde::Serialize;
@@ -27,6 +31,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 const DEFAULT_CLEAN_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further.";
 const DEFAULT_ISSUES_AGENT: &str =
@@ -36,7 +41,6 @@ const DEFAULT_ISSUES_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files 
 const BINARY_NAME: &str = "post-tool-use-agent-hook";
 const TURN_COMPLETION_BINARY_NAME: &str = "turn-completion-agent-hook";
 const SESSION_START_BINARY_NAME: &str = "session-start-state-agent-hook";
-const MODIFIED_FILES_FAMILY: &str = "agent-hook-kit.modified-files";
 const BATCHED_TOOLS_FAMILY: &str = "agent-hook-kit.batched-tools";
 
 // ----------------------------------------------------------------------------
@@ -879,9 +883,7 @@ fn run_turn_completion_input(
         .ok_or_else(|| invalid_data("turn-completion input has no workspace root".into()))?;
     let state_root = state_dir.map(StateRoot::new).unwrap_or_default();
     let state = SessionState::ensure(ctx, state_root).map_err(state_error)?;
-    let source_family = state
-        .family(FamilyId::new(MODIFIED_FILES_FAMILY, 1).map_err(state_error)?)
-        .map_err(state_error)?;
+    let activity_store = FileActivityStore::from_state(state.clone()).map_err(activity_error)?;
     let runner_family = state
         .family(FamilyId::new(BATCHED_TOOLS_FAMILY, 1).map_err(state_error)?)
         .map_err(state_error)?;
@@ -892,15 +894,32 @@ fn run_turn_completion_input(
     let _runner_lock = runner_family
         .exclusive_lock("turn-completion")
         .map_err(state_error)?;
-    let modified_files = source_family
-        .session_scope()
-        .and_then(|scope| {
-            scope.entity::<ModifiedFiles>(EntityId::new("dirty-files", 1)?, EntityMode::Windowed)
-        })
-        .map_err(state_error)?;
-    modified_files
+    let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path);
+    let activity_settings = loaded
+        .as_ref()
+        .ok()
+        .and_then(|loaded| loaded.config.settings.file_activity.clone())
+        .unwrap_or_default();
+    let mut reconciliation =
+        ReconciliationOptions::new(ctx.workspace_roots().to_vec(), UtcTimestamp::now());
+    reconciliation.filesystem_mtime = activity_settings.filesystem_mtime;
+    reconciliation.vcs = match activity_settings.vcs {
+        pkl::FileActivityVcsFallback::Disabled => VcsFallback::Disabled,
+        pkl::FileActivityVcsFallback::GitDirty => VcsFallback::GitDirty,
+    };
+    reconciliation.timestamp_tolerance =
+        Duration::from_millis(activity_settings.timestamp_tolerance_millis);
+    reconciliation.max_entries = activity_settings.max_entries;
+    reconciliation.ignored_directory_names = activity_settings
+        .ignored_directory_names
+        .iter()
+        .cloned()
+        .collect();
+    reconcile(&activity_store, reconciliation).map_err(activity_error)?;
+    activity_store
+        .pending()
         .try_with_entity(|view| {
-            run_turn_completion_view(ctx, config_path, &runner_family, &cwd, view)
+            run_turn_completion_view(ctx, loaded, &activity_settings, &runner_family, view)
         })
         .map_err(|error| match error {
             EntityOperationError::State(error) => state_error(error),
@@ -910,10 +929,10 @@ fn run_turn_completion_input(
 
 fn run_turn_completion_view(
     ctx: &RuntimeContext<'_>,
-    config_path: Option<&Path>,
+    loaded: Result<hookkit_pkl_config::Loaded, hookkit_pkl_config::PklConfigError>,
+    activity_settings: &pkl::FileActivitySettings,
     runner_family: &StateFamily,
-    cwd: &Path,
-    view: &EntityView<'_, ModifiedFiles>,
+    view: &EntityView<'_, PendingFileActivity>,
 ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
     if view.events().is_empty() {
         return Ok(EntityOutcome::retain(lower_turn_completion(
@@ -922,14 +941,18 @@ fn run_turn_completion_view(
         )?));
     }
 
-    let mut candidates = view
-        .state()
-        .paths()
+    let mut resolve_options = ResolveOptions::new(ctx.workspace_roots().to_vec());
+    resolve_options.max_entries = activity_settings.max_entries;
+    resolve_options.ignored_directory_names = activity_settings
+        .ignored_directory_names
         .iter()
-        .map(|path| normalize_path(&absolute_from(path.as_std_path(), cwd)))
-        .filter(|path| path.is_file())
-        .collect::<BTreeSet<_>>()
+        .cloned()
+        .collect();
+    let resolved = resolve_files(view.state(), &resolve_options).map_err(activity_error)?;
+    let mut candidates = resolved
+        .files
         .into_iter()
+        .map(|path| normalize_path(path.as_std_path()))
         .collect::<Vec<_>>();
     candidates.sort();
     let source_entry_count = view.events().len();
@@ -944,7 +967,7 @@ fn run_turn_completion_view(
             .map_err(state_error)?,
     );
 
-    let loaded = match hookkit_pkl_config::discover_and_load(cwd, config_path) {
+    let loaded = match loaded {
         Ok(loaded) => loaded,
         Err(error) => {
             let run = run.take().expect("run bundle is available");
@@ -1221,6 +1244,10 @@ fn lower_turn_completion(
 }
 
 fn state_error(error: hookkit_session_state::StateError) -> HookkitError {
+    std::io::Error::other(error).into()
+}
+
+fn activity_error(error: hookkit_file_activity::FileActivityError) -> HookkitError {
     std::io::Error::other(error).into()
 }
 

@@ -30,6 +30,36 @@ class Settings {
 
   /// What to do when a configured tool executable is missing.
   missingToolPolicy: ("user-notice" | "hard-failure" | "harness-block")?
+
+  /// Optional stop-time file-activity fallback overrides. Omit to use the
+  /// runtime defaults represented by FileActivity.
+  fileActivity: FileActivity?
+}
+
+class FileActivity {
+  /// Infer candidates from project files whose mtimes fall in the unreconciled
+  /// interval. This is noisy but useful when tool inspection has gaps.
+  filesystemMtime: Boolean = true
+
+  /// `git-dirty` is deliberately broad: it can include changes that predate
+  /// the agent session. It is disabled unless explicitly selected.
+  vcs: "disabled" | "git-dirty" = "disabled"
+
+  /// Applied only to the first timestamp scan, whose session-start observation
+  /// may occur just after an early edit.
+  timestampToleranceMillis: UInt = 2000
+
+  /// Bound recursive scans and record a coverage gap when the limit is hit.
+  maxEntries: UInt = 100000
+
+  ignoredDirectoryNames: Listing<String> = new Listing<String> {
+    ".context"
+    ".git"
+    ".hg"
+    ".svn"
+    "node_modules"
+    "target"
+  }
 }
 
 class Merge {
