@@ -90,3 +90,10 @@ Codex file action triggers a rule.
 `ClaimSet` fits the immediate first-writer-wins decision here better than an
 NDJSON entity journal: this hook does not consume event history or need a
 materialized loaded-rule projection.
+
+## Refactoring notes
+
+- [`WHAT_CHANGED.md`](WHAT_CHANGED.md) records the completed refactor and its
+  behavioral impact.
+- [`FUTURE_REFINEMENTS.md`](FUTURE_REFINEMENTS.md) captures the HookKit API
+  opportunities exposed by the example.
