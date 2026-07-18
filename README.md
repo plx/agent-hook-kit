@@ -434,8 +434,10 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - writes verbose manual diagnostics to a temp artifact and gives concise agent guidance when supported.
 - `codex-claude-rules`:
   - discovers Claude Code rule files recursively in user-before-project order,
-  - evaluates `paths` frontmatter against file paths observable in Codex tool input,
-  - atomically inserts each matched rule into a monotonic journal-derived set before injecting its body as additional context.
+  - evaluates `paths` frontmatter against structured paths, patch headers, and
+    HookKit's parsed/inferred Bash file targets,
+  - atomically claims each matched rule in session state before injecting its
+    body as additional context.
 - `forbidden-file-guard`:
   - uses clap to select Codex, Gemini, or Antigravity native pre-tool handling,
   - merges additive YAML glob policy from home and workspace configuration,
