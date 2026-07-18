@@ -128,6 +128,7 @@ fn sanitize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn artifact_key_filename() {
@@ -176,5 +177,45 @@ mod tests {
     #[test]
     fn sanitize_special_chars() {
         assert_eq!(sanitize("hello/world:test"), "hello_world_test");
+    }
+
+    proptest! {
+        /// Property: sanitization is length-preserving in Unicode scalar values,
+        /// idempotent, and its output contains only filename-safe characters.
+        /// Thus applying it at more than one artifact layer cannot change a key.
+        #[test]
+        fn sanitization_is_safe_and_idempotent(value in any::<String>()) {
+            let sanitized = sanitize(&value);
+
+            prop_assert_eq!(sanitized.chars().count(), value.chars().count());
+            prop_assert!(sanitized
+                .chars()
+                .all(|character| character.is_alphanumeric() || character == '-' || character == '_'));
+            prop_assert_eq!(sanitize(&sanitized), sanitized);
+        }
+
+        /// Property: artifact key segments retain their order and no path
+        /// separator from external identifiers can escape into the filename.
+        #[test]
+        fn artifact_filenames_are_ordered_safe_segments(
+            session in any::<String>(),
+            turn in any::<String>(),
+            tool in any::<String>(),
+            label in any::<String>(),
+        ) {
+            let filename = ArtifactKey::new(session.clone(), label.clone())
+                .with_turn(turn.clone())
+                .with_tool_use(tool.clone())
+                .filename();
+            let expected = [session, turn, tool, label]
+                .iter()
+                .map(|part| sanitize(part))
+                .collect::<Vec<_>>()
+                .join("_");
+
+            prop_assert_eq!(&filename, &expected);
+            prop_assert!(!filename.contains('/'));
+            prop_assert!(!filename.contains('\\'));
+        }
     }
 }

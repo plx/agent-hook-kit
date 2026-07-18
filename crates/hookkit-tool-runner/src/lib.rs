@@ -2593,6 +2593,7 @@ fn invalid_data(message: String) -> HookkitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -2746,6 +2747,84 @@ mod tests {
         // no jobs means no workers.
         assert_eq!(resolve_worker_count(4, 0), 0);
         assert_eq!(resolve_worker_count(0, 0), 0);
+    }
+
+    proptest! {
+        /// Property: worker selection is total and bounded. A non-empty batch
+        /// always gets at least one worker, never more workers than jobs, and
+        /// explicit settings are honored up to that cap (`0` means serial auto).
+        #[test]
+        fn worker_count_is_bounded(jobs_setting in any::<u32>(), job_count in any::<usize>()) {
+            let actual = resolve_worker_count(jobs_setting, job_count);
+            let expected = if job_count == 0 {
+                0
+            } else {
+                usize::try_from(jobs_setting.max(1)).unwrap_or(usize::MAX).min(job_count)
+            };
+
+            prop_assert_eq!(actual, expected);
+            prop_assert!(actual <= job_count);
+            prop_assert_eq!(actual == 0, job_count == 0);
+        }
+
+        /// Property: overlapping exit-code policy lists have a documented
+        /// precedence (clean, then issues, then failure), and unlisted values
+        /// use exactly the configured fallback.
+        #[test]
+        fn exit_code_classification_has_stable_precedence(
+            clean in prop::collection::vec(any::<i32>(), 0..30),
+            issues in prop::collection::vec(any::<i32>(), 0..30),
+            failure in prop::collection::vec(any::<i32>(), 0..30),
+            code in any::<i32>(),
+            unexpected_issues in any::<bool>(),
+        ) {
+            let unexpected = if unexpected_issues {
+                UnexpectedExitPolicy::Issues
+            } else {
+                UnexpectedExitPolicy::Failure
+            };
+            let policy = ExitCodePolicy {
+                clean: clean.clone(),
+                issues: issues.clone(),
+                failure: failure.clone(),
+                unexpected,
+            };
+            let expected = if clean.contains(&code) {
+                PhaseStatus::Clean
+            } else if issues.contains(&code) {
+                PhaseStatus::Issues
+            } else if failure.contains(&code) {
+                PhaseStatus::Failure
+            } else if unexpected_issues {
+                PhaseStatus::Issues
+            } else {
+                PhaseStatus::Failure
+            };
+
+            prop_assert_eq!(classify_exit_code(&policy, code), expected);
+        }
+
+        /// Property: lexical normalization for not-yet-created output paths is
+        /// idempotent, absolute, and cannot retain traversal above root.
+        #[test]
+        fn non_existing_output_path_normalization_is_stable(
+            segments in prop::collection::vec(prop_oneof![Just(".".to_owned()), Just("..".to_owned()), "[a-z]{1,8}"], 0..30),
+        ) {
+            let path = PathBuf::from(format!(
+                "/hookkit-property-path-that-does-not-exist/{}/{}",
+                std::process::id(),
+                segments.join("/")
+            ));
+            let once = normalize_path(&path);
+            let twice = normalize_path(&once);
+
+            prop_assert_eq!(&once, &twice);
+            prop_assert!(once.is_absolute());
+            let contains_traversal = once.components().any(|component| {
+                matches!(component, Component::CurDir | Component::ParentDir)
+            });
+            prop_assert!(!contains_traversal);
+        }
     }
 
     fn job_with_file(root: &Path, name: &str) -> ToolJob {

@@ -23,3 +23,4 @@ walkdir = { workspace = true }
 
 [dev-dependencies]
 hookkit-codex = { workspace = true }
+proptest = { workspace = true }

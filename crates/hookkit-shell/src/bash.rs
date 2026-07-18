@@ -831,6 +831,7 @@ fn duration_millis(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn complete(source: &str) -> BashAnalysis {
         match BashAnalyzer::default().analyze(source) {
@@ -942,6 +943,64 @@ mod tests {
             Some(RedirectionOperator::Append)
         );
         assert_eq!(command.redirections[2].descriptor.as_deref(), Some("2"));
+    }
+
+    proptest! {
+        /// Property: whitespace-separated words from Bash's unambiguous safe
+        /// subset are recovered in order as literal argv. The command's source
+        /// span and raw text continue to point at the exact original source.
+        #[test]
+        fn safe_words_round_trip_as_literal_argv(
+            args in prop::collection::vec("[a-zA-Z0-9_./-]{1,20}", 0..20),
+        ) {
+            let expected = std::iter::once("hookkit_cmd".to_owned())
+                .chain(args)
+                .collect::<Vec<_>>();
+            let source = expected.join(" ");
+            let outcome = BashAnalyzer::default().analyze(&source);
+            let Some(analysis) = outcome.analysis() else {
+                return Err(TestCaseError::fail("safe command was unavailable"));
+            };
+
+            prop_assert!(outcome.is_complete());
+            prop_assert_eq!(analysis.commands.len(), 1);
+            prop_assert_eq!(analysis.commands[0].literal_argv(), Some(expected.as_slice()));
+            prop_assert_eq!(&analysis.commands[0].raw, &source);
+            let span = analysis.commands[0].span;
+            prop_assert_eq!(&source[span.start_byte..span.end_byte], source.as_str());
+        }
+
+        /// Property: the source-size limit is a hard pre-parse boundary. Inputs
+        /// above it are unavailable with exact actual/maximum byte counts.
+        #[test]
+        fn source_byte_limit_is_exact(extra in 1usize..512) {
+            let max = 64usize;
+            let source = "x".repeat(max + extra);
+            let analyzer = BashAnalyzer::new(BashAnalyzerLimits {
+                max_source_bytes: max,
+                ..BashAnalyzerLimits::default()
+            });
+
+            prop_assert_eq!(
+                analyzer.analyze(&source),
+                BashAnalysisOutcome::Unavailable(UnavailableReason::InputTooLarge {
+                    actual_bytes: max + extra,
+                    max_bytes: max,
+                })
+            );
+        }
+
+        /// Property: an unquoted parameter expansion is never reported as a
+        /// literal argv, even when surrounded by otherwise literal words.
+        #[test]
+        fn unquoted_parameters_always_mark_argv_dynamic(name in "[A-Z_][A-Z0-9_]{0,15}") {
+            let source = format!("hookkit_cmd ${name}");
+            let outcome = BashAnalyzer::default().analyze(&source);
+            let analysis = outcome.analysis().unwrap();
+
+            prop_assert!(analysis.commands[0].literal_argv().is_none());
+            prop_assert!(analysis.contains_dynamic_syntax());
+        }
     }
 
     #[test]

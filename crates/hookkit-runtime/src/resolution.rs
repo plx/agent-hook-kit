@@ -335,6 +335,7 @@ mod tests {
         ContractId, EventCategory, EventSpec, NativeContext, NoCommandEnvironment, ProcessEmission,
         SnapshotId,
     };
+    use proptest::prelude::*;
 
     macro_rules! test_event {
         ($type:ident, $harness:literal, $event:literal, $required:literal) => {
@@ -378,6 +379,41 @@ mod tests {
             IdentificationDescriptor::sound_shape::<Sound>(&[]),
             IdentificationDescriptor::weak_shape::<Weak>(&[]),
         ]
+    }
+
+    proptest! {
+        /// Property: unrelated payload fields cannot perturb a definitive
+        /// discriminator. Resolution depends on the declared JSON pointer and
+        /// still validates the selected native parser before succeeding.
+        #[test]
+        fn definitive_resolution_ignores_unrelated_fields(
+            extras in prop::collection::btree_map("x_[a-z]{1,8}", any::<i64>(), 0..20),
+            alpha in any::<i64>(),
+        ) {
+            let mut object = serde_json::Map::new();
+            object.insert("kind".into(), serde_json::Value::String("Alpha".into()));
+            object.insert("alpha".into(), serde_json::Value::Number(alpha.into()));
+            object.extend(extras.into_iter().map(|(key, value)| (key, value.into())));
+            let raw = RawInvocation::parse(serde_json::to_vec(&object).unwrap()).unwrap();
+
+            let resolved = resolve_event(&registry(), HarnessId::builtin("h"), &raw, None).unwrap();
+            prop_assert_eq!(resolved.event, Alpha::EVENT);
+            prop_assert_eq!(resolved.provenance, ResolutionProvenance::DefinitiveDiscriminator);
+        }
+
+        /// Property: RFC 6901 escaping is honored for discriminator pointers.
+        /// Harnesses may identify events beneath object keys containing `/` or
+        /// `~`, and those keys must not be confused with pointer syntax.
+        #[test]
+        fn discriminator_pointer_uses_json_pointer_escaping(
+            key in "[a-z]{1,6}[/~][a-z]{0,6}",
+            value in any::<String>(),
+        ) {
+            let json = serde_json::json!({key.clone(): value.clone()});
+            let pointer = format!("/{}", key.replace('~', "~0").replace('/', "~1"));
+
+            prop_assert_eq!(pointer_value(&json, &pointer), Some(value.as_str()));
+        }
     }
 
     #[test]

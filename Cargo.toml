@@ -51,6 +51,7 @@ sha2 = "0.11"
 time = { version = "=0.3.36", features = ["formatting", "parsing"] }
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25.0"
+proptest = "1.11.0"
 
 # workspace crates
 hookkit-core = { version = "0.1.0", path = "crates/hookkit-core" }

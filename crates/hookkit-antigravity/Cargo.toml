@@ -14,3 +14,6 @@ hookkit-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 camino = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
