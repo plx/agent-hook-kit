@@ -52,6 +52,7 @@ pub struct Settings {
     pub lowering_policy: LoweringPolicy,
     pub diagnostics_directory: Option<String>,
     pub missing_tool_policy: MissingToolPolicy,
+    pub file_activity: Option<FileActivitySettings>,
 }
 
 impl Default for Settings {
@@ -64,6 +65,7 @@ impl Default for Settings {
             lowering_policy: LoweringPolicy::default(),
             diagnostics_directory: Some(".agent-hook-kit/post-tool-use".into()),
             missing_tool_policy: MissingToolPolicy::default(),
+            file_activity: None,
         }
     }
 }
@@ -88,6 +90,7 @@ pub struct SettingsPatch {
     pub lowering_policy: Option<LoweringPolicy>,
     pub diagnostics_directory: Option<String>,
     pub missing_tool_policy: Option<MissingToolPolicy>,
+    pub file_activity: Option<FileActivitySettings>,
 }
 
 impl SettingsPatch {
@@ -113,7 +116,48 @@ impl SettingsPatch {
         if let Some(missing_tool_policy) = self.missing_tool_policy {
             settings.missing_tool_policy = missing_tool_policy;
         }
+        if let Some(file_activity) = self.file_activity {
+            settings.file_activity = Some(file_activity);
+        }
     }
+}
+
+/// Stop-time fallback behavior for the pending file-activity window.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FileActivitySettings {
+    pub filesystem_mtime: bool,
+    pub vcs: FileActivityVcsFallback,
+    pub timestamp_tolerance_millis: u64,
+    pub max_entries: usize,
+    pub ignored_directory_names: Vec<String>,
+}
+
+impl Default for FileActivitySettings {
+    fn default() -> Self {
+        Self {
+            filesystem_mtime: true,
+            vcs: FileActivityVcsFallback::Disabled,
+            timestamp_tolerance_millis: 2_000,
+            max_entries: 100_000,
+            ignored_directory_names: vec![
+                ".context".into(),
+                ".git".into(),
+                ".hg".into(),
+                ".svn".into(),
+                "node_modules".into(),
+                "target".into(),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileActivityVcsFallback {
+    #[default]
+    Disabled,
+    GitDirty,
 }
 
 /// How to handle optional common-output intents the harness cannot represent.

@@ -28,9 +28,10 @@ pub use eval::{
     evaluate_pkl_source, evaluate_pkl_source_patch, staged_builtins_dir,
 };
 pub use schema::{
-    ArgToken, ArgvElement, Diagnostics, ExitCodes, FileSelection, LoweringPolicy, Merge,
-    MergeResetKey, Messages, MissingToolPolicy, Phase, PhaseMode, RunnerConfig, RunnerConfigPatch,
-    Settings, SettingsPatch, ToolSpec, UnexpectedExitPolicy, WriteBehavior,
+    ArgToken, ArgvElement, Diagnostics, ExitCodes, FileActivitySettings, FileActivityVcsFallback,
+    FileSelection, LoweringPolicy, Merge, MergeResetKey, Messages, MissingToolPolicy, Phase,
+    PhaseMode, RunnerConfig, RunnerConfigPatch, Settings, SettingsPatch, ToolSpec,
+    UnexpectedExitPolicy, WriteBehavior,
 };
 
 /// Result of loading the config chain.

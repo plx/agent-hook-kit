@@ -2,7 +2,10 @@
 //! merged result.
 
 use hookkit_pkl_config::merge::merge_chain;
-use hookkit_pkl_config::{evaluate_pkl_source, schema::MissingToolPolicy};
+use hookkit_pkl_config::{
+    evaluate_pkl_source,
+    schema::{FileActivityVcsFallback, MissingToolPolicy},
+};
 
 fn pkl_available() -> bool {
     std::process::Command::new("pkl")
@@ -19,6 +22,34 @@ macro_rules! require_pkl {
             return;
         }
     };
+}
+
+#[test]
+fn file_activity_fallback_settings_round_trip() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+
+settings {
+  fileActivity = new FileActivity {
+    filesystemMtime = false
+    vcs = "git-dirty"
+    timestampToleranceMillis = 750
+    maxEntries = 1234
+    ignoredDirectoryNames = new Listing<String> { ".git"; "vendor" }
+  }
+}
+"#,
+    )
+    .expect("file activity settings");
+
+    let activity = config.settings.file_activity.expect("file activity");
+    assert!(!activity.filesystem_mtime);
+    assert_eq!(activity.vcs, FileActivityVcsFallback::GitDirty);
+    assert_eq!(activity.timestamp_tolerance_millis, 750);
+    assert_eq!(activity.max_entries, 1234);
+    assert_eq!(activity.ignored_directory_names, vec![".git", "vendor"]);
 }
 
 #[test]

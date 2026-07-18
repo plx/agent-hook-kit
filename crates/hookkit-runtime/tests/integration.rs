@@ -373,24 +373,17 @@ fn session_journal_len(state_dir: &Path, harness: &str, session: &str) -> usize 
         hookkit_session_state::SessionIdentity::Session(session.into()),
         hookkit_session_state::StateRoot::new(state_dir),
     )
-    .and_then(|state| {
-        state.family(
-            hookkit_session_state::FamilyId::new("agent-hook-kit.modified-files", 1).unwrap(),
-        )
-    })
-    .and_then(|family| family.session_scope())
-    .and_then(|scope| {
-        scope.entity::<hookkit_session_state::ModifiedFiles>(
-            hookkit_session_state::EntityId::new("dirty-files", 1)?,
-            hookkit_session_state::EntityMode::Windowed,
-        )
-    })
-    .and_then(|entity| {
-        entity.with_entity(|view| {
-            Ok(hookkit_session_state::EntityOutcome::retain(
-                view.events().len(),
-            ))
-        })
+    .map_err(hookkit_file_activity::FileActivityError::from)
+    .and_then(hookkit_file_activity::FileActivityStore::from_state)
+    .and_then(|store| {
+        store
+            .pending()
+            .with_entity(|view| {
+                Ok(hookkit_session_state::EntityOutcome::retain(
+                    view.events().len(),
+                ))
+            })
+            .map_err(Into::into)
     })
     .unwrap()
 }
@@ -424,7 +417,9 @@ fn ensure_built(binary: &str) {
     }
 
     let package = match binary {
-        "post-tool-use-agent-hook" | "turn-completion-agent-hook" => "hookkit-tool-runner",
+        "post-tool-use-agent-hook"
+        | "turn-completion-agent-hook"
+        | "session-start-state-agent-hook" => "hookkit-tool-runner",
         _ => binary,
     };
 
@@ -897,24 +892,19 @@ fn session_modified_file_tracker_records_all_supported_posttool_paths() {
             hookkit_session_state::StateRoot::new(&state_dir),
         )
         .unwrap();
-        let entity = state
-            .family(
-                hookkit_session_state::FamilyId::new("agent-hook-kit.modified-files", 1).unwrap(),
-            )
-            .and_then(|family| family.session_scope())
-            .and_then(|scope| {
-                scope.entity::<hookkit_session_state::ModifiedFiles>(
-                    hookkit_session_state::EntityId::new("dirty-files", 1)?,
-                    hookkit_session_state::EntityMode::Windowed,
-                )
-            })
-            .unwrap();
-        entity
+        let store = hookkit_file_activity::FileActivityStore::from_state(state).unwrap();
+        store
+            .pending()
             .with_entity(|view| {
                 assert_eq!(view.events().len(), 1);
-                assert!(view.state().paths().contains(
-                    &hookkit_core::Utf8PathBuf::from_path_buf(project.join("src/main.rs")).unwrap()
-                ));
+                assert!(
+                    view.state().targets().contains(
+                        &hookkit_file_activity::FileActivityTarget::exact(
+                            hookkit_core::Utf8PathBuf::from_path_buf(project.join("src/main.rs"))
+                                .unwrap()
+                        )
+                    )
+                );
                 Ok(hookkit_session_state::EntityOutcome::retain(()))
             })
             .unwrap();
@@ -972,6 +962,49 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
 }
 
 #[test]
+fn turn_completion_mtime_fallback_finds_files_without_tool_observations() {
+    require_pkl!();
+    let project = temp_project("turn-completion-mtime-fallback");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let start = serde_json::to_vec(&serde_json::json!({
+        "session_id": "claude-ruff-test",
+        "transcript_path": "/tmp/claude-ruff-test.jsonl",
+        "cwd": project.to_string_lossy(),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "model": "claude-test"
+    }))
+    .unwrap();
+    let started = run_example(
+        "session-start-state-agent-hook",
+        &start,
+        &["--claude", "--state-dir", state_arg.as_str()],
+    );
+    assert!(started.status.success());
+
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/unobserved.py");
+    std::fs::write(&file, "import os  # unused_import\nprint('needs_format')\n").unwrap();
+
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("claude", &project),
+        &["--claude", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+    let rewritten = std::fs::read_to_string(file).unwrap();
+    assert!(rewritten.contains("formatted"));
+    assert!(!rewritten.contains("unused_import"));
+    assert_eq!(
+        session_journal_len(&state_dir, "claude-code", "claude-ruff-test"),
+        0
+    );
+}
+
+#[test]
 fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
     require_pkl!();
     let project = temp_project("turn-completion-issues");
@@ -1004,9 +1037,9 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
             .unwrap()
             .contains("still need attention")
     );
-    assert_eq!(
-        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
-        1
+    assert!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test") >= 1,
+        "retained window includes tool evidence and fallback observations"
     );
     let summaries = files_named(&state_dir, "summary.json");
     assert_eq!(summaries.len(), 1);

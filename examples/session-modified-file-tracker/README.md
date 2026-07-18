@@ -9,37 +9,47 @@ session-modified-file-tracker --harness=codex
 session-modified-file-tracker --harness=gemini
 ```
 
-The hook classifies known structured writer names, parses `apply_patch` file
-headers, and recognizes a small set of direct shell mutations and redirections.
-It normalizes every candidate relative to the native workspace root and records
-it without invoking `git`, diffing the workspace, or snapshotting the tree.
+The hook uses `hookkit-file-activity` to classify known structured writer
+names, parse `apply_patch` headers, and run the bounded `hookkit-shell`
+file-access analyzer over native shell calls. Every candidate retains its
+effect, source, certainty, timestamp, event, tool-call ID, and turn ID. Known
+blind spots (such as a dynamic shell path) are recorded as coverage gaps rather
+than silently discarded. The post-tool observer does not invoke Git, diff the
+workspace, or snapshot the tree.
 
-By default, state is stored as a windowed `ModifiedFiles` entity whose event
-log uses rotated NDJSON generations:
+By default, state is stored as a windowed `PendingFileActivity` entity whose
+event log uses rotated NDJSON generations. A separate monotonic entity stores
+the stop-time reconciliation cursor:
 
 ```text
 $TMPDIR/agent-hook-kit/session-state/v1/
   <harness>/session/<identity-hash>/families/
-    agent-hook-kit.modified-files/v1/scopes/session/
-      entities/dirty-files/v1/
+    agent-hook-kit.file-activity/v1/scopes/session/
+      entities/pending-files/v1/
         active-generation.json
         generations/<generation-id>.ndjson
         projection-cache.json
+      entities/reconciliation-cursor/v1/
+        checkpoint.json
 ```
 
-Each NDJSON line contains the normalized path plus its hook event and optional
-tool-call identity. The entity projection supplies the consumer with a set of
-paths while retaining detailed source events. A short append lock makes
-concurrent writes safe. Pass `--state-dir PATH` to choose another common state
-root.
+The entity projection supplies the consumer with a set of exact, descendant,
+glob, or workspace targets while retaining detailed evidence and gaps. A short
+append lock makes concurrent writes safe. Pass `--state-dir PATH` to choose
+another common state root.
 
-The shipped `turn-completion-agent-hook` seals an exact generation window and runs all
-matching Pkl-configured formatter/linter phases at turn completion. A clean or
-fully auto-corrected batch is acknowledged quietly. Manual findings retain the
-exact snapshot for a retry and point the agent and user at committed detailed
-logs. Entries appended while a batch is running go to a new generation and are
-not part of its acknowledgement. Retained retries load a cached set and fold
-only newly arrived generations.
+The shipped `turn-completion-agent-hook` first reconciles workspace mtimes from
+the previous durable cursor (using current-session start metadata to bootstrap),
+then seals an exact generation window and runs all matching Pkl-configured
+formatter/linter phases. A clean or fully auto-corrected batch is acknowledged
+quietly. Manual findings retain the exact snapshot for a retry and point the
+agent and user at committed detailed logs. Entries appended while a batch is
+running go to a new generation and are not part of its acknowledgement.
+Retained retries load a cached set and fold only newly arrived generations.
+
+The library also exposes an opt-in `GitDirty` fallback. It is disabled by
+default because a dirty working tree cannot distinguish agent edits from
+changes that predated the session.
 
 Checked-in Codex and Gemini fixtures make the state layout easy to inspect. For
 example:
@@ -51,10 +61,11 @@ target/debug/session-modified-file-tracker \
   < examples/session-modified-file-tracker/fixtures/codex_post_apply_patch.json
 ```
 
-The tracker is deliberately best effort. It misses files changed inside scripts
-or tools whose open payloads do not expose a recognizable path. A failed tool
-can also partially modify a file, so observing post-tool input is more useful
-than assuming a nonzero result means no change.
+The tracker is deliberately best effort. Executed programs can still change
+files that do not appear in their open payload or statically analyzable argv.
+Timestamp reconciliation is noisy, while dirty VCS state is broader still.
+Consumers can inspect provenance and gap counts instead of mistaking the
+combined result for a complete audit log.
 
 ## API findings
 
@@ -68,5 +79,5 @@ than assuming a nonzero result means no change.
   cannot contribute modified paths because its `PostToolUse` omits the tool
   call.
 - The tracker and consumer coordinate only through the versioned
-  `agent-hook-kit.modified-files` family; unrelated hook families remain
+  `agent-hook-kit.file-activity` family; unrelated hook families remain
   isolated.

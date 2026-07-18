@@ -572,6 +572,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hookkit-file-activity"
+version = "0.1.0"
+dependencies = [
+ "globset",
+ "hookkit-codex",
+ "hookkit-common",
+ "hookkit-core",
+ "hookkit-session-state",
+ "hookkit-shell",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "walkdir",
+]
+
+[[package]]
 name = "hookkit-gemini"
 version = "0.1.0"
 dependencies = [
@@ -603,6 +619,7 @@ dependencies = [
  "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
+ "hookkit-file-activity",
  "hookkit-gemini",
  "hookkit-session-state",
  "serde",
@@ -648,6 +665,7 @@ dependencies = [
  "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
+ "hookkit-file-activity",
  "hookkit-gemini",
  "hookkit-pkl-config",
  "hookkit-runtime",
@@ -1282,11 +1300,10 @@ dependencies = [
  "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
+ "hookkit-file-activity",
  "hookkit-gemini",
  "hookkit-runtime",
  "hookkit-session-state",
- "serde",
- "serde_json",
 ]
 
 [[package]]

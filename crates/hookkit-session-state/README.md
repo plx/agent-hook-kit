@@ -236,21 +236,30 @@ and rename, and the configured root itself may not be a symlink.
 
 ## Batched formatter/linter mechanics
 
-`session-modified-file-tracker` appends `ModifiedFileEvent` lines to the
-windowed `agent-hook-kit.modified-files` entity. At turn completion,
+`hookkit-file-activity` builds on these primitives with provenance-bearing
+evidence and gap events. `session-modified-file-tracker` appends those events
+to the windowed `agent-hook-kit.file-activity` entity. At turn completion,
 `turn-completion-agent-hook`:
 
-1. obtains a `ModifiedFiles` entity view;
-2. runs matching Pkl-configured format/fix/verify phases over the path set;
-3. writes complete per-tool output and commits a run summary;
-4. acknowledges the exact generations and emits a native no-op when clean or
+1. reconciles workspace mtimes through a captured cutoff and advances a
+   monotonic cursor only after discoveries are durable;
+2. obtains a `PendingFileActivity` entity view and expands its exact,
+   descendant, glob, and workspace targets;
+3. runs matching Pkl-configured format/fix/verify phases over the path set;
+4. writes complete per-tool output and commits a run summary;
+5. acknowledges the exact generations and emits a native no-op when clean or
    fully auto-corrected;
-5. otherwise retains the projection, asks the harness to continue, informs the
+6. otherwise retains the projection, asks the harness to continue, informs the
    user, and points the agent at the committed logs.
 
 Retries reuse the cached set and add only newly sealed observations. Files
 modified while linters run land in the next generation and remain pending even
 when the completed window is acknowledged.
+
+The older `ModifiedFiles`/`ModifiedFileEvent` projection remains a small
+session-state convenience for callers that only need an exact-path set. It does
+not model inference provenance, coverage gaps, scoped targets, or
+reconciliation; new tracking workflows should use `hookkit-file-activity`.
 
 ## Boundaries
 

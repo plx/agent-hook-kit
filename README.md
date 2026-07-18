@@ -30,6 +30,8 @@ change.
   - `hookkit-common`
 - Opt-in, bounded Bash syntax analysis and file-access inference for native shell tool calls:
   - [`hookkit-shell`](crates/hookkit-shell/README.md)
+- Loss-aware file activity evidence, pending windows, and reconciliation:
+  - [`hookkit-file-activity`](crates/hookkit-file-activity/README.md)
 - Concurrent, versioned session-scoped state primitives:
   - [`hookkit-session-state`](crates/hookkit-session-state/README.md)
 - Runtime stdin/stdout/exit-code plumbing:
@@ -66,6 +68,7 @@ crates/
   hookkit-antigravity/
   hookkit-common/
   hookkit-shell/
+  hookkit-file-activity/
   hookkit-pkl-config/
   hookkit-tool-runner/
   hookkit-session-state/
@@ -289,8 +292,8 @@ limitation notes:
   native pre-tool contract with `--harness=codex|gemini|antigravity` and merges
   home/project YAML policy.
 - [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
-  selects `--harness=claude|codex|gemini` and appends per-session
-  modified-file entity events without consulting Git.
+  selects `--harness=claude|codex|gemini` and appends provenance-bearing,
+  per-session file-activity evidence without consulting Git.
 
 ## `post-tool-use-agent-hook`
 
@@ -305,19 +308,22 @@ cat fixtures/claude/post_tool_use.json \
 The CLI accepts `--claude`, `--codex`, or `--gemini` to choose the harness,
 and `--config PATH` to load a single Pkl file directly (bypassing discovery).
 
-The companion `turn-completion-agent-hook` consumes the NDJSON-backed
-`ModifiedFiles` entity at Claude/Codex `Stop` or Gemini `AfterAgent`, runs the same
-configured tools over the whole session batch, and stays quiet when everything
-is clean or auto-corrected:
+The companion `turn-completion-agent-hook` reconciles and consumes the
+NDJSON-backed pending file-activity window at Claude/Codex `Stop` or Gemini
+`AfterAgent`, runs the same configured tools over the candidate batch, and
+stays quiet when everything is clean or auto-corrected:
 
 ```bash
 cargo run -q -p hookkit-tool-runner --bin turn-completion-agent-hook -- \
   --claude --state-dir .context/hookkit-state
 ```
 
-Use the same `--state-dir` for `session-modified-file-tracker`. Manual
-issues block the stop attempt, retain the sealed generations and cached set for retry, and point
-to detailed logs committed below the versioned session state. See the
+Use the same `--state-dir` for `session-modified-file-tracker`. Before sealing
+the window, the runner scans workspace mtimes since the durable reconciliation
+cursor (or the current session start on its first pass). Manual issues block
+the stop attempt, retain the sealed generations and cached set for retry, and
+point to detailed logs committed below the versioned session state. See the
+[file-activity crate](crates/hookkit-file-activity/README.md) and
 [session-state walkthrough](crates/hookkit-session-state/README.md).
 
 For precise automatic start metadata even before another stateful hook runs,
