@@ -19,6 +19,7 @@ hookkit-codex = { workspace = true }
 hookkit-core = { workspace = true }
 hookkit-gemini = { workspace = true }
 hookkit-runtime = { workspace = true }
+hookkit-shell = { workspace = true, features = ["codex", "gemini", "antigravity"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }

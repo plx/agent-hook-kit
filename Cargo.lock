@@ -411,6 +411,7 @@ dependencies = [
  "hookkit-core",
  "hookkit-gemini",
  "hookkit-runtime",
+ "hookkit-shell",
  "serde",
  "serde_json",
  "serde_yaml_ng",
