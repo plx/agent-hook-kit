@@ -3,6 +3,25 @@ use crate::{
     AccessCandidate, AccessCertainty, AccessIntent, AccessProvenance, AccessScope, AccessSource,
     AccessTarget, JsonRef, PatchOperation, ToolAccessGapReason, ToolAccessReport, ToolCallRef,
 };
+use hookkit_core::Utf8Path;
+use hookkit_shell::{BashAnalysis, RedirectionKind, SourceSpan};
+
+#[derive(Debug, Clone, Copy)]
+struct PatchContext<'a> {
+    cwd: Option<&'a Utf8Path>,
+    evidence: PatchEvidence<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PatchEvidence<'a> {
+    Structured,
+    Shell {
+        command_index: usize,
+        command_span: SourceSpan,
+        heredoc_span: SourceSpan,
+        delimiter: &'a str,
+    },
+}
 
 pub(crate) fn is_patch_tool(tool_name: &str) -> bool {
     let name = tool_name.to_ascii_lowercase();
@@ -14,7 +33,119 @@ pub(crate) fn analyze_patch(call: &ToolCallRef<'_>, report: &mut ToolAccessRepor
     else {
         return;
     };
-    parse_patch(payload, payload_pointer, call, report);
+    parse_patch(
+        payload,
+        payload_pointer,
+        PatchContext {
+            cwd: call.cwd,
+            evidence: PatchEvidence::Structured,
+        },
+        report,
+    );
+}
+
+pub(crate) fn analyze_shell_patches(
+    analysis: &BashAnalysis,
+    cwd: Option<&Utf8Path>,
+    report: &mut ToolAccessReport,
+) {
+    let directory_changes = analysis
+        .commands
+        .iter()
+        .filter(|command| {
+            matches!(
+                command
+                    .name
+                    .as_ref()
+                    .and_then(|name| name.literal.as_deref()),
+                Some("cd" | "pushd" | "popd")
+            )
+        })
+        .map(|command| command.span.start_byte)
+        .collect::<Vec<_>>();
+
+    for (command_index, command) in analysis.commands.iter().enumerate() {
+        let Some(name) = command
+            .name
+            .as_ref()
+            .and_then(|name| name.literal.as_deref())
+        else {
+            continue;
+        };
+        if !is_shell_patch_command(name) {
+            continue;
+        }
+        let heredocs = command
+            .redirections
+            .iter()
+            .filter(|redirection| redirection.kind == RedirectionKind::HereDocument)
+            .collect::<Vec<_>>();
+        if heredocs.is_empty() {
+            report.push_gap(
+                AccessSource::Shell,
+                ToolAccessGapReason::MissingShellPatchHereDocument {
+                    command_span: command.span,
+                },
+            );
+            continue;
+        }
+        let cwd_may_have_changed = directory_changes
+            .iter()
+            .any(|offset| *offset < command.span.start_byte);
+        for redirection in heredocs {
+            let Some(heredoc) = &redirection.here_document else {
+                report.push_gap(
+                    AccessSource::Shell,
+                    ToolAccessGapReason::MissingShellPatchHereDocument {
+                        command_span: command.span,
+                    },
+                );
+                continue;
+            };
+            let delimiter = heredoc
+                .delimiter
+                .literal
+                .as_deref()
+                .unwrap_or(heredoc.delimiter.raw.as_str());
+            let Some(payload) = heredoc.literal_body.as_deref() else {
+                report.push_gap(
+                    AccessSource::Shell,
+                    ToolAccessGapReason::DynamicShellPatchHereDocument {
+                        command_span: command.span,
+                        delimiter: delimiter.to_owned(),
+                        reasons: heredoc.dynamic_reasons.clone(),
+                    },
+                );
+                continue;
+            };
+            if cwd_may_have_changed {
+                report.push_gap(
+                    AccessSource::Shell,
+                    ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged {
+                        command_span: command.span,
+                    },
+                );
+            }
+            parse_patch(
+                payload,
+                "<shell-heredoc>",
+                PatchContext {
+                    cwd: (!cwd_may_have_changed).then_some(cwd).flatten(),
+                    evidence: PatchEvidence::Shell {
+                        command_index,
+                        command_span: command.span,
+                        heredoc_span: heredoc.body_span.unwrap_or(redirection.span),
+                        delimiter,
+                    },
+                },
+                report,
+            );
+        }
+    }
+}
+
+fn is_shell_patch_command(name: &str) -> bool {
+    name == "apply_patch" || name.rsplit('/').next() == Some("apply_patch")
 }
 
 fn patch_payload<'a>(
@@ -56,17 +187,18 @@ struct PendingHeader<'a> {
 fn parse_patch(
     payload: &str,
     payload_pointer: &str,
-    call: &ToolCallRef<'_>,
+    context: PatchContext<'_>,
     report: &mut ToolAccessReport,
 ) {
     let initial_candidates = report.candidates.len();
+    let initial_gaps = report.gaps.len();
     let mut pending_update: Option<PendingHeader<'_>> = None;
     let mut pending_old: Option<PendingHeader<'_>> = None;
 
     for (index, line) in payload.lines().enumerate() {
         let line_number = index + 1;
         if let Some(raw) = line.strip_prefix("*** Update File: ") {
-            flush_update(pending_update.take(), payload_pointer, call, report);
+            flush_update(pending_update.take(), payload_pointer, context, report);
             pending_update = header(raw, line_number, "*** Update File", report);
         } else if let Some(raw) = line.strip_prefix("*** Move to: ") {
             let destination = header(raw, line_number, "*** Move to", report);
@@ -75,7 +207,7 @@ fn parse_patch(
                     emit(
                         &source,
                         payload_pointer,
-                        call,
+                        context,
                         PatchOperation::MoveSource,
                         AccessIntent::MoveSource,
                         report,
@@ -83,7 +215,7 @@ fn parse_patch(
                     emit(
                         &destination,
                         payload_pointer,
-                        call,
+                        context,
                         PatchOperation::MoveDestination,
                         AccessIntent::MoveDestination,
                         report,
@@ -93,7 +225,7 @@ fn parse_patch(
                     emit(
                         &destination,
                         payload_pointer,
-                        call,
+                        context,
                         PatchOperation::MoveDestination,
                         AccessIntent::MoveDestination,
                         report,
@@ -108,7 +240,7 @@ fn parse_patch(
                     emit(
                         &source,
                         payload_pointer,
-                        call,
+                        context,
                         PatchOperation::MoveSource,
                         AccessIntent::MoveSource,
                         report,
@@ -117,31 +249,31 @@ fn parse_patch(
                 (None, None) => {}
             }
         } else if let Some(raw) = line.strip_prefix("*** Add File: ") {
-            flush_update(pending_update.take(), payload_pointer, call, report);
+            flush_update(pending_update.take(), payload_pointer, context, report);
             if let Some(header) = header(raw, line_number, "*** Add File", report) {
                 emit(
                     &header,
                     payload_pointer,
-                    call,
+                    context,
                     PatchOperation::Add,
                     AccessIntent::Modify,
                     report,
                 );
             }
         } else if let Some(raw) = line.strip_prefix("*** Delete File: ") {
-            flush_update(pending_update.take(), payload_pointer, call, report);
+            flush_update(pending_update.take(), payload_pointer, context, report);
             if let Some(header) = header(raw, line_number, "*** Delete File", report) {
                 emit(
                     &header,
                     payload_pointer,
-                    call,
+                    context,
                     PatchOperation::Delete,
                     AccessIntent::Delete,
                     report,
                 );
             }
         } else if let Some(raw) = line.strip_prefix("--- ") {
-            flush_old(pending_old.take(), payload_pointer, call, report);
+            flush_old(pending_old.take(), payload_pointer, context, report);
             pending_old = Some(PendingHeader {
                 raw: unified_path(raw),
                 line: line_number,
@@ -153,13 +285,13 @@ fn parse_patch(
                 line: line_number,
                 header: "+++",
             };
-            emit_unified_pair(pending_old.take(), new, payload_pointer, call, report);
+            emit_unified_pair(pending_old.take(), new, payload_pointer, context, report);
         }
     }
 
-    flush_update(pending_update, payload_pointer, call, report);
-    flush_old(pending_old, payload_pointer, call, report);
-    if report.candidates.len() == initial_candidates && report.gaps.is_empty() {
+    flush_update(pending_update, payload_pointer, context, report);
+    flush_old(pending_old, payload_pointer, context, report);
+    if report.candidates.len() == initial_candidates && report.gaps.len() == initial_gaps {
         malformed(report, None, "no recognized file header");
     }
 }
@@ -186,14 +318,14 @@ fn header<'a>(
 fn flush_update(
     pending: Option<PendingHeader<'_>>,
     payload_pointer: &str,
-    call: &ToolCallRef<'_>,
+    context: PatchContext<'_>,
     report: &mut ToolAccessReport,
 ) {
     if let Some(update) = pending {
         emit(
             &update,
             payload_pointer,
-            call,
+            context,
             PatchOperation::Update,
             AccessIntent::ReadModify,
             report,
@@ -204,7 +336,7 @@ fn flush_update(
 fn flush_old(
     pending: Option<PendingHeader<'_>>,
     payload_pointer: &str,
-    call: &ToolCallRef<'_>,
+    context: PatchContext<'_>,
     report: &mut ToolAccessReport,
 ) {
     if let Some(old) = pending {
@@ -212,7 +344,7 @@ fn flush_old(
             emit(
                 &old,
                 payload_pointer,
-                call,
+                context,
                 PatchOperation::UnifiedOld,
                 AccessIntent::Unclassified,
                 report,
@@ -230,7 +362,7 @@ fn emit_unified_pair(
     old: Option<PendingHeader<'_>>,
     new: PendingHeader<'_>,
     payload_pointer: &str,
-    call: &ToolCallRef<'_>,
+    context: PatchContext<'_>,
     report: &mut ToolAccessReport,
 ) {
     let Some(old) = old else {
@@ -238,7 +370,7 @@ fn emit_unified_pair(
             emit(
                 &new,
                 payload_pointer,
-                call,
+                context,
                 PatchOperation::UnifiedNew,
                 AccessIntent::Modify,
                 report,
@@ -259,7 +391,7 @@ fn emit_unified_pair(
         ("/dev/null", _) => emit(
             &new,
             payload_pointer,
-            call,
+            context,
             PatchOperation::Add,
             AccessIntent::Modify,
             report,
@@ -267,7 +399,7 @@ fn emit_unified_pair(
         (_, "/dev/null") => emit(
             &old,
             payload_pointer,
-            call,
+            context,
             PatchOperation::Delete,
             AccessIntent::Delete,
             report,
@@ -275,7 +407,7 @@ fn emit_unified_pair(
         (old_path, new_path) if old_path == new_path => emit(
             &new,
             payload_pointer,
-            call,
+            context,
             PatchOperation::Update,
             AccessIntent::ReadModify,
             report,
@@ -284,7 +416,7 @@ fn emit_unified_pair(
             emit(
                 &old,
                 payload_pointer,
-                call,
+                context,
                 PatchOperation::MoveSource,
                 AccessIntent::MoveSource,
                 report,
@@ -292,7 +424,7 @@ fn emit_unified_pair(
             emit(
                 &new,
                 payload_pointer,
-                call,
+                context,
                 PatchOperation::MoveDestination,
                 AccessIntent::MoveDestination,
                 report,
@@ -304,7 +436,7 @@ fn emit_unified_pair(
 fn emit(
     header: &PendingHeader<'_>,
     payload_pointer: &str,
-    call: &ToolCallRef<'_>,
+    context: PatchContext<'_>,
     operation: PatchOperation,
     intent: AccessIntent,
     report: &mut ToolAccessReport,
@@ -313,7 +445,7 @@ fn emit(
     if raw.is_empty() || raw == "/dev/null" {
         return;
     }
-    let (expression, unresolved) = path_expression(raw, call.cwd);
+    let (expression, unresolved) = path_expression(raw, context.cwd);
     report.candidates.push(AccessCandidate {
         target: AccessTarget::Path {
             expression,
@@ -321,16 +453,35 @@ fn emit(
         },
         intent,
         certainty: AccessCertainty::Direct,
-        provenance: AccessProvenance::Patch {
-            payload_pointer: payload_pointer.to_owned(),
-            operation,
-            header: header.header.to_owned(),
-            line: header.line,
+        provenance: match context.evidence {
+            PatchEvidence::Structured => AccessProvenance::Patch {
+                payload_pointer: payload_pointer.to_owned(),
+                operation,
+                header: header.header.to_owned(),
+                line: header.line,
+            },
+            PatchEvidence::Shell {
+                command_index,
+                command_span,
+                heredoc_span,
+                delimiter,
+            } => AccessProvenance::ShellPatch {
+                command_index,
+                command_span,
+                heredoc_span,
+                delimiter: delimiter.to_owned(),
+                operation,
+                header: header.header.to_owned(),
+                line: header.line,
+            },
         },
     });
     if unresolved {
         report.push_gap(
-            AccessSource::Patch,
+            match context.evidence {
+                PatchEvidence::Structured => AccessSource::Patch,
+                PatchEvidence::Shell { .. } => AccessSource::Shell,
+            },
             ToolAccessGapReason::MissingWorkingDirectory {
                 raw: raw.to_owned(),
                 pointer: Some(payload_pointer.to_owned()),

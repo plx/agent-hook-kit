@@ -4,7 +4,6 @@
 //! candidate target and the limits of the inference, then provides timestamp
 //! and opt-in VCS fallbacks for deferred consumers.
 
-use globset::Glob;
 use hookkit_common::PostToolUseInput;
 use hookkit_core::{RuntimeContext, Utf8Path, Utf8PathBuf, normalize_utf8_path};
 use hookkit_session_state::{
@@ -13,7 +12,8 @@ use hookkit_session_state::{
 };
 use hookkit_tool_access::{
     AccessCandidate, AccessCertainty, AccessIntent, AccessScope, AccessSource, AccessTarget,
-    ToolAccessAnalyzer,
+    ExactPathPolicy, PathBase, PathExpression, ResolutionIssuePolicy, SymlinkPolicy,
+    TargetResolutionOptions, TargetResolutionReason, ToolAccessAnalyzer, resolve_targets,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -813,57 +813,49 @@ pub fn resolve_files(
             FileActivityTarget::Path {
                 path,
                 scope: FileActivityScope::Exact,
-            } => {
-                if path.is_file() {
-                    resolved.files.insert(path.clone());
-                }
             }
-            FileActivityTarget::Path {
-                path,
-                scope: FileActivityScope::Descendants,
-            } => walk_matching(path, None, options, &mut resolved)?,
-            FileActivityTarget::Path {
+            | FileActivityTarget::Path {
                 path,
                 scope: FileActivityScope::ExactOrDescendants,
-            } => {
-                if path.is_file() {
-                    resolved.files.insert(path.clone());
-                } else {
-                    walk_matching(path, None, options, &mut resolved)?;
-                }
+            } if path.is_file() => {
+                // Compatibility: exact-file probes were never charged against
+                // the traversal entry budget.
+                resolved.files.insert(path.clone());
+                continue;
             }
-            FileActivityTarget::Path {
-                path,
-                scope: FileActivityScope::Glob,
-            } => {
-                let pattern = path.as_str();
-                let matcher =
-                    Glob::new(pattern).map_err(|error| FileActivityError::InvalidGlob {
-                        pattern: pattern.to_owned(),
-                        message: error.to_string(),
-                    })?;
-                let matcher = matcher.compile_matcher();
-                for root in &options.roots {
-                    walk_matching(root, Some(&matcher), options, &mut resolved)?;
-                    if resolved.truncated {
-                        break;
-                    }
-                }
-            }
-            FileActivityTarget::Workspace { root } => {
-                if let Some(root) = root {
-                    walk_matching(root, None, options, &mut resolved)?;
-                } else {
-                    for root in &options.roots {
-                        walk_matching(root, None, options, &mut resolved)?;
-                        if resolved.truncated {
-                            break;
-                        }
-                    }
-                }
-            }
+            _ => {}
         }
-        if resolved.truncated {
+
+        let access_target = activity_target_to_access(target);
+        let resolution_options = TargetResolutionOptions {
+            workspace_roots: options.roots.clone(),
+            ignored_directory_names: options.ignored_directory_names.clone(),
+            excluded_roots: options.excluded_roots.clone(),
+            max_entries: options.max_entries.saturating_sub(resolved.scanned_entries),
+            symlinks: SymlinkPolicy::DoNotFollow,
+            exact_paths: ExactPathPolicy::ExistingOnly,
+            // The compatibility API historically ignored traversal errors but
+            // returned invalid glob syntax as an error.
+            io_errors: ResolutionIssuePolicy::Report,
+            invalid_globs: ResolutionIssuePolicy::Abort,
+        };
+        let materialized =
+            resolve_targets([&access_target], &resolution_options).map_err(|error| match error
+                .reason
+            {
+                TargetResolutionReason::InvalidGlob { pattern, message } => {
+                    FileActivityError::InvalidGlob { pattern, message }
+                }
+                reason => FileActivityError::Io(std::io::Error::other(format!(
+                    "target resolution failed: {reason:?}"
+                ))),
+            })?;
+        resolved.scanned_entries += materialized.scanned_entries;
+        resolved
+            .files
+            .extend(materialized.paths.into_iter().filter(|path| path.is_file()));
+        if materialized.budget_exhausted {
+            resolved.truncated = true;
             resolved.unresolved_targets.push(target.clone());
             break;
         }
@@ -871,46 +863,23 @@ pub fn resolve_files(
     Ok(resolved)
 }
 
-fn walk_matching(
-    root: &Utf8Path,
-    matcher: Option<&globset::GlobMatcher>,
-    options: &ResolveOptions,
-    resolved: &mut ResolvedFileActivity,
-) -> Result<()> {
-    if !root.exists() {
-        return Ok(());
+fn activity_target_to_access(target: &FileActivityTarget) -> AccessTarget {
+    match target {
+        FileActivityTarget::Path { path, scope } => AccessTarget::Path {
+            expression: PathExpression {
+                raw: path.to_string(),
+                resolved: Some(path.clone()),
+                base: PathBase::Absolute,
+            },
+            scope: match scope {
+                FileActivityScope::Exact => AccessScope::Exact,
+                FileActivityScope::Descendants => AccessScope::Descendants,
+                FileActivityScope::ExactOrDescendants => AccessScope::ExactOrDescendants,
+                FileActivityScope::Glob => AccessScope::Glob,
+            },
+        },
+        FileActivityTarget::Workspace { root } => AccessTarget::Workspace { root: root.clone() },
     }
-    let walker = WalkDir::new(root.as_std_path())
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| {
-            should_descend(
-                entry,
-                &options.ignored_directory_names,
-                &options.excluded_roots,
-            )
-        });
-    for entry in walker {
-        if resolved.scanned_entries >= options.max_entries {
-            resolved.truncated = true;
-            break;
-        }
-        resolved.scanned_entries += 1;
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let Ok(path) = utf8_path(entry.path()) else {
-            continue;
-        };
-        if matcher.is_none_or(|matcher| matcher.is_match(path.as_std_path())) {
-            resolved.files.insert(path);
-        }
-    }
-    Ok(())
 }
 
 fn default_ignored_directory_names() -> BTreeSet<String> {
@@ -1057,6 +1026,35 @@ mod tests {
         assert_eq!(activity.targets(), &BTreeSet::from([target]));
         assert_eq!(activity.evidence_count(), 1);
         assert_eq!(activity.gap_count(), 1);
+    }
+
+    #[test]
+    fn compatibility_resolver_keeps_exact_files_outside_the_walk_budget() {
+        let project = temporary_directory("resolve-compatibility");
+        let file = Utf8PathBuf::from_path_buf(project.join("exact.txt")).unwrap();
+        std::fs::write(&file, "exact").unwrap();
+        let mut activity = PendingFileActivity::empty();
+        activity.apply(&FileActivityEvent::Evidence(FileActivityEvidence {
+            target: FileActivityTarget::exact(file.clone()),
+            effect: FileActivityEffect::CreateOrModify,
+            source: FileActivitySource::ShellInference,
+            certainty: ActivityCertainty::Direct,
+            observed_at: UtcTimestamp::now(),
+            event: None,
+            tool_call_id: None,
+            turn_id: None,
+            detail: None,
+        }));
+        let mut options =
+            ResolveOptions::new(vec![Utf8PathBuf::from_path_buf(project.clone()).unwrap()]);
+        options.max_entries = 0;
+
+        let resolved = resolve_files(&activity, &options).unwrap();
+        assert_eq!(resolved.files, BTreeSet::from([file]));
+        assert_eq!(resolved.scanned_entries, 0);
+        assert!(!resolved.truncated);
+
+        std::fs::remove_dir_all(project).unwrap();
     }
 
     #[test]

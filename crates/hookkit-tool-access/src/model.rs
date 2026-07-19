@@ -152,6 +152,15 @@ pub enum AccessProvenance {
         command_span: SourceSpan,
         inferred_by: String,
     },
+    ShellPatch {
+        command_index: usize,
+        command_span: SourceSpan,
+        heredoc_span: SourceSpan,
+        delimiter: String,
+        operation: PatchOperation,
+        header: String,
+        line: usize,
+    },
     Custom {
         analyzer: String,
         detail: Option<String>,
@@ -164,6 +173,7 @@ impl AccessProvenance {
             Self::StructuredField { .. } => AccessSource::Structured,
             Self::Patch { .. } => AccessSource::Patch,
             Self::Shell { .. } => AccessSource::Shell,
+            Self::ShellPatch { .. } => AccessSource::Shell,
             Self::Custom { .. } => AccessSource::Custom,
         }
     }
@@ -192,6 +202,16 @@ impl fmt::Display for AccessProvenance {
             } => write!(
                 formatter,
                 "shell inference {inferred_by} at bytes {}..{}",
+                command_span.start_byte, command_span.end_byte
+            ),
+            Self::ShellPatch {
+                command_span,
+                operation,
+                line,
+                ..
+            } => write!(
+                formatter,
+                "shell patch {operation} at bytes {}..{}, patch line {line}",
                 command_span.start_byte, command_span.end_byte
             ),
             Self::Custom { analyzer, detail } => {
@@ -261,6 +281,17 @@ pub enum ToolAccessGapReason {
     MalformedPatch {
         line: Option<usize>,
         detail: String,
+    },
+    DynamicShellPatchHereDocument {
+        command_span: SourceSpan,
+        delimiter: String,
+        reasons: Vec<hookkit_shell::DynamicReason>,
+    },
+    MissingShellPatchHereDocument {
+        command_span: SourceSpan,
+    },
+    ShellPatchWorkingDirectoryMayHaveChanged {
+        command_span: SourceSpan,
     },
 }
 
@@ -338,6 +369,27 @@ impl fmt::Display for ToolAccessGap {
                     write!(formatter, " at source line {line}")?;
                 }
                 write!(formatter, ": {detail}")
+            }
+            ToolAccessGapReason::DynamicShellPatchHereDocument {
+                command_span,
+                delimiter,
+                ..
+            } => write!(
+                formatter,
+                "shell apply_patch here-document `{delimiter}` at bytes {}..{} is dynamic",
+                command_span.start_byte, command_span.end_byte
+            ),
+            ToolAccessGapReason::MissingShellPatchHereDocument { command_span } => write!(
+                formatter,
+                "shell apply_patch at bytes {}..{} has no observable here-document body",
+                command_span.start_byte, command_span.end_byte
+            ),
+            ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged { command_span } => {
+                write!(
+                    formatter,
+                    "shell apply_patch working directory may have changed before bytes {}..{}",
+                    command_span.start_byte, command_span.end_byte
+                )
             }
         }
     }

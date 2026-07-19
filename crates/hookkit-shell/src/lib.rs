@@ -28,11 +28,20 @@ pub mod summary;
 ))]
 mod adapters;
 
+#[cfg(feature = "antigravity")]
+pub use adapters::ANTIGRAVITY_RUN_COMMAND_PROFILE;
+#[cfg(feature = "claude")]
+pub use adapters::CLAUDE_BASH_PROFILE;
+#[cfg(feature = "codex")]
+pub use adapters::CODEX_BASH_PROFILE;
+#[cfg(feature = "gemini")]
+pub use adapters::GEMINI_RUN_SHELL_COMMAND_PROFILE;
+
 pub use bash::{
     ArgvStatus, BashAnalysis, BashAnalysisOutcome, BashAnalyzer, BashAnalyzerLimits,
     CommandOccurrence, ConstructKind, ConstructOccurrence, DynamicReason, ExecutionContext,
-    IncompleteReason, Redirection, RedirectionKind, RedirectionOperator, ShellWord, SourcePosition,
-    SourceSpan, UnavailableReason,
+    HereDocument, IncompleteReason, Redirection, RedirectionKind, RedirectionOperator, ShellWord,
+    SourcePosition, SourceSpan, UnavailableReason,
 };
 pub use call::{
     JsonRef, ShellToolCallError, ShellToolCallErrorKind, ShellToolCallExt, ShellToolCallMatch,
@@ -42,6 +51,6 @@ pub use file_access::{
     BuiltinCommandFileSemantics, CommandFileContext, CommandFileSemantics, FileAccessAnalyzer,
     FileAccessCandidate, FileAccessCertainty, FileAccessKind, FileAccessOrigin, FileAccessReport,
     FileAccessSink, FileInferenceContext, FileTarget, FileTargetScope, PathBase, PathExpression,
-    UnresolvedFileAccess, UnresolvedFileAccessReason,
+    UnknownCommandFallback, UnresolvedFileAccess, UnresolvedFileAccessReason,
 };
 pub use summary::{CommandSummarizer, InspectionSummarizer, InspectionSummary, PathCandidate};

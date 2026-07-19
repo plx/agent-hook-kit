@@ -10,14 +10,16 @@ use crate::call::ShellToolCallError;
 use crate::call::{ShellToolCallExt, ShellToolCallMatch, ShellToolProfile, ToolPhase};
 
 #[cfg(feature = "claude")]
-const CLAUDE_BASH: ShellToolProfile = ShellToolProfile::builtin("Bash", "/command", None);
+pub const CLAUDE_BASH_PROFILE: ShellToolProfile =
+    ShellToolProfile::builtin("Bash", "/command", None);
 #[cfg(feature = "codex")]
-const CODEX_BASH: ShellToolProfile = ShellToolProfile::builtin("Bash", "/command", None);
+pub const CODEX_BASH_PROFILE: ShellToolProfile =
+    ShellToolProfile::builtin("Bash", "/command", None);
 #[cfg(feature = "gemini")]
-const GEMINI_SHELL: ShellToolProfile =
+pub const GEMINI_RUN_SHELL_COMMAND_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("run_shell_command", "/command", None);
 #[cfg(feature = "antigravity")]
-const ANTIGRAVITY_SHELL: ShellToolProfile =
+pub const ANTIGRAVITY_RUN_COMMAND_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("run_command", "/CommandLine", Some("/Cwd"));
 
 #[cfg(feature = "claude")]
@@ -29,7 +31,7 @@ impl ShellToolCallExt for hookkit_claude::catalog::CatalogInput {
         let Some(tool_name) = self.field("tool_name").and_then(serde_json::Value::as_str) else {
             return ShellToolCallMatch::NotShell;
         };
-        if tool_name != CLAUDE_BASH.tool_name() {
+        if tool_name != CLAUDE_BASH_PROFILE.tool_name() {
             return ShellToolCallMatch::NotShell;
         }
         let event = EventId::builtin(HarnessId::CLAUDE_CODE, "PreToolUse");
@@ -37,10 +39,10 @@ impl ShellToolCallExt for hookkit_claude::catalog::CatalogInput {
             return ShellToolCallMatch::Malformed(ShellToolCallError::missing_command(
                 event,
                 tool_name,
-                CLAUDE_BASH.command_pointer(),
+                CLAUDE_BASH_PROFILE.command_pointer(),
             ));
         };
-        CLAUDE_BASH.extract_from_value(
+        CLAUDE_BASH_PROFILE.extract_from_value(
             event,
             ToolPhase::Pre,
             tool_name,
@@ -54,7 +56,7 @@ impl ShellToolCallExt for hookkit_claude::catalog::CatalogInput {
 #[cfg(feature = "claude")]
 impl ShellToolCallExt for hookkit_claude::protocol::PostToolUseInput {
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        CLAUDE_BASH.extract_from_value(
+        CLAUDE_BASH_PROFILE.extract_from_value(
             EventId::builtin(HarnessId::CLAUDE_CODE, "PostToolUse"),
             ToolPhase::Post,
             &self.tool_name,
@@ -68,7 +70,7 @@ impl ShellToolCallExt for hookkit_claude::protocol::PostToolUseInput {
 #[cfg(feature = "codex")]
 impl ShellToolCallExt for hookkit_codex::protocol::PreToolUseInput {
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        CODEX_BASH.extract_from_value(
+        CODEX_BASH_PROFILE.extract_from_value(
             EventId::builtin(HarnessId::CODEX, "PreToolUse"),
             ToolPhase::Pre,
             &self.tool_name,
@@ -82,7 +84,7 @@ impl ShellToolCallExt for hookkit_codex::protocol::PreToolUseInput {
 #[cfg(feature = "codex")]
 impl ShellToolCallExt for hookkit_codex::protocol::PostToolUseInput {
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        CODEX_BASH.extract_from_value(
+        CODEX_BASH_PROFILE.extract_from_value(
             EventId::builtin(HarnessId::CODEX, "PostToolUse"),
             ToolPhase::Post,
             &self.tool_name,
@@ -96,7 +98,7 @@ impl ShellToolCallExt for hookkit_codex::protocol::PostToolUseInput {
 #[cfg(feature = "gemini")]
 impl ShellToolCallExt for hookkit_gemini::protocol::BeforeToolInput {
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        GEMINI_SHELL.extract_from_object(
+        GEMINI_RUN_SHELL_COMMAND_PROFILE.extract_from_object(
             EventId::builtin(HarnessId::GEMINI_CLI, "BeforeTool"),
             ToolPhase::Pre,
             &self.tool_name,
@@ -110,7 +112,7 @@ impl ShellToolCallExt for hookkit_gemini::protocol::BeforeToolInput {
 #[cfg(feature = "gemini")]
 impl ShellToolCallExt for hookkit_gemini::protocol::AfterToolInput {
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        GEMINI_SHELL.extract_from_object(
+        GEMINI_RUN_SHELL_COMMAND_PROFILE.extract_from_object(
             EventId::builtin(HarnessId::GEMINI_CLI, "AfterTool"),
             ToolPhase::Post,
             &self.tool_name,
@@ -124,7 +126,7 @@ impl ShellToolCallExt for hookkit_gemini::protocol::AfterToolInput {
 #[cfg(feature = "antigravity")]
 impl ShellToolCallExt for hookkit_antigravity::PreToolUseInput {
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        ANTIGRAVITY_SHELL.extract_from_object(
+        ANTIGRAVITY_RUN_COMMAND_PROFILE.extract_from_object(
             EventId::builtin(HarnessId::ANTIGRAVITY, "PreToolUse"),
             ToolPhase::Pre,
             &self.tool_call.name,

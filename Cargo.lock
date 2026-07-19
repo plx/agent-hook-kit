@@ -692,10 +692,12 @@ dependencies = [
 name = "hookkit-tool-access"
 version = "0.1.0"
 dependencies = [
+ "globset",
  "hookkit-common",
  "hookkit-core",
  "hookkit-shell",
  "serde_json",
+ "walkdir",
 ]
 
 [[package]]

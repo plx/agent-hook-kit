@@ -8,6 +8,7 @@
 mod call;
 mod model;
 mod patch;
+mod resolver;
 mod structured;
 
 pub use call::{JsonRef, ToolCallObservation, ToolCallRef, observe_post_tool, observe_pre_tool};
@@ -17,6 +18,10 @@ pub use model::{
     AccessTarget, PatchOperation, PathBase, PathExpression, StructuredFieldMatch, ToolAccessGap,
     ToolAccessGapReason, ToolAccessReport,
 };
+pub use resolver::{
+    ExactPathPolicy, ResolutionIssuePolicy, ResolvedTargets, SymlinkPolicy, TargetResolutionError,
+    TargetResolutionOptions, TargetResolutionReason, UnresolvedTarget, resolve_targets,
+};
 pub use structured::{StructuredFieldAnalyzer, StructuredFieldConfigError};
 
 use hookkit_common::{PostToolUseInput, PreToolUseInput};
@@ -24,7 +29,7 @@ use hookkit_shell::{
     BashAnalyzer, FileAccessAnalyzer, FileAccessCandidate as ShellCandidate,
     FileAccessCertainty as ShellCertainty, FileAccessKind as ShellIntent, FileInferenceContext,
     FileTarget as ShellTarget, FileTargetScope as ShellScope, PathBase as ShellPathBase,
-    ShellToolCallMatch,
+    ShellToolCallMatch, ShellToolProfile,
 };
 
 /// Stateless structured, patch, and shell access analyzer.
@@ -33,6 +38,7 @@ pub struct ToolAccessAnalyzer {
     bash: BashAnalyzer,
     shell: FileAccessAnalyzer,
     structured: StructuredFieldAnalyzer,
+    shell_profiles: Vec<ShellToolProfile>,
 }
 
 impl ToolAccessAnalyzer {
@@ -45,7 +51,29 @@ impl ToolAccessAnalyzer {
             bash,
             shell,
             structured,
+            shell_profiles: Vec::new(),
         }
+    }
+
+    /// Registers an exact opt-in shell tool shape. Later registrations are
+    /// checked first, matching custom command-semantics precedence.
+    pub fn register_shell_profile(&mut self, profile: ShellToolProfile) {
+        self.shell_profiles.insert(0, profile);
+    }
+
+    pub fn with_shell_profile(mut self, profile: ShellToolProfile) -> Self {
+        self.register_shell_profile(profile);
+        self
+    }
+
+    pub fn with_shell_profiles(
+        mut self,
+        profiles: impl IntoIterator<Item = ShellToolProfile>,
+    ) -> Self {
+        for profile in profiles {
+            self.register_shell_profile(profile);
+        }
+        self
     }
 
     pub fn structured_fields(&self) -> &StructuredFieldAnalyzer {
@@ -85,6 +113,29 @@ impl ToolAccessAnalyzer {
                 }],
             },
             ShellToolCallMatch::NotShell => {
+                match self.explicit_shell_call(call) {
+                    ShellToolCallMatch::Matched(shell_call) => {
+                        return self.analyze_shell(call, &shell_call);
+                    }
+                    ShellToolCallMatch::Malformed(error) => {
+                        return ToolAccessReport {
+                            candidates: Vec::new(),
+                            gaps: vec![ToolAccessGap {
+                                source: AccessSource::Shell,
+                                reason: ToolAccessGapReason::MalformedShellCall(error),
+                            }],
+                        };
+                    }
+                    ShellToolCallMatch::NotShell => {}
+                    _ => {
+                        let mut report = ToolAccessReport::default();
+                        report.push_gap(
+                            AccessSource::Shell,
+                            ToolAccessGapReason::UnsupportedShellEvidence,
+                        );
+                        return report;
+                    }
+                }
                 let mut report = ToolAccessReport::default();
                 if patch::is_patch_tool(call.tool_name) {
                     patch::analyze_patch(call, &mut report);
@@ -102,6 +153,33 @@ impl ToolAccessAnalyzer {
                 report
             }
         }
+    }
+
+    fn explicit_shell_call<'a>(&self, call: &ToolCallRef<'a>) -> ShellToolCallMatch<'a> {
+        for profile in &self.shell_profiles {
+            let matched = match call.tool_input {
+                JsonRef::Value(input) => profile.extract_from_value(
+                    call.event.clone(),
+                    call.phase,
+                    call.tool_name,
+                    input,
+                    call.cwd,
+                    None,
+                ),
+                JsonRef::Object(input) => profile.extract_from_object(
+                    call.event.clone(),
+                    call.phase,
+                    call.tool_name,
+                    input,
+                    call.cwd,
+                    None,
+                ),
+            };
+            if !matches!(matched, ShellToolCallMatch::NotShell) {
+                return matched;
+            }
+        }
+        ShellToolCallMatch::NotShell
     }
 
     fn analyze_shell(
@@ -127,6 +205,9 @@ impl ToolAccessAnalyzer {
                     ToolAccessGapReason::UnsupportedShellEvidence,
                 ),
             }
+        }
+        if let Some(analysis) = analysis.analysis() {
+            patch::analyze_shell_patches(analysis, shell_call.cwd, &mut report);
         }
         report.gaps.extend(
             shell_report

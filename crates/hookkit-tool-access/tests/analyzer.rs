@@ -2,9 +2,11 @@ use hookkit_common::{PostToolUseInput, PreToolUseInput};
 use hookkit_core::{EventId, HarnessId, Utf8Path, Utf8PathBuf};
 use hookkit_tool_access::{
     AccessCertainty, AccessIntent, AccessProvenance, AccessSource, AccessTarget, JsonRef,
-    PatchOperation, StructuredFieldAnalyzer, StructuredFieldMatch, ToolAccessAnalyzer,
-    ToolAccessGapReason, ToolCallRef, ToolPhase,
+    PatchOperation, StructuredFieldAnalyzer, StructuredFieldMatch, TargetResolutionOptions,
+    ToolAccessAnalyzer, ToolAccessGapReason, ToolCallRef, ToolPhase, resolve_targets,
 };
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn call<'a>(tool_name: &'a str, input: &'a serde_json::Value) -> ToolCallRef<'a> {
     ToolCallRef::new(
@@ -15,6 +17,46 @@ fn call<'a>(tool_name: &'a str, input: &'a serde_json::Value) -> ToolCallRef<'a>
         Some(Utf8Path::new("/repo/native-cwd")),
         vec![Utf8PathBuf::from("/repo")],
     )
+}
+
+fn codex_shell(command: &str, cwd: &str) -> PreToolUseInput {
+    PreToolUseInput::Codex(
+        serde_json::from_value(serde_json::json!({
+            "session_id": "session",
+            "transcript_path": null,
+            "cwd": cwd,
+            "hook_event_name": "PreToolUse",
+            "model": "gpt-test",
+            "turn_id": "turn",
+            "permission_mode": "default",
+            "tool_name": "Bash",
+            "tool_use_id": "call",
+            "tool_input": {"command": command}
+        }))
+        .unwrap(),
+    )
+}
+
+struct TempDirectory(Utf8PathBuf);
+
+impl TempDirectory {
+    fn new(label: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = Utf8PathBuf::from_path_buf(std::env::temp_dir())
+            .unwrap()
+            .join(format!("hookkit-access-analyzer-{label}-{nonce}"));
+        fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for TempDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 #[test]
@@ -219,6 +261,141 @@ fn aligned_shell_reads_modifications_and_unknowns_map_without_role_loss() {
                     if matches!(unresolved.reason, hookkit_shell::UnresolvedFileAccessReason::UnknownCommandSemantics { .. })
             )
     }));
+}
+
+#[test]
+fn recursive_remove_scope_materializes_descendants_for_policy_matching() {
+    let temporary = TempDirectory::new("recursive-remove");
+    fs::create_dir_all(temporary.0.join("secrets/nested")).unwrap();
+    fs::write(temporary.0.join("secrets/nested/token.txt"), "token").unwrap();
+    let input = codex_shell("rm -rf secrets", temporary.0.as_str());
+    let report = ToolAccessAnalyzer::default().analyze_pre_tool(&input);
+    let options = TargetResolutionOptions::new(vec![temporary.0.clone()]);
+    let materialized = resolve_targets(
+        report.may_modify().map(|candidate| &candidate.target),
+        &options,
+    )
+    .unwrap();
+
+    assert!(
+        materialized
+            .paths
+            .contains(&temporary.0.join("secrets/nested/token.txt"))
+    );
+}
+
+#[test]
+fn bundled_profiles_are_public_and_custom_shell_aliases_are_explicit() {
+    assert_eq!(
+        hookkit_shell::CLAUDE_BASH_PROFILE.command_pointer(),
+        "/command"
+    );
+    assert_eq!(hookkit_shell::CODEX_BASH_PROFILE.tool_name(), "Bash");
+    assert_eq!(
+        hookkit_shell::GEMINI_RUN_SHELL_COMMAND_PROFILE.tool_name(),
+        "run_shell_command"
+    );
+    assert_eq!(
+        hookkit_shell::ANTIGRAVITY_RUN_COMMAND_PROFILE.cwd_pointer(),
+        Some("/Cwd")
+    );
+
+    let input = serde_json::json!({"request": {"command": "cat input.txt"}});
+    let custom_call = call("project_shell", &input);
+    let conservative = ToolAccessAnalyzer::default().analyze_call(&custom_call);
+    assert!(
+        !conservative
+            .candidates
+            .iter()
+            .any(|candidate| matches!(candidate.provenance, AccessProvenance::Shell { .. }))
+    );
+
+    let profile =
+        hookkit_shell::ShellToolProfile::new("project_shell", "/request/command").unwrap();
+    let explicit = ToolAccessAnalyzer::default()
+        .with_shell_profile(profile)
+        .analyze_call(&custom_call);
+    assert!(
+        explicit
+            .candidates
+            .iter()
+            .any(|candidate| matches!(candidate.provenance, AccessProvenance::Shell { .. }))
+    );
+}
+
+#[test]
+fn literal_shell_patch_heredoc_preserves_add_delete_and_move_provenance() {
+    let command = "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: added.txt\n+new\n*** Delete File: deleted.txt\n*** Update File: old.txt\n*** Move to: moved.txt\n*** End Patch\nPATCH\n";
+    let report = ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(command, "/repo"));
+
+    assert_eq!(
+        report
+            .candidates
+            .iter()
+            .map(|candidate| candidate.intent)
+            .collect::<Vec<_>>(),
+        vec![
+            AccessIntent::Modify,
+            AccessIntent::Delete,
+            AccessIntent::MoveSource,
+            AccessIntent::MoveDestination,
+        ]
+    );
+    assert!(report.candidates.iter().all(|candidate| matches!(
+        candidate.provenance,
+        AccessProvenance::ShellPatch {
+            ref delimiter,
+            line,
+            ..
+        } if delimiter == "PATCH" && line > 0
+    )));
+    assert!(report.is_complete());
+}
+
+#[test]
+fn shell_patch_reports_malformed_dynamic_and_uncertain_cwd_cases() {
+    let malformed = ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(
+        "apply_patch <<'PATCH'\nnot a patch\nPATCH\n",
+        "/repo",
+    ));
+    assert!(
+        malformed
+            .gaps
+            .iter()
+            .any(|gap| matches!(gap.reason, ToolAccessGapReason::MalformedPatch { .. }))
+    );
+
+    let dynamic = ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(
+        "apply_patch <<PATCH\n*** Add File: $TARGET\nPATCH\n",
+        "/repo",
+    ));
+    assert!(dynamic.gaps.iter().any(|gap| matches!(
+        gap.reason,
+        ToolAccessGapReason::DynamicShellPatchHereDocument { .. }
+    )));
+
+    let dynamic_delimiter = ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(
+        "apply_patch <<$DELIMITER\n*** Add File: recovered.txt\n$DELIMITER\n",
+        "/repo",
+    ));
+    assert!(dynamic_delimiter.gaps.iter().any(|gap| matches!(
+        gap.reason,
+        ToolAccessGapReason::DynamicShellPatchHereDocument { .. }
+    )));
+
+    let after_cd = ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(
+        "cd subdir; apply_patch <<'PATCH'\n*** Add File: new.txt\n+new\nPATCH\n",
+        "/repo",
+    ));
+    assert!(after_cd.gaps.iter().any(|gap| matches!(
+        gap.reason,
+        ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged { .. }
+    )));
+    assert!(after_cd.candidates.iter().any(|candidate| matches!(
+        &candidate.target,
+        AccessTarget::Path { expression, .. }
+            if expression.raw == "new.txt" && expression.resolved.is_none()
+    )));
 }
 
 #[test]

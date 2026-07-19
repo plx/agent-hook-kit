@@ -41,4 +41,7 @@ settings {
 
 Callers using the Rust API can supply the same controls through
 `ReconciliationOptions` and can independently resolve scoped targets with
-`ResolveOptions`.
+`ResolveOptions`. That resolver remains a compatibility wrapper with
+existing-files-only behavior; new pre-tool consumers can call
+`hookkit_tool_access::resolve_targets` directly for typed unresolved outcomes,
+nonexistent-write retention, and explicit symlink/error policies.
