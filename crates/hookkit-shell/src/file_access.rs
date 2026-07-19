@@ -5,9 +5,7 @@
 //! load configuration, follow symlinks, evaluate generated code, or perform
 //! arbitrary I/O that is not represented in their argv.
 
-use std::path::{Component, Path, PathBuf};
-
-use hookkit_core::{Utf8Path, Utf8PathBuf};
+use hookkit_core::{Utf8Path, Utf8PathBuf, normalize_utf8_path};
 
 use crate::bash::{
     BashAnalysis, BashAnalysisOutcome, CommandOccurrence, DynamicReason, ExecutionContext,
@@ -415,7 +413,7 @@ impl FileAccessSink<'_, '_> {
     ) {
         let path = Utf8Path::new(raw);
         let (base, resolved) = if path.is_absolute() {
-            (PathBase::Absolute, Some(normalize_utf8(path)))
+            (PathBase::Absolute, Some(normalize_utf8_path(path)))
         } else if self.cwd_may_have_changed {
             if !self.cwd_issue_emitted {
                 self.cwd_issue_emitted = true;
@@ -429,7 +427,7 @@ impl FileAccessSink<'_, '_> {
             match self.inference.cwd {
                 Some(cwd) => (
                     PathBase::InvocationCwd,
-                    Some(normalize_utf8(&cwd.join(path))),
+                    Some(normalize_utf8_path(cwd.join(path))),
                 ),
                 None => {
                     if !self.cwd_issue_emitted {
@@ -1201,28 +1199,6 @@ fn infer_redirections(output: &mut FileAccessSink<'_, '_>) {
     }
 }
 
-fn normalize_utf8(path: &Utf8Path) -> Utf8PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in Path::new(path.as_str()).components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                ) {
-                    normalized.pop();
-                } else if !path.is_absolute() {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    Utf8PathBuf::from_path_buf(normalized)
-        .expect("normalizing an existing UTF-8 path preserves UTF-8")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1508,27 +1484,6 @@ mod tests {
     }
 
     proptest! {
-        /// Property: lexical path normalization is idempotent and removes all
-        /// current-directory components. Parent traversal may remain only for
-        /// relative paths that genuinely attempt to escape their starting point.
-        #[test]
-        fn path_normalization_is_idempotent(
-            absolute in any::<bool>(),
-            segments in prop::collection::vec(prop_oneof![Just(".".to_owned()), Just("..".to_owned()), "[a-z]{1,8}"], 0..30),
-        ) {
-            let mut source = if absolute { "/".to_owned() } else { String::new() };
-            source.push_str(&segments.join("/"));
-            let once = normalize_utf8(Utf8Path::new(&source));
-            let twice = normalize_utf8(&once);
-
-            prop_assert_eq!(&once, &twice);
-            prop_assert!(!once.as_std_path().components().any(|component| matches!(component, std::path::Component::CurDir)));
-            if absolute {
-                prop_assert!(once.is_absolute());
-                prop_assert!(!once.as_std_path().components().any(|component| matches!(component, std::path::Component::ParentDir)));
-            }
-        }
-
         /// Property: output redirection to a literal relative path always
         /// denotes a direct modification resolved beneath the supplied cwd.
         #[test]

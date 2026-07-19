@@ -5,6 +5,7 @@ mod error;
 mod event;
 mod identity;
 pub mod json_helpers;
+pub mod path;
 mod raw;
 
 pub use context::{
@@ -20,6 +21,10 @@ pub use event::{
 };
 pub use identity::{
     AlignedEventKind, BuiltinHarness, ContractId, DialectLineage, EventId, HarnessId, SnapshotId,
+};
+pub use path::{
+    expand_home, expand_utf8_home, normalize_path, normalize_utf8_path, resolve_path,
+    resolve_utf8_path, utf8_path_to_slash,
 };
 pub use raw::RawInvocation;
 

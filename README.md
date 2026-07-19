@@ -41,8 +41,10 @@ change.
   - `hookkit-tool-runner` (ships `post-tool-use-agent-hook`,
     `turn-completion-agent-hook`, and the precise
     `session-start-state-agent-hook` metadata observer)
-- Shared core error/types:
-  - `hookkit-core`
+- Shared core errors, types, and deterministic lexical path operations:
+  - `hookkit-core` path helpers normalize, resolve, expand an explicitly
+    supplied home, and render UTF-8 slash paths without filesystem access;
+    canonicalization and symlink resolution remain explicit caller concerns.
 - Versioned upstream protocol ledger and generated support matrix:
   - [`contracts/`](contracts/README.md)
   - [`contracts/status/support.md`](contracts/status/support.md)

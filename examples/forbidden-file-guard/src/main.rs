@@ -1,7 +1,7 @@
 use clap::{Parser, ValueEnum};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_antigravity::ToolDecision;
-use hookkit_core::{RuntimeContext, Utf8Path};
+use hookkit_core::{RuntimeContext, Utf8Path, expand_home, normalize_path, resolve_path};
 use hookkit_shell::{
     BashAnalyzer, FileAccessAnalyzer, FileAccessCandidate, FileInferenceContext, FileTarget,
     ShellToolCallError, ShellToolCallExt, ShellToolCallMatch, ShellToolCallRef,
@@ -9,7 +9,7 @@ use hookkit_shell::{
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 const PROJECT_CONFIG: &str = ".agent-hook-kit/forbidden-files.yaml";
 
@@ -176,7 +176,7 @@ fn load_policy(config_paths: &[PathBuf], roots: &[PathBuf]) -> hookkit_core::Res
             if pattern.trim().is_empty() {
                 continue;
             }
-            let pattern = expand_home(&pattern);
+            let pattern = expand_pattern_home(&pattern);
             builder.add(Glob::new(&slash_string(&pattern)).map_err(invalid_data)?);
         }
     }
@@ -306,12 +306,8 @@ fn matches_policy(policy: &Policy, path: &Path, roots: &[PathBuf]) -> bool {
     let expanded = expand_path_home(path);
     let mut forms = BTreeSet::from([slash_path(path), slash_path(&expanded)]);
     for root in roots {
-        let absolute = normalize_path(if expanded.is_absolute() {
-            expanded.clone()
-        } else {
-            root.join(&expanded)
-        });
-        let normalized_root = normalize_path(root.clone());
+        let absolute = resolve_path(root, &expanded);
+        let normalized_root = normalize_path(root);
         insert_path_forms(&mut forms, &absolute, &normalized_root);
         if let Ok(canonical) = std::fs::canonicalize(&absolute) {
             let canonical_root = std::fs::canonicalize(&normalized_root).unwrap_or(normalized_root);
@@ -425,42 +421,15 @@ fn find_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a st
         .find_map(|key| map.get(*key).and_then(serde_json::Value::as_str))
 }
 
-fn expand_home(pattern: &str) -> String {
-    let Some(rest) = pattern.strip_prefix("~/") else {
-        return pattern.to_string();
-    };
-    dirs::home_dir().map_or_else(|| pattern.to_string(), |home| slash_path(&home.join(rest)))
+fn expand_pattern_home(pattern: &str) -> String {
+    dirs::home_dir().map_or_else(
+        || pattern.to_string(),
+        |home| slash_path(&expand_home(pattern, home)),
+    )
 }
 
 fn expand_path_home(path: &Path) -> PathBuf {
-    let value = path.to_string_lossy();
-    let Some(rest) = value.strip_prefix("~/") else {
-        return path.to_path_buf();
-    };
-    dirs::home_dir().map_or_else(|| path.to_path_buf(), |home| home.join(rest))
-}
-
-fn normalize_path(path: PathBuf) -> PathBuf {
-    let absolute = path.is_absolute();
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let can_pop = matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                );
-                if can_pop {
-                    normalized.pop();
-                } else if !absolute {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
+    dirs::home_dir().map_or_else(|| path.to_path_buf(), |home| expand_home(path, home))
 }
 
 fn slash_path(path: &Path) -> String {

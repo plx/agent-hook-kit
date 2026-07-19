@@ -1,6 +1,7 @@
 use clap::Parser;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_codex::protocol::{PreToolUse, PreToolUseInput, PreToolUseOutput};
+use hookkit_core::{normalize_path, resolve_path};
 use hookkit_session_state::{ClaimResult, FamilyId, SessionState, StateRoot};
 use hookkit_shell::{
     BashAnalyzer, FileAccessAnalyzer, FileInferenceContext, FileTarget, ShellToolCallExt,
@@ -9,7 +10,7 @@ use hookkit_shell::{
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const STATE_FAMILY: &str = "agent-hook-kit.codex-claude-rules";
@@ -214,12 +215,8 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
 }
 
 fn rule_matches(rule: &Rule, path: &Path, project_root: &Path) -> bool {
-    let absolute = normalize_path(if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        project_root.join(path)
-    });
-    let root = normalize_path(project_root.to_path_buf());
+    let absolute = resolve_path(project_root, path);
+    let root = normalize_path(project_root);
     absolute
         .strip_prefix(root)
         .ok()
@@ -245,11 +242,7 @@ fn referenced_paths(input: &PreToolUseInput) -> Vec<PathBuf> {
         .filter(|path| !path.trim().is_empty())
         .map(|path| {
             let path = PathBuf::from(path);
-            normalize_path(if path.is_absolute() {
-                path
-            } else {
-                input.cwd.as_std_path().join(path)
-            })
+            resolve_path(input.cwd.as_std_path(), path)
         });
     structured
         .chain(shell_referenced_paths(input))
@@ -371,11 +364,7 @@ fn shell_referenced_paths(input: &PreToolUseInput) -> Vec<PathBuf> {
                 .map_or(argument.as_str(), |(_, value)| value);
             if looks_like_path(candidate) {
                 let path = PathBuf::from(candidate);
-                paths.push(normalize_path(if path.is_absolute() {
-                    path
-                } else {
-                    cwd.as_std_path().join(path)
-                }));
+                paths.push(resolve_path(cwd.as_std_path(), path));
             }
         }
     }
@@ -403,35 +392,8 @@ fn find_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a st
         .find_map(|key| map.get(*key).and_then(serde_json::Value::as_str))
 }
 
-fn normalize_path(path: PathBuf) -> PathBuf {
-    let absolute = path.is_absolute();
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let can_pop = matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                );
-                if can_pop {
-                    normalized.pop();
-                } else if !absolute {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
-}
-
 fn absolute_path(path: &Path) -> std::io::Result<PathBuf> {
-    if path.is_absolute() {
-        Ok(normalize_path(path.to_path_buf()))
-    } else {
-        Ok(normalize_path(std::env::current_dir()?.join(path)))
-    }
+    Ok(resolve_path(std::env::current_dir()?, path))
 }
 
 fn slash_path(path: &Path) -> String {

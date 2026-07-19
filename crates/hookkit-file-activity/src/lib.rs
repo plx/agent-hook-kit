@@ -6,7 +6,7 @@
 
 use globset::Glob;
 use hookkit_common::PostToolUseInput;
-use hookkit_core::{RuntimeContext, Utf8Path, Utf8PathBuf};
+use hookkit_core::{RuntimeContext, Utf8Path, Utf8PathBuf, normalize_utf8_path};
 use hookkit_session_state::{
     EntityId, EntityJournal, EntityMode, EntityOutcome, FamilyId, JournalEntity, SessionState,
     StateRoot, UtcTimestamp,
@@ -17,7 +17,7 @@ use hookkit_shell::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 use walkdir::{DirEntry, WalkDir};
@@ -606,7 +606,7 @@ fn find_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a st
 
 fn resolve_utf8_path(cwd: &Utf8Path, raw: &str) -> Option<Utf8PathBuf> {
     let raw = Utf8Path::new(raw);
-    Some(normalize_utf8(if raw.is_absolute() {
+    Some(normalize_utf8_path(if raw.is_absolute() {
         raw.to_path_buf()
     } else {
         cwd.join(raw)
@@ -940,7 +940,7 @@ fn append_git_path(
             return Ok(());
         }
     };
-    let path = normalize_utf8(root.join(relative));
+    let path = normalize_utf8_path(root.join(relative));
     if seen.insert(path.clone()) {
         events.push(FileActivityEvent::Evidence(metadata.evidence(
             FileActivityTarget::exact(path),
@@ -1112,30 +1112,7 @@ fn default_ignored_directory_names() -> BTreeSet<String> {
 fn utf8_path(path: &Path) -> Result<Utf8PathBuf> {
     Utf8PathBuf::from_path_buf(path.to_path_buf())
         .map_err(FileActivityError::NonUtf8Path)
-        .map(normalize_utf8)
-}
-
-fn normalize_utf8(path: Utf8PathBuf) -> Utf8PathBuf {
-    let absolute = path.is_absolute();
-    let mut normalized = PathBuf::new();
-    for component in path.as_std_path().components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let can_pop = matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                );
-                if can_pop {
-                    normalized.pop();
-                } else if !absolute {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    Utf8PathBuf::from_path_buf(normalized).expect("normalizing a UTF-8 path preserves UTF-8")
+        .map(normalize_utf8_path)
 }
 
 #[cfg(test)]
@@ -1405,22 +1382,5 @@ mod tests {
             prop_assert_eq!(cursor.reconciled_through, timestamps.into_iter().max());
         }
 
-        /// Property: lexical normalization is idempotent and absolute paths
-        /// never retain traversal above their filesystem root.
-        #[test]
-        fn normalized_activity_paths_are_stable(
-            segments in prop::collection::vec(prop_oneof![Just(".".to_owned()), Just("..".to_owned()), "[a-z]{1,8}"], 0..30),
-        ) {
-            let source = Utf8PathBuf::from(format!("/{}", segments.join("/")));
-            let once = normalize_utf8(source);
-            let twice = normalize_utf8(once.clone());
-
-            prop_assert_eq!(&once, &twice);
-            prop_assert!(once.is_absolute());
-            let contains_traversal = once.as_std_path().components().any(|component| {
-                matches!(component, Component::CurDir | Component::ParentDir)
-            });
-            prop_assert!(!contains_traversal);
-        }
     }
 }
