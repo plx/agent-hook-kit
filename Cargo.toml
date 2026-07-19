@@ -11,6 +11,7 @@ members = [
     "crates/hookkit-conformance",
     "crates/hookkit-common",
     "crates/hookkit-shell",
+    "crates/hookkit-tool-access",
     "crates/hookkit-file-activity",
     "crates/hookkit-pkl-config",
     "crates/hookkit-tool-runner",
@@ -62,6 +63,7 @@ hookkit-gemini = { version = "0.1.0", path = "crates/hookkit-gemini" }
 hookkit-antigravity = { version = "0.1.0", path = "crates/hookkit-antigravity" }
 hookkit-common = { version = "0.1.0", path = "crates/hookkit-common" }
 hookkit-shell = { version = "0.1.0", path = "crates/hookkit-shell" }
+hookkit-tool-access = { version = "0.1.0", path = "crates/hookkit-tool-access" }
 hookkit-file-activity = { version = "0.1.0", path = "crates/hookkit-file-activity" }
 hookkit-pkl-config = { version = "0.1.0", path = "crates/hookkit-pkl-config" }
 hookkit-tool-runner = { version = "0.1.0", path = "crates/hookkit-tool-runner" }

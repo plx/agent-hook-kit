@@ -10,6 +10,12 @@ modification times, and opt-in VCS dirty state all retain their provenance.
 Unresolved shell behavior is recorded as a coverage gap instead of being
 silently treated as a complete observation.
 
+Immediate post-tool extraction delegates to `hookkit-tool-access`, then keeps
+only candidates whose retained access intent may modify a file. Read-only
+evidence remains available to pre-tool and policy consumers through the lower
+crate but is not persisted as modified-file activity. The version-1 activity
+journal schema remains unchanged.
+
 Pending activity is a windowed session-state entity. A consumer acknowledges
 the exact generations it discharged; new observations appended while the
 consumer runs remain pending. Filesystem reconciliation uses a monotonic

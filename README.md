@@ -30,6 +30,8 @@ change.
   - `hookkit-common`
 - Opt-in, bounded Bash syntax analysis and file-access inference for native shell tool calls:
   - [`hookkit-shell`](crates/hookkit-shell/README.md)
+- Phase-agnostic structured, patch, and shell file-access evidence:
+  - [`hookkit-tool-access`](crates/hookkit-tool-access/README.md)
 - Loss-aware file activity evidence, pending windows, and reconciliation:
   - [`hookkit-file-activity`](crates/hookkit-file-activity/README.md)
 - Concurrent, versioned session-scoped state primitives:
@@ -70,6 +72,7 @@ crates/
   hookkit-antigravity/
   hookkit-common/
   hookkit-shell/
+  hookkit-tool-access/
   hookkit-file-activity/
   hookkit-pkl-config/
   hookkit-tool-runner/

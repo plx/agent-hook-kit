@@ -605,11 +605,10 @@ name = "hookkit-file-activity"
 version = "0.1.0"
 dependencies = [
  "globset",
- "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
  "hookkit-session-state",
- "hookkit-shell",
+ "hookkit-tool-access",
  "proptest",
  "serde",
  "serde_json",
@@ -687,6 +686,16 @@ dependencies = [
  "serde_json",
  "tree-sitter",
  "tree-sitter-bash",
+]
+
+[[package]]
+name = "hookkit-tool-access"
+version = "0.1.0"
+dependencies = [
+ "hookkit-common",
+ "hookkit-core",
+ "hookkit-shell",
+ "serde_json",
 ]
 
 [[package]]

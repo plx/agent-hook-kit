@@ -11,9 +11,9 @@ use hookkit_session_state::{
     EntityId, EntityJournal, EntityMode, EntityOutcome, FamilyId, JournalEntity, SessionState,
     StateRoot, UtcTimestamp,
 };
-use hookkit_shell::{
-    BashAnalyzer, FileAccessAnalyzer, FileAccessCertainty, FileAccessKind, FileInferenceContext,
-    FileTarget, FileTargetScope, ShellToolCallExt, ShellToolCallMatch,
+use hookkit_tool_access::{
+    AccessCandidate, AccessCertainty, AccessIntent, AccessScope, AccessSource, AccessTarget,
+    ToolAccessAnalyzer,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -305,43 +305,80 @@ pub fn observe_post_tool(input: &PostToolUseInput, context: &RuntimeContext<'_>)
         turn_id,
     };
 
-    match input {
-        PostToolUseInput::Claude(native) => observe_native_post_tool(
-            native.shell_tool_call(),
-            &native.tool_name,
-            &native.tool_input,
-            native.cwd.as_path(),
-            &metadata,
-        ),
-        PostToolUseInput::Codex(native) => observe_native_post_tool(
-            native.shell_tool_call(),
-            &native.tool_name,
-            &native.tool_input,
-            native.cwd.as_path(),
-            &metadata,
-        ),
-        PostToolUseInput::Gemini(native) => {
-            let tool_input = serde_json::Value::Object(native.tool_input.clone());
-            observe_native_post_tool(
-                native.shell_tool_call(),
-                &native.tool_name,
-                &tool_input,
-                native.cwd.as_path(),
-                &metadata,
-            )
+    let access = ToolAccessAnalyzer::default().analyze_post_tool(input);
+    activity_report(access, &metadata)
+}
+
+fn activity_report(
+    access: hookkit_tool_access::ToolAccessReport,
+    metadata: &ObservationMetadata,
+) -> ActivityReport {
+    let mut events = Vec::new();
+    for candidate in access.may_modify() {
+        match activity_evidence(candidate, metadata) {
+            Some(evidence) => events.push(FileActivityEvent::Evidence(evidence)),
+            None => events.push(FileActivityEvent::Gap(metadata.gap(
+                activity_source(candidate.provenance.source()),
+                format!(
+                    "{}; modifying target has no persistence-compatible lexical resolution",
+                    candidate.provenance
+                ),
+            ))),
         }
-        PostToolUseInput::Antigravity(_) => ActivityReport {
-            events: vec![FileActivityEvent::Gap(metadata.gap(
-                FileActivitySource::StructuredToolInput,
-                "Antigravity PostToolUse does not include the completed tool call",
-            ))],
+    }
+    events.extend(access.gaps.into_iter().map(|gap| {
+        FileActivityEvent::Gap(metadata.gap(activity_source(gap.source), gap.to_string()))
+    }));
+    ActivityReport { events }
+}
+
+fn activity_evidence(
+    candidate: &AccessCandidate,
+    metadata: &ObservationMetadata,
+) -> Option<FileActivityEvidence> {
+    let target = match &candidate.target {
+        AccessTarget::Path { expression, scope } => FileActivityTarget::Path {
+            path: expression.resolved.clone()?,
+            scope: match scope {
+                AccessScope::Exact => FileActivityScope::Exact,
+                AccessScope::Descendants => FileActivityScope::Descendants,
+                AccessScope::ExactOrDescendants => FileActivityScope::ExactOrDescendants,
+                AccessScope::Glob => FileActivityScope::Glob,
+                _ => return None,
+            },
         },
-        _ => ActivityReport {
-            events: vec![FileActivityEvent::Gap(metadata.gap(
-                FileActivitySource::StructuredToolInput,
-                "unknown aligned PostToolUse input arm",
-            ))],
-        },
+        AccessTarget::Workspace { root } => FileActivityTarget::Workspace { root: root.clone() },
+        _ => return None,
+    };
+    let effect = match candidate.intent {
+        AccessIntent::Delete => FileActivityEffect::Delete,
+        AccessIntent::MoveSource => FileActivityEffect::MoveSource,
+        AccessIntent::MoveDestination => FileActivityEffect::MoveDestination,
+        AccessIntent::Modify | AccessIntent::ReadModify => FileActivityEffect::CreateOrModify,
+        _ => FileActivityEffect::MaybeWrite,
+    };
+    let certainty = match candidate.certainty {
+        AccessCertainty::Direct => ActivityCertainty::Direct,
+        AccessCertainty::Conditional => ActivityCertainty::Conditional,
+        AccessCertainty::Heuristic => ActivityCertainty::Heuristic,
+        _ => ActivityCertainty::Heuristic,
+    };
+    Some(metadata.evidence(
+        target,
+        effect,
+        activity_source(candidate.provenance.source()),
+        certainty,
+        Some(candidate.provenance.to_string()),
+    ))
+}
+
+fn activity_source(source: AccessSource) -> FileActivitySource {
+    match source {
+        AccessSource::Structured => FileActivitySource::StructuredToolInput,
+        AccessSource::Patch => FileActivitySource::Patch,
+        AccessSource::Shell => FileActivitySource::ShellInference,
+        AccessSource::Custom => FileActivitySource::StructuredToolInput,
+        _ => FileActivitySource::StructuredToolInput,
     }
 }
 
@@ -385,232 +422,6 @@ impl ObservationMetadata {
             detail: detail.into(),
         }
     }
-}
-
-fn observe_native_post_tool(
-    shell_call: ShellToolCallMatch<'_>,
-    tool_name: &str,
-    tool_input: &serde_json::Value,
-    cwd: &Utf8Path,
-    metadata: &ObservationMetadata,
-) -> ActivityReport {
-    match shell_call {
-        ShellToolCallMatch::Matched(call) => {
-            let analysis = BashAnalyzer::default().analyze(call.command);
-            let access =
-                FileAccessAnalyzer::default().infer(&analysis, FileInferenceContext::new(call.cwd));
-            let mut events = access
-                .may_modify()
-                .filter_map(|candidate| {
-                    shell_evidence(candidate, metadata).map(FileActivityEvent::Evidence)
-                })
-                .collect::<Vec<_>>();
-            events.extend(access.unresolved.into_iter().map(|unresolved| {
-                FileActivityEvent::Gap(metadata.gap(
-                    FileActivitySource::ShellInference,
-                    format!("{unresolved:?}"),
-                ))
-            }));
-            ActivityReport { events }
-        }
-        ShellToolCallMatch::Malformed(error) => ActivityReport {
-            events: vec![FileActivityEvent::Gap(
-                metadata.gap(FileActivitySource::ShellInference, error.to_string()),
-            )],
-        },
-        ShellToolCallMatch::NotShell => {
-            observe_structured_tool(tool_name, tool_input, cwd, metadata)
-        }
-        _ => ActivityReport {
-            events: vec![FileActivityEvent::Gap(metadata.gap(
-                FileActivitySource::ShellInference,
-                "unknown shell-tool match result",
-            ))],
-        },
-    }
-}
-
-fn shell_evidence(
-    candidate: &hookkit_shell::FileAccessCandidate,
-    metadata: &ObservationMetadata,
-) -> Option<FileActivityEvidence> {
-    let target = match &candidate.target {
-        FileTarget::Path { expression, scope } => FileActivityTarget::Path {
-            path: expression.resolved.clone()?,
-            scope: match scope {
-                FileTargetScope::Exact => FileActivityScope::Exact,
-                FileTargetScope::Descendants => FileActivityScope::Descendants,
-                FileTargetScope::ExactOrDescendants => FileActivityScope::ExactOrDescendants,
-                FileTargetScope::Glob => FileActivityScope::Glob,
-                _ => FileActivityScope::ExactOrDescendants,
-            },
-        },
-        FileTarget::Workspace { root } => FileActivityTarget::Workspace { root: root.clone() },
-        _ => return None,
-    };
-    let effect = match candidate.access {
-        FileAccessKind::Delete => FileActivityEffect::Delete,
-        FileAccessKind::MoveSource => FileActivityEffect::MoveSource,
-        FileAccessKind::MoveDestination => FileActivityEffect::MoveDestination,
-        FileAccessKind::Modify | FileAccessKind::ReadModify => FileActivityEffect::CreateOrModify,
-        _ => FileActivityEffect::MaybeWrite,
-    };
-    let certainty = match candidate.certainty {
-        FileAccessCertainty::Direct => ActivityCertainty::Direct,
-        FileAccessCertainty::Conditional => ActivityCertainty::Conditional,
-        FileAccessCertainty::Heuristic => ActivityCertainty::Heuristic,
-        _ => ActivityCertainty::Heuristic,
-    };
-    Some(metadata.evidence(
-        target,
-        effect,
-        FileActivitySource::ShellInference,
-        certainty,
-        Some(candidate.inferred_by.clone()),
-    ))
-}
-
-fn observe_structured_tool(
-    tool_name: &str,
-    tool_input: &serde_json::Value,
-    cwd: &Utf8Path,
-    metadata: &ObservationMetadata,
-) -> ActivityReport {
-    let mut paths = Vec::new();
-    let mut source = FileActivitySource::StructuredToolInput;
-    let lower = tool_name.to_ascii_lowercase();
-    let is_patch = lower == "apply_patch" || lower.ends_with(".apply_patch");
-    if is_patch {
-        source = FileActivitySource::Patch;
-        if let Some(patch) = find_string(tool_input, &["patch", "input"]) {
-            collect_patch_paths(patch, &mut paths);
-        }
-    } else if is_structured_writer(&lower) {
-        collect_path_fields(tool_input, &mut paths);
-    } else {
-        return ActivityReport::default();
-    }
-
-    let mut seen = BTreeSet::new();
-    let mut events = paths
-        .into_iter()
-        .filter(|path| !path.trim().is_empty())
-        .filter_map(|path| resolve_utf8_path(cwd, &path))
-        .filter(|path| seen.insert(path.clone()))
-        .map(|path| {
-            FileActivityEvent::Evidence(metadata.evidence(
-                FileActivityTarget::exact(path),
-                FileActivityEffect::MaybeWrite,
-                source,
-                if is_patch {
-                    ActivityCertainty::Direct
-                } else {
-                    ActivityCertainty::Heuristic
-                },
-                Some(format!("tool {tool_name}")),
-            ))
-        })
-        .collect::<Vec<_>>();
-    if events.is_empty() {
-        events.push(FileActivityEvent::Gap(metadata.gap(
-            source,
-            format!("recognized writer tool {tool_name} exposed no resolvable path"),
-        )));
-    }
-    ActivityReport { events }
-}
-
-fn is_structured_writer(lower_tool_name: &str) -> bool {
-    [
-        "write", "edit", "replace", "patch", "save", "create", "delete", "remove", "move", "rename",
-    ]
-    .iter()
-    .any(|verb| lower_tool_name.contains(verb))
-}
-
-fn collect_path_fields(value: &serde_json::Value, out: &mut Vec<String>) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, value) in map {
-                if is_path_key(key) {
-                    collect_path_values(value, out);
-                } else {
-                    collect_path_fields(value, out);
-                }
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_path_fields(value, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_path_values(value: &serde_json::Value, out: &mut Vec<String>) {
-    match value {
-        serde_json::Value::String(path) => out.push(path.clone()),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_path_values(value, out);
-            }
-        }
-        value => collect_path_fields(value, out),
-    }
-}
-
-fn is_path_key(key: &str) -> bool {
-    matches!(
-        key,
-        "path"
-            | "paths"
-            | "file_path"
-            | "filePath"
-            | "target_file"
-            | "targetFile"
-            | "absolute_path"
-            | "absolutePath"
-            | "source"
-            | "destination"
-            | "old_path"
-            | "new_path"
-    )
-}
-
-fn collect_patch_paths(patch: &str, out: &mut Vec<String>) {
-    const PREFIXES: &[&str] = &[
-        "*** Add File: ",
-        "*** Update File: ",
-        "*** Delete File: ",
-        "*** Move to: ",
-        "+++ b/",
-        "--- a/",
-    ];
-    for line in patch.lines() {
-        if let Some(path) = PREFIXES
-            .iter()
-            .find_map(|prefix| line.strip_prefix(prefix))
-            .filter(|path| *path != "/dev/null")
-        {
-            out.push(path.trim().to_owned());
-        }
-    }
-}
-
-fn find_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
-    let map = value.as_object()?;
-    keys.iter()
-        .find_map(|key| map.get(*key).and_then(serde_json::Value::as_str))
-}
-
-fn resolve_utf8_path(cwd: &Utf8Path, raw: &str) -> Option<Utf8PathBuf> {
-    let raw = Utf8Path::new(raw);
-    Some(normalize_utf8_path(if raw.is_absolute() {
-        raw.to_path_buf()
-    } else {
-        cwd.join(raw)
-    }))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1136,22 +947,49 @@ mod tests {
         directory
     }
 
-    #[test]
-    fn patch_observation_retains_direct_provenance() {
-        let metadata = ObservationMetadata {
+    fn observation_metadata() -> ObservationMetadata {
+        ObservationMetadata {
             observed_at: UtcTimestamp::now(),
             event: Some("PostToolUse".to_owned()),
             tool_call_id: Some("tool".to_owned()),
             turn_id: Some("turn".to_owned()),
-        };
-        let report = observe_structured_tool(
+        }
+    }
+
+    fn codex_post_tool(tool_name: &str, tool_input: serde_json::Value) -> PostToolUseInput {
+        PostToolUseInput::Codex(
+            serde_json::from_value(serde_json::json!({
+                "session_id": "session",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": "/repo",
+                "hook_event_name": "PostToolUse",
+                "model": "gpt-test",
+                "turn_id": "turn",
+                "permission_mode": "default",
+                "tool_name": tool_name,
+                "tool_use_id": "tool",
+                "tool_input": tool_input,
+                "tool_response": {"exit_code": 0}
+            }))
+            .unwrap(),
+        )
+    }
+
+    fn analyze_activity(input: &PostToolUseInput) -> ActivityReport {
+        activity_report(
+            ToolAccessAnalyzer::default().analyze_post_tool(input),
+            &observation_metadata(),
+        )
+    }
+
+    #[test]
+    fn patch_observation_retains_direct_provenance() {
+        let report = analyze_activity(&codex_post_tool(
             "apply_patch",
-            &serde_json::json!({
+            serde_json::json!({
                 "patch": "*** Update File: src/lib.rs\n*** Add File: src/new.rs"
             }),
-            Utf8Path::new("/repo"),
-            &metadata,
-        );
+        ));
 
         let evidence = report.evidence().collect::<Vec<_>>();
         assert_eq!(evidence.len(), 2);
@@ -1165,29 +1003,10 @@ mod tests {
 
     #[test]
     fn shell_observation_keeps_candidates_and_known_gaps() {
-        let metadata = ObservationMetadata {
-            observed_at: UtcTimestamp::now(),
-            event: None,
-            tool_call_id: None,
-            turn_id: None,
-        };
-        let analysis = BashAnalyzer::default().analyze("echo ok > src/out.txt; mystery $TARGET");
-        let access = FileAccessAnalyzer::default().infer(
-            &analysis,
-            FileInferenceContext::new(Some(Utf8Path::new("/repo"))),
-        );
-        let mut events = access
-            .may_modify()
-            .filter_map(|candidate| {
-                shell_evidence(candidate, &metadata).map(FileActivityEvent::Evidence)
-            })
-            .collect::<Vec<_>>();
-        events.extend(access.unresolved.into_iter().map(|gap| {
-            FileActivityEvent::Gap(
-                metadata.gap(FileActivitySource::ShellInference, format!("{gap:?}")),
-            )
-        }));
-        let report = ActivityReport { events };
+        let report = analyze_activity(&codex_post_tool(
+            "Bash",
+            serde_json::json!({"command": "echo ok > src/out.txt; mystery $TARGET"}),
+        ));
 
         assert!(report.evidence().any(|item| {
             item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/out.txt"))
@@ -1196,39 +1015,17 @@ mod tests {
     }
 
     #[test]
-    fn native_codex_shell_adapter_feeds_file_access_inference() {
-        let native: hookkit_codex::protocol::PostToolUseInput =
-            serde_json::from_value(serde_json::json!({
-                "session_id": "session",
-                "transcript_path": "/tmp/transcript.jsonl",
-                "cwd": "/repo",
-                "hook_event_name": "PostToolUse",
-                "model": "gpt-test",
-                "turn_id": "turn",
-                "permission_mode": "default",
-                "tool_name": "Bash",
-                "tool_use_id": "tool",
-                "tool_input": {"command": "touch src/new.rs"},
-                "tool_response": {"exit_code": 0}
-            }))
-            .unwrap();
-        let metadata = ObservationMetadata {
-            observed_at: UtcTimestamp::now(),
-            event: Some("PostToolUse".to_owned()),
-            tool_call_id: Some("tool".to_owned()),
-            turn_id: Some("turn".to_owned()),
-        };
-
-        let report = observe_native_post_tool(
-            native.shell_tool_call(),
-            &native.tool_name,
-            &native.tool_input,
-            native.cwd.as_path(),
-            &metadata,
-        );
+    fn shared_access_report_keeps_modifications_and_drops_reads() {
+        let report = analyze_activity(&codex_post_tool(
+            "Bash",
+            serde_json::json!({"command": "cat src/input.rs; touch src/new.rs"}),
+        ));
         assert!(report.evidence().any(|item| {
             item.source == FileActivitySource::ShellInference
                 && item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/new.rs"))
+        }));
+        assert!(!report.evidence().any(|item| {
+            item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/input.rs"))
         }));
     }
 
@@ -1320,51 +1117,6 @@ mod tests {
     }
 
     proptest! {
-        /// Property: recursive structured-tool discovery returns each spelling
-        /// exactly once. Path-key arrays and nested objects are traversed, but
-        /// values under unrelated keys are not guessed to be paths.
-        #[test]
-        fn structured_path_collection_is_recursive_without_duplicates(
-            direct in any::<String>(),
-            array in prop::collection::vec(any::<String>(), 0..20),
-            nested in any::<String>(),
-            unrelated in any::<String>(),
-        ) {
-            let value = serde_json::json!({
-                "path": direct.clone(),
-                "wrapper": [{"paths": array.clone()}, {"deeper": {"filePath": nested.clone()}}],
-                "message": unrelated,
-            });
-            let mut actual = Vec::new();
-            collect_path_fields(&value, &mut actual);
-            let expected = std::iter::once(direct)
-                .chain(array)
-                .chain(std::iter::once(nested))
-                .collect::<Vec<_>>();
-
-            prop_assert_eq!(actual, expected);
-        }
-
-        /// Property: patch path extraction is line-oriented and order
-        /// preserving across every supported patch header spelling.
-        #[test]
-        fn patch_headers_extract_trimmed_paths(
-            paths in prop::collection::vec("[a-z][a-z0-9_./-]{0,20}", 0..30),
-        ) {
-            const PREFIXES: [&str; 6] = [
-                "*** Add File: ", "*** Update File: ", "*** Delete File: ",
-                "*** Move to: ", "+++ b/", "--- a/",
-            ];
-            let patch = paths.iter().enumerate()
-                .map(|(index, path)| format!("{}  {path}  ", PREFIXES[index % PREFIXES.len()]))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let mut actual = Vec::new();
-            collect_patch_paths(&patch, &mut actual);
-
-            prop_assert_eq!(actual, paths);
-        }
-
         /// Property: reconciliation cursors are a monotonic maximum. Event
         /// order and duplicate timestamps cannot move the cursor backwards.
         #[test]
