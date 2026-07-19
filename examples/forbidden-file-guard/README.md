@@ -1,9 +1,10 @@
 # Forbidden file guard
 
-`forbidden-file-guard` is one clap-based executable with three native pre-tool
+`forbidden-file-guard` is one aligned executable with four native pre-tool
 modes:
 
 ```bash
+forbidden-file-guard --harness=claude
 forbidden-file-guard --harness=codex
 forbidden-file-guard --harness=gemini
 forbidden-file-guard --harness=antigravity
@@ -27,7 +28,7 @@ patterns:
   - "**/.env"
   - "**/.env.*"
   - "~/.ssh/**"
-block_shell_commands: true
+access_policy: deny_unresolved
 ```
 
 See [`forbidden-files.example.yaml`](forbidden-files.example.yaml) for a
@@ -35,16 +36,23 @@ commented version. Patterns are matched against both absolute paths and paths
 relative to each workspace root. Home `~/` patterns are expanded before glob
 compilation.
 
-For structured tool calls the handler recursively inspects path-bearing fields
-and recognizes `apply_patch` headers. Shell tool calls are identified by
-`hookkit-shell`'s native adapters (`ShellToolCallExt`) — Codex/Claude `Bash`,
-Gemini `run_shell_command`, and Antigravity `run_command` (whose command lives in
-`CommandLine`, with its own `Cwd`) — and their commands are inspected with a
-bounded Bash parse (`BashAnalyzer` + `FileAccessAnalyzer`). That parse resolves
-each read, write, delete, move, and redirection target against the call's working
-directory, so `cat .env`, `echo x > sub/.env`, and `rm -rf .env` are all caught,
-while a write to an unlisted file passes. A match is lowered to Codex `deny`,
-Gemini `deny`, or Antigravity `ToolDecision::Deny`.
+`access_policy` has three postures:
+
+- `inspect_known` matches recovered candidates and allows analysis or resolver gaps;
+- `deny_unresolved` also denies any incomplete analysis or materialization; and
+- `deny_all_shell` denies exact native shell calls while continuing to inspect
+  non-shell calls.
+
+The legacy `block_shell_commands: true` remains accepted and maps to
+`deny_all_shell`; `false` maps to the default `inspect_known` behavior.
+
+Every native input is handled through aligned `PreToolUse` and
+`ToolAccessAnalyzer`. Structured fields, patch operations, exact native shell
+profiles, heuristic literal operands, and literal shell `apply_patch` heredocs
+produce one provenance-bearing report. `resolve_targets` then materializes
+descendant, glob, and workspace scopes within a 100,000-entry budget while
+retaining nonexistent exact write targets. Thus `rm -rf secrets` can match a
+`secrets/**` policy when descendants exist.
 
 For example, after building the binary, the checked-in Antigravity fixture
 produces a native deny response:
@@ -56,8 +64,10 @@ target/debug/forbidden-file-guard \
   < examples/forbidden-file-guard/fixtures/antigravity_pre_tool_use.json
 ```
 
-Existing candidates are also canonicalized before matching so a symlink does not
-hide an otherwise forbidden target.
+Raw and native-cwd-resolved exact forms are checked before materialization.
+Existing concrete candidates are also canonicalized explicitly before matching,
+so a symlink does not hide an otherwise forbidden target. Canonicalization is a
+filesystem-aware guard choice, not part of HookKit's lexical path API.
 
 ## Security boundary
 
@@ -65,21 +75,12 @@ A hook cannot reliably determine which files an arbitrary shell program will
 open. The Bash parse resolves literal and glob targets, but parameter expansion,
 command substitution, `eval`/`source`, generated scripts, and subprocess behavior
 remain outside static syntax — the analyzer reports those as *unresolved* file
-accesses rather than silently missing them (as the old lexical scan did). This
-guard still denies only on a concrete pattern match, so with
-`block_shell_commands: false` a command like `cat "$SECRET"` can pass. Set
-`block_shell_commands: true` to fail closed; the tradeoff is that every shell tool
-call is denied while that policy is active. For a real secret boundary, combine
+accesses rather than silently missing them. Under `inspect_known`, a command
+like `cat "$SECRET"` can pass; `deny_unresolved` rejects it without rejecting
+every inspectable shell call. Resolver truncation follows the same explicit
+posture. For a real secret boundary, combine
 this hook with an OS sandbox or harness-native filesystem restrictions rather than
 treating static analysis as isolation.
 
-Claude Code mode is intentionally unavailable. The selected `hookkit-claude`
-snapshot catalogs Claude `PreToolUse` but does not yet implement its native
-parser/output type, so the runtime cannot safely decode or deny that event.
-
-`hookkit-shell` now unifies the *input* side across harnesses, but the three arms
-still build their native outputs by hand. Unlike post-tool hooks — which run
-through `hookkit_runtime::aligned::run_aligned_event::<PostToolUse>` and match on
-one `PostToolUseInput`/`PostToolUseOutput` enum — there is no aligned `PreToolUse`
-event, and its `AlignedEventSpec` trait is sealed, so the allow/deny lowering
-cannot yet be shared.
+Native cwd determines relative operand meaning. Workspace roots determine
+policy discovery and project-relative matching; they never rewrite operands.

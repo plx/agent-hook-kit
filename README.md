@@ -30,7 +30,8 @@ change.
   - `hookkit-common`
 - Opt-in, bounded Bash syntax analysis and file-access inference for native shell tool calls:
   - [`hookkit-shell`](crates/hookkit-shell/README.md)
-- Phase-agnostic structured, patch, and shell file-access evidence:
+- Phase-agnostic structured, patch, and shell file-access evidence plus bounded
+  scoped-target materialization:
   - [`hookkit-tool-access`](crates/hookkit-tool-access/README.md)
 - Loss-aware file activity evidence, pending windows, and reconciliation:
   - [`hookkit-file-activity`](crates/hookkit-file-activity/README.md)
@@ -323,7 +324,7 @@ limitation notes:
 - [`codex-claude-rules`](examples/codex-claude-rules/README.md) lazily injects
   path-scoped files from Claude Code's user and project rules directories.
 - [`forbidden-file-guard`](examples/forbidden-file-guard/README.md) selects a
-  native pre-tool contract with `--harness=codex|gemini|antigravity` and merges
+  native pre-tool contract with `--harness=claude|codex|gemini|antigravity` and merges
   home/project YAML policy.
 - [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
   selects `--harness=claude|codex|gemini` and appends provenance-bearing,
@@ -468,14 +469,15 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - writes verbose manual diagnostics to a temp artifact and gives concise agent guidance when supported.
 - `codex-claude-rules`:
   - discovers Claude Code rule files recursively in user-before-project order,
-  - evaluates `paths` frontmatter against structured paths, patch headers, and
-    HookKit's parsed/inferred Bash file targets,
+  - evaluates `paths` frontmatter against materialized structured, patch, and
+    shell access targets from `hookkit-tool-access`,
   - atomically claims each matched rule in session state before injecting its
     body as additional context.
 - `forbidden-file-guard`:
-  - uses clap to select Codex, Gemini, or Antigravity native pre-tool handling,
+  - uses one aligned handler for Claude, Codex, Gemini, and Antigravity pre-tool events,
   - merges additive YAML glob policy from home and workspace configuration,
-  - emits the selected harness's native deny output for matching structured paths, patch paths, or obvious shell path tokens.
+  - applies inspect-known, deny-unresolved, or deny-all-shell posture to bounded
+    structured, patch, and shell access evidence.
 - `session-modified-file-tracker`:
   - uses the aligned post-tool API for Claude, Codex, and Gemini,
   - infers direct modifications from native open tool payloads and never shells out to Git,

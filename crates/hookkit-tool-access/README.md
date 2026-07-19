@@ -10,6 +10,13 @@ tools, expand runtime shell values, canonicalize paths, or promise that every
 runtime access is visible. Consumers decide how to treat unresolved or
 unclassified evidence.
 
+The `codex-claude-rules` and `forbidden-file-guard` examples are complete
+pre-tool consumers: the former expands referenced directories before selecting
+rules, while the latter demonstrates inspect-known and fail-closed policy
+postures across all four aligned harness arms. `hookkit-file-activity` uses the
+same analyzer after tool execution and deliberately keeps only modification
+evidence.
+
 Aligned `PreToolUseInput` and `PostToolUseInput` values can be analyzed directly:
 
 ```rust

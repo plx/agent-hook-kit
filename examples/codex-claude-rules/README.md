@@ -11,15 +11,14 @@ User rules are considered before project rules. Only files with a YAML
 frontmatter `paths` string or list are handled; Claude Code loads unscoped rules
 at session start, which is outside this example's purpose.
 
-For structured and patch tools, the hook resolves visible path fields and patch
-headers against the native working directory. For `Bash`, HookKit's exact Codex
-adapter extracts `/command`, its bounded Bash parser recovers commands and
-redirections, and its file-access analyzer supplies semantically classified
-path candidates. Commands outside the analyzer's built-in table fall back to
-path-like operands from HookKit's recovered literal argv; the example no longer
-maintains its own shell lexer.
+All structured, patch, and shell calls go through
+`hookkit_tool_access::ToolAccessAnalyzer`. Its shell analyzer enables the
+opt-in literal-operand fallback for unknown commands, and `resolve_targets`
+materializes exact, descendant, exact-or-descendant, glob, and workspace
+scopes within a 100,000-entry budget. Nonexistent exact paths are retained so
+a rule can activate before a write creates its target.
 
-Each candidate is matched relative to the project root. A newly matched rule is
+Materialized paths are matched relative to the project root. A newly matched rule is
 claimed through the shared session-scoped `ClaimSet`, then its markdown body is
 returned through `PreToolUseOutput::with_context`. Atomic claims mean concurrent
 hook processes cannot both decide one rule is new. By default, state lives in
@@ -56,14 +55,17 @@ A Codex `hooks.json` entry can invoke it for every supported pre-tool call:
 For isolated tests, `--project-root`, `--claude-home`, and `--state-dir` replace
 all ambient path choices.
 
-The checked-in fixture can be exercised from the repository root:
+The checked-in fixture uses a placeholder `/workspace` cwd. Set its native cwd
+to the same absolute fixture project used by the command before exercising it:
 
 ```bash
-target/debug/codex-claude-rules \
-  --project-root examples/codex-claude-rules/fixture-project \
-  --claude-home examples/codex-claude-rules/fixture-project/empty-claude-home \
-  --state-dir .context/codex-claude-rules-state \
-  < examples/codex-claude-rules/fixtures/pre_tool_use_apply_patch.json
+fixture_project="$(pwd)/examples/codex-claude-rules/fixture-project"
+jq --arg cwd "$fixture_project" '.cwd = $cwd' \
+  examples/codex-claude-rules/fixtures/pre_tool_use_apply_patch.json \
+  | target/debug/codex-claude-rules \
+  --project-root "$fixture_project" \
+  --claude-home "$fixture_project/empty-claude-home" \
+  --state-dir .context/codex-claude-rules-state
 ```
 
 The first invocation emits Codex `additionalContext`; repeating it with the
@@ -74,18 +76,19 @@ same state directory and session emits the native empty no-op.
 An exact clone of Claude Code's behavior is not possible with the current Codex
 hook surface. Codex `PreToolUse` currently observes Bash, `apply_patch`, and MCP
 tool calls rather than every internal file open. Structured `path`/`file_path`
-arguments and patch headers are reliable enough to match. Shell analysis is
-bounded and static: variables, command substitutions, sourced/generated code,
-executables' internal behavior, and runtime filesystem effects can still hide
-the eventual path. Unsupported commands use a deliberately broad fallback over
-literal operands, which can also over-report path-looking arguments.
+arguments and patch headers are reliable enough to match. Analysis and target
+materialization are bounded and static: variables, command substitutions,
+sourced/generated code, executables' internal behavior, filesystem races, and
+runtime effects can still hide the eventual path. Heuristic literal operands
+can also over-report path-looking arguments. Recovered concrete paths may
+activate rules; unresolved or truncated targets are never converted into a
+match.
 
-The file-access analyzer retains exact/descendant/glob/workspace target scope,
-but this example can only reuse its resolved path and does not expand scoped
-targets into the files a command will eventually touch. A broad directory read
-can therefore miss a descendant-only rule until Codex exposes a more specific
-path. The hook implements the observable subset and does not claim that every
-Codex file action triggers a rule.
+Relative tool operands always resolve against the native hook cwd.
+`--project-root` controls rule discovery, materialization roots for unrooted
+scopes, and project-relative pattern matching; it does not rewrite tool
+operands. A resolved target outside that project root does not match a
+project-relative rule.
 
 `ClaimSet` fits the immediate first-writer-wins decision here better than an
 NDJSON entity journal: this hook does not consume event history or need a
@@ -95,5 +98,5 @@ materialized loaded-rule projection.
 
 - [`WHAT_CHANGED.md`](WHAT_CHANGED.md) records the completed refactor and its
   behavioral impact.
-- [`FUTURE_REFINEMENTS.md`](FUTURE_REFINEMENTS.md) captures the HookKit API
-  opportunities exposed by the example.
+- [`FUTURE_REFINEMENTS.md`](FUTURE_REFINEMENTS.md) records which exposed
+  HookKit API opportunities are now addressed and which remain deferred.

@@ -15,6 +15,9 @@ It provides four deliberately separate layers:
    provenance, certainty, and explicit unresolved gaps.
 
 None of these layers executes the command or decides that it is safe.
+Applications that need unified structured-field, patch, and shell evidence
+should normally consume these facts through `hookkit-tool-access` rather than
+rebuilding phase-specific extraction on top of this crate.
 
 ## Features
 
