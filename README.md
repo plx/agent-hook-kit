@@ -134,6 +134,35 @@ it cannot emit another event's discriminator. `WorktreeCreate` demonstrates the
 same typed contract with a non-JSON result: its output emits an absolute path as
 exact plain text.
 
+## Quick Start: Aligned `PreToolUse`
+
+Aligned events keep native inputs and outputs intact while allowing one handler
+to cover several harnesses. Pre-tool execution maps the shared name to Claude
+Code `PreToolUse`, Codex `PreToolUse`, Gemini CLI `BeforeTool`, and Antigravity
+`PreToolUse`:
+
+```rust
+use hookkit_common::PreToolUseOutput;
+use hookkit_core::HarnessId;
+use hookkit_runtime::aligned::{PreToolUse, run_aligned_event};
+
+fn main() -> std::process::ExitCode {
+    let harness = HarnessId::CODEX; // select from trusted configuration or CLI input
+    run_aligned_event::<PreToolUse, _>(harness, |input, environment, _context| {
+        assert_eq!(input.harness(), environment.harness());
+        if input.tool_name() == Some("dangerous_tool") {
+            PreToolUseOutput::deny(&input.harness(), "blocked by policy")
+        } else {
+            PreToolUseOutput::allow(&input.harness())
+        }
+    })
+}
+```
+
+The convenience constructors return a concrete native enum arm. Callers can
+instead match `PreToolUseInput` and construct any native-only output capability
+available to that arm.
+
 ## Quick Start: Aligned `PostToolUse`
 
 Use `run_aligned_event` for genuinely shared lifecycle logic. Its enums retain
@@ -162,10 +191,10 @@ fn main() -> std::process::ExitCode {
 ```
 
 For a multi-harness executable, select a `HarnessId` from trusted CLI or
-configuration input and match every supported `PostToolUseInput` arm. There is no
-universal output lowering: each arm constructs the native response its harness
-actually supports. See `examples/shared-posttool-autofix` for the complete
-pattern.
+configuration input and match every supported `PostToolUseInput` arm. There is
+no universal serialized output envelope: each arm constructs the native
+response its harness actually supports. See `examples/shared-posttool-autofix`
+for the complete pattern.
 
 ## Exact, Selected, and Aligned Execution
 
