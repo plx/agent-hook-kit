@@ -253,10 +253,12 @@ dependencies = [
  "dirs",
  "globset",
  "hookkit-codex",
+ "hookkit-common",
  "hookkit-core",
  "hookkit-runtime",
  "hookkit-session-state",
  "hookkit-shell",
+ "hookkit-tool-access",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -429,12 +431,11 @@ dependencies = [
  "clap",
  "dirs",
  "globset",
- "hookkit-antigravity",
- "hookkit-codex",
+ "hookkit-common",
  "hookkit-core",
- "hookkit-gemini",
  "hookkit-runtime",
  "hookkit-shell",
+ "hookkit-tool-access",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -605,11 +606,10 @@ name = "hookkit-file-activity"
 version = "0.1.0"
 dependencies = [
  "globset",
- "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
  "hookkit-session-state",
- "hookkit-shell",
+ "hookkit-tool-access",
  "proptest",
  "serde",
  "serde_json",
@@ -687,6 +687,18 @@ dependencies = [
  "serde_json",
  "tree-sitter",
  "tree-sitter-bash",
+]
+
+[[package]]
+name = "hookkit-tool-access"
+version = "0.1.0"
+dependencies = [
+ "globset",
+ "hookkit-common",
+ "hookkit-core",
+ "hookkit-shell",
+ "serde_json",
+ "walkdir",
 ]
 
 [[package]]

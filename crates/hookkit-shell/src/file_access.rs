@@ -5,9 +5,7 @@
 //! load configuration, follow symlinks, evaluate generated code, or perform
 //! arbitrary I/O that is not represented in their argv.
 
-use std::path::{Component, Path, PathBuf};
-
-use hookkit_core::{Utf8Path, Utf8PathBuf};
+use hookkit_core::{Utf8Path, Utf8PathBuf, normalize_utf8_path};
 
 use crate::bash::{
     BashAnalysis, BashAnalysisOutcome, CommandOccurrence, DynamicReason, ExecutionContext,
@@ -154,6 +152,19 @@ pub enum FileAccessCertainty {
     Direct,
     Conditional,
     Heuristic,
+}
+
+/// Opt-in treatment of literal operands when command semantics remain unknown
+/// or ambiguous.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnknownCommandFallback {
+    /// Preserve only the unresolved record.
+    #[default]
+    Disabled,
+    /// Emit path-like literal operands as heuristic read/modify candidates
+    /// while preserving the unresolved record.
+    LiteralPathOperands,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,6 +315,26 @@ impl FileAccessSink<'_, '_> {
         );
     }
 
+    fn emit_argument_literal(
+        &mut self,
+        argv_index: usize,
+        raw: &str,
+        access: FileAccessKind,
+        scope: FileTargetScope,
+        certainty: FileAccessCertainty,
+    ) {
+        self.emit_path(
+            raw,
+            access,
+            scope,
+            FileAccessOrigin::Argument {
+                command_index: self.command.command_index,
+                argv_index,
+            },
+            certainty,
+        );
+    }
+
     pub fn emit_working_directory(&mut self, access: FileAccessKind, scope: FileTargetScope) {
         self.emit_path(
             ".",
@@ -415,7 +446,7 @@ impl FileAccessSink<'_, '_> {
     ) {
         let path = Utf8Path::new(raw);
         let (base, resolved) = if path.is_absolute() {
-            (PathBase::Absolute, Some(normalize_utf8(path)))
+            (PathBase::Absolute, Some(normalize_utf8_path(path)))
         } else if self.cwd_may_have_changed {
             if !self.cwd_issue_emitted {
                 self.cwd_issue_emitted = true;
@@ -429,7 +460,7 @@ impl FileAccessSink<'_, '_> {
             match self.inference.cwd {
                 Some(cwd) => (
                     PathBase::InvocationCwd,
-                    Some(normalize_utf8(&cwd.join(path))),
+                    Some(normalize_utf8_path(cwd.join(path))),
                 ),
                 None => {
                     if !self.cwd_issue_emitted {
@@ -461,6 +492,9 @@ impl FileAccessSink<'_, '_> {
     }
 
     fn adjust_certainty(&self, certainty: FileAccessCertainty) -> FileAccessCertainty {
+        if certainty == FileAccessCertainty::Heuristic {
+            return certainty;
+        }
         if self.command.command.context.iter().any(|context| {
             matches!(
                 context,
@@ -482,6 +516,7 @@ impl FileAccessSink<'_, '_> {
 /// over the bundled command table.
 pub struct FileAccessAnalyzer {
     semantics: Vec<Box<dyn CommandFileSemantics>>,
+    unknown_command_fallback: UnknownCommandFallback,
 }
 
 impl Default for FileAccessAnalyzer {
@@ -494,13 +529,24 @@ impl FileAccessAnalyzer {
     pub fn empty() -> Self {
         Self {
             semantics: Vec::new(),
+            unknown_command_fallback: UnknownCommandFallback::Disabled,
         }
     }
 
     pub fn with_builtins() -> Self {
         Self {
             semantics: vec![Box::new(BuiltinCommandFileSemantics)],
+            unknown_command_fallback: UnknownCommandFallback::Disabled,
         }
+    }
+
+    pub fn with_unknown_command_fallback(mut self, fallback: UnknownCommandFallback) -> Self {
+        self.unknown_command_fallback = fallback;
+        self
+    }
+
+    pub fn set_unknown_command_fallback(&mut self, fallback: UnknownCommandFallback) {
+        self.unknown_command_fallback = fallback;
     }
 
     pub fn register<S>(&mut self, semantics: S)
@@ -611,6 +657,7 @@ impl FileAccessAnalyzer {
             };
 
             let mut handled = false;
+            let unresolved_before = sink.report.unresolved.len();
             for semantics in &self.semantics {
                 sink.inferred_by = semantics.id().to_owned();
                 if semantics.infer(command_context, &mut sink) {
@@ -625,6 +672,21 @@ impl FileAccessAnalyzer {
                         command: command_context.name.to_owned(),
                     },
                 );
+            }
+            let ambiguous = sink.report.unresolved[unresolved_before..]
+                .iter()
+                .any(|unresolved| {
+                    matches!(
+                        unresolved.reason,
+                        UnresolvedFileAccessReason::UnknownCommandSemantics { .. }
+                            | UnresolvedFileAccessReason::AmbiguousArguments { .. }
+                    )
+                });
+            if ambiguous
+                && self.unknown_command_fallback == UnknownCommandFallback::LiteralPathOperands
+            {
+                sink.inferred_by = "hookkit-literal-operand-fallback".to_owned();
+                infer_literal_path_operands(command_context, &mut sink);
             }
         }
         report
@@ -721,6 +783,10 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                 infer_search(command, output);
                 true
             }
+            "sed" => {
+                infer_sed(command, output);
+                true
+            }
             "touch" | "truncate" | "mkdir" => {
                 emit_operands(
                     command,
@@ -802,9 +868,71 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                 );
                 true
             }
+            "apply_patch" => true,
             _ => false,
         }
     }
+}
+
+fn infer_literal_path_operands(
+    command: CommandFileContext<'_>,
+    output: &mut FileAccessSink<'_, '_>,
+) {
+    if command.command().literal_argv().is_none() {
+        return;
+    }
+    let mut operands_only = false;
+    for argv_index in 1..command.argv_len() {
+        let Some(literal) = command.literal(argv_index) else {
+            return;
+        };
+        if !operands_only && literal == "--" {
+            operands_only = true;
+            continue;
+        }
+        if !operands_only && literal.starts_with('-') {
+            continue;
+        }
+        let value = assignment_value(literal).unwrap_or(literal);
+        if is_path_like(value) {
+            output.emit_argument_literal(
+                argv_index,
+                value,
+                FileAccessKind::ReadModify,
+                FileTargetScope::ExactOrDescendants,
+                FileAccessCertainty::Heuristic,
+            );
+        }
+    }
+}
+
+fn assignment_value(value: &str) -> Option<&str> {
+    let (name, value) = value.split_once('=')?;
+    let mut characters = name.chars();
+    let first = characters.next()?;
+    (matches!(first, '_' | 'a'..='z' | 'A'..='Z')
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric()))
+    .then_some(value)
+}
+
+/// A fallback operand is path-like when it is dot/dot-dot, begins with a
+/// conventional absolute or relative path prefix, contains a separator, or
+/// has a filename-style dot in its final component. Bare words stay unknown.
+fn is_path_like(value: &str) -> bool {
+    if value.is_empty() || value == "-" || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    value == "."
+        || value == ".."
+        || value.starts_with('/')
+        || value.starts_with("./")
+        || value.starts_with("../")
+        || value.starts_with("~/")
+        || value.contains('/')
+        || value
+            .rsplit('/')
+            .next()
+            .is_some_and(|component| component.contains('.'))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -994,6 +1122,171 @@ fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_,
             );
         }
     }
+}
+
+fn infer_sed(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_>) {
+    let mut index = 1;
+    let mut operands_only = false;
+    let mut script_configured = false;
+    let mut in_place = false;
+    let mut input_files = Vec::new();
+
+    while index < command.argv_len() {
+        let Some(word) = command.word(index) else {
+            break;
+        };
+        let Some(literal) = word.literal.as_deref() else {
+            output.unresolved(
+                Some(word.raw.clone()),
+                UnresolvedFileAccessReason::AmbiguousArguments {
+                    detail: "dynamic sed option, script, or operand layout".to_owned(),
+                },
+            );
+            return;
+        };
+
+        if !operands_only && literal == "--" {
+            operands_only = true;
+            index += 1;
+            continue;
+        }
+        if !operands_only
+            && matches!(
+                literal,
+                "-n" | "--quiet"
+                    | "--silent"
+                    | "-E"
+                    | "-r"
+                    | "-s"
+                    | "--separate"
+                    | "-u"
+                    | "--unbuffered"
+                    | "-z"
+                    | "--null-data"
+                    | "--sandbox"
+            )
+        {
+            index += 1;
+            continue;
+        }
+        if !operands_only && matches!(literal, "-e" | "--expression") {
+            if index + 1 >= command.argv_len() {
+                sed_ambiguous(
+                    output,
+                    literal,
+                    "sed expression option is missing its script",
+                );
+                return;
+            }
+            script_configured = true;
+            index += 2;
+            continue;
+        }
+        if !operands_only
+            && (literal
+                .strip_prefix("-e")
+                .is_some_and(|script| !script.is_empty())
+                || literal.starts_with("--expression="))
+        {
+            script_configured = true;
+            index += 1;
+            continue;
+        }
+        if !operands_only && matches!(literal, "-f" | "--file") {
+            if index + 1 >= command.argv_len() {
+                sed_ambiguous(
+                    output,
+                    literal,
+                    "sed file option is missing its script file",
+                );
+                return;
+            }
+            output.emit_argument(index + 1, FileAccessKind::Read, FileTargetScope::Exact);
+            script_configured = true;
+            index += 2;
+            continue;
+        }
+        if !operands_only {
+            if let Some(script_file) = literal
+                .strip_prefix("--file=")
+                .filter(|value| !value.is_empty())
+                .or_else(|| literal.strip_prefix("-f").filter(|value| !value.is_empty()))
+            {
+                output.emit_argument_literal(
+                    index,
+                    script_file,
+                    FileAccessKind::Read,
+                    FileTargetScope::Exact,
+                    FileAccessCertainty::Direct,
+                );
+                script_configured = true;
+                index += 1;
+                continue;
+            }
+        }
+        if !operands_only && matches!(literal, "-i" | "--in-place") {
+            in_place = true;
+            index += 1;
+            continue;
+        }
+        if !operands_only
+            && (literal.starts_with("--in-place=")
+                || literal
+                    .strip_prefix("-i")
+                    .is_some_and(|suffix| !suffix.is_empty()))
+        {
+            in_place = true;
+            index += 1;
+            continue;
+        }
+        if !operands_only && literal.starts_with('-') && literal != "-" {
+            sed_ambiguous(output, literal, "unrecognized or ambiguous sed option");
+            return;
+        }
+
+        if script_configured {
+            if literal != "-" {
+                input_files.push(index);
+            }
+        } else {
+            // Without -e/-f, the first non-option is the sed program.
+            script_configured = true;
+        }
+        index += 1;
+    }
+
+    if !script_configured {
+        sed_ambiguous(output, command.name(), "sed command has no script");
+        return;
+    }
+    if in_place && input_files.is_empty() {
+        sed_ambiguous(
+            output,
+            command.command().raw.as_str(),
+            "in-place sed has no statically identified input file",
+        );
+        return;
+    }
+    for input in input_files {
+        output.emit_argument(
+            input,
+            if in_place {
+                FileAccessKind::ReadModify
+            } else {
+                FileAccessKind::Read
+            },
+            FileTargetScope::Exact,
+        );
+    }
+}
+
+fn sed_ambiguous(output: &mut FileAccessSink<'_, '_>, raw: &str, detail: &str) {
+    output.unresolved(
+        Some(raw.to_owned()),
+        UnresolvedFileAccessReason::AmbiguousArguments {
+            detail: detail.to_owned(),
+        },
+    );
 }
 
 fn is_search_boolean(literal: Option<&str>) -> bool {
@@ -1199,28 +1492,6 @@ fn infer_redirections(output: &mut FileAccessSink<'_, '_>) {
             }
         }
     }
-}
-
-fn normalize_utf8(path: &Utf8Path) -> Utf8PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in Path::new(path.as_str()).components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                ) {
-                    normalized.pop();
-                } else if !path.is_absolute() {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    Utf8PathBuf::from_path_buf(normalized)
-        .expect("normalizing an existing UTF-8 path preserves UTF-8")
 }
 
 #[cfg(test)]
@@ -1437,6 +1708,80 @@ mod tests {
     }
 
     #[test]
+    fn models_sed_reads_in_place_modification_and_ambiguous_layouts() {
+        let read = infer("sed -n 's/a/b/p' input.txt");
+        assert_eq!(read.candidates.len(), 1);
+        assert_eq!(read.candidates[0].access, FileAccessKind::Read);
+        assert_eq!(path(&read.candidates[0]).0.raw, "input.txt");
+        assert!(read.unresolved.is_empty());
+
+        let in_place = infer("sed -i.bak -e 's/a/b/' first.txt second.txt");
+        assert_eq!(in_place.candidates.len(), 2);
+        assert!(
+            in_place
+                .candidates
+                .iter()
+                .all(|candidate| candidate.access == FileAccessKind::ReadModify)
+        );
+        assert!(in_place.unresolved.is_empty());
+
+        let ambiguous = infer("sed --mystery 's/a/b/' input.txt");
+        assert!(ambiguous.candidates.is_empty());
+        assert!(ambiguous.unresolved.iter().any(|unresolved| matches!(
+            unresolved.reason,
+            UnresolvedFileAccessReason::AmbiguousArguments { .. }
+        )));
+    }
+
+    #[test]
+    fn literal_operand_fallback_is_opt_in_and_preserves_unknown_semantics() {
+        let outcome = BashAnalyzer::default()
+            .analyze("mystery --mode fast path/to/input CONFIG=generated/output.txt bareword");
+        let context = FileInferenceContext::new(Some(Utf8Path::new("/repo")));
+        let conservative = FileAccessAnalyzer::default().infer(&outcome, context);
+        assert!(conservative.candidates.is_empty());
+
+        let heuristic = FileAccessAnalyzer::default()
+            .with_unknown_command_fallback(UnknownCommandFallback::LiteralPathOperands)
+            .infer(&outcome, context);
+        assert_eq!(heuristic.candidates.len(), 2);
+        assert!(heuristic.candidates.iter().all(|candidate| {
+            candidate.certainty == FileAccessCertainty::Heuristic
+                && candidate.inferred_by == "hookkit-literal-operand-fallback"
+                && matches!(candidate.origin, FileAccessOrigin::Argument { .. })
+        }));
+        assert!(
+            heuristic
+                .candidates
+                .iter()
+                .any(|candidate| { path(candidate).0.raw == "generated/output.txt" })
+        );
+        assert!(heuristic.unresolved.iter().any(|unresolved| matches!(
+            unresolved.reason,
+            UnresolvedFileAccessReason::UnknownCommandSemantics { .. }
+        )));
+    }
+
+    #[test]
+    fn literal_operand_fallback_does_not_resolve_after_directory_change() {
+        let outcome = BashAnalyzer::default().analyze("cd subdir; mystery path/to/input");
+        let report = FileAccessAnalyzer::default()
+            .with_unknown_command_fallback(UnknownCommandFallback::LiteralPathOperands)
+            .infer(
+                &outcome,
+                FileInferenceContext::new(Some(Utf8Path::new("/repo"))),
+            );
+        assert_eq!(report.candidates.len(), 1);
+        let expression = path(&report.candidates[0]).0;
+        assert_eq!(expression.resolved, None);
+        assert_eq!(expression.base, PathBase::UnknownAfterDirectoryChange);
+        assert!(report.unresolved.iter().any(|unresolved| matches!(
+            unresolved.reason,
+            UnresolvedFileAccessReason::WorkingDirectoryMayHaveChanged
+        )));
+    }
+
+    #[test]
     fn marks_branch_dependent_accesses_as_conditional() {
         let report = infer("test -f marker && cat input");
         assert_eq!(report.candidates.len(), 1);
@@ -1508,27 +1853,6 @@ mod tests {
     }
 
     proptest! {
-        /// Property: lexical path normalization is idempotent and removes all
-        /// current-directory components. Parent traversal may remain only for
-        /// relative paths that genuinely attempt to escape their starting point.
-        #[test]
-        fn path_normalization_is_idempotent(
-            absolute in any::<bool>(),
-            segments in prop::collection::vec(prop_oneof![Just(".".to_owned()), Just("..".to_owned()), "[a-z]{1,8}"], 0..30),
-        ) {
-            let mut source = if absolute { "/".to_owned() } else { String::new() };
-            source.push_str(&segments.join("/"));
-            let once = normalize_utf8(Utf8Path::new(&source));
-            let twice = normalize_utf8(&once);
-
-            prop_assert_eq!(&once, &twice);
-            prop_assert!(!once.as_std_path().components().any(|component| matches!(component, std::path::Component::CurDir)));
-            if absolute {
-                prop_assert!(once.is_absolute());
-                prop_assert!(!once.as_std_path().components().any(|component| matches!(component, std::path::Component::ParentDir)));
-            }
-        }
-
         /// Property: output redirection to a literal relative path always
         /// denotes a direct modification resolved beneath the supplied cwd.
         #[test]

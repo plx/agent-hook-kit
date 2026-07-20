@@ -10,6 +10,13 @@ modification times, and opt-in VCS dirty state all retain their provenance.
 Unresolved shell behavior is recorded as a coverage gap instead of being
 silently treated as a complete observation.
 
+Immediate post-tool extraction delegates to `hookkit-tool-access`, then keeps
+only candidates whose retained access intent may modify a file. Read-only
+evidence remains available to pre-tool and policy consumers through the lower
+crate but is not persisted as modified-file activity. The version-1 activity
+journal schema, session tracker behavior, and persistence contract remain
+unchanged by that migration.
+
 Pending activity is a windowed session-state entity. A consumer acknowledges
 the exact generations it discharged; new observations appended while the
 consumer runs remain pending. Filesystem reconciliation uses a monotonic
@@ -35,4 +42,7 @@ settings {
 
 Callers using the Rust API can supply the same controls through
 `ReconciliationOptions` and can independently resolve scoped targets with
-`ResolveOptions`.
+`ResolveOptions`. That resolver remains a compatibility wrapper with
+existing-files-only behavior; new pre-tool consumers can call
+`hookkit_tool_access::resolve_targets` directly for typed unresolved outcomes,
+nonexistent-write retention, and explicit symlink/error policies.

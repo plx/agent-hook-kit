@@ -1,23 +1,44 @@
 use clap::{Parser, ValueEnum};
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use hookkit_antigravity::ToolDecision;
-use hookkit_core::{RuntimeContext, Utf8Path};
+use hookkit_common::{PreToolUseInput, PreToolUseOutput};
+use hookkit_core::{
+    HarnessId, Utf8Path, Utf8PathBuf, expand_utf8_home, normalize_utf8_path, resolve_utf8_path,
+    utf8_path_to_slash,
+};
 use hookkit_shell::{
-    BashAnalyzer, FileAccessAnalyzer, FileAccessCandidate, FileInferenceContext, FileTarget,
-    ShellToolCallError, ShellToolCallExt, ShellToolCallMatch, ShellToolCallRef,
+    ANTIGRAVITY_RUN_COMMAND_PROFILE, BashAnalyzer, CLAUDE_BASH_PROFILE, CODEX_BASH_PROFILE,
+    FileAccessAnalyzer, GEMINI_RUN_SHELL_COMMAND_PROFILE, UnknownCommandFallback,
+};
+use hookkit_tool_access::{
+    AccessCandidate, AccessProvenance, AccessSource, AccessTarget, ExactPathPolicy,
+    TargetResolutionOptions, ToolAccessAnalyzer, ToolCallObservation, observe_pre_tool,
+    resolve_targets,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 const PROJECT_CONFIG: &str = ".agent-hook-kit/forbidden-files.yaml";
+const TARGET_RESOLUTION_BUDGET: usize = 100_000;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Harness {
+    Claude,
     Codex,
     Gemini,
     Antigravity,
+}
+
+impl Harness {
+    fn id(self) -> HarnessId {
+        match self {
+            Self::Claude => HarnessId::CLAUDE_CODE,
+            Self::Codex => HarnessId::CODEX,
+            Self::Gemini => HarnessId::GEMINI_CLI,
+            Self::Antigravity => HarnessId::ANTIGRAVITY,
+        }
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -39,92 +60,40 @@ struct FileConfig {
     patterns: Vec<String>,
     #[serde(default)]
     block_shell_commands: bool,
+    /// Preferred replacement for `block_shell_commands`.
+    access_policy: Option<AccessPolicy>,
 }
 
 struct Policy {
     patterns: GlobSet,
-    block_shell_commands: bool,
+    access_policy: AccessPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+enum AccessPolicy {
+    /// Match recovered candidates and allow analysis/resolver gaps.
+    #[default]
+    InspectKnown,
+    /// Match candidates and deny when either analysis or resolution is incomplete.
+    DenyUnresolved,
+    /// Deny exact native shell calls; inspect non-shell calls like `InspectKnown`.
+    DenyAllShell,
 }
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
-    match cli.harness {
-        Harness::Codex => run_codex(cli),
-        Harness::Gemini => run_gemini(cli),
-        Harness::Antigravity => run_antigravity(cli),
-    }
-}
-
-fn run_codex(cli: Cli) -> std::process::ExitCode {
-    hookkit_runtime::typed::run_typed::<hookkit_codex::protocol::PreToolUse, _>(
-        move |input, _environment, context| {
-            let roots = workspace_roots(context);
-            let reason = deny_reason(
-                &cli.config_paths,
-                &roots,
-                input.shell_tool_call(),
-                &input.tool_name,
-                &input.tool_input,
-            );
-            Ok(match reason {
-                Some(reason) => hookkit_codex::protocol::PreToolUseOutput::deny(Some(reason)),
-                None => hookkit_codex::protocol::PreToolUseOutput::no_op(),
-            })
+    let harness = cli.harness.id();
+    hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PreToolUse, _>(
+        harness.clone(),
+        move |input, _environment, _context| {
+            let reason = deny_reason(&cli.config_paths, &input, TARGET_RESOLUTION_BUDGET);
+            match reason {
+                Some(reason) => PreToolUseOutput::deny(&harness, reason),
+                None => PreToolUseOutput::allow(&harness),
+            }
         },
     )
-}
-
-fn run_gemini(cli: Cli) -> std::process::ExitCode {
-    hookkit_runtime::typed::run_typed::<hookkit_gemini::protocol::BeforeTool, _>(
-        move |input, _environment, context| {
-            let roots = workspace_roots(context);
-            let tool_input = serde_json::Value::Object(input.tool_input.clone());
-            let reason = deny_reason(
-                &cli.config_paths,
-                &roots,
-                input.shell_tool_call(),
-                &input.tool_name,
-                &tool_input,
-            );
-            Ok(reason.map_or_else(
-                hookkit_gemini::protocol::BeforeToolOutput::no_op,
-                hookkit_gemini::protocol::BeforeToolOutput::deny,
-            ))
-        },
-    )
-}
-
-fn run_antigravity(cli: Cli) -> std::process::ExitCode {
-    hookkit_runtime::typed::run_typed::<hookkit_antigravity::PreToolUse, _>(
-        move |input, _environment, context| {
-            let roots = workspace_roots(context);
-            let tool_input = serde_json::Value::Object(input.tool_call.args.clone());
-            let reason = deny_reason(
-                &cli.config_paths,
-                &roots,
-                input.shell_tool_call(),
-                &input.tool_call.name,
-                &tool_input,
-            );
-            Ok(hookkit_antigravity::PreToolUseOutput {
-                decision: if reason.is_some() {
-                    ToolDecision::Deny
-                } else {
-                    ToolDecision::Allow
-                },
-                reason,
-                permission_overrides: Vec::new(),
-            })
-        },
-    )
-}
-
-fn workspace_roots(context: &RuntimeContext<'_>) -> Vec<PathBuf> {
-    context
-        .workspace_roots()
-        .iter()
-        .map(|path| path.as_std_path().to_path_buf())
-        .collect()
 }
 
 /// Load the active policy and return a deny reason, or `None` to allow. A policy
@@ -132,12 +101,11 @@ fn workspace_roots(context: &RuntimeContext<'_>) -> Vec<PathBuf> {
 /// opens the boundary.
 fn deny_reason(
     config_paths: &[PathBuf],
-    roots: &[PathBuf],
-    shell_call: ShellToolCallMatch<'_>,
-    tool_name: &str,
-    tool_input: &serde_json::Value,
+    input: &PreToolUseInput,
+    max_entries: usize,
 ) -> Option<String> {
-    let policy = match load_policy(config_paths, roots) {
+    let roots = input.workspace_roots();
+    let policy = match load_policy(config_paths, &roots) {
         Ok(policy) => policy,
         Err(error) => {
             return Some(format!(
@@ -145,10 +113,10 @@ fn deny_reason(
             ));
         }
     };
-    evaluate(&policy, shell_call, tool_name, tool_input, roots)
+    evaluate(&policy, input, &roots, max_entries)
 }
 
-fn load_policy(config_paths: &[PathBuf], roots: &[PathBuf]) -> hookkit_core::Result<Policy> {
+fn load_policy(config_paths: &[PathBuf], roots: &[Utf8PathBuf]) -> hookkit_core::Result<Policy> {
     let explicit_paths = !config_paths.is_empty();
     let paths = if config_paths.is_empty() {
         default_config_paths(roots)
@@ -157,7 +125,7 @@ fn load_policy(config_paths: &[PathBuf], roots: &[PathBuf]) -> hookkit_core::Res
     };
 
     let mut builder = GlobSetBuilder::new();
-    let mut block_shell_commands = false;
+    let mut access_policy = AccessPolicy::InspectKnown;
     for path in paths {
         if !path.is_file() {
             if explicit_paths {
@@ -171,108 +139,102 @@ fn load_policy(config_paths: &[PathBuf], roots: &[PathBuf]) -> hookkit_core::Res
         }
         let content = std::fs::read_to_string(&path)?;
         let config: FileConfig = serde_yaml_ng::from_str(&content).map_err(invalid_data)?;
-        block_shell_commands |= config.block_shell_commands;
+        if config.block_shell_commands {
+            access_policy = access_policy.max(AccessPolicy::DenyAllShell);
+        }
+        if let Some(configured) = config.access_policy {
+            access_policy = access_policy.max(configured);
+        }
         for pattern in config.patterns {
             if pattern.trim().is_empty() {
                 continue;
             }
-            let pattern = expand_home(&pattern);
-            builder.add(Glob::new(&slash_string(&pattern)).map_err(invalid_data)?);
+            builder.add(Glob::new(&expand_pattern_home(&pattern)).map_err(invalid_data)?);
         }
     }
 
     Ok(Policy {
         patterns: builder.build().map_err(invalid_data)?,
-        block_shell_commands,
+        access_policy,
     })
 }
 
-fn default_config_paths(roots: &[PathBuf]) -> Vec<PathBuf> {
+fn default_config_paths(roots: &[Utf8PathBuf]) -> Vec<PathBuf> {
     let mut paths = BTreeSet::new();
     if let Some(home) = dirs::home_dir() {
         paths.insert(home.join(PROJECT_CONFIG));
     }
     for root in roots {
-        for ancestor in root.ancestors() {
+        for ancestor in root.as_std_path().ancestors() {
             paths.insert(ancestor.join(PROJECT_CONFIG));
         }
     }
     paths.into_iter().collect()
 }
 
-/// Route one native pre-tool call to the appropriate inspector. Shell tools are
-/// recognized by `hookkit-shell`'s native adapters; everything else is treated
-/// as a structured tool whose path-bearing fields are inspected directly.
+/// Analyze one aligned native call, materialize its scoped targets, and apply
+/// the caller-selected uncertainty posture.
 fn evaluate(
     policy: &Policy,
-    shell_call: ShellToolCallMatch<'_>,
-    tool_name: &str,
-    tool_input: &serde_json::Value,
-    roots: &[PathBuf],
+    input: &PreToolUseInput,
+    roots: &[Utf8PathBuf],
+    max_entries: usize,
 ) -> Option<String> {
-    match shell_call {
-        ShellToolCallMatch::Matched(call) => evaluate_shell(policy, &call, roots),
-        ShellToolCallMatch::Malformed(error) => evaluate_unparseable_shell(policy, &error),
-        // `NotShell`, plus any future non-shell classification, fall back to
-        // structured field and `apply_patch` inspection.
-        _ => evaluate_structured(policy, tool_name, tool_input, roots),
+    let shell_call = is_exact_native_shell(input);
+    if policy.access_policy == AccessPolicy::DenyAllShell && shell_call {
+        return Some(blocked_shell_reason(
+            input.tool_name().unwrap_or("<unknown>"),
+        ));
     }
-}
 
-/// Inspect a shell command with a bounded Bash parse, matching every resolved
-/// read, write, delete, and redirection target against the policy.
-fn evaluate_shell(
-    policy: &Policy,
-    call: &ShellToolCallRef<'_>,
-    roots: &[PathBuf],
-) -> Option<String> {
-    if policy.block_shell_commands {
-        return Some(blocked_shell_reason(call.tool_name));
-    }
-    if policy.patterns.is_empty() {
-        return None;
-    }
-    let outcome = BashAnalyzer::default().analyze(call.command);
-    let report = FileAccessAnalyzer::default().infer(&outcome, FileInferenceContext::new(call.cwd));
-    report
+    let analyzer = ToolAccessAnalyzer::new(
+        BashAnalyzer::default(),
+        FileAccessAnalyzer::default()
+            .with_unknown_command_fallback(UnknownCommandFallback::LiteralPathOperands),
+        hookkit_tool_access::StructuredFieldAnalyzer::default(),
+    );
+    let report = analyzer.analyze_pre_tool(input);
+    if let Some(reason) = report
         .candidates
         .iter()
-        .find_map(|candidate| forbidden_target(policy, candidate, roots))
-}
+        .find_map(|candidate| forbidden_candidate(policy, candidate, roots))
+    {
+        return Some(reason);
+    }
 
-/// A shell tool whose command field could not be recovered cannot be inspected.
-/// Deny it whenever the policy is active rather than treating it as harmless.
-fn evaluate_unparseable_shell(policy: &Policy, error: &ShellToolCallError) -> Option<String> {
-    if policy.block_shell_commands {
-        return Some(blocked_shell_reason(&error.tool_name));
+    let mut options = TargetResolutionOptions::new(roots.to_vec());
+    options.max_entries = max_entries;
+    options.ignored_directory_names.clear();
+    options.exact_paths = ExactPathPolicy::RetainNonexistent;
+    let resolution = match resolve_targets(
+        report.candidates.iter().map(|candidate| &candidate.target),
+        &options,
+    ) {
+        Ok(resolution) => resolution,
+        Err(error) => {
+            return Some(format!(
+                "Forbidden-file policy could not resolve an observed target: {error}"
+            ));
+        }
+    };
+    if let Some(path) = resolution
+        .paths
+        .iter()
+        .find(|path| matches_concrete_policy(policy, path, roots))
+    {
+        return Some(forbidden_path_reason(path));
     }
-    if policy.patterns.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "Forbidden-file policy denies a shell tool call it cannot parse: {error}"
-    ))
-}
 
-fn evaluate_structured(
-    policy: &Policy,
-    tool_name: &str,
-    input: &serde_json::Value,
-    roots: &[PathBuf],
-) -> Option<String> {
-    if policy.patterns.is_empty() {
-        return None;
+    if policy.access_policy == AccessPolicy::DenyUnresolved
+        && (!report.is_complete() || !resolution.is_complete())
+    {
+        return Some(format!(
+            "Forbidden-file policy denies unresolved access analysis ({} analysis gap(s), {} resolution gap(s))",
+            report.gaps.len(),
+            resolution.unresolved.len()
+        ));
     }
-    referenced_paths(tool_name, input)
-        .into_iter()
-        .find_map(|path| {
-            matches_policy(policy, &path, roots).then(|| {
-                format!(
-                    "Forbidden-file policy denies access to `{}`",
-                    path.display()
-                )
-            })
-        })
+    None
 }
 
 fn blocked_shell_reason(tool_name: &str) -> String {
@@ -281,194 +243,109 @@ fn blocked_shell_reason(tool_name: &str) -> String {
     )
 }
 
-/// Test a single inferred shell file-access candidate against the policy, trying
-/// both the raw argument and the working-directory-resolved absolute form.
-fn forbidden_target(
+fn forbidden_candidate(
     policy: &Policy,
-    candidate: &FileAccessCandidate,
-    roots: &[PathBuf],
+    candidate: &AccessCandidate,
+    roots: &[Utf8PathBuf],
 ) -> Option<String> {
-    let FileTarget::Path { expression, .. } = &candidate.target else {
-        // Whole-workspace scopes (and any future target kind) name no single
-        // file, so there is nothing to match against a file pattern here.
+    let AccessTarget::Path { expression, .. } = &candidate.target else {
         return None;
     };
-    let resolved = expression.resolved.as_deref();
-    let matched = matches_policy(policy, Path::new(expression.raw.as_str()), roots)
-        || resolved.is_some_and(|resolved| matches_policy(policy, resolved.as_std_path(), roots));
-    matched.then(|| {
-        let shown = resolved.map_or(expression.raw.as_str(), Utf8Path::as_str);
-        format!("Forbidden-file policy denies access to `{shown}`")
-    })
+    if matches_raw_policy(policy, &expression.raw)
+        || expression
+            .resolved
+            .as_deref()
+            .is_some_and(|path| matches_concrete_policy(policy, path, roots))
+    {
+        let shown = expression
+            .resolved
+            .as_deref()
+            .map_or(expression.raw.as_str(), Utf8Path::as_str);
+        Some(format!(
+            "Forbidden-file policy denies {} access to `{shown}`",
+            provenance_label(&candidate.provenance)
+        ))
+    } else {
+        None
+    }
 }
 
-fn matches_policy(policy: &Policy, path: &Path, roots: &[PathBuf]) -> bool {
-    let expanded = expand_path_home(path);
-    let mut forms = BTreeSet::from([slash_path(path), slash_path(&expanded)]);
+fn provenance_label(provenance: &AccessProvenance) -> &'static str {
+    match provenance.source() {
+        AccessSource::Structured => "structured-tool",
+        AccessSource::Patch => "patch",
+        AccessSource::Shell => "shell",
+        AccessSource::Custom => "custom",
+        _ => "unknown",
+    }
+}
+
+fn matches_raw_policy(policy: &Policy, raw: &str) -> bool {
+    let path = Utf8Path::new(raw);
+    let expanded = expand_candidate_home(path);
+    [utf8_path_to_slash(path), utf8_path_to_slash(expanded)]
+        .iter()
+        .any(|form| policy.patterns.is_match(form))
+}
+
+fn matches_concrete_policy(policy: &Policy, path: &Utf8Path, roots: &[Utf8PathBuf]) -> bool {
+    let expanded = expand_candidate_home(path);
+    let mut forms = BTreeSet::from([utf8_path_to_slash(path), utf8_path_to_slash(&expanded)]);
     for root in roots {
-        let absolute = normalize_path(if expanded.is_absolute() {
-            expanded.clone()
-        } else {
-            root.join(&expanded)
-        });
-        let normalized_root = normalize_path(root.clone());
+        let absolute = resolve_utf8_path(root, &expanded);
+        let normalized_root = normalize_utf8_path(root);
         insert_path_forms(&mut forms, &absolute, &normalized_root);
-        if let Ok(canonical) = std::fs::canonicalize(&absolute) {
-            let canonical_root = std::fs::canonicalize(&normalized_root).unwrap_or(normalized_root);
+        if let Some(canonical) = canonicalize_utf8(&absolute) {
+            let canonical_root = canonicalize_utf8(&normalized_root).unwrap_or(normalized_root);
             insert_path_forms(&mut forms, &canonical, &canonical_root);
         }
     }
     forms.iter().any(|form| policy.patterns.is_match(form))
 }
 
-fn insert_path_forms(forms: &mut BTreeSet<String>, path: &Path, root: &Path) {
-    forms.insert(slash_path(path));
+fn canonicalize_utf8(path: &Utf8Path) -> Option<Utf8PathBuf> {
+    std::fs::canonicalize(path.as_std_path())
+        .ok()
+        .and_then(|path| Utf8PathBuf::from_path_buf(path).ok())
+}
+
+fn insert_path_forms(forms: &mut BTreeSet<String>, path: &Utf8Path, root: &Utf8Path) {
+    forms.insert(utf8_path_to_slash(path));
     if let Ok(relative) = path.strip_prefix(root) {
-        forms.insert(slash_path(relative));
+        forms.insert(utf8_path_to_slash(relative));
     }
 }
 
-/// Collect path-bearing fields from a structured (non-shell) tool call,
-/// including `apply_patch` file headers.
-fn referenced_paths(tool_name: &str, input: &serde_json::Value) -> Vec<PathBuf> {
-    let mut raw = Vec::new();
-    collect_path_fields(input, None, &mut raw);
-
-    if let Some(patch) = tool_name
-        .eq_ignore_ascii_case("apply_patch")
-        .then(|| find_string(input, &["patch", "input"]))
-        .flatten()
-    {
-        collect_patch_paths(patch, &mut raw);
-    }
-
-    raw.into_iter()
-        .filter(|path| !path.trim().is_empty())
-        .map(PathBuf::from)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+fn forbidden_path_reason(path: &Utf8Path) -> String {
+    format!("Forbidden-file policy denies access to `{path}`")
 }
 
-fn collect_path_fields(value: &serde_json::Value, parent_key: Option<&str>, out: &mut Vec<String>) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, value) in map {
-                if is_path_key(key) {
-                    match value {
-                        serde_json::Value::String(path) => out.push(path.clone()),
-                        serde_json::Value::Array(paths) => out.extend(
-                            paths
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .map(str::to_owned),
-                        ),
-                        _ => {}
-                    }
-                }
-                collect_path_fields(value, Some(key), out);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_path_fields(value, parent_key, out);
-            }
-        }
-        serde_json::Value::String(path) if parent_key.is_some_and(is_path_key) => {
-            out.push(path.clone());
-        }
-        _ => {}
-    }
-}
-
-fn is_path_key(key: &str) -> bool {
-    matches!(
-        key,
-        "path"
-            | "paths"
-            | "file_path"
-            | "filePath"
-            | "target_file"
-            | "targetFile"
-            | "absolute_path"
-            | "absolutePath"
-            | "source"
-            | "destination"
-            | "old_path"
-            | "new_path"
-    )
-}
-
-fn collect_patch_paths(patch: &str, out: &mut Vec<String>) {
-    const PREFIXES: &[&str] = &[
-        "*** Add File: ",
-        "*** Update File: ",
-        "*** Delete File: ",
-        "*** Move to: ",
-        "+++ b/",
-        "--- a/",
-    ];
-    for line in patch.lines() {
-        if let Some(path) = PREFIXES
-            .iter()
-            .find_map(|prefix| line.strip_prefix(prefix))
-            .filter(|path| *path != "/dev/null")
-        {
-            out.push(path.trim().to_string());
-        }
-    }
-}
-
-fn find_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
-    let map = value.as_object()?;
-    keys.iter()
-        .find_map(|key| map.get(*key).and_then(serde_json::Value::as_str))
-}
-
-fn expand_home(pattern: &str) -> String {
-    let Some(rest) = pattern.strip_prefix("~/") else {
-        return pattern.to_string();
+fn is_exact_native_shell(input: &PreToolUseInput) -> bool {
+    let ToolCallObservation::Call(call) = observe_pre_tool(input) else {
+        return false;
     };
-    dirs::home_dir().map_or_else(|| pattern.to_string(), |home| slash_path(&home.join(rest)))
+    (call.harness() == &HarnessId::CLAUDE_CODE && call.tool_name == CLAUDE_BASH_PROFILE.tool_name())
+        || (call.harness() == &HarnessId::CODEX && call.tool_name == CODEX_BASH_PROFILE.tool_name())
+        || (call.harness() == &HarnessId::GEMINI_CLI
+            && call.tool_name == GEMINI_RUN_SHELL_COMMAND_PROFILE.tool_name())
+        || (call.harness() == &HarnessId::ANTIGRAVITY
+            && call.tool_name == ANTIGRAVITY_RUN_COMMAND_PROFILE.tool_name())
 }
 
-fn expand_path_home(path: &Path) -> PathBuf {
-    let value = path.to_string_lossy();
-    let Some(rest) = value.strip_prefix("~/") else {
-        return path.to_path_buf();
-    };
-    dirs::home_dir().map_or_else(|| path.to_path_buf(), |home| home.join(rest))
+fn expand_pattern_home(pattern: &str) -> String {
+    let path = Utf8Path::new(pattern);
+    dirs::home_dir()
+        .and_then(|home| Utf8PathBuf::from_path_buf(home).ok())
+        .map_or_else(
+            || utf8_path_to_slash(path),
+            |home| utf8_path_to_slash(expand_utf8_home(path, home)),
+        )
 }
 
-fn normalize_path(path: PathBuf) -> PathBuf {
-    let absolute = path.is_absolute();
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let can_pop = matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                );
-                if can_pop {
-                    normalized.pop();
-                } else if !absolute {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
-}
-
-fn slash_path(path: &Path) -> String {
-    slash_string(&path.to_string_lossy())
-}
-
-fn slash_string(value: &str) -> String {
-    value.replace('\\', "/")
+fn expand_candidate_home(path: &Utf8Path) -> Utf8PathBuf {
+    dirs::home_dir()
+        .and_then(|home| Utf8PathBuf::from_path_buf(home).ok())
+        .map_or_else(|| path.to_path_buf(), |home| expand_utf8_home(path, home))
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -479,7 +356,7 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 mod tests {
     use super::*;
     use hookkit_core::{EventId, HarnessId};
-    use hookkit_shell::{ShellToolProfile, ToolPhase};
+    use hookkit_tool_access::{JsonRef, ToolCallRef, ToolPhase};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
@@ -492,118 +369,229 @@ mod tests {
         ))
     }
 
-    fn policy(patterns: &[&str], block_shell_commands: bool) -> Policy {
+    fn policy(patterns: &[&str], access_policy: AccessPolicy) -> Policy {
         let mut builder = GlobSetBuilder::new();
         for pattern in patterns {
             builder.add(Glob::new(pattern).unwrap());
         }
         Policy {
             patterns: builder.build().unwrap(),
-            block_shell_commands,
+            access_policy,
         }
     }
 
-    /// Classify a tool call the way the runtime arms do, using a `Bash` profile
-    /// as a stand-in for the per-harness shell adapters. A non-`Bash` tool name
-    /// yields `NotShell`, exercising the structured path.
-    fn classify<'a>(
-        tool_name: &'a str,
-        tool_input: &'a serde_json::Value,
-        cwd: &'a Utf8Path,
-    ) -> ShellToolCallMatch<'a> {
-        ShellToolProfile::new("Bash", "/command")
-            .unwrap()
-            .extract_from_value(
-                EventId::builtin(HarnessId::CODEX, "PreToolUse"),
-                ToolPhase::Pre,
-                tool_name,
-                tool_input,
-                Some(cwd),
-                None,
-            )
+    fn codex_input_at_cwd(
+        cwd: &str,
+        tool_name: &str,
+        tool_input: serde_json::Value,
+    ) -> PreToolUseInput {
+        PreToolUseInput::Codex(
+            serde_json::from_value(serde_json::json!({
+                "session_id": "session",
+                "transcript_path": null,
+                "cwd": cwd,
+                "hook_event_name": "PreToolUse",
+                "model": "gpt-test",
+                "turn_id": "turn",
+                "permission_mode": "default",
+                "tool_name": tool_name,
+                "tool_use_id": "call",
+                "tool_input": tool_input
+            }))
+            .unwrap(),
+        )
+    }
+
+    fn codex_input(tool_name: &str, tool_input: serde_json::Value) -> PreToolUseInput {
+        codex_input_at_cwd("/repo", tool_name, tool_input)
+    }
+
+    fn evaluate_codex(policy: &Policy, input: &PreToolUseInput) -> Option<String> {
+        evaluate(
+            policy,
+            input,
+            &[Utf8PathBuf::from("/repo")],
+            TARGET_RESOLUTION_BUDGET,
+        )
     }
 
     #[test]
-    fn blocks_structured_root_and_nested_env_paths() {
-        let policy = policy(&[".env", "**/.env"], false);
-        let roots = vec![PathBuf::from("/repo")];
-        let cwd = Utf8Path::new("/repo");
-
-        let root = serde_json::json!({"path": "/repo/.env"});
-        assert!(
-            evaluate(
-                &policy,
-                classify("read_file", &root, cwd),
-                "read_file",
-                &root,
-                &roots
-            )
-            .is_some()
+    fn blocks_structured_reads_writes_and_patch_roles() {
+        let guard = policy(
+            &[".env", "**/.env", "secrets/**"],
+            AccessPolicy::InspectKnown,
         );
-        let nested = serde_json::json!({"file_path": "services/api/.env"});
-        assert!(
-            evaluate(
-                &policy,
-                classify("write_file", &nested, cwd),
+        for (tool, input) in [
+            ("read_file", serde_json::json!({"path": "/repo/.env"})),
+            (
                 "write_file",
-                &nested,
-                &roots
-            )
-            .is_some()
-        );
+                serde_json::json!({"file_path": "services/api/.env"}),
+            ),
+        ] {
+            assert!(evaluate_codex(&guard, &codex_input(tool, input)).is_some());
+        }
+
+        let patch = serde_json::json!({
+            "patch": "*** Add File: secrets/new.txt\n+new\n*** Update File: secrets/current.txt\n*** Delete File: secrets/old.txt\n*** Update File: secrets/from.txt\n*** Move to: secrets/to.txt\n"
+        });
+        assert!(evaluate_codex(&guard, &codex_input("apply_patch", patch)).is_some());
     }
 
     #[test]
-    fn inspects_shell_file_access_or_fails_closed() {
-        let roots = vec![PathBuf::from("/repo")];
-        let cwd = Utf8Path::new("/repo");
-        let inspect = policy(&[".env", "**/.env"], false);
-
-        // A literal read, a branch-guarded read, and a redirect write all reach
-        // the forbidden target through the Bash parse.
+    fn inspects_shell_candidates_and_supports_three_uncertainty_postures() {
+        let roots = [Utf8PathBuf::from("/repo")];
+        let inspect = policy(&[".env", "**/.env"], AccessPolicy::InspectKnown);
         for command in [
             "cat .env",
             "test -f .env && cat .env",
             "echo secret > config/.env",
         ] {
-            let input = serde_json::json!({ "command": command });
+            let input = codex_input("Bash", serde_json::json!({"command": command}));
             assert!(
-                evaluate(
-                    &inspect,
-                    classify("Bash", &input, cwd),
-                    "Bash",
-                    &input,
-                    &roots
-                )
-                .is_some(),
+                evaluate(&inspect, &input, &roots, TARGET_RESOLUTION_BUDGET).is_some(),
                 "expected `{command}` to be denied"
             );
         }
 
-        // A command that touches no forbidden path is allowed.
-        let benign = serde_json::json!({"command": "echo safe > notes.txt"});
+        let dynamic = codex_input("Bash", serde_json::json!({"command": "cat \"$SECRET\""}));
+        assert!(evaluate(&inspect, &dynamic, &roots, TARGET_RESOLUTION_BUDGET).is_none());
+        let deny_unresolved = policy(&["**/.env"], AccessPolicy::DenyUnresolved);
+        assert!(evaluate(&deny_unresolved, &dynamic, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+
+        let deny_all = policy(&[], AccessPolicy::DenyAllShell);
+        let safe = codex_input("Bash", serde_json::json!({"command": "echo safe"}));
+        assert!(evaluate(&deny_all, &safe, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+    }
+
+    #[test]
+    fn shell_patch_and_recursive_remove_materialize_forbidden_descendants() {
+        let directory = test_dir("forbidden-descendants");
+        let root = Utf8PathBuf::from_path_buf(directory.clone()).unwrap();
+        std::fs::create_dir_all(root.join("secrets/nested")).unwrap();
+        std::fs::write(root.join("secrets/nested/token.txt"), "token").unwrap();
+        let guard = policy(&["secrets/**"], AccessPolicy::InspectKnown);
+
+        let remove = codex_input_at_cwd(
+            root.as_str(),
+            "Bash",
+            serde_json::json!({"command": "rm -rf secrets"}),
+        );
         assert!(
             evaluate(
-                &inspect,
-                classify("Bash", &benign, cwd),
-                "Bash",
-                &benign,
-                &roots
+                &guard,
+                &remove,
+                std::slice::from_ref(&root),
+                TARGET_RESOLUTION_BUDGET
+            )
+            .is_some()
+        );
+
+        let patch = codex_input_at_cwd(
+            root.as_str(),
+            "Bash",
+            serde_json::json!({
+                "command": "apply_patch <<'PATCH'\n*** Add File: secrets/new.txt\n+new\nPATCH\n"
+            }),
+        );
+        assert!(
+            evaluate(
+                &guard,
+                &patch,
+                std::slice::from_ref(&root),
+                TARGET_RESOLUTION_BUDGET
+            )
+            .is_some()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn unknown_literal_fallback_and_truncation_are_explicit_policy_inputs() {
+        let directory = test_dir("forbidden-truncation");
+        let root = Utf8PathBuf::from_path_buf(directory.clone()).unwrap();
+        std::fs::create_dir_all(root.join("secrets")).unwrap();
+        std::fs::write(root.join("secrets/token.txt"), "token").unwrap();
+        let inspect = policy(&["secrets/**"], AccessPolicy::InspectKnown);
+
+        let unknown = codex_input_at_cwd(
+            root.as_str(),
+            "Bash",
+            serde_json::json!({"command": "mystery secrets/token.txt"}),
+        );
+        assert!(evaluate(&inspect, &unknown, std::slice::from_ref(&root), 100).is_some());
+
+        let scoped = codex_input_at_cwd(
+            root.as_str(),
+            "Bash",
+            serde_json::json!({"command": "rm -rf secrets"}),
+        );
+        assert!(evaluate(&inspect, &scoped, std::slice::from_ref(&root), 0).is_none());
+        let deny_unresolved = policy(&["secrets/**"], AccessPolicy::DenyUnresolved);
+        assert!(evaluate(&deny_unresolved, &scoped, std::slice::from_ref(&root), 0).is_some());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn malformed_shell_is_denied_when_unresolved_access_is_denied() {
+        let guard = policy(&["**/.env"], AccessPolicy::DenyUnresolved);
+        let malformed = codex_input("Bash", serde_json::json!({"not_command": "cat .env"}));
+        assert!(evaluate_codex(&guard, &malformed).is_some());
+    }
+
+    #[test]
+    fn exact_native_shell_names_and_explicit_aliases_are_distinct() {
+        let native = codex_input("Bash", serde_json::json!({"command": "echo safe"}));
+        let guessed = codex_input(
+            "exec_command",
+            serde_json::json!({"command": "cat secrets/token.txt"}),
+        );
+        assert!(is_exact_native_shell(&native));
+        assert!(!is_exact_native_shell(&guessed));
+
+        let alias_input = serde_json::json!({"request": {"command": "cat secrets/token.txt"}});
+        let alias = ToolCallRef::new(
+            EventId::builtin(HarnessId::CODEX, "PreToolUse"),
+            ToolPhase::Pre,
+            "project_shell",
+            JsonRef::Value(&alias_input),
+            Some(Utf8Path::new("/repo")),
+            vec![Utf8PathBuf::from("/repo")],
+        );
+        let profile =
+            hookkit_shell::ShellToolProfile::new("project_shell", "/request/command").unwrap();
+        let report = ToolAccessAnalyzer::default()
+            .with_shell_profile(profile)
+            .analyze_call(&alias);
+        assert!(
+            report
+                .candidates
+                .iter()
+                .any(|candidate| matches!(candidate.provenance, AccessProvenance::Shell { .. }))
+        );
+    }
+
+    #[test]
+    fn native_cwd_is_distinct_from_policy_roots() {
+        let guard = policy(&["/project/src/**"], AccessPolicy::InspectKnown);
+        let input = codex_input_at_cwd(
+            "/native/cwd",
+            "read_file",
+            serde_json::json!({"path": "src/lib.rs"}),
+        );
+        assert!(
+            evaluate(
+                &guard,
+                &input,
+                &[Utf8PathBuf::from("/project")],
+                TARGET_RESOLUTION_BUDGET
             )
             .is_none()
         );
-
-        // Failing closed denies every shell tool regardless of its command.
-        let closed = policy(&[], true);
-        let safe = serde_json::json!({"command": "echo safe"});
-        assert!(evaluate(&closed, classify("Bash", &safe, cwd), "Bash", &safe, &roots).is_some());
     }
 
     #[test]
     fn antigravity_command_line_shell_is_inspected() {
-        // Antigravity puts the command in `CommandLine`, not `command`; the
-        // native adapter recovers it so the Bash parse can run.
-        let input: hookkit_antigravity::PreToolUseInput =
+        let input = PreToolUseInput::Antigravity(
             serde_json::from_value(serde_json::json!({
                 "conversationId": "conversation",
                 "workspacePaths": ["/repo"],
@@ -615,69 +603,72 @@ mod tests {
                 },
                 "stepIdx": 1
             }))
-            .unwrap();
-
-        let policy = policy(&["**/.env"], false);
-        let tool_input = serde_json::Value::Object(input.tool_call.args.clone());
-        assert!(
-            evaluate(
-                &policy,
-                input.shell_tool_call(),
-                &input.tool_call.name,
-                &tool_input,
-                &[PathBuf::from("/repo")],
-            )
-            .is_some()
+            .unwrap(),
         );
+        let guard = policy(&["**/.env"], AccessPolicy::InspectKnown);
+        assert!(evaluate_codex(&guard, &input).is_some());
     }
 
     #[test]
-    fn explicit_configs_are_merged_additively() {
+    fn explicit_configs_merge_and_legacy_shell_blocking_maps_to_deny_all() {
         let directory = test_dir("forbidden-config");
         std::fs::create_dir_all(&directory).unwrap();
         let first = directory.join("first.yaml");
         let second = directory.join("second.yaml");
-        std::fs::write(&first, "patterns: ['.env']\n").unwrap();
+        std::fs::write(
+            &first,
+            "patterns: ['.env']\naccess_policy: deny_unresolved\n",
+        )
+        .unwrap();
         std::fs::write(
             &second,
             "patterns: ['**/*.pem']\nblock_shell_commands: true\n",
         )
         .unwrap();
 
-        let policy = load_policy(&[first, second], &[PathBuf::from("/repo")]).unwrap();
-        assert_eq!(policy.patterns.len(), 2);
-        assert!(policy.block_shell_commands);
-        assert!(policy.patterns.is_match("keys/private.pem"));
+        let guard = load_policy(&[first, second], &[Utf8PathBuf::from("/repo")]).unwrap();
+        assert_eq!(guard.patterns.len(), 2);
+        assert_eq!(guard.access_policy, AccessPolicy::DenyAllShell);
+        assert!(guard.patterns.is_match("keys/private.pem"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn missing_explicit_config_is_an_error() {
         let missing = test_dir("missing-forbidden-config").join("policy.yaml");
-        assert!(load_policy(&[missing], &[PathBuf::from("/repo")]).is_err());
+        assert!(load_policy(&[missing], &[Utf8PathBuf::from("/repo")]).is_err());
     }
 
     #[test]
-    fn patch_paths_are_guarded() {
-        let policy = policy(&["secrets/**"], false);
-        let input = serde_json::json!({"patch": "*** Update File: secrets/token.txt\n"});
-        let reason = evaluate(
-            &policy,
-            classify("apply_patch", &input, Utf8Path::new("/repo")),
-            "apply_patch",
-            &input,
-            &[PathBuf::from("/repo")],
+    fn parent_traversal_is_normalized_against_native_cwd() {
+        let guard = policy(&[".env"], AccessPolicy::InspectKnown);
+        let input = codex_input("read_file", serde_json::json!({"path": "../../repo/.env"}));
+        assert!(evaluate_codex(&guard, &input).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_candidate_forms_detect_symlinked_forbidden_paths() {
+        let directory = test_dir("forbidden-symlink");
+        let root = Utf8PathBuf::from_path_buf(directory.clone()).unwrap();
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::write(root.join("real/.env"), "secret").unwrap();
+        std::os::unix::fs::symlink(root.join("real/.env"), root.join("alias")).unwrap();
+        let guard = policy(&["real/.env"], AccessPolicy::InspectKnown);
+        let input = codex_input_at_cwd(
+            root.as_str(),
+            "read_file",
+            serde_json::json!({"path": "alias"}),
         );
-        assert!(reason.is_some());
-    }
-
-    #[test]
-    fn normalizes_parent_traversal_without_escaping_the_filesystem_root() {
-        let policy = policy(&[".env"], false);
-        assert!(matches_policy(
-            &policy,
-            Path::new("../../repo/.env"),
-            &[PathBuf::from("/repo")]
-        ));
+        assert!(
+            evaluate(
+                &guard,
+                &input,
+                std::slice::from_ref(&root),
+                TARGET_RESOLUTION_BUDGET
+            )
+            .is_some()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

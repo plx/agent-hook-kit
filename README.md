@@ -30,6 +30,9 @@ change.
   - `hookkit-common`
 - Opt-in, bounded Bash syntax analysis and file-access inference for native shell tool calls:
   - [`hookkit-shell`](crates/hookkit-shell/README.md)
+- Phase-agnostic structured, patch, and shell file-access evidence plus bounded
+  scoped-target materialization:
+  - [`hookkit-tool-access`](crates/hookkit-tool-access/README.md)
 - Loss-aware file activity evidence, pending windows, and reconciliation:
   - [`hookkit-file-activity`](crates/hookkit-file-activity/README.md)
 - Concurrent, versioned session-scoped state primitives:
@@ -41,8 +44,10 @@ change.
   - `hookkit-tool-runner` (ships `post-tool-use-agent-hook`,
     `turn-completion-agent-hook`, and the precise
     `session-start-state-agent-hook` metadata observer)
-- Shared core error/types:
-  - `hookkit-core`
+- Shared core errors, types, and deterministic lexical path operations:
+  - `hookkit-core` path helpers normalize, resolve, expand an explicitly
+    supplied home, and render UTF-8 slash paths without filesystem access;
+    canonicalization and symlink resolution remain explicit caller concerns.
 - Versioned upstream protocol ledger and generated support matrix:
   - [`contracts/`](contracts/README.md)
   - [`contracts/status/support.md`](contracts/status/support.md)
@@ -68,6 +73,7 @@ crates/
   hookkit-antigravity/
   hookkit-common/
   hookkit-shell/
+  hookkit-tool-access/
   hookkit-file-activity/
   hookkit-pkl-config/
   hookkit-tool-runner/
@@ -132,6 +138,35 @@ it cannot emit another event's discriminator. `WorktreeCreate` demonstrates the
 same typed contract with a non-JSON result: its output emits an absolute path as
 exact plain text.
 
+## Quick Start: Aligned `PreToolUse`
+
+Aligned events keep native inputs and outputs intact while allowing one handler
+to cover several harnesses. Pre-tool execution maps the shared name to Claude
+Code `PreToolUse`, Codex `PreToolUse`, Gemini CLI `BeforeTool`, and Antigravity
+`PreToolUse`:
+
+```rust
+use hookkit_common::PreToolUseOutput;
+use hookkit_core::HarnessId;
+use hookkit_runtime::aligned::{PreToolUse, run_aligned_event};
+
+fn main() -> std::process::ExitCode {
+    let harness = HarnessId::CODEX; // select from trusted configuration or CLI input
+    run_aligned_event::<PreToolUse, _>(harness, |input, environment, _context| {
+        assert_eq!(input.harness(), environment.harness());
+        if input.tool_name() == Some("dangerous_tool") {
+            PreToolUseOutput::deny(&input.harness(), "blocked by policy")
+        } else {
+            PreToolUseOutput::allow(&input.harness())
+        }
+    })
+}
+```
+
+The convenience constructors return a concrete native enum arm. Callers can
+instead match `PreToolUseInput` and construct any native-only output capability
+available to that arm.
+
 ## Quick Start: Aligned `PostToolUse`
 
 Use `run_aligned_event` for genuinely shared lifecycle logic. Its enums retain
@@ -160,10 +195,10 @@ fn main() -> std::process::ExitCode {
 ```
 
 For a multi-harness executable, select a `HarnessId` from trusted CLI or
-configuration input and match every supported `PostToolUseInput` arm. There is no
-universal output lowering: each arm constructs the native response its harness
-actually supports. See `examples/shared-posttool-autofix` for the complete
-pattern.
+configuration input and match every supported `PostToolUseInput` arm. There is
+no universal serialized output envelope: each arm constructs the native
+response its harness actually supports. See `examples/shared-posttool-autofix`
+for the complete pattern.
 
 ## Exact, Selected, and Aligned Execution
 
@@ -289,7 +324,7 @@ limitation notes:
 - [`codex-claude-rules`](examples/codex-claude-rules/README.md) lazily injects
   path-scoped files from Claude Code's user and project rules directories.
 - [`forbidden-file-guard`](examples/forbidden-file-guard/README.md) selects a
-  native pre-tool contract with `--harness=codex|gemini|antigravity` and merges
+  native pre-tool contract with `--harness=claude|codex|gemini|antigravity` and merges
   home/project YAML policy.
 - [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
   selects `--harness=claude|codex|gemini` and appends provenance-bearing,
@@ -434,14 +469,15 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - writes verbose manual diagnostics to a temp artifact and gives concise agent guidance when supported.
 - `codex-claude-rules`:
   - discovers Claude Code rule files recursively in user-before-project order,
-  - evaluates `paths` frontmatter against structured paths, patch headers, and
-    HookKit's parsed/inferred Bash file targets,
+  - evaluates `paths` frontmatter against materialized structured, patch, and
+    shell access targets from `hookkit-tool-access`,
   - atomically claims each matched rule in session state before injecting its
     body as additional context.
 - `forbidden-file-guard`:
-  - uses clap to select Codex, Gemini, or Antigravity native pre-tool handling,
+  - uses one aligned handler for Claude, Codex, Gemini, and Antigravity pre-tool events,
   - merges additive YAML glob policy from home and workspace configuration,
-  - emits the selected harness's native deny output for matching structured paths, patch paths, or obvious shell path tokens.
+  - applies inspect-known, deny-unresolved, or deny-all-shell posture to bounded
+    structured, patch, and shell access evidence.
 - `session-modified-file-tracker`:
   - uses the aligned post-tool API for Claude, Codex, and Gemini,
   - infers direct modifications from native open tool payloads and never shells out to Git,

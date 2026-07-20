@@ -304,6 +304,19 @@ pub struct Redirection {
     pub raw: String,
     pub descriptor: Option<String>,
     pub target: Option<ShellWord>,
+    /// Source-backed delimiter and body facts for a here-document.
+    pub here_document: Option<HereDocument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct HereDocument {
+    pub delimiter: ShellWord,
+    pub body_span: Option<SourceSpan>,
+    /// The bytes supplied on stdin after quote handling and optional tab
+    /// stripping, but only when no runtime expansion is possible.
+    pub literal_body: Option<String>,
+    pub dynamic_reasons: Vec<DynamicReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -656,6 +669,9 @@ fn analyze_redirection(node: Node<'_>, source: &str) -> Redirection {
         }
         RedirectionKind::HereDocument => None,
     };
+    let here_document = (kind == RedirectionKind::HereDocument)
+        .then(|| analyze_here_document(node, source, operator))
+        .flatten();
     Redirection {
         kind,
         operator,
@@ -663,7 +679,91 @@ fn analyze_redirection(node: Node<'_>, source: &str) -> Redirection {
         raw: node_text(node, source).to_owned(),
         descriptor,
         target: target_node.map(|target| analyze_word(target, source)),
+        here_document,
     }
+}
+
+fn analyze_here_document(
+    node: Node<'_>,
+    source: &str,
+    operator: Option<RedirectionOperator>,
+) -> Option<HereDocument> {
+    let mut cursor = node.walk();
+    let children = node.named_children(&mut cursor).collect::<Vec<_>>();
+    let delimiter_node = children
+        .iter()
+        .find(|child| child.kind() == "heredoc_start")?;
+    let delimiter_raw = node_text(*delimiter_node, source).to_owned();
+    let delimiter_literal = literal_heredoc_delimiter(&delimiter_raw);
+    let delimiter_quoted = delimiter_raw.starts_with(['\'', '"']);
+    let delimiter = ShellWord {
+        span: source_span(*delimiter_node),
+        raw: delimiter_raw,
+        literal: delimiter_literal.clone(),
+        dynamic_reasons: if delimiter_literal.is_some() {
+            Vec::new()
+        } else {
+            vec![DynamicReason::UnsupportedSyntax]
+        },
+    };
+    let body_node = children.iter().find(|child| child.kind() == "heredoc_body");
+    let mut body_dynamic_reasons = body_node.map_or_else(Vec::new, |body| {
+        if delimiter_quoted {
+            Vec::new()
+        } else {
+            dynamic_reasons(*body, source)
+        }
+    });
+    if delimiter_literal.is_none() {
+        body_dynamic_reasons.push(DynamicReason::UnsupportedSyntax);
+    }
+    deduplicate(&mut body_dynamic_reasons);
+    let literal_body = body_node
+        .filter(|_| body_dynamic_reasons.is_empty())
+        .map(|body| node_text(*body, source))
+        .map(|body| {
+            if operator == Some(RedirectionOperator::HereDocumentStripTabs) {
+                strip_heredoc_tabs(body)
+            } else {
+                body.to_owned()
+            }
+        });
+    Some(HereDocument {
+        delimiter,
+        body_span: body_node.map(|body| source_span(*body)),
+        literal_body,
+        dynamic_reasons: body_dynamic_reasons,
+    })
+}
+
+fn literal_heredoc_delimiter(raw: &str) -> Option<String> {
+    if raw.len() >= 2 {
+        if let Some(value) = raw
+            .strip_prefix('\'')
+            .and_then(|value| value.strip_suffix('\''))
+        {
+            return (!value.is_empty()).then(|| value.to_owned());
+        }
+        if let Some(value) = raw
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+        {
+            return (!value.is_empty() && !value.contains('\\')).then(|| value.to_owned());
+        }
+    }
+    (!raw.is_empty()
+        && raw
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_-+.".contains(character)))
+    .then(|| raw.to_owned())
+}
+
+fn strip_heredoc_tabs(body: &str) -> String {
+    let mut stripped = String::with_capacity(body.len());
+    for line in body.split_inclusive('\n') {
+        stripped.push_str(line.trim_start_matches('\t'));
+    }
+    stripped
 }
 
 fn redirection_operator(node: Node<'_>) -> Option<RedirectionOperator> {
@@ -1072,6 +1172,25 @@ mod tests {
         assert_eq!(
             heredoc.commands[0].redirections[0].kind,
             RedirectionKind::HereDocument
+        );
+        let here_document = heredoc.commands[0].redirections[0]
+            .here_document
+            .as_ref()
+            .unwrap();
+        assert_eq!(here_document.delimiter.literal.as_deref(), Some("EOF"));
+        assert_eq!(here_document.literal_body.as_deref(), Some("hello\n"));
+        assert!(here_document.body_span.is_some());
+
+        let dynamic = complete("cat <<EOF\nhello $USER\nEOF\n");
+        let here_document = dynamic.commands[0].redirections[0]
+            .here_document
+            .as_ref()
+            .unwrap();
+        assert_eq!(here_document.literal_body, None);
+        assert!(
+            here_document
+                .dynamic_reasons
+                .contains(&DynamicReason::ParameterExpansion)
         );
     }
 

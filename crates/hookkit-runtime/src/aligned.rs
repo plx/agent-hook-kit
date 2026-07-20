@@ -1,5 +1,12 @@
+//! Explicit-harness execution for lossless aligned lifecycle-event families.
+//!
+//! The sealed marker types select only library-defined alignments. Each path
+//! parses, validates, and emits the exact native contract for the explicitly
+//! selected harness, and rejects a handler output arm for another harness.
+
 use hookkit_common::{
     PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput,
+    PreToolUseCommandEnvironment, PreToolUseInput, PreToolUseOutput,
     TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput,
 };
 use hookkit_core::{
@@ -8,6 +15,9 @@ use hookkit_core::{
     ResolutionProvenance, RuntimeContext, SnapshotId,
 };
 use std::io::Read;
+
+/// Marker for the aligned pre-tool event family.
+pub enum PreToolUse {}
 
 /// Marker for the aligned post-tool event family.
 pub enum PostToolUse {}
@@ -19,6 +29,7 @@ mod sealed {
     pub trait Sealed {}
 }
 
+impl sealed::Sealed for PreToolUse {}
 impl sealed::Sealed for PostToolUse {}
 impl sealed::Sealed for TurnCompletion {}
 
@@ -40,6 +51,28 @@ pub trait AlignedEventSpec: sealed::Sealed {
             &Self::CommandEnvironment,
             &RuntimeContext<'_>,
         ) -> hookkit_core::Result<Self::Output>;
+}
+
+impl AlignedEventSpec for PreToolUse {
+    type Input = PreToolUseInput;
+    type CommandEnvironment = PreToolUseCommandEnvironment;
+    type Output = PreToolUseOutput;
+
+    fn execute<F>(
+        harness: HarnessId,
+        bytes: Vec<u8>,
+        variables: &EnvironmentVariables,
+        handler: F,
+    ) -> hookkit_core::Result<ProcessEmission>
+    where
+        F: FnOnce(
+            Self::Input,
+            &Self::CommandEnvironment,
+            &RuntimeContext<'_>,
+        ) -> hookkit_core::Result<Self::Output>,
+    {
+        execute_pre_tool_use_inner(harness, bytes, variables, handler)
+    }
 }
 
 impl AlignedEventSpec for PostToolUse {
@@ -128,7 +161,24 @@ where
     }
 }
 
-/// Convenience spelling for the first aligned event family.
+/// Convenience spelling for aligned pre-tool execution.
+pub fn execute_pre_tool_use<F>(
+    harness: HarnessId,
+    bytes: impl Into<Vec<u8>>,
+    variables: &EnvironmentVariables,
+    handler: F,
+) -> hookkit_core::Result<ProcessEmission>
+where
+    F: FnOnce(
+        PreToolUseInput,
+        &PreToolUseCommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<PreToolUseOutput>,
+{
+    execute_aligned_event::<PreToolUse, _>(harness, bytes, variables, handler)
+}
+
+/// Convenience spelling for aligned post-tool execution.
 pub fn execute_post_tool_use<F>(
     harness: HarnessId,
     bytes: impl Into<Vec<u8>>,
@@ -160,6 +210,42 @@ where
     ) -> hookkit_core::Result<TurnCompletionOutput>,
 {
     execute_aligned_event::<TurnCompletion, _>(harness, bytes, variables, handler)
+}
+
+fn execute_pre_tool_use_inner<F>(
+    harness: HarnessId,
+    bytes: Vec<u8>,
+    variables: &EnvironmentVariables,
+    handler: F,
+) -> hookkit_core::Result<ProcessEmission>
+where
+    F: FnOnce(
+        PreToolUseInput,
+        &PreToolUseCommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<PreToolUseOutput>,
+{
+    let invocation = RawInvocation::parse(bytes)?;
+    let parsed = parse_selected_pre_tool_use(&harness, &invocation, variables)?;
+    let expected_harness = parsed.input.harness();
+    let context = RuntimeContext::new(
+        harness,
+        parsed.snapshot,
+        parsed.event.clone(),
+        parsed.contract,
+        ResolutionProvenance::TypedStatic,
+        &invocation,
+        parsed.native_context,
+        &DISABLED_DIAGNOSTICS,
+    )?;
+    let output = handler(parsed.input, &parsed.command_environment, &context)?;
+    if output.harness() != expected_harness {
+        return Err(HookkitError::EventHarnessMismatch {
+            harness: expected_harness,
+            event: output.event_id(),
+        });
+    }
+    crate::typed::validate_command_emission(emit_pre_tool_use(output)?, context.contract())
 }
 
 fn execute_post_tool_use_inner<F>(
@@ -243,6 +329,15 @@ struct Parsed {
     command_environment: PostToolUseCommandEnvironment,
 }
 
+struct ParsedPreToolUse {
+    input: PreToolUseInput,
+    event: EventId,
+    snapshot: SnapshotId,
+    contract: ContractId,
+    native_context: NativeContext,
+    command_environment: PreToolUseCommandEnvironment,
+}
+
 struct ParsedTurnCompletion {
     input: TurnCompletionInput,
     event: EventId,
@@ -250,6 +345,100 @@ struct ParsedTurnCompletion {
     contract: ContractId,
     native_context: NativeContext,
     command_environment: TurnCompletionCommandEnvironment,
+}
+
+fn parse_selected_pre_tool_use(
+    harness: &HarnessId,
+    invocation: &RawInvocation,
+    variables: &EnvironmentVariables,
+) -> hookkit_core::Result<ParsedPreToolUse> {
+    match harness.as_str() {
+        "claude-code" => {
+            let input = hookkit_claude::catalog::PreToolUse::parse(invocation)?;
+            let command_environment = hookkit_claude::ClaudeCommandEnvironment::from_variables(
+                &hookkit_claude::catalog::PreToolUse::EVENT,
+                variables,
+            )?;
+            hookkit_claude::catalog::PreToolUse::validate_command_environment(
+                &input,
+                &command_environment,
+            )?;
+            let native_context = hookkit_claude::catalog::PreToolUse::context(&input);
+            Ok(ParsedPreToolUse {
+                input: PreToolUseInput::Claude(input),
+                event: hookkit_claude::catalog::PreToolUse::EVENT,
+                snapshot: hookkit_claude::catalog::PreToolUse::SNAPSHOT,
+                contract: hookkit_claude::catalog::PreToolUse::CONTRACT,
+                native_context,
+                command_environment: PreToolUseCommandEnvironment::Claude(command_environment),
+            })
+        }
+        "codex" => {
+            let input = hookkit_codex::protocol::PreToolUse::parse(invocation)?;
+            let command_environment = hookkit_codex::CodexCommandEnvironment::from_variables(
+                &hookkit_codex::protocol::PreToolUse::EVENT,
+                variables,
+            )?;
+            hookkit_codex::protocol::PreToolUse::validate_command_environment(
+                &input,
+                &command_environment,
+            )?;
+            let native_context = hookkit_codex::protocol::PreToolUse::context(&input);
+            Ok(ParsedPreToolUse {
+                input: PreToolUseInput::Codex(input),
+                event: hookkit_codex::protocol::PreToolUse::EVENT,
+                snapshot: hookkit_codex::protocol::PreToolUse::SNAPSHOT,
+                contract: hookkit_codex::protocol::PreToolUse::CONTRACT,
+                native_context,
+                command_environment: PreToolUseCommandEnvironment::Codex(command_environment),
+            })
+        }
+        "gemini-cli" => {
+            let input = hookkit_gemini::protocol::BeforeTool::parse(invocation)?;
+            let command_environment = hookkit_gemini::GeminiCommandEnvironment::from_variables(
+                &hookkit_gemini::protocol::BeforeTool::EVENT,
+                variables,
+            )?;
+            hookkit_gemini::protocol::BeforeTool::validate_command_environment(
+                &input,
+                &command_environment,
+            )?;
+            let native_context = hookkit_gemini::protocol::BeforeTool::context(&input);
+            Ok(ParsedPreToolUse {
+                input: PreToolUseInput::Gemini(input),
+                event: hookkit_gemini::protocol::BeforeTool::EVENT,
+                snapshot: hookkit_gemini::protocol::BeforeTool::SNAPSHOT,
+                contract: hookkit_gemini::protocol::BeforeTool::CONTRACT,
+                native_context,
+                command_environment: PreToolUseCommandEnvironment::Gemini(command_environment),
+            })
+        }
+        "antigravity" => {
+            let input = hookkit_antigravity::PreToolUse::parse(invocation)?;
+            let command_environment =
+                hookkit_antigravity::AntigravityCommandEnvironment::from_variables(
+                    &hookkit_antigravity::PreToolUse::EVENT,
+                    variables,
+                )?;
+            hookkit_antigravity::PreToolUse::validate_command_environment(
+                &input,
+                &command_environment,
+            )?;
+            let native_context = hookkit_antigravity::PreToolUse::context(&input);
+            Ok(ParsedPreToolUse {
+                input: PreToolUseInput::Antigravity(input),
+                event: hookkit_antigravity::PreToolUse::EVENT,
+                snapshot: hookkit_antigravity::PreToolUse::SNAPSHOT,
+                contract: hookkit_antigravity::PreToolUse::CONTRACT,
+                native_context,
+                command_environment: PreToolUseCommandEnvironment::Antigravity(command_environment),
+            })
+        }
+        _ => Err(HookkitError::UnrecognizedEvent {
+            harness: harness.clone(),
+            message: "no aligned PreToolUse adapter is registered".into(),
+        }),
+    }
 }
 
 fn parse_selected(
@@ -476,6 +665,18 @@ fn emit(output: PostToolUseOutput) -> hookkit_core::Result<ProcessEmission> {
     }
 }
 
+fn emit_pre_tool_use(output: PreToolUseOutput) -> hookkit_core::Result<ProcessEmission> {
+    match output {
+        PreToolUseOutput::Claude(output) => hookkit_claude::catalog::PreToolUse::emit(output),
+        PreToolUseOutput::Codex(output) => hookkit_codex::protocol::PreToolUse::emit(output),
+        PreToolUseOutput::Gemini(output) => hookkit_gemini::protocol::BeforeTool::emit(output),
+        PreToolUseOutput::Antigravity(output) => hookkit_antigravity::PreToolUse::emit(output),
+        _ => Err(HookkitError::InvalidProcessEmission(
+            "unknown aligned output arm cannot be emitted",
+        )),
+    }
+}
+
 fn emit_turn_completion(output: TurnCompletionOutput) -> hookkit_core::Result<ProcessEmission> {
     match output {
         TurnCompletionOutput::Claude(output) => hookkit_claude::catalog::Stop::emit(output),
@@ -509,6 +710,215 @@ mod tests {
             ("GEMINI_SESSION_ID", "s"),
             ("CLAUDE_PROJECT_DIR", "/repo"),
         ])
+    }
+
+    fn pre_tool_cases() -> Vec<(HarnessId, &'static [u8], EnvironmentVariables)> {
+        vec![
+            (
+                HarnessId::CLAUDE_CODE,
+                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Read","tool_input":{"path":".env"},"tool_use_id":"u","claude_only":{"retained":true}}"#,
+                claude_variables(),
+            ),
+            (
+                HarnessId::CODEX,
+                br#"{"session_id":"s","transcript_path":null,"cwd":"/repo","hook_event_name":"PreToolUse","model":"gpt-5","turn_id":"t","permission_mode":"default","tool_name":"Read","tool_input":{"path":".env"},"tool_use_id":"u","codex_only":"retained"}"#,
+                EnvironmentVariables::new(),
+            ),
+            (
+                HarnessId::GEMINI_CLI,
+                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"BeforeTool","timestamp":"2026-07-19T00:00:00Z","tool_name":"read_file","tool_input":{"path":".env"},"mcp_context":{"server":"files"},"gemini_only":true}"#,
+                gemini_variables(),
+            ),
+            (
+                HarnessId::ANTIGRAVITY,
+                br#"{"conversationId":"s","workspacePaths":["/repo","/lib"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"read_file","args":{"path":".env"},"nativeFlag":true},"stepIdx":7,"antigravityOnly":"retained"}"#,
+                EnvironmentVariables::from_pairs([("AMBIENT_ONLY", "ignored")]),
+            ),
+        ]
+    }
+
+    #[test]
+    fn aligned_pre_tool_parses_and_allows_every_native_contract() {
+        for (harness, bytes, variables) in pre_tool_cases() {
+            let expected_harness = harness.clone();
+            let handler_harness = harness.clone();
+            let emission = execute_pre_tool_use(
+                harness,
+                bytes,
+                &variables,
+                move |input, environment, context| {
+                    assert_eq!(input.harness(), handler_harness);
+                    assert_eq!(environment.harness(), handler_harness);
+                    assert_eq!(context.harness(), &handler_harness);
+                    assert_eq!(input.event_id().harness(), &handler_harness);
+                    assert_eq!(input.workspace_roots(), context.workspace_roots());
+                    assert_eq!(
+                        input.cwd().is_none(),
+                        handler_harness == HarnessId::ANTIGRAVITY
+                    );
+                    assert_eq!(
+                        input.tool_input().and_then(|input| input.get("path")),
+                        Some(&serde_json::json!(".env"))
+                    );
+                    assert!(input.tool_name().is_some());
+
+                    match (&input, environment) {
+                        (
+                            PreToolUseInput::Claude(input),
+                            PreToolUseCommandEnvironment::Claude(environment),
+                        ) => {
+                            assert_eq!(
+                                input.field("claude_only"),
+                                Some(&serde_json::json!({"retained": true}))
+                            );
+                            assert_eq!(environment.project_dir, "/repo");
+                            assert_eq!(input.cwd, "/repo");
+                        }
+                        (
+                            PreToolUseInput::Codex(input),
+                            PreToolUseCommandEnvironment::Codex(environment),
+                        ) => {
+                            assert_eq!(
+                                input.extra.get("codex_only"),
+                                Some(&serde_json::json!("retained"))
+                            );
+                            assert!(environment.plugin.is_none());
+                            assert_eq!(input.cwd, "/repo");
+                        }
+                        (
+                            PreToolUseInput::Gemini(input),
+                            PreToolUseCommandEnvironment::Gemini(environment),
+                        ) => {
+                            assert_eq!(
+                                input.extra.get("gemini_only"),
+                                Some(&serde_json::json!(true))
+                            );
+                            assert_eq!(
+                                input
+                                    .mcp_context
+                                    .as_ref()
+                                    .and_then(|value| value.get("server")),
+                                Some(&serde_json::json!("files"))
+                            );
+                            assert_eq!(environment.cwd, "/repo");
+                        }
+                        (
+                            PreToolUseInput::Antigravity(input),
+                            PreToolUseCommandEnvironment::Antigravity(_),
+                        ) => {
+                            assert_eq!(input.step_idx, 7);
+                            assert_eq!(
+                                input.tool_call.extra.get("nativeFlag"),
+                                Some(&serde_json::json!(true))
+                            );
+                            assert_eq!(
+                                input.extra.get("antigravityOnly"),
+                                Some(&serde_json::json!("retained"))
+                            );
+                            assert!(input.workspace_paths.len() == 2);
+                        }
+                        _ => panic!("input and command-environment arms must match"),
+                    }
+
+                    let output = PreToolUseOutput::allow(&handler_harness)?;
+                    assert_eq!(output.event_id(), input.event_id());
+                    Ok(output)
+                },
+            )
+            .unwrap();
+
+            assert_eq!(emission.exit_code(), 0);
+            assert!(emission.stderr().is_empty());
+            let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
+            match expected_harness.as_str() {
+                "claude-code" | "codex" => {
+                    assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+                    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
+                }
+                "gemini-cli" => {
+                    assert_eq!(output["decision"], "allow");
+                    assert_eq!(output["hookSpecificOutput"]["hookEventName"], "BeforeTool");
+                }
+                "antigravity" => assert_eq!(output, serde_json::json!({"decision": "allow"})),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn aligned_pre_tool_denies_with_each_native_shape() {
+        for (harness, bytes, variables) in pre_tool_cases() {
+            let expected_harness = harness.clone();
+            let emission = execute_aligned_event::<PreToolUse, _>(
+                harness,
+                bytes,
+                &variables,
+                move |_, _, _| PreToolUseOutput::deny(&expected_harness, "blocked by policy"),
+            )
+            .unwrap();
+
+            assert_eq!(emission.exit_code(), 0);
+            assert!(emission.stderr().is_empty());
+            let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
+            assert_eq!(
+                output["decision"]
+                    .as_str()
+                    .or_else(|| output["hookSpecificOutput"]["permissionDecision"].as_str()),
+                Some("deny")
+            );
+            assert_eq!(
+                output["reason"]
+                    .as_str()
+                    .or_else(|| output["hookSpecificOutput"]["permissionDecisionReason"].as_str()),
+                Some("blocked by policy")
+            );
+        }
+    }
+
+    #[test]
+    fn aligned_pre_tool_rejects_wrong_output_arm_before_emission() {
+        let (_, bytes, variables) = pre_tool_cases().remove(1);
+        let result =
+            execute_pre_tool_use(HarnessId::CODEX, bytes, &variables, |_, environment, _| {
+                assert!(matches!(
+                    environment,
+                    PreToolUseCommandEnvironment::Codex(_)
+                ));
+                Ok(PreToolUseOutput::Gemini(
+                    hookkit_gemini::protocol::BeforeToolOutput::allow(),
+                ))
+            });
+        assert!(matches!(
+            result,
+            Err(HookkitError::EventHarnessMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn aligned_pre_tool_validates_required_native_environments() {
+        let (claude, claude_bytes, _) = pre_tool_cases().remove(0);
+        let claude_result = execute_pre_tool_use(
+            claude,
+            claude_bytes,
+            &EnvironmentVariables::new(),
+            |_, _, _| panic!("handler must not run for an invalid environment"),
+        );
+        assert!(matches!(
+            claude_result,
+            Err(HookkitError::InvalidHookEnvironment { .. })
+        ));
+
+        let (gemini, gemini_bytes, _) = pre_tool_cases().remove(2);
+        let gemini_result = execute_pre_tool_use(
+            gemini,
+            gemini_bytes,
+            &EnvironmentVariables::new(),
+            |_, _, _| panic!("handler must not run for an invalid environment"),
+        );
+        assert!(matches!(
+            gemini_result,
+            Err(HookkitError::InvalidHookEnvironment { .. })
+        ));
     }
 
     #[test]

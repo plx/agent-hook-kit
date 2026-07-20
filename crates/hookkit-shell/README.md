@@ -15,6 +15,9 @@ It provides four deliberately separate layers:
    provenance, certainty, and explicit unresolved gaps.
 
 None of these layers executes the command or decides that it is safe.
+Applications that need unified structured-field, patch, and shell evidence
+should normally consume these facts through `hookkit-tool-access` rather than
+rebuilding phase-specific extraction on top of this crate.
 
 ## Features
 
@@ -121,11 +124,19 @@ Each `FileAccessCandidate` carries:
   that inferred it.
 
 The default analyzer understands file redirections and a deliberately bounded
-table of common readers, listings, searches, direct mutators, removals,
+table of common readers, listings, searches, `sed` (including in-place mode), direct mutators, removals,
 copy/move/link commands, and indirect shell evaluation. Unknown commands,
 ambiguous option layouts, dynamic paths, indirect evaluation, partial parsing,
 and unavailable analysis are retained in `FileAccessReport::unresolved`
 instead of being silently treated as file-free.
+
+Unknown or ambiguous commands with fully literal argv can optionally use
+`UnknownCommandFallback::LiteralPathOperands`. Its documented path-likeness
+rule recognizes dot paths, absolute/explicit-relative prefixes, separators,
+and filename-style dots (including the value side of `name=value`). These
+candidates are `Heuristic` read-modify candidates with argument provenance;
+the original unresolved semantics record is always retained. The default is
+`Disabled`.
 
 The command table is extensible without replacing the parser. Implement
 `CommandFileSemantics`, emit candidates through `FileAccessSink`, and register
@@ -154,12 +165,18 @@ session-state work outside this crate.
 
 Use `ShellToolProfile` to describe an exact custom tool name and JSON Pointer;
 the bundled adapters do not guess aliases such as `shell` or `exec_command`.
+With the matching harness features enabled, the exact reusable values are
+`CLAUDE_BASH_PROFILE`, `CODEX_BASH_PROFILE`,
+`GEMINI_RUN_SHELL_COMMAND_PROFILE`, and
+`ANTIGRAVITY_RUN_COMMAND_PROFILE`.
 
 ## Analysis boundary
 
 The report can expose commands nested in substitutions, pipelines, logical
 lists, conditionals, loops, functions, and subshells. It also reports source
 spans, assignments, expansions, redirections, heredocs, and here-strings.
+Here-document facts include source-backed delimiters, body spans, and literal
+bodies only when static quote/expansion analysis justifies recovery.
 
 Static syntax analysis cannot resolve environment values, glob results, shell
 functions or aliases, `eval`, sourced/generated scripts, executable behavior,

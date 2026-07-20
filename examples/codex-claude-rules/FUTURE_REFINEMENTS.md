@@ -1,10 +1,13 @@
-# Future refinements
+# Shared API refinement record
 
-The refactor exposed several places where a reusable HookKit API could replace
-remaining example-local policy or glue. These are observations for future
-library work, not requirements for the current example.
+The original refactor exposed the gaps below. The generic analysis/path items
+were addressed by the shared API enhancement work; the text is retained as a
+historical record. Observable claim metadata remains deliberately deferred.
 
 ## Reusable structured and patch target extraction
+
+**Status: addressed.** `hookkit-tool-access::ToolAccessAnalyzer` now owns the
+phase-agnostic structured, patch, and shell report consumed by this example.
 
 The example still owns recursive structured-path discovery, recognized field
 names, `apply_patch` header parsing, deduplication, and native-cwd resolution.
@@ -24,6 +27,9 @@ rules or pretending that every path-shaped field has identical semantics.
 
 ## General target-scope resolution
 
+**Status: addressed.** `hookkit-tool-access::resolve_targets` materializes all
+retained scopes with explicit bounds and unresolved results.
+
 `FileAccessAnalyzer` correctly preserves `Exact`, `Descendants`,
 `ExactOrDescendants`, `Glob`, and `Workspace` scope. This example currently
 uses only each candidate's resolved path. Consequently, a command that searches
@@ -37,6 +43,9 @@ entry limits, and unresolved/truncated results—would make that functionality
 available to pre-tool policy hooks without manufacturing file-activity state.
 
 ## First-class heuristic shell candidates
+
+**Status: addressed.** `UnknownCommandFallback::LiteralPathOperands` supplies
+the opt-in heuristic, and `sed` has conservative built-in semantics.
 
 The built-in shell semantics deliberately do not model every executable.
 Unsupported commands such as `sed` therefore require this example to inspect
@@ -53,6 +62,9 @@ the fallback as well.
 
 ## Shared lexical path utilities
 
+**Status: addressed.** `hookkit-core` now exports native and UTF-8 lexical
+normalization, resolution, explicit-home expansion, and slash rendering.
+
 The example still implements lexical `.`/`..` normalization, absolute-path
 anchoring, and slash normalization. Similar private helpers exist in
 `hookkit-shell` and `hookkit-file-activity`.
@@ -63,6 +75,10 @@ or symlink assumptions. That would eliminate subtle drift between crates and
 examples.
 
 ## Atomic loaded-rule state with observability
+
+**Status: deferred.** The example still has no concrete need to expose claim
+metadata, so item 06's decision gate is not met. `ClaimSet` and state-family
+version 2 remain unchanged.
 
 `ClaimSet` is the best existing fit for the hook's immediate decision, but its
 on-disk claims intentionally retain only hashed keys. This makes the loaded

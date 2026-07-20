@@ -454,6 +454,69 @@ macro_rules! require_pkl {
     };
 }
 
+#[test]
+fn aligned_pre_tool_stdin_helper() {
+    if std::env::var_os("HOOKKIT_ALIGNED_PRE_TOOL_STDIN_HELPER").is_none() {
+        return;
+    }
+
+    let code = hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PreToolUse, _>(
+        hookkit_core::HarnessId::CODEX,
+        |_, _, context| {
+            hookkit_common::PreToolUseOutput::deny(context.harness(), "blocked through stdin")
+        },
+    );
+    std::process::exit(if code == std::process::ExitCode::SUCCESS {
+        0
+    } else {
+        1
+    });
+}
+
+#[test]
+fn aligned_pre_tool_run_path_reads_stdin_and_writes_native_stdout() {
+    let fixture = serde_json::json!({
+        "session_id": "stdin-session",
+        "transcript_path": null,
+        "cwd": "/tmp",
+        "hook_event_name": "PreToolUse",
+        "model": "gpt-test",
+        "turn_id": "stdin-turn",
+        "permission_mode": "default",
+        "tool_name": "Read",
+        "tool_use_id": "stdin-call",
+        "tool_input": {"path": ".env"}
+    });
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "aligned_pre_tool_stdin_helper", "--nocapture"])
+        .env("HOOKKIT_ALIGNED_PRE_TOOL_STDIN_HELPER", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    clear_modeled_hook_environment(&mut command);
+
+    let output = command
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&serde_json::to_vec(&fixture).unwrap())?;
+            child.wait_with_output()
+        })
+        .expect("aligned stdin helper should run");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(
+        r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked through stdin"}}"#
+    ));
+}
+
 // --- codex-bash-guard ---
 
 #[test]

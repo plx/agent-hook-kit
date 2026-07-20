@@ -4,6 +4,28 @@ This example predated the shell-analysis (`hookkit-shell`, #32) and file-activit
 (`hookkit-file-activity`, #33) crates and hand-rolled everything. This pass moved
 its shell handling onto `hookkit-shell`.
 
+## Follow-up shared API migration
+
+The implementation has since moved again, from direct `hookkit-shell` use to
+the phase-agnostic `hookkit-tool-access` analyzer and bounded target resolver.
+One aligned `hookkit-common::PreToolUse` handler now covers Claude, Codex,
+Gemini, and Antigravity while preserving each harness's native allow/deny
+output.
+
+Structured fields, patch operations, shell inference, fallback evidence, and
+typed analysis gaps now flow through the same public API. Directory and glob
+targets are materialized with explicit bounds, nonexistent exact write targets
+are retained, and existing paths are canonicalized before policy matching.
+`access_policy` selects `inspect_known`, `deny_unresolved`, or
+`deny_all_shell`; the former `block_shell_commands` key remains accepted as a
+compatibility mapping.
+
+The historical account below describes the earlier shell-only refactor. Its
+local structured extraction and three-arm dispatch no longer describe the
+current implementation; see
+[`LIBRARY-REFINEMENT-NOTES.md`](LIBRARY-REFINEMENT-NOTES.md) for the resolution
+of the gaps it identified.
+
 ## What changed
 
 **Shell inspection now uses a real Bash parse instead of a hand-rolled lexer.**
