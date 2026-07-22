@@ -356,3 +356,48 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 8. The complete deferred executable suite is now shipped and its producer/consumer state contract is exercised end to end.
+
+## Item 8 — Migrate and audit the complete built-in catalog
+
+Outcome:
+
+- Validated all 134 embedded tool specs: 122 enabled entries now comprise seven explicit deferred-workflow entries and 115 structurally verified compatibility translations; twelve unfinished drafts remain disabled and explicitly claim no support.
+- Added genuine read-only checks for `go-fmt`, `gofumpt`, `goimports`, and `golines` using stdout issue classification, for `gomod-tidy` using `go mod tidy -diff`, and for yq using a per-file POSIX shell comparator that preserves executable overrides and extra argv.
+- Split Ruff into ordered lint and format workflows. Lint remedies precede format remedies when both are initially dirty; bounded final verification reports a format issue for manual follow-up if a lint fix dirties a workflow that was initially format-clean.
+- Added a deterministic generated Markdown audit of every built-in's commands, scope, invocation granularity, and precision limitation. Its drift test evaluates the embedded Pkl catalog rather than duplicating hand-maintained metadata.
+
+Public API/config/state changes:
+
+- `WorkflowCommand.issuesOnStdout` upgrades a clean exit with non-whitespace stdout to source issues, supporting non-mutating list/dry-run modes that retain exit zero.
+- The new `ToolExecutable` argv token passes the configured tool executable through structured command rendering; yq uses it inside its shell comparator.
+- `ToolSpec.unverifiedRemedyFallback` is an explicit catalog escape hatch requiring a nonempty limitation for an unavoidable mutator-first compatibility entry. No enabled built-in uses it.
+- `validate_builtin_catalog` checks tool identity, order references, authoritative checks, read/write scopes, and disjoint exit-code policies. `builtin_specs` applies it automatically.
+- No persisted state or native wire schema changed.
+
+Compatibility decision:
+
+- Immediate PostToolUse continues to execute every built-in's legacy `phases`; explicit `workflows` affect only deferred turn completion.
+- Existing formatter/fixer entries with a read-only final phase retain compatibility translation. The checked audit calls that translation and real-tool version dependence out rather than claiming cross-version semantic verification.
+- Batch remains the conservative default. `gomod-tidy` is explicitly workspace-scoped, yq is per-file, and Ruff plus the stdout-list Go formatters are target-file batches.
+
+Focused validation:
+
+- `cargo test -p hookkit-pkl-config --all-targets` (34 passed with Pkl available)
+- `cargo test -p hookkit-tool-runner --all-targets` (37 unit tests passed; controlled-version real-tool lane intentionally ignored)
+- `cargo test -p hookkit-runtime --test integration` (49 passed)
+- `cargo clippy -p hookkit-pkl-config -p hookkit-tool-runner --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+Known gaps:
+
+- The controlled-version real-tool compatibility lane was not run; it remains opt-in and was reported as ignored rather than passing. The generated audit records version and classification ambiguities, notably `go mod tidy -diff` exit 1 and golines' archived upstream.
+- Item 9 still owns the broader cross-harness regression matrix, final documentation sweep, and module cleanup assessment.
+
+Commit/PR:
+
+- This item is ready to commit as the built-in workflow migration and catalog-audit review unit.
+
+Next item readiness:
+
+- Ready for Item 9. Every enabled built-in has an authoritative deferred check or a validated compatibility pairing, and catalog regressions fail before execution.

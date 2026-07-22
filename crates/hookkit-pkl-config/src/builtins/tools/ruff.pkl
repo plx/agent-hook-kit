@@ -14,6 +14,77 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     include = new Listing<String> { "*.py"; "**/*.py"; "*.pyi"; "**/*.pyi" }
   }
 
+  workflows = new Mapping<String, Config.Workflow> {
+    ["lint"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "check"
+          "--force-exclude"
+          new Config.ExtraArgs {}
+          new Config.Files {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+          failure = new Listing<Int> { 2 }
+        }
+      }
+      remedy = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "check"
+          "--force-exclude"
+          "--fix"
+          new Config.ExtraArgs {}
+          new Config.Files {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+          failure = new Listing<Int> { 2 }
+        }
+        writes = "target-files"
+      }
+      checkScope = "target-files"
+      invocation = "batch"
+    }
+    ["format"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "format"
+          "--quiet"
+          "--force-exclude"
+          "--check"
+          new Config.ExtraArgs {}
+          new Config.Files {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+          failure = new Listing<Int> { 2 }
+        }
+      }
+      remedy = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "format"
+          "--quiet"
+          "--force-exclude"
+          new Config.ExtraArgs {}
+          new Config.Files {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          failure = new Listing<Int> { 2 }
+        }
+        writes = "target-files"
+      }
+      checkScope = "target-files"
+      invocation = "batch"
+    }
+  }
+  // Lint fixes can change layout, so when both checks are initially dirty the
+  // bounded remedy pass runs lint before formatting, then verifies both.
+  workflowOrder = new Listing<String> { "lint"; "format" }
+
   phases = new Mapping<String, Config.Phase> {
     ["format"] = new Config.Phase {
       mode = "format"

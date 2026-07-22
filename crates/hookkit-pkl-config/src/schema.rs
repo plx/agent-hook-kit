@@ -394,6 +394,7 @@ pub struct ToolSpec {
     pub workspace_indicator: Option<String>,
     pub workflows: BTreeMap<String, Workflow>,
     pub workflow_order: Vec<String>,
+    pub unverified_remedy_fallback: Option<String>,
     pub phases: BTreeMap<String, Phase>,
     pub phase_order: Vec<String>,
     pub messages: Messages,
@@ -412,6 +413,7 @@ impl Default for ToolSpec {
             workspace_indicator: None,
             workflows: BTreeMap::new(),
             workflow_order: Vec::new(),
+            unverified_remedy_fallback: None,
             phases: BTreeMap::new(),
             phase_order: Vec::new(),
             messages: Messages::default(),
@@ -451,6 +453,7 @@ pub struct WorkflowCommand {
     pub program: Option<String>,
     pub argv: Vec<ArgvElement>,
     pub exit_codes: ExitCodes,
+    pub issues_on_stdout: bool,
     pub writes: WriteBehavior,
     pub extra_args: Vec<String>,
 }
@@ -461,6 +464,7 @@ impl Default for WorkflowCommand {
             program: None,
             argv: Vec::new(),
             exit_codes: ExitCodes::default(),
+            issues_on_stdout: false,
             writes: WriteBehavior::None,
             extra_args: Vec::new(),
         }
@@ -547,6 +551,7 @@ pub enum ArgToken {
     Workspace,
     WorkspaceIndicator,
     ProjectRoot,
+    ToolExecutable,
     ExtraArgs,
 }
 

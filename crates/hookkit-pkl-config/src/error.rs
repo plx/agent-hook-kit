@@ -24,6 +24,9 @@ pub enum PklConfigError {
 
     #[error("failed to read pkl file {path}: {error}", path = path.display())]
     ReadIo { path: PathBuf, error: String },
+
+    #[error("builtin catalog validation failed:\n{0}")]
+    CatalogValidation(String),
 }
 
 impl From<PklConfigError> for hookkit_core::HookkitError {

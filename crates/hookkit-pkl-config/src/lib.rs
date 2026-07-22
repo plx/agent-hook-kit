@@ -13,6 +13,7 @@
 //! The runtime entry-point `hookkit-tool-runner` consumes a [`Loaded`] value
 //! and translates `schema::ToolSpec` into its execution-time `ToolSpec`.
 
+pub mod catalog;
 pub mod discovery;
 pub mod error;
 pub mod eval;
@@ -22,6 +23,9 @@ pub mod schema;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub use catalog::{
+    CatalogValidationError, render_builtin_catalog_markdown, validate_builtin_catalog,
+};
 pub use error::PklConfigError;
 pub use eval::{
     BUILTINS_PKL, CONFIG_PKL, StagedBuiltins, evaluate_pkl_file, evaluate_pkl_file_patch,
@@ -122,10 +126,13 @@ pub fn builtin_specs() -> Result<BTreeMap<String, ToolSpec>, PklConfigError> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<BTreeMap<String, ToolSpec>>(&stdout).map_err(|e| {
+    let specs = serde_json::from_str::<BTreeMap<String, ToolSpec>>(&stdout).map_err(|e| {
         PklConfigError::JsonDecode {
             path: builtins_path,
             error: e.to_string(),
         }
-    })
+    })?;
+    validate_builtin_catalog(&specs)
+        .map_err(|error| PklConfigError::CatalogValidation(error.to_string()))?;
+    Ok(specs)
 }

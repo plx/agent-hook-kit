@@ -187,6 +187,7 @@ pub struct ToolPhase {
     pub program: Option<String>,
     pub args: Vec<CommandArgTemplate>,
     pub exit_codes: ExitCodePolicy,
+    pub issues_on_stdout: bool,
     pub writes: WriteBehavior,
     pub extra_args: Vec<String>,
     pub enabled: bool,
@@ -200,6 +201,7 @@ impl ToolPhase {
             program: None,
             args: Vec::new(),
             exit_codes: ExitCodePolicy::default(),
+            issues_on_stdout: false,
             writes: WriteBehavior::None,
             extra_args: Vec::new(),
             enabled: true,
@@ -263,6 +265,7 @@ pub enum CommandArgTemplate {
     Workspace,
     WorkspaceIndicator,
     ProjectRoot,
+    ToolExecutable,
     ExtraArgs,
 }
 
@@ -2433,6 +2436,7 @@ fn convert_workflow_command(
         program: command.program.clone(),
         args: command.argv.iter().map(convert_argv_element).collect(),
         exit_codes: convert_exit_codes(&command.exit_codes),
+        issues_on_stdout: command.issues_on_stdout,
         writes: convert_writes(command.writes),
         extra_args: command.extra_args.clone(),
         enabled: true,
@@ -2485,6 +2489,7 @@ fn convert_phase((id, phase): (String, &pkl::Phase)) -> ToolPhase {
         program: phase.program.clone(),
         args: phase.argv.iter().map(convert_argv_element).collect(),
         exit_codes: convert_exit_codes(&phase.exit_codes),
+        issues_on_stdout: false,
         writes: convert_writes(phase.writes),
         extra_args: phase.extra_args.clone(),
         enabled: phase.enabled,
@@ -2509,6 +2514,7 @@ fn convert_argv_element(element: &pkl::ArgvElement) -> CommandArgTemplate {
             pkl::ArgToken::Workspace => CommandArgTemplate::Workspace,
             pkl::ArgToken::WorkspaceIndicator => CommandArgTemplate::WorkspaceIndicator,
             pkl::ArgToken::ProjectRoot => CommandArgTemplate::ProjectRoot,
+            pkl::ArgToken::ToolExecutable => CommandArgTemplate::ToolExecutable,
             pkl::ArgToken::ExtraArgs => CommandArgTemplate::ExtraArgs,
         },
     }
@@ -2893,6 +2899,7 @@ fn render_command(phase: &ToolPhase, job: &ToolJob, context: &ToolContext<'_>) -
                 }
             }
             CommandArgTemplate::ProjectRoot => args.push(path_arg(context.project_root)),
+            CommandArgTemplate::ToolExecutable => args.push(context.spec.executable.clone()),
             CommandArgTemplate::ExtraArgs => args.extend(phase.extra_args.iter().cloned()),
         }
     }
@@ -2907,14 +2914,22 @@ fn run_phase_command(phase: &ToolPhase, command: &RenderedCommand, cwd: &Path) -
     {
         Ok(output) => {
             let status = output.status.code();
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let mut classification = status.map(|code| classify_exit_code(&phase.exit_codes, code));
+            if phase.issues_on_stdout
+                && classification == Some(PhaseStatus::Clean)
+                && !stdout.trim().is_empty()
+            {
+                classification = Some(PhaseStatus::Issues);
+            }
             PhaseLog {
                 phase: phase.id.clone(),
                 command: display_command(&command.program, &command.args),
                 program: command.program.clone(),
                 arguments: command.args.clone(),
                 status,
-                classification: status.map(|code| classify_exit_code(&phase.exit_codes, code)),
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                classification,
+                stdout,
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
                 error: None,
             }

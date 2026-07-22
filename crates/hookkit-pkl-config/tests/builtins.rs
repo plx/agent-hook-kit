@@ -6,9 +6,10 @@
 //! without Pkl installed.
 
 use hookkit_pkl_config::schema::{
-    ArgToken, ArgvElement, ExitCodes, FileSelection, Phase, PhaseMode, ToolSpec,
-    UnexpectedExitPolicy, WriteBehavior,
+    ArgToken, ArgvElement, CheckScope, ExitCodes, FileSelection, InvocationGranularity, Phase,
+    PhaseMode, ToolSpec, UnexpectedExitPolicy, Workflow, WorkflowCommand, WriteBehavior,
 };
+use std::collections::BTreeMap;
 
 fn pkl_available() -> bool {
     std::process::Command::new("pkl")
@@ -51,6 +52,15 @@ fn assert_argv(phase: &Phase, expected: Vec<ArgvElement>) {
         argv_eq(&phase.argv, &expected),
         "argv mismatch:\nactual:   {:?}\nexpected: {:?}",
         phase.argv,
+        expected,
+    );
+}
+
+fn assert_workflow_argv(command: &WorkflowCommand, expected: Vec<ArgvElement>) {
+    assert!(
+        argv_eq(&command.argv, &expected),
+        "argv mismatch:\nactual:   {:?}\nexpected: {:?}",
+        command.argv,
         expected,
     );
 }
@@ -349,4 +359,147 @@ fn cargo_clippy_builtin_carries_custom_messages_and_unexpected_policy() {
         clippy.messages.issues_changed_agent,
         "cargo clippy changed {{ changed_files | join(\", \") }} and issues remain; re-read changed files, then inspect diagnostics at {{ diagnostics_path }}."
     );
+}
+
+#[test]
+fn catalog_validator_rejects_unchecked_remedies_unless_fallback_is_explicit() {
+    let mut legacy = ToolSpec {
+        id: "legacy".into(),
+        display_name: "Legacy".into(),
+        executable: "legacy".into(),
+        ..ToolSpec::default()
+    };
+    legacy.phases.insert(
+        "format".into(),
+        Phase {
+            mode: PhaseMode::Format,
+            writes: WriteBehavior::TargetFiles,
+            ..Phase::default()
+        },
+    );
+    let mut specs = BTreeMap::from([("legacy".into(), legacy.clone())]);
+    let error = hookkit_pkl_config::validate_builtin_catalog(&specs)
+        .expect_err("unchecked remedy must fail");
+    assert!(error.to_string().contains("no authoritative final check"));
+
+    legacy.unverified_remedy_fallback = Some("upstream has no read-only mode".into());
+    specs.insert("legacy".into(), legacy);
+    hookkit_pkl_config::validate_builtin_catalog(&specs).expect("explicit fallback rationale");
+
+    let mut explicit = ToolSpec {
+        id: "explicit".into(),
+        display_name: "Explicit".into(),
+        executable: "explicit".into(),
+        ..ToolSpec::default()
+    };
+    explicit.workflows.insert(
+        "format".into(),
+        Workflow {
+            remedy: Some(WorkflowCommand {
+                writes: WriteBehavior::TargetFiles,
+                ..WorkflowCommand::default()
+            }),
+            ..Workflow::default()
+        },
+    );
+    let error = hookkit_pkl_config::validate_builtin_catalog(&BTreeMap::from([(
+        "explicit".into(),
+        explicit,
+    )]))
+    .expect_err("explicit remedy without a check must fail");
+    assert!(error.to_string().contains("has no authoritative check"));
+}
+
+#[test]
+fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+
+    for (key, check_prefix) in [
+        ("goFmt", "-l"),
+        ("goFumpt", "-l"),
+        ("goImports", "-l"),
+        ("goLines", "--dry-run"),
+    ] {
+        let tool = spec(&specs, key);
+        let workflow = tool.workflows.get("format").expect("format workflow");
+        let check = workflow.check.as_ref().expect("format check");
+        let remedy = workflow.remedy.as_ref().expect("format remedy");
+        assert!(check.issues_on_stdout, "{key} stdout issue adapter");
+        assert_eq!(check.writes, WriteBehavior::None);
+        assert_eq!(remedy.writes, WriteBehavior::TargetFiles);
+        assert!(
+            matches!(check.argv.first(), Some(ArgvElement::Literal(value)) if value == check_prefix)
+        );
+        assert_eq!(workflow.check_scope, CheckScope::TargetFiles);
+        assert_eq!(workflow.invocation, InvocationGranularity::Batch);
+    }
+
+    let tidy = spec(&specs, "gomodTidy");
+    let tidy = tidy.workflows.get("tidy").expect("tidy workflow");
+    assert_eq!(tidy.check_scope, CheckScope::Workspace);
+    assert_eq!(tidy.invocation, InvocationGranularity::Workspace);
+    assert_workflow_argv(
+        tidy.check.as_ref().expect("tidy check"),
+        vec![
+            literal("mod"),
+            literal("tidy"),
+            literal("-diff"),
+            token(ArgToken::ExtraArgs),
+        ],
+    );
+    assert_eq!(
+        tidy.remedy.as_ref().expect("tidy remedy").writes,
+        WriteBehavior::Workspace
+    );
+
+    let yq = spec(&specs, "yq");
+    let yq = yq.workflows.get("format").expect("yq workflow");
+    let yq_check = yq.check.as_ref().expect("yq check");
+    assert_eq!(yq_check.program.as_deref(), Some("sh"));
+    assert!(
+        yq_check
+            .argv
+            .iter()
+            .any(|arg| matches!(arg, ArgvElement::Token(ArgToken::ToolExecutable)))
+    );
+    assert_eq!(yq.invocation, InvocationGranularity::PerFile);
+
+    let ruff = spec(&specs, "ruff");
+    assert_eq!(ruff.workflow_order, vec!["lint", "format"]);
+    let lint = ruff.workflows.get("lint").expect("lint workflow");
+    let format = ruff.workflows.get("format").expect("format workflow");
+    assert!(matches!(
+        lint.check.as_ref().and_then(|check| check.argv.first()),
+        Some(ArgvElement::Literal(value)) if value == "check"
+    ));
+    assert!(matches!(
+        format.check.as_ref().and_then(|check| check.argv.first()),
+        Some(ArgvElement::Literal(value)) if value == "format"
+    ));
+    assert!(
+        format
+            .check
+            .as_ref()
+            .expect("format check")
+            .argv
+            .iter()
+            .any(|arg| matches!(arg, ArgvElement::Literal(value) if value == "--check"))
+    );
+}
+
+#[test]
+fn builtin_catalog_audit_is_current() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    hookkit_pkl_config::validate_builtin_catalog(&specs).expect("valid builtin catalog");
+    let generated = hookkit_pkl_config::render_builtin_catalog_markdown(&specs);
+    if std::env::var_os("HOOKKIT_PRINT_BUILTIN_AUDIT").is_some() {
+        eprintln!("HOOKKIT_AUDIT_BEGIN\n{generated}HOOKKIT_AUDIT_END");
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../planning/builtin-deferred-workflow-audit.md");
+    let checked_in = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    assert_eq!(checked_in, generated, "regenerate {}", path.display());
 }

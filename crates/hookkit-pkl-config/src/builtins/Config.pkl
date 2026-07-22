@@ -126,6 +126,7 @@ class WorkspaceFiles extends ArgToken { type = "WorkspaceFiles" }
 class Workspace extends ArgToken { type = "Workspace" }
 class WorkspaceIndicator extends ArgToken { type = "WorkspaceIndicator" }
 class ProjectRoot extends ArgToken { type = "ProjectRoot" }
+class ToolExecutable extends ArgToken { type = "ToolExecutable" }
 class ExtraArgs extends ArgToken { type = "ExtraArgs" }
 
 class ExitCodes {
@@ -165,6 +166,10 @@ class WorkflowCommand {
   program: String?
   argv: Listing<String | ArgToken> = new Listing<String | ArgToken> {}
   exitCodes: ExitCodes = new ExitCodes {}
+  /// Treat non-whitespace stdout on an otherwise-clean exit as source issues.
+  /// This supports tools such as gofmt whose non-mutating list mode reports
+  /// dirty files through stdout while retaining exit status zero.
+  issuesOnStdout: Boolean = false
   writes: "none" | "target-files" | "matching-globs" | "workspace" = "none"
   extraArgs: Listing<String> = new Listing<String> {}
 }
@@ -192,6 +197,10 @@ class ToolSpec {
   /// to execute `phases` exactly as before.
   workflows: Mapping<String, Workflow> = new Mapping<String, Workflow> {}
   workflowOrder: Listing<String> = new Listing<String> {}
+  /// Nonempty only when a catalog entry has no authoritative read-only check
+  /// and must retain the legacy mutator-first compatibility behavior. Built-in
+  /// validation rejects such entries unless this limitation is explicit.
+  unverifiedRemedyFallback: String?
   phases: Mapping<String, Phase> = new Mapping<String, Phase> {}
   /// Optional explicit phase ordering. If empty, runtime iterates `phases`
   /// in insertion order (Pkl mappings preserve order).

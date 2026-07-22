@@ -577,23 +577,23 @@ Scope: every Pkl file under `crates/hookkit-pkl-config/src/builtins/tools/`
 
 Tasks:
 
-- [ ] Migrate all built-ins to the final workflow schema or verify their compatibility translation.
-- [ ] For every formatter/fixer, add a genuine non-mutating precheck whenever the external tool supports one.
-- [ ] Specifically resolve the six reviewed mutating-only built-ins: `go-fmt`, `gofumpt`, `goimports`, `golines`, `gomod-tidy`, and `yq`.
-- [ ] Give combined tools such as Ruff distinct checks for every mutation capability; a lint-only check must not stand in for format cleanliness.
-- [ ] Review whether remedy order should change when fixes can invalidate formatting.
-- [ ] Declare invocation granularity or conservative batch behavior for each tool.
-- [ ] Verify exit-code policies separately for checks and remedies.
-- [ ] Verify write scopes cover every file an automatic remedy may change without making snapshots unnecessarily workspace-wide.
-- [ ] Preserve workspace indicators and structured argv behavior.
-- [ ] Add a catalog validation test that rejects auto-fix workflows without authoritative final checks unless explicitly marked as an unavoidable compatibility fallback.
-- [ ] Add/refresh representative fake-executable tests by workflow family.
-- [ ] Keep real-tool compatibility tests opt-in and version-controlled as documented.
+- [x] Migrate all built-ins to the final workflow schema or verify their compatibility translation.
+- [x] For every formatter/fixer, add a genuine non-mutating precheck whenever the external tool supports one.
+- [x] Specifically resolve the six reviewed mutating-only built-ins: `go-fmt`, `gofumpt`, `goimports`, `golines`, `gomod-tidy`, and `yq`.
+- [x] Give combined tools such as Ruff distinct checks for every mutation capability; a lint-only check must not stand in for format cleanliness.
+- [x] Review whether remedy order should change when fixes can invalidate formatting.
+- [x] Declare invocation granularity or conservative batch behavior for each tool.
+- [x] Verify exit-code policies separately for checks and remedies.
+- [x] Verify write scopes cover every file an automatic remedy may change without making snapshots unnecessarily workspace-wide.
+- [x] Preserve workspace indicators and structured argv behavior.
+- [x] Add a catalog validation test that rejects auto-fix workflows without authoritative final checks unless explicitly marked as an unavoidable compatibility fallback.
+- [x] Add/refresh representative fake-executable tests by workflow family.
+- [x] Keep real-tool compatibility tests opt-in and version-controlled as documented.
 
 Catalog audit output:
 
-- [ ] Record a machine-readable or Markdown inventory of each built-in's checks, remedies, scopes, granularity, and known precision limitations.
-- [ ] Do not claim full support for a built-in whose precheck/final-check semantics are unverified.
+- [x] Record a machine-readable or Markdown inventory of each built-in's checks, remedies, scopes, granularity, and known precision limitations.
+- [x] Do not claim full support for a built-in whose precheck/final-check semantics are unverified.
 
 Exit criteria:
 

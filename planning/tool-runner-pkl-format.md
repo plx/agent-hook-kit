@@ -12,10 +12,10 @@ Version: draft 0.2
 >
 > When `workflows` is empty, the deferred runner compatibility-translates
 > existing `phases`: each mutating phase is paired with the last enabled
-> verifier and check-only tools become check-only workflows. A legacy
-> mutating-only tool may run its remedy once but is then reported as an
-> operationally unverifiable workflow rather than clean. The builtin catalog
-> migration removes that fallback before release.
+> verifier and check-only tools become check-only workflows. Catalog validation
+> rejects an unchecked remedy unless `unverifiedRemedyFallback` contains an
+> explicit limitation; no enabled built-in uses that escape hatch. The complete
+> checked inventory is in `builtin-deferred-workflow-audit.md`.
 >
 > `settings.deferredReporting` separately defines ordered file groups, four
 > user/agent bucket template pairs, master user/agent templates, and optional
@@ -42,6 +42,14 @@ workflows {
 }
 workflowOrder = new Listing { "lint" }
 ```
+
+`WorkflowCommand.issuesOnStdout = true` adapts read-only commands such as
+`gofmt -l` and `golines --dry-run`, which report dirty inputs on stdout while
+retaining exit status zero. It only upgrades an otherwise-clean exit to source
+issues. `ToolExecutable` is an argv token for the rare structured shell adapter
+that must invoke the configured executable; the yq comparator uses it so an
+executable override is preserved. Checks must declare `writes = "none"`, and
+remedies must declare their actual write scope.
 
 ## 1. Purpose
 

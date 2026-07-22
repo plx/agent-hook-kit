@@ -31,6 +31,19 @@ impl Fixture {
         std::fs::write(
             &executable,
             r#"#!/bin/sh
+case "$1" in
+  -P)
+    sed 's/DIRTY/CLEAN/g' "$2"
+    exit $?
+    ;;
+  -iP)
+    shift
+    for file in "$@"; do
+      sed 's/DIRTY/CLEAN/g' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    done
+    exit $?
+    ;;
+esac
 trace=$1
 action=$2
 shift 2
@@ -39,6 +52,11 @@ case "$action" in
   check)
     for file in "$@"; do
       if grep -Eq 'DIRTY|MANUAL' "$file"; then exit 1; fi
+    done
+    ;;
+  stdout-check)
+    for file in "$@"; do
+      if grep -q 'DIRTY' "$file"; then printf '%s\n' "$file"; fi
     done
     ;;
   check-a)
@@ -149,6 +167,7 @@ fn command(
             failure: vec![2],
             unexpected: UnexpectedExitPolicy::Failure,
         },
+        issues_on_stdout: false,
         writes,
         extra_args: Vec::new(),
         enabled: true,
@@ -246,6 +265,100 @@ fn dirty_fixable_and_partly_fixable_use_one_remedy_then_final_check() {
     let trace = fixture.trace_lines();
     assert_eq!(trace.iter().filter(|line| *line == "fix").count(), 1);
     assert_eq!(trace.iter().filter(|line| *line == "partial").count(), 1);
+}
+
+#[test]
+fn stdout_only_check_can_trigger_remedy_and_final_verification() {
+    let fixture = Fixture::new("stdout-check");
+    let file = fixture.file("dirty.go", "DIRTY\n");
+    let mut workflow = scheduled(&fixture, 0, file.clone(), "stdout-check", Some("fix"));
+    workflow.check.as_mut().expect("check").issues_on_stdout = true;
+
+    let execution = execute_deferred_workflows(&[workflow], 1, true);
+
+    assert_eq!(only_status(&execution, &file), Some(FileStatus::AutoFixed));
+    assert_eq!(
+        fixture.trace_lines(),
+        vec!["stdout-check", "fix", "stdout-check"]
+    );
+}
+
+#[test]
+fn shell_comparator_uses_configured_tool_and_preserves_source_during_check() {
+    let fixture = Fixture::new("shell-comparator");
+    let file = fixture.file("dirty.yaml", "value: DIRTY\n");
+    let spec = Arc::new(ToolSpec::new(
+        "yq",
+        "yq",
+        fixture.executable.to_string_lossy(),
+    ));
+    let check = ToolPhase {
+        id: "format.check".into(),
+        mode: PhaseMode::Verify,
+        program: Some("sh".into()),
+        args: vec![
+            CommandArgTemplate::literal("-c"),
+            CommandArgTemplate::literal(
+                "tool=$1; file=$2; shift 3; tmp=$(mktemp \"${TMPDIR:-/tmp}/hookkit-yq-test.XXXXXX\") || exit 2; trap 'rm -f \"$tmp\"' 0 HUP INT TERM; \"$tool\" -P \"$@\" \"$file\" >\"$tmp\" || exit 2; diff -u \"$file\" \"$tmp\"",
+            ),
+            CommandArgTemplate::literal("yq-check"),
+            CommandArgTemplate::ToolExecutable,
+            CommandArgTemplate::Files,
+            CommandArgTemplate::literal("--"),
+            CommandArgTemplate::ExtraArgs,
+        ],
+        exit_codes: ExitCodePolicy {
+            clean: vec![0],
+            issues: vec![1],
+            failure: vec![2],
+            unexpected: UnexpectedExitPolicy::Failure,
+        },
+        issues_on_stdout: false,
+        writes: WriteBehavior::None,
+        extra_args: Vec::new(),
+        enabled: true,
+    };
+    let remedy = ToolPhase {
+        id: "format.remedy".into(),
+        mode: PhaseMode::Fix,
+        program: None,
+        args: vec![
+            CommandArgTemplate::literal("-iP"),
+            CommandArgTemplate::ExtraArgs,
+            CommandArgTemplate::Files,
+        ],
+        exit_codes: ExitCodePolicy::default(),
+        issues_on_stdout: false,
+        writes: WriteBehavior::TargetFiles,
+        extra_args: Vec::new(),
+        enabled: true,
+    };
+    let plan = [ScheduledWorkflow {
+        tool_index: 0,
+        workflow_index: 0,
+        job_index: 0,
+        spec,
+        workflow_id: "format".into(),
+        check: Some(check),
+        remedy: Some(remedy),
+        check_scope: CheckScope::TargetFiles,
+        invocation: InvocationGranularity::PerFile,
+        compatibility_translation: false,
+        job: ToolJob {
+            workspace_dir: fixture.root.clone(),
+            workspace_indicator: None,
+            files: vec![file.clone()],
+        },
+        project_root: fixture.root.clone(),
+    }];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert_eq!(only_status(&execution, &file), Some(FileStatus::AutoFixed));
+    assert_eq!(
+        std::fs::read_to_string(file).expect("fixed yaml"),
+        "value: CLEAN\n"
+    );
 }
 
 #[test]
