@@ -16,6 +16,12 @@ Version: draft 0.2
 > mutating-only tool may run its remedy once but is then reported as an
 > operationally unverifiable workflow rather than clean. The builtin catalog
 > migration removes that fallback before release.
+>
+> `settings.deferredReporting` separately defines ordered file groups, four
+> user/agent bucket template pairs, master user/agent templates, and optional
+> empty-bucket rendering. Deferred Stop lowering applies `loweringPolicy` to
+> the rendered audiences and records exact emitted/omitted/error disposition
+> in `summary.json`; `ToolSpec.messages` remains immediate-runner-only.
 
 The implemented deferred shape is:
 

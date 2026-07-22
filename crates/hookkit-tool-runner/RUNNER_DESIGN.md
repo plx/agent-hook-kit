@@ -66,3 +66,23 @@ observations always requeue the path.
 Coverage gaps use the Pkl `fileActivity.coverageGapPolicy`. The default
 `best-effort` policy retains and summarizes incomplete targets without treating
 resolved clean files as manual. `strict` also blocks Stop until the gap clears.
+
+### Exact Stop lowering
+
+Rendered deferred messages are lowered without a common output envelope. The
+capability matrix is:
+
+| Native event | Allowed user | Allowed agent | Blocked user | Blocked agent |
+| --- | --- | --- | --- | --- |
+| Claude Stop | `systemMessage` | `hookSpecificOutput.additionalContext` | `systemMessage` | `reason` and `additionalContext` |
+| Codex Stop | `systemMessage` | unavailable | `systemMessage` | `reason` |
+| Gemini AfterAgent | `systemMessage` | unavailable | `systemMessage` | deny `reason` |
+| Antigravity Stop | unavailable | unavailable | unavailable | `reason` |
+
+`loweringPolicy = "strict"` turns any nonempty unavailable audience into a
+hook failure after committing the summary but before changing pending state.
+`"best-effort"` omits that audience. `"best-effort-with-warnings"` also emits
+an omission warning through `systemMessage` when available; Antigravity can
+only use its single `reason` fallback and cannot preserve audience separation.
+The summary records emitted, omitted, empty, or unrepresentable status for
+each audience. Allowed completion stays allowed under both best-effort modes.

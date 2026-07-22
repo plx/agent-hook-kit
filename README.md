@@ -346,7 +346,8 @@ and `--config PATH` to load a single Pkl file directly (bypassing discovery).
 The companion `turn-completion-agent-hook` reconciles and consumes the
 NDJSON-backed pending file-activity window at Claude/Codex `Stop` or Gemini
 `AfterAgent`, runs the same configured tools over the candidate batch, and
-stays quiet when everything is clean or auto-corrected:
+allows completion after clean or auto-corrected results while emitting the
+configured deferred report through each harness's native channels:
 
 ```bash
 cargo run -q -p hookkit-tool-runner --bin turn-completion-agent-hook -- \
@@ -435,7 +436,7 @@ run = new Listing<String> { "ruff"; "prettier" }
 | `settings.failFast` | `true` | Stop after operational failures. |
 | `settings.continueAfterIssues` | `true` | Keep running later tools after source issues. |
 | `settings.exclude` | `[".git/**", "node_modules/**"]` | Global file exclusions applied before per-tool filters. |
-| `settings.loweringPolicy` | `"best-effort-with-warnings"` | How to handle harness intents not natively expressible. |
+| `settings.loweringPolicy` | `"best-effort-with-warnings"` | How to handle a nonempty user/agent message that the selected native event cannot represent faithfully: fail, omit, or omit with a native-channel warning. |
 | `settings.diagnosticsDirectory` | `".agent-hook-kit/post-tool-use"` | Where to write diagnostic artifacts. |
 | `settings.missingToolPolicy` | `"user-notice"` | What to do when a configured tool executable is missing. Options: `"user-notice"`, `"hard-failure"`, `"harness-block"`. |
 
@@ -465,6 +466,22 @@ block before applying that file's local overrides.
 The `messages` block inside an individual `ToolSpec` is separate: it remains
 the per-tool message policy for the immediate `post-tool-use-agent-hook` and
 does not define deferred bucket meaning.
+
+Deferred Stop lowering uses the exact native fields below:
+
+| Harness/event | Allowed user | Allowed agent | Blocked user | Blocked agent |
+| --- | --- | --- | --- | --- |
+| Claude `Stop` | `systemMessage` | `hookSpecificOutput.additionalContext` | `systemMessage` | `reason` plus `additionalContext` |
+| Codex `Stop` | `systemMessage` | unavailable | `systemMessage` | `reason` |
+| Gemini `AfterAgent` | `systemMessage` | unavailable | `systemMessage` | deny `reason` |
+| Antigravity `Stop` | unavailable | unavailable | unavailable | `reason` |
+
+`strict` fails before pending-state acknowledgement if a configured audience
+is unavailable. `best-effort` omits it. `best-effort-with-warnings` adds an
+omission warning to a representable native user channel, or to Antigravity's
+single `reason` fallback. The summary records each audience disposition and
+any warning. An unrepresentable allowed-stop agent note never turns a
+successful result into a block under either best-effort policy.
 
 ### Migration from per-tool binaries
 
@@ -521,8 +538,8 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - seals the current modified-file generations under an exclusive entity consumer lock,
   - dispatches the same Pkl-configured phases across the accumulated file set,
   - commits detailed per-tool logs and a summary before producing its decision,
-  - acknowledges only clean or fully auto-corrected snapshots,
-  - retains manual findings for retry and emits each harness's native continue-working signal.
+  - discharges clean or fully auto-corrected files while retaining only unfinished work,
+  - emits configured clean/auto reports without blocking and uses each harness's native continue-working signal for manual or operational results.
 
 ## License
 

@@ -53,8 +53,11 @@ fn configure_hook_environment(
         .iter()
         .find_map(|argument| {
             argument.strip_prefix("--harness=").or_else(|| {
-                matches!(*argument, "--claude" | "--codex" | "--gemini")
-                    .then(|| argument.trim_start_matches("--"))
+                matches!(
+                    *argument,
+                    "--claude" | "--codex" | "--gemini" | "--antigravity"
+                )
+                .then(|| argument.trim_start_matches("--"))
             })
         })
         .or_else(|| binary.split_once('-').map(|(prefix, _)| prefix));
@@ -205,6 +208,11 @@ if [[ "$mode" == "check" ]]; then
     prev="$arg"
   done
 
+  if grep -q "check_crash" "$file"; then
+    echo "check crashed" >&2
+    exit 2
+  fi
+
   if grep -q "manual_issue" "$file"; then
     echo "${file}:1:1: F821 undefined name manual_issue" >&2
     exit 1
@@ -284,6 +292,14 @@ fn add_deferred_reporting_config(project: &Path, reporting_body: &str) {
     );
     let config = config.replacen("settings {", &replacement, 1);
     std::fs::write(path, config).expect("write deferred reporting config");
+}
+
+fn add_runner_setting(project: &Path, setting: &str) {
+    let path = project.join(".agent-hook-kit/post-tool-use.pkl");
+    let config = std::fs::read_to_string(&path).expect("read generated hook config");
+    let replacement = format!("settings {{\n  {setting}");
+    let config = config.replacen("settings {", &replacement, 1);
+    std::fs::write(path, config).expect("write runner setting");
 }
 
 fn write_per_file_ruff_hook_config(project: &Path, fake_ruff: &Path) {
@@ -528,9 +544,87 @@ fn turn_completion_fixture(harness: &str, project: &Path) -> Vec<u8> {
             "prompt_response": "done",
             "stop_hook_active": false
         }),
+        "antigravity" => serde_json::json!({
+            "conversationId": "antigravity-ruff-test",
+            "workspacePaths": [project.to_string_lossy()],
+            "transcriptPath": project.join("antigravity-transcript.jsonl").to_string_lossy(),
+            "artifactDirectoryPath": project.join("antigravity-artifacts").to_string_lossy(),
+            "executionNum": 1,
+            "terminationReason": "agent-finished",
+            "fullyIdle": true
+        }),
         _ => panic!("unknown harness {harness}"),
     };
     serde_json::to_vec(&fixture).unwrap()
+}
+
+fn seed_pending_file(state_dir: &Path, harness: &str, path: &Path) {
+    let (harness, identity) = match harness {
+        "claude" => (
+            hookkit_core::HarnessId::CLAUDE_CODE,
+            hookkit_session_state::SessionIdentity::Session("claude-ruff-test".into()),
+        ),
+        "codex" => (
+            hookkit_core::HarnessId::CODEX,
+            hookkit_session_state::SessionIdentity::Session("codex-ruff-test".into()),
+        ),
+        "gemini" => (
+            hookkit_core::HarnessId::GEMINI_CLI,
+            hookkit_session_state::SessionIdentity::Session("gemini-ruff-test".into()),
+        ),
+        "antigravity" => (
+            hookkit_core::HarnessId::ANTIGRAVITY,
+            hookkit_session_state::SessionIdentity::Conversation("antigravity-ruff-test".into()),
+        ),
+        _ => panic!("unknown harness {harness}"),
+    };
+    let state = hookkit_session_state::SessionState::open(
+        harness,
+        identity,
+        hookkit_session_state::StateRoot::new(state_dir),
+    )
+    .unwrap();
+    let store = hookkit_file_activity::FileActivityStore::from_state(state).unwrap();
+    store
+        .requeue_exact(
+            "integration-test",
+            [hookkit_core::Utf8PathBuf::from_path_buf(path.to_path_buf()).unwrap()],
+        )
+        .unwrap();
+}
+
+fn prepare_deferred_ruff_case(
+    harness: &str,
+    name: &str,
+    files: &[(&str, &str)],
+) -> (PathBuf, PathBuf, String) {
+    let project = temp_project(&format!("{name}-{harness}"));
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    for (relative, contents) in files {
+        let path = project.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, contents).unwrap();
+        seed_pending_file(&state_dir, harness, &path);
+    }
+    (project, state_dir, state_arg)
+}
+
+fn run_deferred_case(harness: &str, project: &Path, state_arg: &str) -> std::process::Output {
+    let harness_arg = format!("--{harness}");
+    run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture(harness, project),
+        &[harness_arg.as_str(), "--state-dir", state_arg],
+    )
+}
+
+fn only_summary(state_dir: &Path) -> serde_json::Value {
+    let summaries = files_named(state_dir, "summary.json");
+    assert_eq!(summaries.len(), 1, "expected exactly one deferred summary");
+    serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap()
 }
 
 fn session_journal_len(state_dir: &Path, harness: &str, session: &str) -> usize {
@@ -1143,6 +1237,227 @@ fn session_modified_file_tracker_records_all_supported_posttool_paths() {
 // --- turn-completion-agent-hook consuming session state ---
 
 #[test]
+fn turn_completion_no_pending_work_emits_each_exact_native_no_op() {
+    require_pkl!();
+    for harness in ["claude", "codex", "gemini", "antigravity"] {
+        let project = temp_project(&format!("turn-completion-no-pending-{harness}"));
+        let state_dir = project.join("state");
+        let state_arg = state_dir.to_string_lossy().into_owned();
+        let output = run_deferred_case(harness, &project, &state_arg);
+        assert!(output.status.success(), "{harness}: {:?}", output.stderr);
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        if harness == "antigravity" {
+            assert_eq!(response, serde_json::json!({"decision": "stop"}));
+        } else {
+            assert_eq!(response, serde_json::json!({}));
+        }
+        assert!(files_named(&state_dir, "summary.json").is_empty());
+    }
+}
+
+#[test]
+fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
+    require_pkl!();
+    for harness in ["claude", "codex", "gemini", "antigravity"] {
+        for (case, files, expected_clean, expected_auto) in [
+            ("clean", vec![("src/clean.py", "print('clean')\n")], 1, 0),
+            (
+                "auto",
+                vec![("src/dirty.py", "import os  # unused_import\n")],
+                0,
+                1,
+            ),
+            (
+                "mixed",
+                vec![
+                    ("src/clean.py", "print('clean')\n"),
+                    ("src/dirty.py", "import os  # unused_import\n"),
+                ],
+                1,
+                1,
+            ),
+        ] {
+            let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+                harness,
+                &format!("turn-completion-allowed-{case}"),
+                &files,
+            );
+            let output = run_deferred_case(harness, &project, &state_arg);
+            assert!(
+                output.status.success(),
+                "{harness}/{case}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            if harness == "antigravity" {
+                assert_eq!(response["decision"], "stop");
+                assert!(
+                    response["reason"]
+                        .as_str()
+                        .unwrap()
+                        .contains("omitted user deferred Stop message")
+                );
+            } else {
+                assert!(response.get("decision").is_none());
+                let user = response["systemMessage"].as_str().unwrap();
+                if expected_clean == 1 {
+                    assert!(
+                        user.contains("Checked 1 clean file"),
+                        "{harness}/{case}: {user:?}"
+                    );
+                }
+                if expected_auto == 1 {
+                    assert!(user.contains("Auto-fixed 1 file"));
+                    if harness == "claude" {
+                        assert!(
+                            response["hookSpecificOutput"]["additionalContext"]
+                                .as_str()
+                                .unwrap()
+                                .contains("re-read changed files")
+                        );
+                    } else {
+                        assert!(user.contains("omitted agent deferred Stop message"));
+                    }
+                }
+            }
+            let summary = only_summary(&state_dir);
+            assert_eq!(summary["status"], "clean");
+            assert_eq!(summary["counts"]["clean"], expected_clean);
+            assert_eq!(summary["counts"]["autoFixed"], expected_auto);
+            assert_eq!(summary["renderedMessages"]["lowering"]["blocked"], false);
+        }
+    }
+}
+
+#[test]
+fn turn_completion_blocked_manual_and_operational_matrix_is_native() {
+    require_pkl!();
+    for harness in ["claude", "codex", "gemini", "antigravity"] {
+        for (case, contents, expected_status) in [
+            ("manual", "print(manual_issue)\n", "issues"),
+            (
+                "operational",
+                "print('check_crash')\n",
+                "operational-failure",
+            ),
+        ] {
+            let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+                harness,
+                &format!("turn-completion-blocked-{case}"),
+                &[("src/result.py", contents)],
+            );
+            let output = run_deferred_case(harness, &project, &state_arg);
+            assert!(
+                output.status.success(),
+                "{harness}/{case}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            match harness {
+                "claude" | "codex" => assert_eq!(response["decision"], "block"),
+                "gemini" => assert_eq!(response["decision"], "deny"),
+                "antigravity" => assert_eq!(response["decision"], "continue"),
+                _ => unreachable!(),
+            }
+            assert!(!response["reason"].as_str().unwrap().is_empty());
+            if harness != "antigravity" {
+                assert!(!response["systemMessage"].as_str().unwrap().is_empty());
+            }
+            let summary = only_summary(&state_dir);
+            assert_eq!(summary["status"], expected_status);
+            assert_eq!(summary["renderedMessages"]["lowering"]["blocked"], true);
+            assert_eq!(
+                summary["renderedMessages"]["lowering"]["agent"]["status"],
+                "emitted"
+            );
+        }
+    }
+}
+
+#[test]
+fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
+    require_pkl!();
+
+    let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+        "codex",
+        "turn-completion-strict-unrepresentable",
+        &[("src/dirty.py", "import os  # unused_import\n")],
+    );
+    add_runner_setting(&project, r#"loweringPolicy = "strict""#);
+    let strict = run_deferred_case("codex", &project, &state_arg);
+    assert!(!strict.status.success());
+    assert!(
+        strict.stdout.is_empty(),
+        "strict failure must not corrupt stdout"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(
+        summary["renderedMessages"]["lowering"]["agent"]["status"],
+        "unrepresentable"
+    );
+    assert!(summary["renderedMessages"]["lowering"]["strictError"].is_string());
+    assert!(session_journal_len(&state_dir, "codex", "codex-ruff-test") >= 1);
+
+    let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+        "codex",
+        "turn-completion-best-effort-omission",
+        &[("src/dirty.py", "import os  # unused_import\n")],
+    );
+    add_runner_setting(&project, r#"loweringPolicy = "best-effort""#);
+    let best_effort = run_deferred_case("codex", &project, &state_arg);
+    assert!(best_effort.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&best_effort.stdout).unwrap();
+    assert!(
+        response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("Auto-fixed")
+    );
+    assert!(
+        !response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("hookkit: omitted")
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(
+        summary["renderedMessages"]["lowering"]["agent"]["status"],
+        "omitted"
+    );
+    assert!(
+        summary["renderedMessages"]["lowering"]["warnings"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
+        "codex",
+        "turn-completion-empty-agent",
+        &[("src/manual.py", "print(manual_issue)\n")],
+    );
+    add_runner_setting(&project, r#"loweringPolicy = "strict""#);
+    add_deferred_reporting_config(
+        &project,
+        r#"    manualFixesNeeded = new TemplatePair { agent = "" }"#,
+    );
+    let empty_agent = run_deferred_case("codex", &project, &state_arg);
+    assert!(
+        empty_agent.status.success(),
+        "{}",
+        String::from_utf8_lossy(&empty_agent.stderr)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&empty_agent.stdout).unwrap();
+    assert_eq!(response["decision"], "block");
+    assert_eq!(response["reason"], "");
+    let summary = only_summary(&state_dir);
+    assert_eq!(
+        summary["renderedMessages"]["lowering"]["agent"]["status"],
+        "empty"
+    );
+}
+
+#[test]
 fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     require_pkl!();
     let project = temp_project("turn-completion-autofix");
@@ -1171,9 +1486,16 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
         &["--claude", "--state-dir", state_arg.as_str()],
     );
     assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert!(
+        response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("Auto-fixed 1 file: src/dirty.py")
+    );
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&stopped.stdout).unwrap(),
-        serde_json::json!({})
+        response["hookSpecificOutput"]["additionalContext"],
+        "Auto-fixed 1 file; re-read changed files before editing further."
     );
     let rewritten = std::fs::read_to_string(file).unwrap();
     assert!(rewritten.contains("formatted"));
@@ -1379,7 +1701,13 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
         response["systemMessage"]
             .as_str()
             .unwrap()
-            .contains("still need attention")
+            .contains("manual fixes")
+    );
+    assert!(
+        response["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Python: src/broken.py")
     );
     assert!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test") >= 1,
@@ -1395,7 +1723,18 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
         summary["stateDisposition"]["source"],
         "acknowledge-sealed-window"
     );
-    assert_eq!(summary["renderedMessages"]["lowering"], "pending-item-6");
+    assert_eq!(
+        summary["renderedMessages"]["lowering"]["policy"],
+        "best-effort-with-warnings"
+    );
+    assert_eq!(
+        summary["renderedMessages"]["lowering"]["user"]["status"],
+        "emitted"
+    );
+    assert_eq!(
+        summary["renderedMessages"]["lowering"]["agent"]["status"],
+        "emitted"
+    );
     assert!(
         summary["renderedMessages"]["user"]
             .as_str()
@@ -1431,9 +1770,12 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
         &["--codex", "--state-dir", state_arg.as_str()],
     );
     assert!(retried.status.success());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&retried.stdout).unwrap(),
-        serde_json::json!({})
+    let retried_response: serde_json::Value = serde_json::from_slice(&retried.stdout).unwrap();
+    assert!(
+        retried_response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("Checked 1 clean file: src/broken.py")
     );
     assert_eq!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test"),
@@ -1517,9 +1859,12 @@ fn turn_completion_selectively_discharges_clean_and_retries_manual_files() {
         &["--codex", "--state-dir", state_arg.as_str()],
     );
     assert!(retried.status.success());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&retried.stdout).unwrap(),
-        serde_json::json!({})
+    let retried_response: serde_json::Value = serde_json::from_slice(&retried.stdout).unwrap();
+    assert!(
+        retried_response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("Checked 1 clean file: src/manual.py")
     );
     assert_eq!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test"),

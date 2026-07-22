@@ -503,30 +503,30 @@ Likely files:
 
 Tasks:
 
-- [ ] Create a harness-capability matrix for user-only and agent-facing output on allowed and blocked completion.
-- [ ] Apply the configured Stop-time lowering policy to every nonempty rendered audience message.
-- [ ] Clean/auto-fixed with no blocking condition must allow completion.
-- [ ] Manual and default operational outcomes must emit the native continue-working/block signal.
-- [ ] User messages should use the exact native user/system channel when available.
-- [ ] Manual agent instructions should use the exact blocking reason/context channel.
-- [ ] Do not block successful completion solely because an allowed-stop agent message is unrepresentable under a best-effort policy.
-- [ ] Keep protocol stdout pure; diagnostic logging must use contract-supported stderr/emission behavior.
-- [ ] Preserve Antigravity limitations explicitly instead of inventing fields.
-- [ ] Remove the current hard-coded Stop strings after defaults are supplied through templates.
+- [x] Create a harness-capability matrix for user-only and agent-facing output on allowed and blocked completion.
+- [x] Apply the configured Stop-time lowering policy to every nonempty rendered audience message.
+- [x] Clean/auto-fixed with no blocking condition must allow completion.
+- [x] Manual and default operational outcomes must emit the native continue-working/block signal.
+- [x] User messages should use the exact native user/system channel when available.
+- [x] Manual agent instructions should use the exact blocking reason/context channel.
+- [x] Do not block successful completion solely because an allowed-stop agent message is unrepresentable under a best-effort policy.
+- [x] Keep protocol stdout pure; diagnostic logging must use contract-supported stderr/emission behavior.
+- [x] Preserve Antigravity limitations explicitly instead of inventing fields.
+- [x] Remove the current hard-coded Stop strings after defaults are supplied through templates.
 
 Required per-harness cases:
 
-- [ ] no pending work;
-- [ ] clean-only;
-- [ ] auto-fixed-only;
-- [ ] mixed clean and auto-fixed;
-- [ ] manual result;
-- [ ] operational error;
-- [ ] strict failure for an unrepresentable audience;
-- [ ] best-effort omission/redirect;
-- [ ] best-effort-with-warnings behavior;
-- [ ] empty agent template;
-- [ ] multiple rendered buckets through a master template.
+- [x] no pending work;
+- [x] clean-only;
+- [x] auto-fixed-only;
+- [x] mixed clean and auto-fixed;
+- [x] manual result;
+- [x] operational error;
+- [x] strict failure for an unrepresentable audience;
+- [x] best-effort omission/redirect;
+- [x] best-effort-with-warnings behavior;
+- [x] empty agent template;
+- [x] multiple rendered buckets through a master template.
 
 Exit criteria:
 

@@ -272,3 +272,44 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 6. Configured master messages, bucket metadata, and durable reporting errors are available to exact native lowering.
+
+## Item 6 — Lower rendered results through exact native Stop outputs
+
+Outcome:
+
+- Added an explicit capability matrix and runner-local lowering plan for Claude Stop, Codex Stop, Gemini AfterAgent, and Antigravity Stop. Every output remains an exact native arm.
+- Configured user and agent master messages now drive both allowed and blocked completion. Clean/auto-fixed runs allow Stop; manual, operational, and strict coverage failures use each harness's native block/deny/continue signal.
+- `strict` records the unrepresentable audience, commits the summary, fails the hook, and leaves pending state untouched. `best-effort` omits unavailable audiences; `best-effort-with-warnings` emits a native-channel warning without converting allowed completion into a block.
+- Removed the legacy fixed blocking strings. Only configuration/reporting failure fallback text remains for cases where configured templates cannot be loaded or rendered.
+
+Public API/config/state changes:
+
+- `summary.json.renderedMessages.lowering` now records policy, blocked state, per-audience emitted/omitted/empty/unrepresentable status, native channel, warnings, and any strict error.
+- No native, aligned, Pkl, or persisted-state public schema changed. The existing `settings.loweringPolicy` now applies to deferred Stop audiences as documented.
+
+Compatibility decision:
+
+- Claude uses `systemMessage` plus `hookSpecificOutput.additionalContext` while allowed, and `systemMessage` plus blocking `reason`/context while blocked.
+- Codex and Gemini use `systemMessage` while allowed and cannot faithfully deliver an allowed agent message; blocked agent messages use `reason`.
+- Antigravity exposes only `decision` and one optional `reason`. It cannot preserve a separate user audience; warning fallback may use `reason`, and the loss remains explicit in the summary.
+- Lowering is planned before summary construction, but strict failure is returned only after summary commit and before state disposition. This preserves diagnostics without falsely discharging work.
+
+Focused validation:
+
+- `cargo test -p hookkit-tool-runner --all-targets` (38 unit tests passed; real-tool lane ignored by design)
+- `cargo test -p hookkit-runtime --test integration` (47 passed)
+- `cargo clippy -p hookkit-tool-runner -p hookkit-runtime --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+Known gaps:
+
+- The file-activity producer is still the standalone example and setup/docs do not yet bundle the complete observer/start/Stop suite. Item 7 consolidates that installation surface.
+
+Commit/PR:
+
+- This item is ready to commit as the exact native Stop lowering review unit.
+
+Next item readiness:
+
+- Ready for Item 7. Deferred execution and reporting now produce final native behavior for every supported turn-completion harness.

@@ -16,7 +16,7 @@ pub use deferred::{
 };
 use deferred::{
     DeferredLog, DeferredReporter, RenderedBuckets, RenderedMessages, ScheduledWorkflow,
-    TemplateRun, execute_deferred_workflows,
+    StopLoweringMetadata, TemplateRun, execute_deferred_workflows, plan_stop_lowering,
 };
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -973,7 +973,7 @@ struct PlannedStateDisposition {
 #[serde(rename_all = "camelCase")]
 struct RenderedMessageMetadata {
     harness: String,
-    lowering: &'static str,
+    lowering: StopLoweringMetadata,
     buckets: RenderedBuckets,
     user: Option<String>,
     agent: Option<String>,
@@ -987,6 +987,7 @@ struct BatchSummaryParts<'a> {
     harness: &'a HarnessId,
     status: &'static str,
     rendered_messages: RenderedMessages,
+    lowering: StopLoweringMetadata,
     source: (usize, Vec<String>),
     candidates: &'a [PathBuf],
     tools: Vec<BatchToolSummary>,
@@ -1090,10 +1091,14 @@ fn run_turn_completion_view(
     view: &EntityView<'_, PendingFileActivity>,
 ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
     if view.events().is_empty() {
-        return Ok(EntityOutcome::retain(lower_turn_completion(
+        let lowering = plan_stop_lowering(
             ctx.harness(),
+            false,
             None,
-        )?));
+            None,
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        )?;
+        return Ok(EntityOutcome::retain(lowering.finish()?));
     }
     let fallback_project_root = ctx
         .workspace_roots()
@@ -1176,20 +1181,28 @@ fn run_turn_completion_view(
                 tool_id: None,
                 phase: Some("configuration".into()),
                 affected_files: candidates.clone(),
-                message: contents,
+                message: contents.clone(),
                 artifact_ids: vec!["configuration".into()],
             });
             record_activity_resolution(&mut result, &resolution);
             let disposition = plan_deferred_state_disposition(&result, &resolution)?;
+            let rendered_messages =
+                failure_rendered_messages(&run.directory().join("summary.json"), &contents);
+            let lowering = plan_stop_lowering(
+                ctx.harness(),
+                true,
+                rendered_messages.user.as_deref(),
+                rendered_messages.agent.as_deref(),
+                pkl::LoweringPolicy::BestEffortWithWarnings,
+            )?;
             let summary = build_batch_summary(BatchSummaryParts {
                 run: &run,
                 project_root: &fallback_project_root,
                 state_directory: activity_store.state().directory(),
                 harness: ctx.harness(),
                 status: "operational-failure",
-                rendered_messages: fallback_rendered_messages(
-                    &run.directory().join("summary.json"),
-                ),
+                rendered_messages,
+                lowering: lowering.metadata.clone(),
                 source: (source_entry_count, source_entry_ids.clone()),
                 candidates: &candidates,
                 tools: Vec::new(),
@@ -1197,16 +1210,15 @@ fn run_turn_completion_view(
                 result,
             })?;
             let run_id = summary.run.id.clone();
-            let summary_path = run.commit(&summary).map_err(state_error)?;
+            run.commit(&summary).map_err(state_error)?;
+            let output = lowering.finish()?;
             apply_deferred_state_disposition(activity_store, disposition, run_id)?;
-            return Ok(EntityOutcome::acknowledge(lower_turn_completion(
-                ctx.harness(),
-                Some(&summary_path),
-            )?));
+            return Ok(EntityOutcome::acknowledge(output));
         }
     };
 
     let project_root = normalize_path(&loaded.project_root);
+    let lowering_policy = loaded.config.settings.lowering_policy;
     let reporter = match DeferredReporter::new(&loaded.config.settings.deferred_reporting) {
         Ok(reporter) => reporter,
         Err(error) => {
@@ -1221,6 +1233,7 @@ fn run_turn_completion_view(
                     resolution: &resolution,
                 },
                 (source_entry_count, source_entry_ids),
+                lowering_policy,
                 error.to_string(),
             );
         }
@@ -1259,20 +1272,28 @@ fn run_turn_completion_view(
                 tool_id: None,
                 phase: Some("configuration".into()),
                 affected_files: candidates.clone(),
-                message: contents,
+                message: contents.clone(),
                 artifact_ids: vec!["configuration".into()],
             });
             record_activity_resolution(&mut result, &resolution);
             let disposition = plan_deferred_state_disposition(&result, &resolution)?;
+            let rendered_messages =
+                failure_rendered_messages(&run.directory().join("summary.json"), &contents);
+            let lowering = plan_stop_lowering(
+                ctx.harness(),
+                true,
+                rendered_messages.user.as_deref(),
+                rendered_messages.agent.as_deref(),
+                lowering_policy,
+            )?;
             let summary = build_batch_summary(BatchSummaryParts {
                 run: &run,
                 project_root: &project_root,
                 state_directory: activity_store.state().directory(),
                 harness: ctx.harness(),
                 status: "operational-failure",
-                rendered_messages: fallback_rendered_messages(
-                    &run.directory().join("summary.json"),
-                ),
+                rendered_messages,
+                lowering: lowering.metadata.clone(),
                 source: (source_entry_count, source_entry_ids.clone()),
                 candidates: &candidates,
                 tools: Vec::new(),
@@ -1280,12 +1301,10 @@ fn run_turn_completion_view(
                 result,
             })?;
             let run_id = summary.run.id.clone();
-            let summary_path = run.commit(&summary).map_err(state_error)?;
+            run.commit(&summary).map_err(state_error)?;
+            let output = lowering.finish()?;
             apply_deferred_state_disposition(activity_store, disposition, run_id)?;
-            return Ok(EntityOutcome::acknowledge(lower_turn_completion(
-                ctx.harness(),
-                Some(&summary_path),
-            )?));
+            return Ok(EntityOutcome::acknowledge(output));
         }
     };
 
@@ -1308,6 +1327,7 @@ fn run_turn_completion_view(
                     resolution: &resolution,
                 },
                 (source_entry_count, source_entry_ids),
+                lowering_policy,
                 error.to_string(),
             );
         }
@@ -1364,6 +1384,13 @@ fn run_turn_completion_view(
     };
 
     let should_block = deferred_should_block(&result, activity_settings.coverage_gap_policy);
+    let lowering = plan_stop_lowering(
+        ctx.harness(),
+        should_block,
+        rendered_messages.user.as_deref(),
+        rendered_messages.agent.as_deref(),
+        lowering_policy,
+    )?;
     let disposition = plan_deferred_state_disposition(&result, &resolution)?;
     let status = if result.has_operational_problems() {
         "operational-failure"
@@ -1382,6 +1409,7 @@ fn run_turn_completion_view(
         harness: ctx.harness(),
         status,
         rendered_messages,
+        lowering: lowering.metadata.clone(),
         source: (source_entry_count, source_entry_ids),
         candidates: &candidates,
         tools: summaries,
@@ -1389,20 +1417,10 @@ fn run_turn_completion_view(
         result,
     })?;
     let run_id = summary.run.id.clone();
-    let summary_path = run.commit(&summary).map_err(state_error)?;
+    run.commit(&summary).map_err(state_error)?;
+    let output = lowering.finish()?;
     apply_deferred_state_disposition(activity_store, disposition, run_id)?;
-
-    if should_block {
-        Ok(EntityOutcome::acknowledge(lower_turn_completion(
-            ctx.harness(),
-            Some(&summary_path),
-        )?))
-    } else {
-        Ok(EntityOutcome::acknowledge(lower_turn_completion(
-            ctx.harness(),
-            None,
-        )?))
-    }
+    Ok(EntityOutcome::acknowledge(output))
 }
 
 #[derive(Debug)]
@@ -1781,7 +1799,7 @@ fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<Bat
         state_disposition,
         rendered_messages: RenderedMessageMetadata {
             harness: parts.harness.to_string(),
-            lowering: "pending-item-6",
+            lowering: parts.lowering,
             buckets,
             user,
             agent,
@@ -1801,24 +1819,17 @@ fn files_with_status(result: &DeferredRunResult, status: FileStatus) -> Vec<Path
         .collect()
 }
 
-fn blocking_turn_completion_messages(summary: &Path) -> (String, String) {
-    let agent = format!(
-        "Do not stop yet: session-batched checks need manual attention. Inspect {} and the referenced tool logs, fix the problems, then try to stop again.",
-        summary.display()
-    );
-    let user = format!(
-        "Some session-batched formatter/linter checks still need attention. Details: {}",
-        summary.display()
-    );
-    (user, agent)
-}
-
-fn fallback_rendered_messages(summary: &Path) -> RenderedMessages {
-    let (user, agent) = blocking_turn_completion_messages(summary);
+fn failure_rendered_messages(summary: &Path, detail: &str) -> RenderedMessages {
     RenderedMessages {
         buckets: RenderedBuckets::default(),
-        user: Some(user),
-        agent: Some(agent),
+        user: Some(format!(
+            "Deferred formatter/linter reporting failed. Details: {}",
+            summary.display()
+        )),
+        agent: Some(format!(
+            "Deferred reporting configuration failed: {detail}. Inspect {} before retrying completion.",
+            summary.display()
+        )),
     }
 }
 
@@ -2010,10 +2021,10 @@ fn record_reporting_failure(
         tool_id: None,
         phase: Some("configuration".into()),
         affected_files: candidates.to_vec(),
-        message: contents,
+        message: contents.clone(),
         artifact_ids: vec!["reporting-configuration".into()],
     });
-    Ok(fallback_rendered_messages(summary_path))
+    Ok(failure_rendered_messages(summary_path, &contents))
 }
 
 fn commit_deferred_config_failure(
@@ -2022,6 +2033,7 @@ fn commit_deferred_config_failure(
     run: RunBundle,
     failure: DeferredFailureContext<'_>,
     source: (usize, Vec<String>),
+    lowering_policy: pkl::LoweringPolicy,
     contents: String,
 ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
     let (source_entry_count, source_entry_ids) = source;
@@ -2054,18 +2066,28 @@ fn commit_deferred_config_failure(
         tool_id: None,
         phase: Some("configuration".into()),
         affected_files: failure.candidates.to_vec(),
-        message: contents,
+        message: contents.clone(),
         artifact_ids: vec!["configuration".into()],
     });
     record_activity_resolution(&mut result, failure.resolution);
     let disposition = plan_deferred_state_disposition(&result, failure.resolution)?;
+    let rendered_messages =
+        failure_rendered_messages(&run.directory().join("summary.json"), &contents);
+    let lowering = plan_stop_lowering(
+        ctx.harness(),
+        true,
+        rendered_messages.user.as_deref(),
+        rendered_messages.agent.as_deref(),
+        lowering_policy,
+    )?;
     let summary = build_batch_summary(BatchSummaryParts {
         run: &run,
         project_root: failure.project_root,
         state_directory: activity_store.state().directory(),
         harness: ctx.harness(),
         status: "operational-failure",
-        rendered_messages: fallback_rendered_messages(&run.directory().join("summary.json")),
+        rendered_messages,
+        lowering: lowering.metadata.clone(),
         source: (source_entry_count, source_entry_ids),
         candidates: failure.candidates,
         tools: Vec::new(),
@@ -2073,68 +2095,10 @@ fn commit_deferred_config_failure(
         result,
     })?;
     let run_id = summary.run.id.clone();
-    let summary_path = run.commit(&summary).map_err(state_error)?;
+    run.commit(&summary).map_err(state_error)?;
+    let output = lowering.finish()?;
     apply_deferred_state_disposition(activity_store, disposition, run_id)?;
-    Ok(EntityOutcome::acknowledge(lower_turn_completion(
-        ctx.harness(),
-        Some(&summary_path),
-    )?))
-}
-
-fn lower_turn_completion(
-    harness: &HarnessId,
-    problem_summary: Option<&Path>,
-) -> hookkit_core::Result<TurnCompletionOutput> {
-    let Some(summary) = problem_summary else {
-        return match harness.as_str() {
-            "claude-code" => Ok(TurnCompletionOutput::Claude(
-                hookkit_claude::catalog::StopOutput::no_op(),
-            )),
-            "codex" => Ok(TurnCompletionOutput::Codex(
-                hookkit_codex::catalog::StopOutput::no_op(),
-            )),
-            "gemini-cli" => Ok(TurnCompletionOutput::Gemini(
-                hookkit_gemini::catalog::AfterAgentOutput::no_op(),
-            )),
-            "antigravity" => Ok(TurnCompletionOutput::Antigravity(
-                hookkit_antigravity::StopOutput {
-                    decision: "stop".into(),
-                    reason: None,
-                },
-            )),
-            _ => Err(invalid_data(format!(
-                "turn-completion runner does not support {harness}"
-            ))),
-        };
-    };
-
-    let (user_message, agent_message) = blocking_turn_completion_messages(summary);
-    match harness.as_str() {
-        "claude-code" => Ok(TurnCompletionOutput::Claude(
-            hookkit_claude::catalog::StopOutput::block_with_context(
-                agent_message.clone(),
-                agent_message,
-            )
-            .with_system_message(user_message)?,
-        )),
-        "codex" => Ok(TurnCompletionOutput::Codex(
-            hookkit_codex::catalog::StopOutput::block(agent_message)
-                .with_system_message(user_message)?,
-        )),
-        "gemini-cli" => Ok(TurnCompletionOutput::Gemini(
-            hookkit_gemini::catalog::AfterAgentOutput::deny(agent_message, false)
-                .with_system_message(user_message)?,
-        )),
-        "antigravity" => Ok(TurnCompletionOutput::Antigravity(
-            hookkit_antigravity::StopOutput {
-                decision: "continue".into(),
-                reason: Some(agent_message),
-            },
-        )),
-        _ => Err(invalid_data(format!(
-            "turn-completion runner does not support {harness}"
-        ))),
-    }
+    Ok(EntityOutcome::acknowledge(output))
 }
 
 fn state_error(error: hookkit_session_state::StateError) -> HookkitError {
