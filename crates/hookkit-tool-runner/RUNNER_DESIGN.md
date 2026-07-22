@@ -37,11 +37,18 @@ Gemini AfterAgent, or Antigravity Stop; Antigravity normally has no batch
 because its post-tool payload cannot feed the tracker.
 
 One runner-family advisory lock serializes stop attempts for a native session.
-The consumer seals NDJSON generations and obtains their cached set projection before executing tools, writes complete
-per-tool logs to a unique run bundle, and commits summary.json last. Clean and
-auto-corrected snapshots are acknowledged and lowered to a quiet native
-response. Manual findings and operational failures retain their generations and
-lower to the native “continue working” response with a summary path. New
-observations written during execution are outside the snapshot and remain
-pending even when the completed batch is acknowledged. Projection caching means
-a retained retry folds only generations that arrived after the prior attempt.
+The consumer seals NDJSON generations and obtains their cached set projection
+before executing tools. Stop-time `workflows` are distinct from the immediate
+runner's legacy `phases`: all non-mutating initial checks run first, only dirty
+workflows receive one ordered remedy, and snapshot-discovered writes invalidate
+intersecting target-file or workspace checks for one authoritative final sweep.
+Check stages retain bounded job parallelism and deterministic result ordering.
+
+The runner writes logs to a unique run bundle and commits `summary.json` last.
+The summary carries per-file clean, auto-fixed, and manual results plus separate
+operational failures; native lowering remains exact per harness. At this stage
+of the rebuild, clean batches are acknowledged while manual/operational batches
+retain their sealed generations. Selective retry entries and handled fallback
+baselines are added by the following persistence unit. New observations written
+during execution are outside the snapshot and remain pending even when the
+completed batch is acknowledged.

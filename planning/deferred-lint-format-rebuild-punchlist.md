@@ -281,20 +281,20 @@ Likely files:
 
 Tasks:
 
-- [ ] Define an explicit Pkl/Rust workflow shape in which non-mutating checks and optional remedies are distinguishable and repeatable.
-- [ ] Support more than one check/remedy workflow per tool; Ruff must be able to represent formatting and linting checks independently.
-- [ ] Preserve structured argv tokens, exit-code policy, write behavior, extra args, workspace indicators, and deterministic ordering.
-- [ ] Provide a compatibility interpretation for existing `phases` configs or a clear, tested migration. Do not silently reinterpret immediate post-tool behavior.
-- [ ] Run all initial checks without mutation.
-- [ ] Schedule a remedy only when its workflow's initial check reports source issues.
-- [ ] Never run a remedy after an operationally failed initial check.
-- [ ] Run each remedy at most once per Stop attempt.
-- [ ] Track actual changed files from snapshots of declared write scopes.
-- [ ] Invalidate prior checks when later remedies intersect their file/workspace inputs.
-- [ ] Perform the final verification sweep after all remedies.
-- [ ] Classify final check issues as manual, including workflows with no remedy.
-- [ ] Treat missing or ambiguous final verification for an auto-fixable workflow as an operational/configuration problem, not clean.
-- [ ] Retain bounded job parallelism and deterministic output ordering.
+- [x] Define an explicit Pkl/Rust workflow shape in which non-mutating checks and optional remedies are distinguishable and repeatable.
+- [x] Support more than one check/remedy workflow per tool; Ruff must be able to represent formatting and linting checks independently.
+- [x] Preserve structured argv tokens, exit-code policy, write behavior, extra args, workspace indicators, and deterministic ordering.
+- [x] Provide a compatibility interpretation for existing `phases` configs or a clear, tested migration. Do not silently reinterpret immediate post-tool behavior.
+- [x] Run all initial checks without mutation.
+- [x] Schedule a remedy only when its workflow's initial check reports source issues.
+- [x] Never run a remedy after an operationally failed initial check.
+- [x] Run each remedy at most once per Stop attempt.
+- [x] Track actual changed files from snapshots of declared write scopes.
+- [x] Invalidate prior checks when later remedies intersect their file/workspace inputs.
+- [x] Perform the final verification sweep after all remedies.
+- [x] Classify final check issues as manual, including workflows with no remedy.
+- [x] Treat missing or ambiguous final verification for an auto-fixable workflow as an operational/configuration problem, not clean.
+- [x] Retain bounded job parallelism and deterministic output ordering.
 
 Compatibility guidance:
 
@@ -305,17 +305,17 @@ Compatibility guidance:
 
 Required hermetic scenarios:
 
-- [ ] initially clean: check runs, remedy does not run, result clean;
-- [ ] dirty and fixable: check reports issues, remedy changes file, final check clean, result auto-fixed;
-- [ ] dirty and partly fixable: remedy changes file, final check issues, result manual;
-- [ ] dirty with no remedy: result manual without a mutating command;
-- [ ] remedy reports clean but changes nothing: classification follows final checks and records the attempted remedy honestly;
-- [ ] initial check fails operationally: no remedy, affected files retained;
-- [ ] remedy fails after changing files: changed files recorded, operational problem emitted, affected files retained;
-- [ ] later tool changes a file previously checked clean: earlier check reruns;
-- [ ] unrelated later write does not rerun an independent per-file check;
-- [ ] workspace-scoped write conservatively invalidates workspace checks;
-- [ ] parallel jobs produce the same ordered result as serial jobs.
+- [x] initially clean: check runs, remedy does not run, result clean;
+- [x] dirty and fixable: check reports issues, remedy changes file, final check clean, result auto-fixed;
+- [x] dirty and partly fixable: remedy changes file, final check issues, result manual;
+- [x] dirty with no remedy: result manual without a mutating command;
+- [x] remedy reports clean but changes nothing: classification follows final checks and records the attempted remedy honestly;
+- [x] initial check fails operationally: no remedy, affected files retained;
+- [x] remedy fails after changing files: changed files recorded, operational problem emitted, affected files retained;
+- [x] later tool changes a file previously checked clean: earlier check reruns;
+- [x] unrelated later write does not rerun an independent per-file check;
+- [x] workspace-scoped write conservatively invalidates workspace checks;
+- [x] parallel jobs produce the same ordered result as serial jobs.
 
 Exit criteria:
 

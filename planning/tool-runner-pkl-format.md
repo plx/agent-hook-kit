@@ -3,6 +3,40 @@
 
 Version: draft 0.2
 
+> Implementation note (2026-07-21): the original document below remains the
+> immediate PostToolUse format. Stop-time deferred execution now has an
+> additive `ToolSpec.workflows` map. Each workflow contains a non-mutating
+> `check`, an optional `remedy`, `checkScope`, and `invocation`; an optional
+> `workflowOrder` provides stable override order. The immediate runner still
+> executes `phases` exactly as documented below.
+>
+> When `workflows` is empty, the deferred runner compatibility-translates
+> existing `phases`: each mutating phase is paired with the last enabled
+> verifier and check-only tools become check-only workflows. A legacy
+> mutating-only tool may run its remedy once but is then reported as an
+> operationally unverifiable workflow rather than clean. The builtin catalog
+> migration removes that fallback before release.
+
+The implemented deferred shape is:
+
+```pkl
+workflows {
+  ["lint"] = new Workflow {
+    check = new WorkflowCommand {
+      argv = new Listing { "check"; new Files {} }
+      exitCodes { issues = new Listing { 1 } }
+    }
+    remedy = new WorkflowCommand {
+      argv = new Listing { "check"; "--fix"; new Files {} }
+      writes = "target-files"
+    }
+    checkScope = "target-files" // or "workspace"
+    invocation = "batch" // or "per-file" / "workspace"
+  }
+}
+workflowOrder = new Listing { "lint" }
+```
+
 ## 1. Purpose
 
 This document defines a Pkl-shaped configuration format for one narrow binary:

@@ -123,6 +123,26 @@ class Phase {
   extraArgs: Listing<String> = new Listing<String> {}
 }
 
+/// One command in a deferred check/remedy workflow.
+class WorkflowCommand {
+  program: String?
+  argv: Listing<String | ArgToken> = new Listing<String | ArgToken> {}
+  exitCodes: ExitCodes = new ExitCodes {}
+  writes: "none" | "target-files" | "matching-globs" | "workspace" = "none"
+  extraArgs: Listing<String> = new Listing<String> {}
+}
+
+/// Stop-time workflow. `check` is required for authoritative explicit
+/// workflows and is optional in the schema only so validation can report a
+/// useful configuration error before any external command runs.
+class Workflow {
+  check: WorkflowCommand?
+  remedy: WorkflowCommand?
+  checkScope: "target-files" | "workspace" = "target-files"
+  invocation: "per-file" | "batch" | "workspace" = "batch"
+  enabled: Boolean = true
+}
+
 class ToolSpec {
   id: String
   displayName: String
@@ -130,6 +150,11 @@ class ToolSpec {
   installHint: String?
   files: FileSelection = new FileSelection {}
   workspaceIndicator: String?
+  /// Preferred Stop-time check/remedy workflows. When empty, the deferred
+  /// runner compatibility-translates `phases`; immediate PostToolUse continues
+  /// to execute `phases` exactly as before.
+  workflows: Mapping<String, Workflow> = new Mapping<String, Workflow> {}
+  workflowOrder: Listing<String> = new Listing<String> {}
   phases: Mapping<String, Phase> = new Mapping<String, Phase> {}
   /// Optional explicit phase ordering. If empty, runtime iterates `phases`
   /// in insertion order (Pkl mappings preserve order).

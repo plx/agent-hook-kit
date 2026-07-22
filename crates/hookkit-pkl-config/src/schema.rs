@@ -207,6 +207,8 @@ pub struct ToolSpec {
     pub install_hint: Option<String>,
     pub files: FileSelection,
     pub workspace_indicator: Option<String>,
+    pub workflows: BTreeMap<String, Workflow>,
+    pub workflow_order: Vec<String>,
     pub phases: BTreeMap<String, Phase>,
     pub phase_order: Vec<String>,
     pub messages: Messages,
@@ -223,6 +225,8 @@ impl Default for ToolSpec {
             install_hint: None,
             files: FileSelection::default(),
             workspace_indicator: None,
+            workflows: BTreeMap::new(),
+            workflow_order: Vec::new(),
             phases: BTreeMap::new(),
             phase_order: Vec::new(),
             messages: Messages::default(),
@@ -230,6 +234,71 @@ impl Default for ToolSpec {
             enabled: true,
         }
     }
+}
+
+/// One repeatable deferred check with an optional automatic remedy.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Workflow {
+    pub check: Option<WorkflowCommand>,
+    pub remedy: Option<WorkflowCommand>,
+    pub check_scope: CheckScope,
+    pub invocation: InvocationGranularity,
+    pub enabled: bool,
+}
+
+impl Default for Workflow {
+    fn default() -> Self {
+        Self {
+            check: None,
+            remedy: None,
+            check_scope: CheckScope::default(),
+            invocation: InvocationGranularity::default(),
+            enabled: true,
+        }
+    }
+}
+
+/// One command in a deferred workflow.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkflowCommand {
+    pub program: Option<String>,
+    pub argv: Vec<ArgvElement>,
+    pub exit_codes: ExitCodes,
+    pub writes: WriteBehavior,
+    pub extra_args: Vec<String>,
+}
+
+impl Default for WorkflowCommand {
+    fn default() -> Self {
+        Self {
+            program: None,
+            argv: Vec::new(),
+            exit_codes: ExitCodes::default(),
+            writes: WriteBehavior::None,
+            extra_args: Vec::new(),
+        }
+    }
+}
+
+/// Inputs whose changes invalidate a prior workflow check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CheckScope {
+    #[default]
+    TargetFiles,
+    Workspace,
+}
+
+/// How candidates are divided into workflow invocations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InvocationGranularity {
+    PerFile,
+    #[default]
+    Batch,
+    Workspace,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

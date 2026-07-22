@@ -36,6 +36,7 @@ pub enum CommandPhase {
     InitialCheck,
     Remedy,
     FinalCheck,
+    Combined,
     Configuration,
 }
 

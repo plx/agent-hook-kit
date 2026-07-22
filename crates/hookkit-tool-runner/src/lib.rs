@@ -13,6 +13,7 @@ pub use deferred::{
     CheckOutcome, CommandPhase, CoverageGap, DeferredRunResult, FileAssessment, FileResult,
     FileStatus, OperationalProblem, RunArtifact, ToolReport, ToolReportRef,
 };
+use deferred::{DeferredLog, ScheduledWorkflow, execute_deferred_workflows};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
@@ -28,16 +29,16 @@ use hookkit_file_activity::{
 use hookkit_pkl_config::schema as pkl;
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
 use hookkit_session_state::{
-    EntityOperationError, EntityOutcome, EntityView, FamilyId, SessionState, StateFamily,
-    StateRoot, UtcTimestamp,
+    EntityOperationError, EntityOutcome, EntityView, FamilyId, RunBundle, SessionState,
+    StateFamily, StateRoot, UtcTimestamp,
 };
 use minijinja::Environment;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const DEFAULT_CLEAN_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files | join(\", \") }}; re-read changed files before editing further.";
@@ -63,6 +64,7 @@ pub struct ToolSpec {
     pub install_hint: Option<String>,
     pub file_selection: FileSelection,
     pub workspace_indicator: Option<String>,
+    pub workflows: Vec<ToolWorkflow>,
     pub phases: Vec<ToolPhase>,
     pub messages: ToolMessages,
     pub diagnostics_directory: Option<String>,
@@ -82,6 +84,7 @@ impl ToolSpec {
             install_hint: None,
             file_selection: FileSelection::default(),
             workspace_indicator: None,
+            workflows: Vec::new(),
             phases: Vec::new(),
             messages: ToolMessages::default(),
             diagnostics_directory: None,
@@ -109,10 +112,44 @@ impl ToolSpec {
         self
     }
 
+    pub fn with_workflow(mut self, workflow: ToolWorkflow) -> Self {
+        self.workflows.push(workflow);
+        self
+    }
+
     pub fn with_messages(mut self, messages: ToolMessages) -> Self {
         self.messages = messages;
         self
     }
+}
+
+/// One Stop-time non-mutating check and optional automatic remedy.
+#[derive(Debug, Clone)]
+pub struct ToolWorkflow {
+    pub id: String,
+    pub check: Option<ToolPhase>,
+    pub remedy: Option<ToolPhase>,
+    pub check_scope: CheckScope,
+    pub invocation: InvocationGranularity,
+    pub compatibility_translation: bool,
+    pub enabled: bool,
+}
+
+/// Inputs whose writes invalidate a workflow's prior check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CheckScope {
+    #[default]
+    TargetFiles,
+    Workspace,
+}
+
+/// How a workflow divides the selected files into invocations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InvocationGranularity {
+    PerFile,
+    #[default]
+    Batch,
+    Workspace,
 }
 
 /// Include/exclude globs used to select modified files.
@@ -1070,80 +1107,37 @@ fn run_turn_completion_view(
         }
     };
 
-    let global_exclude = &loaded.config.settings.exclude;
-    let global_diagnostics_dir = loaded.config.settings.diagnostics_directory.as_deref();
-    let mut summaries = Vec::new();
-    let mut result = DeferredRunResult::default();
-
-    for (index, schema_spec) in tools.into_iter().enumerate() {
-        if !schema_spec.enabled {
-            continue;
+    let (plan, planned_tools) = match build_deferred_plan(
+        &tools,
+        &candidates,
+        &project_root,
+        &loaded.config.settings.exclude,
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let run = run.take().expect("run bundle is available");
+            return commit_deferred_config_failure(
+                ctx,
+                run,
+                &candidates,
+                source_entry_count,
+                source_entry_ids,
+                error.to_string(),
+            );
         }
-        let spec = convert_tool_spec(schema_spec, global_exclude);
-        let context = ToolContext {
-            spec: &spec,
-            project_root: &project_root,
-            global_diagnostics_dir,
-        };
-        let matcher = FileMatcher::new(&spec.file_selection)?;
-        let runnable_paths = candidates
-            .iter()
-            .filter(|path| matcher.matches(path, &project_root))
-            .cloned()
-            .collect::<Vec<_>>();
-        if runnable_paths.is_empty() {
-            continue;
-        }
-        let jobs = build_jobs(&runnable_paths, &project_root, &spec);
-        if jobs.is_empty() {
-            continue;
-        }
-
-        let outcomes = run_jobs(&jobs, &context, loaded.config.settings.jobs);
-        let log_path = format!("tools/{index:03}.log");
-        let log_contents = format_batch_outcomes(&outcomes);
-        let absolute_log_path = run
-            .as_ref()
-            .expect("run bundle is available")
-            .write_text(&log_path, &log_contents)
-            .map_err(state_error)?;
-        let artifact_id = format!("{index:03}-{}-legacy", spec.id);
-        let status = record_legacy_tool_result(
-            &mut result,
-            &spec,
-            &jobs,
-            &outcomes,
-            index,
-            RunArtifact {
-                id: artifact_id,
-                absolute_path: absolute_log_path,
-                run_relative_path: log_path.clone().into(),
-                media_type: "text/plain; charset=utf-8".into(),
-                tool_id: Some(spec.id.clone()),
-                workflow_id: Some("legacy-phases".into()),
-                job_id: None,
-                phase: CommandPhase::FinalCheck,
-                files: jobs
-                    .iter()
-                    .flat_map(|job| job.files.iter().cloned())
-                    .collect(),
-                contents: log_contents,
-            },
-        );
-        summaries.push(BatchToolSummary {
-            tool_id: spec.id.clone(),
-            file_count: runnable_paths.len(),
-            issues: status.issues,
-            operational_failure: status.operational_failure,
-            log: log_path,
-        });
-
-        if (loaded.config.settings.fail_fast && status.operational_failure)
-            || (!loaded.config.settings.continue_after_issues && status.issues)
-        {
-            break;
-        }
-    }
+    };
+    let mut execution = execute_deferred_workflows(
+        &plan,
+        loaded.config.settings.jobs,
+        loaded.config.settings.fail_fast,
+    );
+    let summaries = write_deferred_tool_logs(
+        run.as_ref().expect("run bundle is available"),
+        &planned_tools,
+        &execution.logs,
+        &mut execution.result,
+    )?;
+    let mut result = execution.result;
 
     let operational_files = result
         .operational_problems
@@ -1192,192 +1186,259 @@ fn run_turn_completion_view(
     }
 }
 
-fn record_legacy_tool_result(
-    result: &mut DeferredRunResult,
-    spec: &ToolSpec,
-    jobs: &[ToolJob],
-    outcomes: &[ToolRunOutcome],
-    tool_index: usize,
-    artifact: RunArtifact,
-) -> ToolBatchStatus {
-    let mut status = ToolBatchStatus {
-        operational_failure: false,
-        issues: false,
-    };
-    let artifact_id = artifact.id.clone();
-    result.record_artifact(artifact);
-    let mutating = spec
-        .phases
-        .iter()
-        .any(|phase| phase.enabled && phase.writes != WriteBehavior::None);
-    for (job_index, (job, outcome)) in jobs.iter().zip(outcomes).enumerate() {
-        let report_id = format!("{tool_index:03}-{}-{job_index:03}", spec.id);
-        match outcome {
-            ToolRunOutcome::Completed(completed) => {
-                let changed_files = match &completed.changes {
-                    ChangeState::Unchanged => Vec::new(),
-                    ChangeState::Changed { files } => files.clone(),
-                };
-                let file_status = if completed.issues == IssueState::Issues {
-                    status.issues = true;
-                    FileStatus::ManualFixesNeeded
-                } else if mutating || !changed_files.is_empty() {
-                    FileStatus::AutoFixed
-                } else {
-                    FileStatus::Clean
-                };
-                result.record_conservative_report(
-                    ToolReport {
-                        id: report_id,
-                        tool_id: spec.id.clone(),
-                        tool_name: spec.display_name.clone(),
-                        workflow_id: "legacy-phases".into(),
-                        job_id: format!("{job_index:03}"),
-                        candidate_files: completed.files.clone(),
-                        changed_files,
-                        initial_check: None,
-                        fix_attempted: mutating,
-                        final_check: Some(if completed.issues == IssueState::Issues {
-                            CheckOutcome::Issues
-                        } else {
-                            CheckOutcome::Clean
-                        }),
-                        conservative_attribution: completed.files.len() > 1,
-                        artifact_ids: vec![artifact_id.clone()],
-                    },
-                    file_status,
-                );
-            }
-            ToolRunOutcome::ToolUnavailable {
-                phase,
-                executable,
-                changed_files,
-                ..
-            } => {
-                status.operational_failure = true;
-                result.record_operational_problem(OperationalProblem {
-                    id: report_id,
-                    tool_id: Some(spec.id.clone()),
-                    phase: Some(phase.clone()),
-                    affected_files: job.files.clone(),
-                    message: format!("executable `{executable}` is unavailable"),
-                    artifact_ids: vec![artifact_id.clone()],
-                });
-                result.reports.insert(
-                    format!("{tool_index:03}-{}-{job_index:03}", spec.id),
-                    ToolReport {
-                        id: format!("{tool_index:03}-{}-{job_index:03}", spec.id),
-                        tool_id: spec.id.clone(),
-                        tool_name: spec.display_name.clone(),
-                        workflow_id: "legacy-phases".into(),
-                        job_id: format!("{job_index:03}"),
-                        candidate_files: job.files.clone(),
-                        changed_files: changed_files.clone(),
-                        initial_check: None,
-                        fix_attempted: mutating,
-                        final_check: None,
-                        conservative_attribution: job.files.len() > 1,
-                        artifact_ids: vec![artifact_id.clone()],
-                    },
-                );
-            }
-            ToolRunOutcome::ToolFailed {
-                phase,
-                exit_code,
-                changed_files,
-                ..
-            } => {
-                status.operational_failure = true;
-                result.record_operational_problem(OperationalProblem {
-                    id: report_id.clone(),
-                    tool_id: Some(spec.id.clone()),
-                    phase: Some(phase.clone()),
-                    affected_files: job.files.clone(),
-                    message: format!("tool failed with exit code {exit_code:?}"),
-                    artifact_ids: vec![artifact_id.clone()],
-                });
-                result.reports.insert(
-                    report_id.clone(),
-                    ToolReport {
-                        id: report_id,
-                        tool_id: spec.id.clone(),
-                        tool_name: spec.display_name.clone(),
-                        workflow_id: "legacy-phases".into(),
-                        job_id: format!("{job_index:03}"),
-                        candidate_files: job.files.clone(),
-                        changed_files: changed_files.clone(),
-                        initial_check: None,
-                        fix_attempted: mutating,
-                        final_check: None,
-                        conservative_attribution: job.files.len() > 1,
-                        artifact_ids: vec![artifact_id.clone()],
-                    },
-                );
-            }
-        }
-    }
-    status
+#[derive(Debug)]
+struct PlannedDeferredTool {
+    index: usize,
+    spec: Arc<ToolSpec>,
+    files: Vec<PathBuf>,
 }
 
-fn format_batch_outcomes(outcomes: &[ToolRunOutcome]) -> String {
+fn build_deferred_plan(
+    schemas: &[&pkl::ToolSpec],
+    candidates: &[PathBuf],
+    project_root: &Path,
+    global_exclude: &[String],
+) -> hookkit_core::Result<(Vec<ScheduledWorkflow>, Vec<PlannedDeferredTool>)> {
+    let mut plan = Vec::new();
+    let mut planned_tools = Vec::new();
+    for (tool_index, schema) in schemas.iter().enumerate() {
+        if !schema.enabled {
+            continue;
+        }
+        for id in &schema.workflow_order {
+            if !schema.workflows.contains_key(id) {
+                return Err(invalid_data(format!(
+                    "tool `{}` workflowOrder references unknown workflow `{id}`",
+                    schema.id
+                )));
+            }
+        }
+        let spec = Arc::new(convert_tool_spec(schema, global_exclude));
+        let matcher = FileMatcher::new(&spec.file_selection)?;
+        let files = candidates
+            .iter()
+            .filter(|path| matcher.matches(path, project_root))
+            .cloned()
+            .collect::<Vec<_>>();
+        if files.is_empty() {
+            continue;
+        }
+        let base_jobs = build_jobs(&files, project_root, &spec);
+        if base_jobs.is_empty() {
+            continue;
+        }
+        for (workflow_index, workflow) in spec.workflows.iter().enumerate() {
+            if !workflow.enabled {
+                continue;
+            }
+            if workflow.check.is_none() && !workflow.compatibility_translation {
+                return Err(invalid_data(format!(
+                    "tool `{}` workflow `{}` requires a non-mutating check",
+                    spec.id, workflow.id
+                )));
+            }
+            if workflow
+                .check
+                .as_ref()
+                .is_some_and(|check| check.writes != WriteBehavior::None)
+            {
+                return Err(invalid_data(format!(
+                    "tool `{}` workflow `{}` check must declare writes = none",
+                    spec.id, workflow.id
+                )));
+            }
+            if workflow
+                .remedy
+                .as_ref()
+                .is_some_and(|remedy| remedy.writes == WriteBehavior::None)
+            {
+                return Err(invalid_data(format!(
+                    "tool `{}` workflow `{}` remedy must declare a write scope",
+                    spec.id, workflow.id
+                )));
+            }
+            let jobs = workflow_jobs(&base_jobs, workflow.invocation);
+            for (job_index, job) in jobs.into_iter().enumerate() {
+                plan.push(ScheduledWorkflow {
+                    tool_index,
+                    workflow_index,
+                    job_index,
+                    spec: Arc::clone(&spec),
+                    workflow_id: workflow.id.clone(),
+                    check: workflow.check.clone(),
+                    remedy: workflow.remedy.clone(),
+                    check_scope: workflow.check_scope,
+                    invocation: workflow.invocation,
+                    compatibility_translation: workflow.compatibility_translation,
+                    job,
+                    project_root: project_root.to_path_buf(),
+                });
+            }
+        }
+        planned_tools.push(PlannedDeferredTool {
+            index: tool_index,
+            spec,
+            files,
+        });
+    }
+    Ok((plan, planned_tools))
+}
+
+fn workflow_jobs(base_jobs: &[ToolJob], invocation: InvocationGranularity) -> Vec<ToolJob> {
+    if invocation != InvocationGranularity::PerFile {
+        return base_jobs.to_vec();
+    }
+    base_jobs
+        .iter()
+        .flat_map(|job| {
+            job.files.iter().cloned().map(|file| ToolJob {
+                workspace_dir: job.workspace_dir.clone(),
+                workspace_indicator: job.workspace_indicator.clone(),
+                files: vec![file],
+            })
+        })
+        .collect()
+}
+
+fn write_deferred_tool_logs(
+    run: &RunBundle,
+    tools: &[PlannedDeferredTool],
+    logs: &[DeferredLog],
+    result: &mut DeferredRunResult,
+) -> hookkit_core::Result<Vec<BatchToolSummary>> {
+    let mut summaries = Vec::new();
+    for tool in tools {
+        let tool_logs = logs
+            .iter()
+            .filter(|log| log.tool_index == tool.index)
+            .collect::<Vec<_>>();
+        if tool_logs.is_empty() {
+            continue;
+        }
+        let contents = format_deferred_logs(&tool_logs);
+        let relative = format!("tools/{:03}.log", tool.index);
+        let absolute = run.write_text(&relative, &contents).map_err(state_error)?;
+        let artifact_id = format!("{:03}-{}-combined", tool.index, tool.spec.id);
+        attach_tool_artifact(result, &tool.spec.id, &artifact_id);
+        result.record_artifact(RunArtifact {
+            id: artifact_id,
+            absolute_path: absolute,
+            run_relative_path: relative.clone().into(),
+            media_type: "text/plain; charset=utf-8".into(),
+            tool_id: Some(tool.spec.id.clone()),
+            workflow_id: None,
+            job_id: None,
+            phase: CommandPhase::Combined,
+            files: tool.files.clone(),
+            contents,
+        });
+        let issues = result.reports.values().any(|report| {
+            report.tool_id == tool.spec.id && report.final_check == Some(CheckOutcome::Issues)
+        });
+        let operational_failure = result
+            .operational_problems
+            .values()
+            .any(|problem| problem.tool_id.as_deref() == Some(tool.spec.id.as_str()));
+        summaries.push(BatchToolSummary {
+            tool_id: tool.spec.id.clone(),
+            file_count: tool.files.len(),
+            issues,
+            operational_failure,
+            log: relative,
+        });
+    }
+    Ok(summaries)
+}
+
+fn attach_tool_artifact(result: &mut DeferredRunResult, tool_id: &str, artifact_id: &str) {
+    let report_ids = result
+        .reports
+        .values_mut()
+        .filter(|report| report.tool_id == tool_id)
+        .map(|report| {
+            report.artifact_ids.push(artifact_id.into());
+            report.artifact_ids.sort();
+            report.artifact_ids.dedup();
+            report.id.clone()
+        })
+        .collect::<BTreeSet<_>>();
+    for file in result.files.values_mut() {
+        for report in &mut file.reports {
+            if report_ids.contains(&report.report_id) {
+                report.artifact_ids.push(artifact_id.into());
+                report.artifact_ids.sort();
+                report.artifact_ids.dedup();
+            }
+        }
+    }
+    for problem in result.operational_problems.values_mut() {
+        if problem.tool_id.as_deref() == Some(tool_id) {
+            problem.artifact_ids.push(artifact_id.into());
+            problem.artifact_ids.sort();
+            problem.artifact_ids.dedup();
+        }
+    }
+}
+
+fn format_deferred_logs(logs: &[&DeferredLog]) -> String {
     let mut output = String::new();
-    for (index, outcome) in outcomes.iter().enumerate() {
-        output.push_str(&format!("== job {} ==\n", index + 1));
-        match outcome {
-            ToolRunOutcome::Completed(completed) => {
-                output.push_str(&format!(
-                    "result: {:?}\nfiles: {}\n",
-                    completed.issues,
-                    completed
-                        .files
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-                output.push_str(&completed.diagnostics);
-            }
-            ToolRunOutcome::ToolUnavailable {
-                phase,
-                executable,
-                install_hint,
-                changed_files,
-            } => {
-                output.push_str(&format!(
-                    "result: unavailable\nphase: {phase}\nexecutable: {executable}\nchanged files: {}\n",
-                    changed_files
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-                if let Some(hint) = install_hint {
-                    output.push_str(&format!("install hint: {hint}\n"));
-                }
-            }
-            ToolRunOutcome::ToolFailed {
-                phase,
-                exit_code,
-                diagnostics,
-                changed_files,
-            } => {
-                output.push_str(&format!(
-                    "result: failure\nphase: {phase}\nexit code: {exit_code:?}\nchanged files: {}\n",
-                    changed_files
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-                output.push_str(diagnostics);
-            }
-        }
-        if !output.ends_with('\n') {
-            output.push('\n');
-        }
-        output.push('\n');
+    for log in logs {
+        output.push_str(&format!(
+            "== workflow {:03}, job {:03}, {:?} ==\n",
+            log.workflow_index, log.job_index, log.phase
+        ));
+        output.push_str(&format_logs(std::slice::from_ref(&log.log)));
     }
     output
+}
+
+fn commit_deferred_config_failure(
+    ctx: &RuntimeContext<'_>,
+    run: RunBundle,
+    candidates: &[PathBuf],
+    source_entry_count: usize,
+    source_entry_ids: Vec<String>,
+    contents: String,
+) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+    let artifact_path = run
+        .write_text("config-error.log", &contents)
+        .map_err(state_error)?;
+    let mut result = DeferredRunResult::default();
+    result.record_artifact(RunArtifact {
+        id: "configuration".into(),
+        absolute_path: artifact_path,
+        run_relative_path: "config-error.log".into(),
+        media_type: "text/plain; charset=utf-8".into(),
+        tool_id: None,
+        workflow_id: None,
+        job_id: None,
+        phase: CommandPhase::Configuration,
+        files: candidates.to_vec(),
+        contents: contents.clone(),
+    });
+    result.record_operational_problem(OperationalProblem {
+        id: "configuration".into(),
+        tool_id: None,
+        phase: Some("configuration".into()),
+        affected_files: candidates.to_vec(),
+        message: contents,
+        artifact_ids: vec!["configuration".into()],
+    });
+    let summary_path = run
+        .commit(&BatchRunSummary {
+            status: "operational-failure",
+            source_entry_count,
+            source_entry_ids,
+            files: candidates.iter().map(|path| slash_path(path)).collect(),
+            tools: Vec::new(),
+            acknowledged: false,
+            result,
+        })
+        .map_err(state_error)?;
+    Ok(EntityOutcome::retain(lower_turn_completion(
+        ctx.harness(),
+        Some(&summary_path),
+    )?))
 }
 
 fn lower_turn_completion(
@@ -1760,13 +1821,14 @@ struct ToolBatchStatus {
 
 /// Convert a Pkl-shaped tool spec to the runtime execution type.
 fn convert_tool_spec(spec: &pkl::ToolSpec, global_exclude: &[String]) -> ToolSpec {
-    let phases = ordered_phases(spec)
+    let phases: Vec<ToolPhase> = ordered_phases(spec)
         .into_iter()
         .map(convert_phase)
         .collect();
 
     let mut exclude = global_exclude.to_vec();
     exclude.extend(spec.files.exclude.clone());
+    let workflows = convert_workflows(spec, &phases);
 
     ToolSpec {
         id: spec.id.clone(),
@@ -1778,10 +1840,130 @@ fn convert_tool_spec(spec: &pkl::ToolSpec, global_exclude: &[String]) -> ToolSpe
             exclude,
         },
         workspace_indicator: spec.workspace_indicator.clone(),
+        workflows,
         phases,
         messages: convert_messages(&spec.messages),
         diagnostics_directory: spec.diagnostics.directory.clone(),
         enabled: spec.enabled,
+    }
+}
+
+fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWorkflow> {
+    if !spec.workflows.is_empty() {
+        return ordered_workflows(spec)
+            .into_iter()
+            .map(|(id, workflow)| ToolWorkflow {
+                id: id.clone(),
+                check: workflow.check.as_ref().map(|command| {
+                    convert_workflow_command(format!("{id}.check"), command, PhaseMode::Verify)
+                }),
+                remedy: workflow.remedy.as_ref().map(|command| {
+                    convert_workflow_command(format!("{id}.remedy"), command, PhaseMode::Fix)
+                }),
+                check_scope: match workflow.check_scope {
+                    pkl::CheckScope::TargetFiles => CheckScope::TargetFiles,
+                    pkl::CheckScope::Workspace => CheckScope::Workspace,
+                },
+                invocation: match workflow.invocation {
+                    pkl::InvocationGranularity::PerFile => InvocationGranularity::PerFile,
+                    pkl::InvocationGranularity::Batch => InvocationGranularity::Batch,
+                    pkl::InvocationGranularity::Workspace => InvocationGranularity::Workspace,
+                },
+                compatibility_translation: false,
+                enabled: workflow.enabled,
+            })
+            .collect();
+    }
+
+    // Compatibility translation for the existing immediate-runner phase
+    // shape. Every mutator becomes a separate deferred workflow paired with
+    // the last enabled verifier. Mutating-only tools remain explicitly marked
+    // and are rejected as operationally unverifiable after one compatibility
+    // remedy pass; Item 8 migrates all builtins away from that fallback.
+    let verifier = phases
+        .iter()
+        .rev()
+        .find(|phase| phase.enabled && phase.is_verifier())
+        .cloned();
+    let mut workflows = phases
+        .iter()
+        .filter(|phase| phase.enabled && !phase.is_verifier())
+        .map(|remedy| ToolWorkflow {
+            id: remedy.id.clone(),
+            check: verifier.clone(),
+            remedy: Some(remedy.clone()),
+            check_scope: if spec.workspace_indicator.is_some()
+                && !remedy.args.iter().any(|arg| {
+                    matches!(
+                        arg,
+                        CommandArgTemplate::Files | CommandArgTemplate::WorkspaceFiles
+                    )
+                }) {
+                CheckScope::Workspace
+            } else {
+                CheckScope::TargetFiles
+            },
+            invocation: InvocationGranularity::Batch,
+            compatibility_translation: true,
+            enabled: true,
+        })
+        .collect::<Vec<_>>();
+    if workflows.is_empty() {
+        workflows.extend(
+            phases
+                .iter()
+                .filter(|phase| phase.enabled && phase.is_verifier())
+                .cloned()
+                .map(|check| ToolWorkflow {
+                    id: check.id.clone(),
+                    check: Some(check),
+                    remedy: None,
+                    check_scope: if spec.workspace_indicator.is_some() {
+                        CheckScope::Workspace
+                    } else {
+                        CheckScope::TargetFiles
+                    },
+                    invocation: InvocationGranularity::Batch,
+                    compatibility_translation: true,
+                    enabled: true,
+                }),
+        );
+    }
+    workflows
+}
+
+fn ordered_workflows(spec: &pkl::ToolSpec) -> Vec<(&String, &pkl::Workflow)> {
+    let mut seen = BTreeSet::new();
+    let mut workflows = Vec::new();
+    for id in &spec.workflow_order {
+        if let Some(workflow) = spec.workflows.get(id) {
+            if seen.insert(id.clone()) {
+                workflows.push((id, workflow));
+            }
+        }
+    }
+    workflows.extend(
+        spec.workflows
+            .iter()
+            .filter(|(id, _)| !seen.contains(id.as_str())),
+    );
+    workflows
+}
+
+fn convert_workflow_command(
+    id: String,
+    command: &pkl::WorkflowCommand,
+    mode: PhaseMode,
+) -> ToolPhase {
+    ToolPhase {
+        id,
+        mode,
+        program: command.program.clone(),
+        args: command.argv.iter().map(convert_argv_element).collect(),
+        exit_codes: convert_exit_codes(&command.exit_codes),
+        writes: convert_writes(command.writes),
+        extra_args: command.extra_args.clone(),
+        enabled: true,
     }
 }
 

@@ -95,3 +95,47 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 2. The staged engine can emit `ToolReport` values directly without changing native lowering.
+
+## Item 2 — Redesign deferred tool workflows around check/fix/final-check
+
+Outcome:
+
+- Added additive Pkl/Rust `workflows` and `workflowOrder` fields. A workflow has an authoritative non-mutating check, optional remedy, target/workspace invalidation scope, and per-file/batch/workspace invocation granularity.
+- Replaced the Stop-time mutator-first loop with a global staged engine: all initial checks run first, only dirty workflows receive one remedy, snapshot-discovered writes invalidate intersecting checks, and final checks run after all remedies.
+- Check stages retain bounded parallelism and deterministic result/log order. Remedies remain ordered to avoid concurrent writers.
+- Final issues become manual fixes; check/remedy spawn and exit failures remain operational; failed remedies retain exact changed files.
+
+Public API/config/state changes:
+
+- Added `Workflow`, `WorkflowCommand`, `CheckScope`, and `InvocationGranularity` to `hookkit-pkl-config`.
+- Added matching `ToolWorkflow`, `CheckScope`, and `InvocationGranularity` runner types.
+- No persisted-state change.
+
+Compatibility decision:
+
+- Immediate PostToolUse continues to execute `phases` without reinterpretation.
+- Deferred configs with no explicit workflows are compatibility-translated: mutators pair with the last enabled verifier, while read-only tools become check-only workflows.
+- A legacy mutating-only workflow is run at most once but reported as operationally unverifiable because it has no authoritative final check. Item 8 migrates all six affected builtins before release.
+- Explicit workflow checks that declare writes, remedies with no declared write scope, missing checks, and unknown workflow-order entries fail validation before an external command runs.
+
+Focused validation:
+
+- `cargo test -p hookkit-tool-runner --all-targets` (25 unit tests passed; real-tool lane ignored by design)
+- `cargo test -p hookkit-pkl-config --all-targets` (29 tests passed with Pkl available)
+- `cargo test -p hookkit-runtime --test integration` (37 tests passed, including the existing three Stop scenarios)
+- `cargo clippy -p hookkit-tool-runner -p hookkit-pkl-config --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+Known gaps:
+
+- Builtins still use the compatibility translation until Item 8, including Ruff's currently insufficient lint-only verifier for formatting.
+- Command artifacts are still combined per tool for compatibility; Item 4 writes every check/remedy/final-check independently.
+
+Commit/PR:
+
+- This item is committed as the staged-workflow review unit.
+
+Next item readiness:
+
+- Ready for Item 3. The per-file result now supplies the exact disposition sets needed for retry entries and handled baselines.

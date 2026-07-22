@@ -4,7 +4,10 @@
 use hookkit_pkl_config::merge::merge_chain;
 use hookkit_pkl_config::{
     evaluate_pkl_source,
-    schema::{FileActivityVcsFallback, MissingToolPolicy},
+    schema::{
+        CheckScope, FileActivityVcsFallback, InvocationGranularity, MissingToolPolicy,
+        WriteBehavior,
+    },
 };
 
 fn pkl_available() -> bool {
@@ -50,6 +53,56 @@ settings {
     assert_eq!(activity.timestamp_tolerance_millis, 750);
     assert_eq!(activity.max_entries, 1234);
     assert_eq!(activity.ignored_directory_names, vec![".git", "vendor"]);
+}
+
+#[test]
+fn deferred_workflow_schema_round_trips_structured_commands() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+
+tools {
+  ["example"] = new ToolSpec {
+    id = "example"
+    displayName = "Example"
+    executable = "example"
+    files { include = new Listing { "**/*.rs" } }
+    workflows {
+      ["lint"] = new Workflow {
+        check = new WorkflowCommand {
+          argv = new Listing { "check"; new Files {} }
+          exitCodes { issues = new Listing { 1 } }
+        }
+        remedy = new WorkflowCommand {
+          argv = new Listing { "fix"; new Files {} }
+          writes = "target-files"
+        }
+        checkScope = "workspace"
+        invocation = "per-file"
+      }
+    }
+    workflowOrder = new Listing { "lint" }
+  }
+}
+run = new Listing { "example" }
+"#,
+    )
+    .expect("workflow config");
+
+    let tool = config.tools.get("example").expect("tool");
+    assert_eq!(tool.workflow_order, vec!["lint"]);
+    let workflow = tool.workflows.get("lint").expect("workflow");
+    assert_eq!(workflow.check_scope, CheckScope::Workspace);
+    assert_eq!(workflow.invocation, InvocationGranularity::PerFile);
+    assert_eq!(
+        workflow.remedy.as_ref().expect("remedy").writes,
+        WriteBehavior::TargetFiles
+    );
+    assert_eq!(
+        workflow.check.as_ref().expect("check").exit_codes.issues,
+        vec![1]
+    );
 }
 
 #[test]
