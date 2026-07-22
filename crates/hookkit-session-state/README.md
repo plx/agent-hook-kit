@@ -237,7 +237,7 @@ and rename, and the configured root itself may not be a symlink.
 ## Batched formatter/linter mechanics
 
 `hookkit-file-activity` builds on these primitives with provenance-bearing
-evidence and gap events. `session-modified-file-tracker` appends those events
+evidence and gap events. The shipped `file-activity-agent-hook` appends those events
 to the windowed `agent-hook-kit.file-activity` entity. At turn completion,
 `turn-completion-agent-hook`:
 

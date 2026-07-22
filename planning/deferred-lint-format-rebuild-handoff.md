@@ -313,3 +313,46 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 7. Deferred execution and reporting now produce final native behavior for every supported turn-completion harness.
+
+## Item 7 — Promote and consolidate the file-activity observer
+
+Outcome:
+
+- Added the shipped `file-activity-agent-hook` binary to `hookkit-tool-runner` beside session start and turn completion. It is a quiet aligned PostToolUse observer for Claude, Codex, and Gemini.
+- The binary delegates all structured writer, patch, shell-write, read-only, and gap analysis to `hookkit-file-activity::observe_post_tool`; no extraction logic was copied.
+- Converted `session-modified-file-tracker` into a thin compatibility wrapper around the shipped library entry point.
+- Removed the immediate runner's recursive open-payload discovery implementation. Immediate exact candidates now come from the same shared file-activity/tool-access analysis path.
+
+Public API/config/state changes:
+
+- `hookkit-tool-runner` exports `FileActivityCli`, `parse_file_activity_args`, and `run_file_activity_observer`, and installs the new binary target.
+- Observer, session-start, and turn-completion CLIs accept consistent `--claude|--codex|--gemini` and `--state-dir` forms plus `--harness=...` and `--state-dir=...` compatibility aliases. Turn completion continues to accept `--config` and now also accepts `--config=...`.
+- No file-activity or session-state schema versions changed.
+
+Compatibility decision:
+
+- The old example executable and its `--harness=claude|codex|gemini` invocation remain available, but new installations bind `file-activity-agent-hook`.
+- Exact native no-op responses remain `{}` for all three supported post-tool harnesses; evidence and gaps are persisted without stdout/stderr chatter.
+- Antigravity remains Stop-only because its PostToolUse payload lacks the tool call and arguments. Documentation explicitly describes its mtime-only default observation path and optional Git-dirty fallback.
+
+Focused validation:
+
+- `cargo test -p hookkit-file-activity --all-targets` (17 passed)
+- `cargo test -p hookkit-tool-runner --all-targets` (35 unit tests passed; real-tool lane ignored by design)
+- `cargo test -p session-modified-file-tracker --all-targets` (build and zero-test compatibility target passed)
+- `cargo test -p hookkit-runtime --test integration` (49 passed)
+- `cargo clippy -p hookkit-tool-runner -p hookkit-runtime -p hookkit-file-activity -p hookkit-session-state -p session-modified-file-tracker --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+Known gaps:
+
+- The embedded catalog still contains legacy phase-only entries, including mutating-only tools whose deferred compatibility translation cannot prove a clean final state. Item 8 migrates and audits the full catalog.
+
+Commit/PR:
+
+- This item is ready to commit as the bundled observer and shared-analysis migration review unit.
+
+Next item readiness:
+
+- Ready for Item 8. The complete deferred executable suite is now shipped and its producer/consumer state contract is exercised end to end.

@@ -513,6 +513,28 @@ fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u
     serde_json::to_vec(&fixture).unwrap()
 }
 
+fn codex_post_tool_case(
+    project: &Path,
+    tool_name: &str,
+    tool_use_id: &str,
+    tool_input: serde_json::Value,
+) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "session_id": "codex-ruff-test",
+        "transcript_path": "/tmp/codex-ruff-test.jsonl",
+        "cwd": project.to_string_lossy(),
+        "hook_event_name": "PostToolUse",
+        "model": "gpt-test",
+        "turn_id": "codex-ruff-turn",
+        "permission_mode": "default",
+        "tool_name": tool_name,
+        "tool_use_id": tool_use_id,
+        "tool_input": tool_input,
+        "tool_response": {"exit_code": 0}
+    }))
+    .unwrap()
+}
+
 fn turn_completion_fixture(harness: &str, project: &Path) -> Vec<u8> {
     let fixture = match harness {
         "claude" => serde_json::json!({
@@ -678,6 +700,7 @@ fn ensure_built(binary: &str) {
 
     let package = match binary {
         "post-tool-use-agent-hook"
+        | "file-activity-agent-hook"
         | "turn-completion-agent-hook"
         | "session-start-state-agent-hook" => "hookkit-tool-runner",
         _ => binary,
@@ -1185,7 +1208,7 @@ fn forbidden_file_guard_emits_gemini_and_antigravity_native_denies() {
 // --- session-modified-file-tracker ---
 
 #[test]
-fn session_modified_file_tracker_records_all_supported_posttool_paths() {
+fn file_activity_agent_hook_records_all_supported_posttool_paths() {
     let project = temp_project("session-modified-file-tracker");
     let state_dir = project.join("state");
     let state_arg = state_dir.to_string_lossy().into_owned();
@@ -1199,7 +1222,7 @@ fn session_modified_file_tracker_records_all_supported_posttool_paths() {
         let fixture = post_tool_use_fixture(harness, &project, "src/main.rs");
         let harness_arg = format!("--harness={harness}");
         let output = run_example(
-            "session-modified-file-tracker",
+            "file-activity-agent-hook",
             &fixture,
             &[harness_arg.as_str(), "--state-dir", state_arg.as_str()],
         );
@@ -1232,6 +1255,192 @@ fn session_modified_file_tracker_records_all_supported_posttool_paths() {
             })
             .unwrap();
     }
+
+    let compatibility = run_example(
+        "session-modified-file-tracker",
+        &post_tool_use_fixture("codex", &project, "src/compatibility.rs"),
+        &["--harness=codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(compatibility.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&compatibility.stdout).unwrap(),
+        serde_json::json!({})
+    );
+}
+
+#[test]
+fn file_activity_observer_persists_shared_writer_patch_shell_and_gap_analysis_quietly() {
+    let project = temp_project("file-activity-shared-analysis");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let cases = [
+        (
+            "Write",
+            "writer",
+            serde_json::json!({"file_path": "src/writer.rs", "content": "fn main() {}"}),
+        ),
+        (
+            "apply_patch",
+            "patch",
+            serde_json::json!({
+                "patch": "*** Begin Patch\n*** Update File: src/patched.rs\n@@\n-old\n+new\n*** End Patch"
+            }),
+        ),
+        (
+            "Bash",
+            "shell",
+            serde_json::json!({"command": "echo ok > src/shell.txt"}),
+        ),
+        (
+            "Read",
+            "read-only",
+            serde_json::json!({"file_path": "src/read-only.rs"}),
+        ),
+        (
+            "Bash",
+            "dynamic-gap",
+            serde_json::json!({"command": "echo ok > src/known.txt; mystery $TARGET"}),
+        ),
+    ];
+    for (tool, id, input) in cases {
+        let output = run_example(
+            "file-activity-agent-hook",
+            &codex_post_tool_case(&project, tool, id, input),
+            &["--codex", "--state-dir", state_arg.as_str()],
+        );
+        assert!(
+            output.status.success(),
+            "{id}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+            serde_json::json!({})
+        );
+        assert!(output.stderr.is_empty(), "{id} observer must remain quiet");
+    }
+
+    let state = hookkit_session_state::SessionState::open(
+        hookkit_core::HarnessId::CODEX,
+        hookkit_session_state::SessionIdentity::Session("codex-ruff-test".into()),
+        hookkit_session_state::StateRoot::new(&state_dir),
+    )
+    .unwrap();
+    let store = hookkit_file_activity::FileActivityStore::from_state(state).unwrap();
+    store
+        .pending()
+        .with_entity(|view| {
+            let targets = view.state().targets();
+            for relative in [
+                "src/writer.rs",
+                "src/patched.rs",
+                "src/shell.txt",
+                "src/known.txt",
+            ] {
+                assert!(
+                    targets.contains(&hookkit_file_activity::FileActivityTarget::exact(
+                        hookkit_core::Utf8PathBuf::from_path_buf(project.join(relative)).unwrap()
+                    ))
+                );
+            }
+            assert!(
+                !targets.contains(&hookkit_file_activity::FileActivityTarget::exact(
+                    hookkit_core::Utf8PathBuf::from_path_buf(project.join("src/read-only.rs"))
+                        .unwrap()
+                ))
+            );
+            assert!(view.state().has_gaps());
+            let evidence = view
+                .events()
+                .iter()
+                .filter_map(|record| match record.event() {
+                    hookkit_file_activity::FileActivityEvent::Evidence(evidence) => Some(evidence),
+                    hookkit_file_activity::FileActivityEvent::Gap(_)
+                    | hookkit_file_activity::FileActivityEvent::Retry(_) => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(evidence.iter().any(|item| {
+                item.source == hookkit_file_activity::FileActivitySource::StructuredToolInput
+            }));
+            assert!(
+                evidence
+                    .iter()
+                    .any(|item| item.source == hookkit_file_activity::FileActivitySource::Patch)
+            );
+            assert!(evidence.iter().any(|item| {
+                item.source == hookkit_file_activity::FileActivitySource::ShellInference
+            }));
+            Ok(hookkit_session_state::EntityOutcome::retain(()))
+        })
+        .unwrap();
+}
+
+#[test]
+fn bundled_start_observer_and_turn_runner_share_one_explicit_state_root() {
+    require_pkl!();
+    let project = temp_project("bundled-deferred-suite-state-root");
+    let state_dir = project.join("shared-state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    let start = serde_json::to_vec(&serde_json::json!({
+        "session_id": "codex-ruff-test",
+        "transcript_path": "/tmp/codex-ruff-test.jsonl",
+        "cwd": project.to_string_lossy(),
+        "hook_event_name": "SessionStart",
+        "model": "gpt-test",
+        "permission_mode": "default",
+        "source": "startup"
+    }))
+    .unwrap();
+    let started = run_example(
+        "session-start-state-agent-hook",
+        &start,
+        &["--harness=codex", &format!("--state-dir={state_arg}")],
+    );
+    assert!(started.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&started.stdout).unwrap(),
+        serde_json::json!({})
+    );
+
+    let file = project.join("src/clean.py");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "print('clean')\n").unwrap();
+    let observed = run_example(
+        "file-activity-agent-hook",
+        &post_tool_use_fixture("codex", &project, "src/clean.py"),
+        &["--harness=codex", &format!("--state-dir={state_arg}")],
+    );
+    assert!(observed.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&observed.stdout).unwrap(),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
+        1
+    );
+
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--harness=codex", &format!("--state-dir={state_arg}")],
+    );
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert!(
+        response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("Checked 1 clean file")
+    );
+    assert_eq!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
+        0
+    );
+    let summary = only_summary(&state_dir);
+    assert!(Path::new(summary["run"]["stateDirectory"].as_str().unwrap()).starts_with(&state_dir));
 }
 
 // --- turn-completion-agent-hook consuming session state ---
@@ -1470,7 +1679,7 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     std::fs::write(&file, "import os  # unused_import\nprint('needs_format')\n").unwrap();
 
     let tracked = run_example(
-        "session-modified-file-tracker",
+        "file-activity-agent-hook",
         &post_tool_use_fixture("claude", &project, "src/dirty.py"),
         &["--harness=claude", "--state-dir", state_arg.as_str()],
     );
@@ -1544,7 +1753,7 @@ fn invalid_deferred_template_syntax_fails_before_any_remedy_runs() {
     let file = project.join("src/dirty.py");
     std::fs::write(&file, "import os  # unused_import\n").unwrap();
     let tracked = run_example(
-        "session-modified-file-tracker",
+        "file-activity-agent-hook",
         &post_tool_use_fixture("codex", &project, "src/dirty.py"),
         &["--harness=codex", "--state-dir", state_arg.as_str()],
     );
@@ -1586,7 +1795,7 @@ fn deferred_template_render_failure_is_a_durable_operational_error() {
     std::fs::create_dir_all(project.join("src")).unwrap();
     std::fs::write(project.join("src/clean.py"), "print('clean')\n").unwrap();
     let tracked = run_example(
-        "session-modified-file-tracker",
+        "file-activity-agent-hook",
         &post_tool_use_fixture("codex", &project, "src/clean.py"),
         &["--harness=codex", "--state-dir", state_arg.as_str()],
     );
@@ -1683,7 +1892,7 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
     std::fs::write(&file, "print(manual_issue)\n").unwrap();
 
     let tracked = run_example(
-        "session-modified-file-tracker",
+        "file-activity-agent-hook",
         &post_tool_use_fixture("codex", &project, "src/broken.py"),
         &["--harness=codex", "--state-dir", state_arg.as_str()],
     );
@@ -1799,7 +2008,7 @@ fn turn_completion_selectively_discharges_clean_and_retries_manual_files() {
 
     for file in ["src/clean.py", "src/manual.py"] {
         let tracked = run_example(
-            "session-modified-file-tracker",
+            "file-activity-agent-hook",
             &post_tool_use_fixture("codex", &project, file),
             &["--harness=codex", "--state-dir", state_arg.as_str()],
         );
@@ -1899,7 +2108,7 @@ fn turn_completion_operational_failure_retries_only_affected_files() {
 
     for file in ["src/clean.py", "src/operational.rs"] {
         let tracked = run_example(
-            "session-modified-file-tracker",
+            "file-activity-agent-hook",
             &post_tool_use_fixture("codex", &project, file),
             &["--harness=codex", "--state-dir", state_arg.as_str()],
         );
@@ -1988,7 +2197,7 @@ fn turn_completion_links_distinct_tool_artifacts_to_one_file() {
     std::fs::create_dir_all(project.join("src")).unwrap();
     std::fs::write(project.join("src/shared.py"), "print('clean')\n").unwrap();
     let tracked = run_example(
-        "session-modified-file-tracker",
+        "file-activity-agent-hook",
         &post_tool_use_fixture("codex", &project, "src/shared.py"),
         &["--harness=codex", "--state-dir", state_arg.as_str()],
     );
@@ -2034,7 +2243,7 @@ fn turn_completion_reuses_one_batch_artifact_for_multiple_files() {
     std::fs::write(project.join("src/second.py"), "print('second')\n").unwrap();
     for file in ["src/first.py", "src/second.py"] {
         let tracked = run_example(
-            "session-modified-file-tracker",
+            "file-activity-agent-hook",
             &post_tool_use_fixture("codex", &project, file),
             &["--harness=codex", "--state-dir", state_arg.as_str()],
         );

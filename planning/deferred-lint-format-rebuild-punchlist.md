@@ -545,22 +545,22 @@ The Stop runner is shipped by `hookkit-tool-runner`, but the producer it depends
 
 Tasks:
 
-- [ ] Add a shipped quiet file-activity observer binary alongside the Stop and session-start binaries, or provide an equally simple bundled subcommand design.
-- [ ] Use aligned `PostToolUse` and `hookkit-file-activity::observe_post_tool`; do not copy structured/patch/shell extraction into the binary.
-- [ ] Preserve exact native no-op output for Claude, Codex, and Gemini.
-- [ ] Preserve current Antigravity limitations and document mtime-only fallback behavior where applicable.
-- [ ] Standardize CLI harness/config/state flags across the three binaries while retaining reasonable compatibility aliases for the example invocation.
-- [ ] Convert the existing example into a thin usage demonstration or retire it with a documented migration.
-- [ ] Document the three required hook bindings: session start when available, post-tool activity, and turn completion.
-- [ ] Ensure every component uses the same state-root resolution.
-- [ ] Remove or migrate the immediate runner's older private path-discovery duplication if it remains part of the supported product path.
+- [x] Add a shipped quiet file-activity observer binary alongside the Stop and session-start binaries, or provide an equally simple bundled subcommand design.
+- [x] Use aligned `PostToolUse` and `hookkit-file-activity::observe_post_tool`; do not copy structured/patch/shell extraction into the binary.
+- [x] Preserve exact native no-op output for Claude, Codex, and Gemini.
+- [x] Preserve current Antigravity limitations and document mtime-only fallback behavior where applicable.
+- [x] Standardize CLI harness/config/state flags across the three binaries while retaining reasonable compatibility aliases for the example invocation.
+- [x] Convert the existing example into a thin usage demonstration or retire it with a documented migration.
+- [x] Document the three required hook bindings: session start when available, post-tool activity, and turn completion.
+- [x] Ensure every component uses the same state-root resolution.
+- [x] Remove or migrate the immediate runner's older private path-discovery duplication if it remains part of the supported product path.
 
 Required tests:
 
-- [ ] stdin/stdout observer fixture for every supported post-tool harness;
-- [ ] direct structured writer, patch, shell write, read-only tool, malformed/dynamic gap;
-- [ ] all three binaries coordinate through one explicit `--state-dir`;
-- [ ] observer remains quiet while persisting evidence and gaps.
+- [x] stdin/stdout observer fixture for every supported post-tool harness;
+- [x] direct structured writer, patch, shell write, read-only tool, malformed/dynamic gap;
+- [x] all three binaries coordinate through one explicit `--state-dir`;
+- [x] observer remains quiet while persisting evidence and gaps.
 
 Exit criteria:
 

@@ -73,3 +73,11 @@ The default coverage policy processes materialized files, requeues unresolved
 scopes and analyzer gaps, and exposes those gaps in the run summary without
 calling resolved files dirty. `strict` additionally blocks Stop while a gap is
 present. Both policies retain the unresolved evidence for a later attempt.
+
+The shipped producer is `file-activity-agent-hook` from
+`hookkit-tool-runner`. Bind it to Claude/Codex PostToolUse or Gemini AfterTool
+and give it the same `--state-dir` as `session-start-state-agent-hook` and
+`turn-completion-agent-hook`. The older `session-modified-file-tracker`
+example is only a compatibility wrapper around that library-owned observer.
+Antigravity has no supported post-tool producer because its payload omits the
+tool call and arguments; its Stop consumer relies on mtime reconciliation.

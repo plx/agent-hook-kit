@@ -28,7 +28,8 @@ use hookkit_common::{
 use hookkit_core::{HarnessId, HookkitError, RuntimeContext, Utf8PathBuf};
 use hookkit_file_activity::{
     FileActivityEvent, FileActivityStore, FileActivityTarget, PendingFileActivity,
-    ReconciliationOptions, ResolveOptions, VcsFallback, reconcile, resolve_files,
+    ReconciliationOptions, ResolveOptions, VcsFallback, observe_post_tool as observe_file_activity,
+    reconcile, resolve_files,
 };
 use hookkit_pkl_config::schema as pkl;
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
@@ -53,6 +54,7 @@ const DEFAULT_ISSUES_CHANGED_AGENT: &str = "{{ tool }} changed {{ changed_files 
 const BINARY_NAME: &str = "post-tool-use-agent-hook";
 const TURN_COMPLETION_BINARY_NAME: &str = "turn-completion-agent-hook";
 const SESSION_START_BINARY_NAME: &str = "session-start-state-agent-hook";
+const FILE_ACTIVITY_BINARY_NAME: &str = "file-activity-agent-hook";
 const BATCHED_TOOLS_FAMILY: &str = "agent-hook-kit.batched-tools";
 
 // ----------------------------------------------------------------------------
@@ -366,6 +368,66 @@ pub struct SessionStartCli {
     pub state_dir: Option<PathBuf>,
 }
 
+/// CLI options for the quiet post-tool file-activity observer.
+#[derive(Debug, Clone)]
+pub struct FileActivityCli {
+    pub harness: HarnessId,
+    pub state_dir: Option<PathBuf>,
+}
+
+/// Parse a supported PostToolUse harness and optional shared state root.
+/// `--harness=claude|codex|gemini` remains a compatibility alias for the
+/// former example binary.
+#[allow(clippy::result_unit_err)]
+pub fn parse_file_activity_args() -> Result<FileActivityCli, ()> {
+    let mut harness = None;
+    let mut state_dir = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
+            "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
+            "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
+            "--harness" => {
+                let Some(value) = args.next() else {
+                    eprintln!("{}", file_activity_usage());
+                    return Err(());
+                };
+                harness = Some(set_harness(harness, post_tool_harness(&value)?)?);
+            }
+            "--state-dir" => {
+                let Some(path) = args.next() else {
+                    eprintln!("{}", file_activity_usage());
+                    return Err(());
+                };
+                state_dir = Some(PathBuf::from(path));
+            }
+            "--help" | "-h" => {
+                eprintln!("{}", file_activity_usage());
+                return Err(());
+            }
+            _ if arg.starts_with("--harness=") => {
+                harness = Some(set_harness(
+                    harness,
+                    post_tool_harness(arg.trim_start_matches("--harness="))?,
+                )?);
+            }
+            _ if arg.starts_with("--state-dir=") => {
+                state_dir = Some(PathBuf::from(arg.trim_start_matches("--state-dir=")));
+            }
+            _ => {
+                eprintln!("{}", file_activity_usage());
+                return Err(());
+            }
+        }
+    }
+    let Some(harness) = harness else {
+        eprintln!("{}", file_activity_usage());
+        return Err(());
+    };
+    Ok(FileActivityCli { harness, state_dir })
+}
+
 /// Parse `--claude|--codex|--gemini [--config PATH]` from `std::env::args`.
 #[allow(clippy::result_unit_err)]
 pub fn parse_args() -> Result<Cli, ()> {
@@ -378,6 +440,13 @@ pub fn parse_args() -> Result<Cli, ()> {
             "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
             "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
+            "--harness" => {
+                let Some(value) = args.next() else {
+                    eprintln!("{}", usage());
+                    return Err(());
+                };
+                harness = Some(set_harness(harness, post_tool_harness(&value)?)?);
+            }
             "--config" => {
                 let Some(path) = args.next() else {
                     eprintln!("{}", usage());
@@ -388,6 +457,15 @@ pub fn parse_args() -> Result<Cli, ()> {
             "--help" | "-h" => {
                 eprintln!("{}", usage());
                 return Err(());
+            }
+            _ if arg.starts_with("--harness=") => {
+                harness = Some(set_harness(
+                    harness,
+                    post_tool_harness(arg.trim_start_matches("--harness="))?,
+                )?);
+            }
+            _ if arg.starts_with("--config=") => {
+                config_path = Some(PathBuf::from(arg.trim_start_matches("--config=")));
             }
             _ => {
                 eprintln!("{}", usage());
@@ -421,6 +499,13 @@ pub fn parse_turn_completion_args() -> Result<TurnCompletionCli, ()> {
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
             "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
             "--antigravity" => harness = Some(set_harness(harness, HarnessId::ANTIGRAVITY)?),
+            "--harness" => {
+                let Some(value) = args.next() else {
+                    eprintln!("{}", turn_completion_usage());
+                    return Err(());
+                };
+                harness = Some(set_harness(harness, turn_completion_harness(&value)?)?);
+            }
             "--config" => {
                 let Some(path) = args.next() else {
                     eprintln!("{}", turn_completion_usage());
@@ -438,6 +523,18 @@ pub fn parse_turn_completion_args() -> Result<TurnCompletionCli, ()> {
             "--help" | "-h" => {
                 eprintln!("{}", turn_completion_usage());
                 return Err(());
+            }
+            _ if arg.starts_with("--harness=") => {
+                harness = Some(set_harness(
+                    harness,
+                    turn_completion_harness(arg.trim_start_matches("--harness="))?,
+                )?);
+            }
+            _ if arg.starts_with("--config=") => {
+                config_path = Some(PathBuf::from(arg.trim_start_matches("--config=")));
+            }
+            _ if arg.starts_with("--state-dir=") => {
+                state_dir = Some(PathBuf::from(arg.trim_start_matches("--state-dir=")));
             }
             _ => {
                 eprintln!("{}", turn_completion_usage());
@@ -468,6 +565,13 @@ pub fn parse_session_start_args() -> Result<SessionStartCli, ()> {
             "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
             "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
+            "--harness" => {
+                let Some(value) = args.next() else {
+                    eprintln!("{}", session_start_usage());
+                    return Err(());
+                };
+                harness = Some(set_harness(harness, post_tool_harness(&value)?)?);
+            }
             "--state-dir" => {
                 let Some(path) = args.next() else {
                     eprintln!("{}", session_start_usage());
@@ -478,6 +582,15 @@ pub fn parse_session_start_args() -> Result<SessionStartCli, ()> {
             "--help" | "-h" => {
                 eprintln!("{}", session_start_usage());
                 return Err(());
+            }
+            _ if arg.starts_with("--harness=") => {
+                harness = Some(set_harness(
+                    harness,
+                    post_tool_harness(arg.trim_start_matches("--harness="))?,
+                )?);
+            }
+            _ if arg.starts_with("--state-dir=") => {
+                state_dir = Some(PathBuf::from(arg.trim_start_matches("--state-dir=")));
             }
             _ => {
                 eprintln!("{}", session_start_usage());
@@ -500,337 +613,61 @@ fn set_harness(current: Option<HarnessId>, next: HarnessId) -> Result<HarnessId,
     Ok(next)
 }
 
+fn post_tool_harness(value: &str) -> Result<HarnessId, ()> {
+    match value {
+        "claude" | "claude-code" => Ok(HarnessId::CLAUDE_CODE),
+        "codex" => Ok(HarnessId::CODEX),
+        "gemini" | "gemini-cli" => Ok(HarnessId::GEMINI_CLI),
+        _ => Err(()),
+    }
+}
+
+fn turn_completion_harness(value: &str) -> Result<HarnessId, ()> {
+    match value {
+        "antigravity" => Ok(HarnessId::ANTIGRAVITY),
+        _ => post_tool_harness(value),
+    }
+}
+
 fn usage() -> String {
-    format!("Usage: {BINARY_NAME} --claude|--codex|--gemini [--config PATH]")
+    format!(
+        "Usage: {BINARY_NAME} --claude|--codex|--gemini [--config PATH]\n       {BINARY_NAME} --harness=claude|codex|gemini [--config PATH]"
+    )
+}
+
+fn file_activity_usage() -> String {
+    format!(
+        "Usage: {FILE_ACTIVITY_BINARY_NAME} --claude|--codex|--gemini [--state-dir PATH]\n       {FILE_ACTIVITY_BINARY_NAME} --harness=claude|codex|gemini [--state-dir PATH]"
+    )
 }
 
 fn session_start_usage() -> String {
-    format!("Usage: {SESSION_START_BINARY_NAME} --claude|--codex|--gemini [--state-dir PATH]")
+    format!(
+        "Usage: {SESSION_START_BINARY_NAME} --claude|--codex|--gemini [--state-dir PATH]\n       {SESSION_START_BINARY_NAME} --harness=claude|codex|gemini [--state-dir PATH]"
+    )
 }
 
 fn turn_completion_usage() -> String {
     format!(
-        "Usage: {TURN_COMPLETION_BINARY_NAME} --claude|--codex|--gemini|--antigravity [--config PATH] [--state-dir PATH]"
+        "Usage: {TURN_COMPLETION_BINARY_NAME} --claude|--codex|--gemini|--antigravity [--config PATH] [--state-dir PATH]\n       {TURN_COMPLETION_BINARY_NAME} --harness=claude|codex|gemini|antigravity [--config PATH] [--state-dir PATH]"
     )
 }
 
 // ----------------------------------------------------------------------------
-// Runner-owned post-tool observation and path discovery
+// Shared immediate post-tool path discovery
 // ----------------------------------------------------------------------------
 
-/// The runner deliberately owns these best-effort interpretations of open tool
-/// payloads. They are workflow policy, not cross-harness protocol facts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ObservedToolStatus {
-    Success,
-    Failure,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy)]
-// Path selection currently needs only `value`; the rest of the observation is
-// kept here because result interpretation is runner policy and is exercised by
-// runner tests rather than exported from `hookkit-common`.
-#[allow(dead_code)]
-struct ToolResultObservation<'a> {
-    value: Option<JsonPayload<'a>>,
-    status: ObservedToolStatus,
-    stdout: Option<&'a str>,
-    stderr: Option<&'a str>,
-    exit_code: Option<i64>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PostToolObservation<'a> {
-    tool_name: Option<&'a str>,
-    tool_input: Option<JsonPayload<'a>>,
-    result: ToolResultObservation<'a>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum JsonPayload<'a> {
-    Value(&'a serde_json::Value),
-    Object(&'a serde_json::Map<String, serde_json::Value>),
-}
-
-fn observe_post_tool(input: &PostToolUseInput) -> Option<PostToolObservation<'_>> {
-    let (tool_name, tool_input, tool_result) = match input {
-        PostToolUseInput::Claude(event) => (
-            event.tool_name.as_str(),
-            JsonPayload::Value(&event.tool_input),
-            JsonPayload::Value(&event.tool_response),
-        ),
-        PostToolUseInput::Codex(event) => (
-            event.tool_name.as_str(),
-            JsonPayload::Value(&event.tool_input),
-            JsonPayload::Value(&event.tool_response),
-        ),
-        PostToolUseInput::Gemini(event) => (
-            event.tool_name.as_str(),
-            JsonPayload::Object(&event.tool_input),
-            JsonPayload::Object(&event.tool_response),
-        ),
-        PostToolUseInput::Antigravity(_) => return None,
-        _ => return None,
-    };
-
-    Some(PostToolObservation {
-        tool_name: Some(tool_name),
-        tool_input: Some(tool_input),
-        result: observe_tool_result(Some(tool_result)),
-    })
-}
-
-fn observe_tool_result(value: Option<JsonPayload<'_>>) -> ToolResultObservation<'_> {
-    ToolResultObservation {
-        value,
-        status: infer_tool_status(value),
-        stdout: find_result_string(value, &["stdout", "standardOutput"]),
-        stderr: find_result_string(value, &["stderr", "standardError"]),
-        exit_code: find_result_i64(value, &["exitCode", "exit_code", "code"]),
-    }
-}
-
-fn infer_tool_status(value: Option<JsonPayload<'_>>) -> ObservedToolStatus {
-    let Some(value) = value else {
-        return ObservedToolStatus::Unknown;
-    };
-
-    if let Some(success) = find_result_bool(Some(value), &["success", "ok"]) {
-        return if success {
-            ObservedToolStatus::Success
-        } else {
-            ObservedToolStatus::Failure
-        };
-    }
-
-    if let Some(exit_code) = find_result_i64(Some(value), &["exitCode", "exit_code"]) {
-        return if exit_code == 0 {
-            ObservedToolStatus::Success
-        } else {
-            ObservedToolStatus::Failure
-        };
-    }
-
-    ObservedToolStatus::Unknown
-}
-
-fn find_result_string<'a>(value: Option<JsonPayload<'a>>, keys: &[&str]) -> Option<&'a str> {
-    match value? {
-        JsonPayload::Value(serde_json::Value::Object(map)) | JsonPayload::Object(map) => {
-            for key in keys {
-                if let Some(found) = map.get(*key).and_then(serde_json::Value::as_str) {
-                    return Some(found);
-                }
-            }
-            map.values()
-                .find_map(|nested| find_result_string(Some(JsonPayload::Value(nested)), keys))
-        }
-        JsonPayload::Value(serde_json::Value::Array(values)) => values
-            .iter()
-            .find_map(|nested| find_result_string(Some(JsonPayload::Value(nested)), keys)),
-        _ => None,
-    }
-}
-
-fn find_result_bool(value: Option<JsonPayload<'_>>, keys: &[&str]) -> Option<bool> {
-    match value? {
-        JsonPayload::Value(serde_json::Value::Object(map)) | JsonPayload::Object(map) => {
-            for key in keys {
-                if let Some(found) = map.get(*key).and_then(serde_json::Value::as_bool) {
-                    return Some(found);
-                }
-            }
-            map.values()
-                .find_map(|nested| find_result_bool(Some(JsonPayload::Value(nested)), keys))
-        }
-        JsonPayload::Value(serde_json::Value::Array(values)) => values
-            .iter()
-            .find_map(|nested| find_result_bool(Some(JsonPayload::Value(nested)), keys)),
-        _ => None,
-    }
-}
-
-fn find_result_i64(value: Option<JsonPayload<'_>>, keys: &[&str]) -> Option<i64> {
-    match value? {
-        JsonPayload::Value(serde_json::Value::Object(map)) | JsonPayload::Object(map) => {
-            for key in keys {
-                if let Some(found) = map.get(*key).and_then(serde_json::Value::as_i64) {
-                    return Some(found);
-                }
-            }
-            map.values()
-                .find_map(|nested| find_result_i64(Some(JsonPayload::Value(nested)), keys))
-        }
-        JsonPayload::Value(serde_json::Value::Array(values)) => values
-            .iter()
-            .find_map(|nested| find_result_i64(Some(JsonPayload::Value(nested)), keys)),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DiscoveredPathRole {
-    ModifiedFile,
-    ReadFile,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DiscoveredPathSource {
-    ToolInput(&'static str),
-    ToolResult(&'static str),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DiscoveredPath {
-    absolute_path: PathBuf,
-    role: DiscoveredPathRole,
-    source: DiscoveredPathSource,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum OpenPayloadSource {
-    ToolInput,
-    ToolResult,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RawDiscoveredPath<'a> {
-    path: &'a str,
-    role: DiscoveredPathRole,
-    source: DiscoveredPathSource,
-}
-
-fn discover_modified_files(input: &PostToolUseInput, cwd: &Path) -> Vec<PathBuf> {
-    discover_path_candidates(input, cwd)
+fn discover_modified_files(input: &PostToolUseInput, context: &RuntimeContext<'_>) -> Vec<PathBuf> {
+    observe_file_activity(input, context)
+        .evidence()
+        .filter_map(|evidence| match &evidence.target {
+            FileActivityTarget::Path { path, .. } => Some(normalize_path(path.as_std_path())),
+            FileActivityTarget::Workspace { .. } => None,
+        })
+        .collect::<BTreeSet<_>>()
         .into_iter()
-        .filter(|candidate| candidate.role == DiscoveredPathRole::ModifiedFile)
-        .map(|candidate| candidate.absolute_path)
         .collect()
 }
-
-fn discover_path_candidates(input: &PostToolUseInput, cwd: &Path) -> Vec<DiscoveredPath> {
-    let Some(observation) = observe_post_tool(input) else {
-        return Vec::new();
-    };
-    let mut raw = Vec::new();
-    if let Some(tool_input) = observation.tool_input {
-        collect_open_payload_paths(
-            tool_input,
-            OpenPayloadSource::ToolInput,
-            observation.tool_name,
-            &mut raw,
-        );
-    }
-    if let Some(tool_result) = observation.result.value {
-        collect_open_payload_paths(
-            tool_result,
-            OpenPayloadSource::ToolResult,
-            observation.tool_name,
-            &mut raw,
-        );
-    }
-
-    let mut seen = BTreeSet::new();
-    let mut candidates = Vec::new();
-    for raw_candidate in raw {
-        let absolute_path = normalize_path(&absolute_from(Path::new(raw_candidate.path), cwd));
-        if !seen.insert(slash_path(&absolute_path)) {
-            continue;
-        }
-        candidates.push(DiscoveredPath {
-            absolute_path,
-            role: raw_candidate.role,
-            source: raw_candidate.source,
-        });
-    }
-    candidates
-}
-
-fn collect_open_payload_paths<'a>(
-    value: JsonPayload<'a>,
-    source: OpenPayloadSource,
-    tool_name: Option<&str>,
-    out: &mut Vec<RawDiscoveredPath<'a>>,
-) {
-    match value {
-        JsonPayload::Value(serde_json::Value::Object(map)) | JsonPayload::Object(map) => {
-            for (key, value) in map {
-                if let Some(path) = value.as_str().filter(|path| !path.trim().is_empty()) {
-                    if let Some(candidate) = path_candidate_from_field(key, path, source, tool_name)
-                    {
-                        out.push(candidate);
-                    }
-                }
-                collect_open_payload_paths(JsonPayload::Value(value), source, tool_name, out);
-            }
-        }
-        JsonPayload::Value(serde_json::Value::Array(values)) => {
-            for value in values {
-                collect_open_payload_paths(JsonPayload::Value(value), source, tool_name, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn path_candidate_from_field<'a>(
-    key: &str,
-    path: &'a str,
-    source: OpenPayloadSource,
-    tool_name: Option<&str>,
-) -> Option<RawDiscoveredPath<'a>> {
-    let is_target_field = matches!(
-        key,
-        "file_path" | "filePath" | "target_file" | "targetFile" | "absolute_path" | "absolutePath"
-    );
-    let is_path_field = key == "path";
-    if !is_target_field && !is_path_field {
-        return None;
-    }
-
-    let tool_writes = tool_name.is_some_and(is_known_file_writing_tool);
-    let role = match (source, is_target_field, is_path_field, tool_writes) {
-        (OpenPayloadSource::ToolInput, true, _, true)
-        | (OpenPayloadSource::ToolInput, false, true, true)
-        | (OpenPayloadSource::ToolResult, _, _, true) => DiscoveredPathRole::ModifiedFile,
-        (OpenPayloadSource::ToolInput, true, _, false)
-        | (OpenPayloadSource::ToolResult, true, _, false) => DiscoveredPathRole::ReadFile,
-        (OpenPayloadSource::ToolInput, false, true, false)
-        | (OpenPayloadSource::ToolResult, false, true, false) => return None,
-        _ => return None,
-    };
-
-    Some(RawDiscoveredPath {
-        path,
-        role,
-        source: match source {
-            OpenPayloadSource::ToolInput => DiscoveredPathSource::ToolInput(static_path_key(key)),
-            OpenPayloadSource::ToolResult => DiscoveredPathSource::ToolResult(static_path_key(key)),
-        },
-    })
-}
-
-fn static_path_key(key: &str) -> &'static str {
-    match key {
-        "file_path" => "file_path",
-        "filePath" => "filePath",
-        "target_file" => "target_file",
-        "targetFile" => "targetFile",
-        "absolute_path" => "absolute_path",
-        "absolutePath" => "absolutePath",
-        "path" => "path",
-        _ => "unknown",
-    }
-}
-
-fn is_known_file_writing_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "write_file" | "replace" | "save_file"
-    )
-}
-
 /// Run the full post-tool-use hook from parsed CLI args.
 pub fn run_runner(cli: Cli) -> std::process::ExitCode {
     hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PostToolUse, _>(
@@ -839,6 +676,44 @@ pub fn run_runner(cli: Cli) -> std::process::ExitCode {
             run_post_tool_input(input, environment, ctx, cli.config_path.as_deref())
         },
     )
+}
+
+/// Run the bundled quiet PostToolUse file-activity observer.
+pub fn run_file_activity_observer(cli: FileActivityCli) -> std::process::ExitCode {
+    hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PostToolUse, _>(
+        cli.harness,
+        move |input, _environment, ctx| {
+            let report = observe_file_activity(&input, ctx);
+            let state_root = cli
+                .state_dir
+                .as_deref()
+                .map(StateRoot::new)
+                .unwrap_or_default();
+            let store = FileActivityStore::ensure(ctx, state_root).map_err(activity_error)?;
+            let invocation = String::from_utf8_lossy(ctx.raw().bytes());
+            store
+                .append_report(&invocation, &report)
+                .map_err(activity_error)?;
+            post_tool_no_op(ctx.harness())
+        },
+    )
+}
+
+fn post_tool_no_op(harness: &HarnessId) -> hookkit_core::Result<PostToolUseOutput> {
+    match harness.as_str() {
+        "claude-code" => Ok(PostToolUseOutput::Claude(
+            hookkit_claude::protocol::PostToolUseOutput::no_op(),
+        )),
+        "codex" => Ok(PostToolUseOutput::Codex(
+            hookkit_codex::protocol::PostToolUseOutput::no_op(),
+        )),
+        "gemini-cli" => Ok(PostToolUseOutput::Gemini(
+            hookkit_gemini::protocol::AfterToolOutput::no_op(),
+        )),
+        _ => Err(invalid_data(format!(
+            "file-activity observer does not support {harness}"
+        ))),
+    }
 }
 
 /// Run the stop-time batch hook from parsed CLI args.
@@ -2163,7 +2038,7 @@ fn run_post_tool_input(
             global_diagnostics_dir: global_diagnostics_dir.as_deref(),
         };
 
-        let candidates = discover_modified_files(&post_tool, &cwd);
+        let candidates = discover_modified_files(&post_tool, ctx);
         let matcher = FileMatcher::new(&spec.file_selection)?;
         let runnable_paths = candidates
             .into_iter()
@@ -3584,114 +3459,6 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-
-    fn claude_post_tool(
-        tool_name: &str,
-        tool_input: serde_json::Value,
-        tool_response: serde_json::Value,
-    ) -> PostToolUseInput {
-        PostToolUseInput::Claude(hookkit_claude::protocol::PostToolUseInput {
-            session_id: "r5-test".into(),
-            transcript_path: "/tmp/r5-transcript.jsonl".into(),
-            cwd: "/hookkit-r5-root".into(),
-            hook_event_name: "PostToolUse".into(),
-            tool_name: tool_name.into(),
-            tool_input,
-            tool_use_id: "tool-r5".into(),
-            tool_response,
-            agent_id: None,
-            agent_type: None,
-            duration_ms: None,
-            effort: None,
-            permission_mode: None,
-            prompt_id: None,
-            extra: BTreeMap::new(),
-        })
-    }
-
-    #[test]
-    fn runner_discovers_nested_writer_paths_and_deduplicates_payload_spellings() {
-        let root = Path::new("/hookkit-r5-root");
-        let input = claude_post_tool(
-            "Write",
-            serde_json::json!({
-                "wrapper": [{"file_path": "src/./app.py"}],
-                "duplicate": {"filePath": "src/app.py"}
-            }),
-            serde_json::json!({
-                "nested": {
-                    "targetFile": "/hookkit-r5-root/src/app.py",
-                    "absolute_path": "/hookkit-r5-root/src/generated.py"
-                }
-            }),
-        );
-
-        let candidates = discover_path_candidates(&input, root);
-        assert_eq!(candidates.len(), 2);
-        assert_eq!(candidates[0].absolute_path, root.join("src/app.py"));
-        assert_eq!(candidates[0].role, DiscoveredPathRole::ModifiedFile);
-        assert!(
-            matches!(
-                candidates[0].source,
-                DiscoveredPathSource::ToolInput("file_path" | "filePath")
-            ),
-            "first occurrence should come from the tool input: {candidates:?}"
-        );
-        assert_eq!(
-            candidates[1],
-            DiscoveredPath {
-                absolute_path: root.join("src/generated.py"),
-                role: DiscoveredPathRole::ModifiedFile,
-                source: DiscoveredPathSource::ToolResult("absolute_path"),
-            }
-        );
-        assert_eq!(
-            discover_modified_files(&input, root),
-            vec![root.join("src/app.py"), root.join("src/generated.py")]
-        );
-    }
-
-    #[test]
-    fn runner_does_not_treat_read_tool_paths_as_modified() {
-        let root = Path::new("/hookkit-r5-root");
-        let input = claude_post_tool(
-            "Read",
-            serde_json::json!({"nested": {"file_path": "src/app.py"}}),
-            serde_json::json!({"content": "def f(): pass\n"}),
-        );
-
-        assert_eq!(
-            discover_path_candidates(&input, root),
-            vec![DiscoveredPath {
-                absolute_path: root.join("src/app.py"),
-                role: DiscoveredPathRole::ReadFile,
-                source: DiscoveredPathSource::ToolInput("file_path"),
-            }]
-        );
-        assert!(discover_modified_files(&input, root).is_empty());
-    }
-
-    #[test]
-    fn runner_owns_recursive_tool_result_observation() {
-        let input = claude_post_tool(
-            "Write",
-            serde_json::json!({}),
-            serde_json::json!({
-                "wrapper": [{
-                    "ok": false,
-                    "standardOutput": "partial output",
-                    "standardError": "write failed",
-                    "exit_code": 7
-                }]
-            }),
-        );
-
-        let observation = observe_post_tool(&input).unwrap().result;
-        assert_eq!(observation.status, ObservedToolStatus::Failure);
-        assert_eq!(observation.stdout, Some("partial output"));
-        assert_eq!(observation.stderr, Some("write failed"));
-        assert_eq!(observation.exit_code, Some(7));
-    }
 
     #[test]
     fn domain_outcomes_keep_clean_failure_and_unsupported_distinct() {

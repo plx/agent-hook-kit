@@ -30,7 +30,11 @@ add a dedicated benchmark/measurement lane before publishing performance claims.
 
 turn-completion-agent-hook reuses the same Pkl catalog and execution engine,
 but obtains candidate files from the `hookkit-file-activity` pending entity
-maintained by session-modified-file-tracker. Before taking the entity view, it
+maintained by the bundled `file-activity-agent-hook`. That quiet aligned
+PostToolUse observer delegates structured, patch, and shell analysis to
+`hookkit-file-activity::observe_post_tool` and the shared tool-access layer.
+The immediate runner uses the same observation path for exact file candidates
+instead of maintaining a second open-payload walker. Before taking the entity view, it
 reconciles workspace mtimes from the prior durable cursor, using current-session
 start metadata only as the first lower bound. The aligned lifecycle is Claude/Codex Stop,
 Gemini AfterAgent, or Antigravity Stop; Antigravity normally has no batch

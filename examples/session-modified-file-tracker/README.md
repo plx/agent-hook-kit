@@ -1,13 +1,17 @@
 # Session-modified file tracker
 
-`session-modified-file-tracker` is a cross-harness `PostToolUse` example built
-on the lossless aligned runtime:
+`session-modified-file-tracker` is now a compatibility demonstration for the
+shipped `file-activity-agent-hook`. Both commands call the same library-owned
+aligned observer; new installations should bind the shipped binary:
 
 ```bash
-session-modified-file-tracker --harness=claude
-session-modified-file-tracker --harness=codex
-session-modified-file-tracker --harness=gemini
+file-activity-agent-hook --claude
+file-activity-agent-hook --codex
+file-activity-agent-hook --gemini
 ```
+
+The example keeps `--harness=claude|codex|gemini` and `--state-dir=PATH`
+compatible, while the shipped binary accepts those aliases as well.
 
 The hook uses `hookkit-file-activity` to classify known structured writer
 names, parse `apply_patch` headers, and run the bounded `hookkit-shell`
@@ -25,7 +29,7 @@ the stop-time reconciliation cursor:
 $TMPDIR/agent-hook-kit/session-state/v1/
   <harness>/session/<identity-hash>/families/
     agent-hook-kit.file-activity/v1/scopes/session/
-      entities/pending-files/v1/
+      entities/pending-files/v2/
         active-generation.json
         generations/<generation-id>.ndjson
         projection-cache.json

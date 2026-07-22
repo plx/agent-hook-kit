@@ -41,8 +41,8 @@ change.
   - `hookkit-runtime`
 - Pkl-driven post-tool and batched turn-completion runners with embedded tool catalog:
   - `hookkit-pkl-config` (Pkl evaluation, builtin specs, multi-file merge)
-  - `hookkit-tool-runner` (ships `post-tool-use-agent-hook`,
-    `turn-completion-agent-hook`, and the precise
+  - `hookkit-tool-runner` (ships `post-tool-use-agent-hook`, the quiet
+    `file-activity-agent-hook`, `turn-completion-agent-hook`, and the precise
     `session-start-state-agent-hook` metadata observer)
 - Shared core errors, types, and deterministic lexical path operations:
   - `hookkit-core` path helpers normalize, resolve, expand an explicitly
@@ -327,8 +327,8 @@ limitation notes:
   native pre-tool contract with `--harness=claude|codex|gemini|antigravity` and merges
   home/project YAML policy.
 - [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
-  selects `--harness=claude|codex|gemini` and appends provenance-bearing,
-  per-session file-activity evidence without consulting Git.
+  demonstrates the shipped file-activity observer while retaining the former
+  example command and flags as compatibility aliases.
 
 ## `post-tool-use-agent-hook`
 
@@ -354,7 +354,7 @@ cargo run -q -p hookkit-tool-runner --bin turn-completion-agent-hook -- \
   --claude --state-dir .context/hookkit-state
 ```
 
-Use the same `--state-dir` for `session-modified-file-tracker`. Before sealing
+Use the same `--state-dir` for `file-activity-agent-hook`. Before sealing
 the window, the runner scans workspace mtimes since the durable reconciliation
 cursor (or the current session start on its first pass). Manual issues block
 the stop attempt, retain the sealed generations and cached set for retry, and
@@ -374,6 +374,35 @@ Codex and Gemini use `--codex` and `--gemini`. Every later
 `SessionState::ensure` still refreshes typed project metadata automatically;
 without a start binding, the timestamp is explicitly marked as a
 first-observed fallback.
+
+### Deferred hook suite
+
+A complete deferred installation binds these shipped executables to one shared
+state root:
+
+| Purpose | Claude | Codex | Gemini |
+| --- | --- | --- | --- |
+| Precise session lower bound | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` |
+| File-activity producer | `PostToolUse` → `file-activity-agent-hook` | `PostToolUse` → `file-activity-agent-hook` | `AfterTool` → `file-activity-agent-hook` |
+| Deferred consumer | `Stop` → `turn-completion-agent-hook` | `Stop` → `turn-completion-agent-hook` | `AfterAgent` → `turn-completion-agent-hook` |
+
+For example, every command below must use the same path:
+
+```bash
+session-start-state-agent-hook --claude --state-dir .context/hookkit-state
+file-activity-agent-hook --claude --state-dir .context/hookkit-state
+turn-completion-agent-hook --claude --state-dir .context/hookkit-state
+```
+
+Use `--codex` or `--gemini` consistently for those harnesses. All three also
+accept the compatibility form `--harness=claude|codex|gemini` and
+`--state-dir=PATH`; turn completion alone accepts `--config PATH`.
+
+Antigravity can bind `Stop` to `turn-completion-agent-hook --antigravity`, but
+its PostToolUse payload has no tool call or path arguments and it has no
+supported precise start/activity producer in this suite. Antigravity therefore
+uses best-effort filesystem-mtime reconciliation only (plus optional Git-dirty
+fallback) and may miss changes outside that observable window.
 
 ### Configuration discovery
 
@@ -522,13 +551,13 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - merges additive YAML glob policy from home and workspace configuration,
   - applies inspect-known, deny-unresolved, or deny-all-shell posture to bounded
     structured, patch, and shell access evidence.
-- `session-modified-file-tracker`:
+- `file-activity-agent-hook`:
   - uses the aligned post-tool API for Claude, Codex, and Gemini,
-  - infers direct modifications from native open tool payloads and never shells out to Git,
+  - delegates structured writers, patches, and shell inference to the shared tool-access analyzer and never shells out to Git,
   - appends detailed observations to rotated NDJSON generations whose projection is a versioned per-session path set.
 - `post-tool-use-agent-hook`:
   - loads merged Pkl config plus embedded builtin tool catalog,
-  - discovers candidate paths from exact native input arms using runner-local tool policy,
+  - discovers exact candidate paths through the shared file-activity/tool-access analyzer,
   - runs each tool's phases for format/fix/verify commands,
   - classifies clean versus issues and changed versus unchanged from exit policies plus file snapshots,
   - reports missing tools and operational failures per `missingToolPolicy`,

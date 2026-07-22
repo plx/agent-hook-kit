@@ -19,6 +19,10 @@ path = "src/bin/turn-completion-agent-hook.rs"
 name = "session-start-state-agent-hook"
 path = "src/bin/session-start-state-agent-hook.rs"
 
+[[bin]]
+name = "file-activity-agent-hook"
+path = "src/bin/file-activity-agent-hook.rs"
+
 [dependencies]
 camino = { workspace = true }
 globset = { workspace = true }
