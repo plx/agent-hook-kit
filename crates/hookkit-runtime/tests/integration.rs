@@ -276,6 +276,109 @@ run = new Listing {{ "ruff" }}
         .expect("failed to write post-tool-use.pkl");
 }
 
+fn write_per_file_ruff_hook_config(project: &Path, fake_ruff: &Path) {
+    let config_dir = project.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
+    let escaped = fake_ruff.to_string_lossy().replace('\\', "\\\\");
+    let config = format!(
+        r#"amends "Config.pkl"
+import "Builtins.pkl"
+
+settings {{
+  fileActivity {{ filesystemMtime = false }}
+}}
+
+tools {{
+  ["ruff"] = (Builtins.ruff) {{
+    executable = "{escaped}"
+    workflows {{
+      ["lint"] = new Workflow {{
+        check = new WorkflowCommand {{
+          argv = new Listing {{ "check"; new Files {{}} }}
+          exitCodes {{
+            clean = new Listing {{ 0 }}
+            issues = new Listing {{ 1 }}
+            failure = new Listing {{ 2 }}
+          }}
+        }}
+        remedy = new WorkflowCommand {{
+          argv = new Listing {{ "check"; "--fix"; new Files {{}} }}
+          exitCodes {{
+            clean = new Listing {{ 0 }}
+            issues = new Listing {{ 1 }}
+            failure = new Listing {{ 2 }}
+          }}
+          writes = "target-files"
+        }}
+        invocation = "per-file"
+      }}
+    }}
+    workflowOrder = new Listing {{ "lint" }}
+  }}
+}}
+run = new Listing {{ "ruff" }}
+"#
+    );
+    std::fs::write(config_dir.join("post-tool-use.pkl"), config)
+        .expect("failed to write post-tool-use.pkl");
+}
+
+fn write_selective_operational_hook_config(project: &Path, fake_ruff: &Path) {
+    let config_dir = project.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
+    let clean_executable = fake_ruff.to_string_lossy().replace('\\', "\\\\");
+    let missing_executable = project
+        .join("bin/definitely-missing-checker")
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let config = format!(
+        r#"amends "Config.pkl"
+
+settings {{
+  fileActivity {{ filesystemMtime = false }}
+}}
+
+tools {{
+  ["clean-python"] = new ToolSpec {{
+    id = "clean-python"
+    displayName = "Clean Python"
+    executable = "{clean_executable}"
+    files {{ include = new Listing {{ "**/*.py" }} }}
+    workflows {{
+      ["lint"] = new Workflow {{
+        check = new WorkflowCommand {{
+          argv = new Listing {{ "check"; new Files {{}} }}
+          exitCodes {{ issues = new Listing {{ 1 }}; failure = new Listing {{ 2 }} }}
+        }}
+        invocation = "per-file"
+      }}
+    }}
+    workflowOrder = new Listing {{ "lint" }}
+  }}
+  ["missing-rust"] = new ToolSpec {{
+    id = "missing-rust"
+    displayName = "Missing Rust"
+    executable = "{missing_executable}"
+    files {{ include = new Listing {{ "**/*.rs" }} }}
+    workflows {{
+      ["lint"] = new Workflow {{
+        check = new WorkflowCommand {{
+          argv = new Listing {{ "check"; new Files {{}} }}
+          exitCodes {{ issues = new Listing {{ 1 }}; failure = new Listing {{ 2 }} }}
+        }}
+        invocation = "per-file"
+      }}
+    }}
+    workflowOrder = new Listing {{ "lint" }}
+  }}
+}}
+run = new Listing {{ "clean-python"; "missing-rust" }}
+"#
+    );
+    std::fs::write(config_dir.join("post-tool-use.pkl"), config)
+        .expect("failed to write post-tool-use.pkl");
+}
+
 fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u8> {
     let fixture = match harness {
         "claude" => serde_json::json!({
@@ -1021,7 +1124,23 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     let summary: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
     assert_eq!(summary["status"], "clean");
-    assert_eq!(summary["acknowledged"], true);
+    assert_eq!(summary["plannedSourceAcknowledgement"], true);
+
+    let second = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("claude", &project),
+        &["--claude", "--state-dir", state_arg.as_str()],
+    );
+    assert!(second.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&second.stdout).unwrap(),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        files_named(&state_dir, "summary.json").len(),
+        1,
+        "the runner's own writes must not resurrect an auto-fixed file"
+    );
 }
 
 #[test]
@@ -1109,7 +1228,7 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
     let summary: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
     assert_eq!(summary["status"], "issues");
-    assert_eq!(summary["acknowledged"], false);
+    assert_eq!(summary["plannedSourceAcknowledgement"], true);
     let logs = files_named(&state_dir, "000.log");
     assert_eq!(logs.len(), 1);
     assert!(
@@ -1132,6 +1251,169 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
     assert_eq!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test"),
         0
+    );
+}
+
+#[test]
+fn turn_completion_selectively_discharges_clean_and_retries_manual_files() {
+    require_pkl!();
+    let project = temp_project("turn-completion-selective");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let clean = project.join("src/clean.py");
+    let manual = project.join("src/manual.py");
+    std::fs::write(&clean, "print('clean')\n").unwrap();
+    std::fs::write(&manual, "print(manual_issue)\n").unwrap();
+
+    for file in ["src/clean.py", "src/manual.py"] {
+        let tracked = run_example(
+            "session-modified-file-tracker",
+            &post_tool_use_fixture("codex", &project, file),
+            &["--harness=codex", "--state-dir", state_arg.as_str()],
+        );
+        assert!(tracked.status.success());
+    }
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block");
+
+    let state = hookkit_session_state::SessionState::open(
+        hookkit_core::HarnessId::CODEX,
+        hookkit_session_state::SessionIdentity::Session("codex-ruff-test".into()),
+        hookkit_session_state::StateRoot::new(&state_dir),
+    )
+    .unwrap();
+    let store = hookkit_file_activity::FileActivityStore::from_state(state).unwrap();
+    store
+        .pending()
+        .with_entity(|view| {
+            assert_eq!(view.state().targets().len(), 1);
+            assert!(
+                view.state()
+                    .targets()
+                    .contains(&hookkit_file_activity::FileActivityTarget::exact(
+                        hookkit_core::Utf8PathBuf::from_path_buf(
+                            std::fs::canonicalize(&manual).unwrap()
+                        )
+                        .unwrap()
+                    ))
+            );
+            Ok(hookkit_session_state::EntityOutcome::retain(()))
+        })
+        .unwrap();
+
+    let summaries = files_named(&state_dir, "summary.json");
+    assert_eq!(summaries.len(), 1);
+    let first: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
+    let files = first["result"]["files"].as_object().unwrap();
+    assert_eq!(files.len(), 2);
+    assert!(files.values().any(|file| file["status"] == "clean"));
+    assert!(
+        files
+            .values()
+            .any(|file| file["status"] == "manual-fixes-needed")
+    );
+
+    std::fs::write(&manual, "print('fixed')\n").unwrap();
+    let retried = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(retried.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&retried.stdout).unwrap(),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
+        0
+    );
+    let summaries = files_named(&state_dir, "summary.json");
+    assert_eq!(summaries.len(), 2);
+    let second: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&summaries[1]).unwrap()).unwrap();
+    assert_eq!(second["files"].as_array().unwrap().len(), 1);
+    assert!(second["files"][0].as_str().unwrap().ends_with("manual.py"));
+}
+
+#[test]
+fn turn_completion_operational_failure_retries_only_affected_files() {
+    require_pkl!();
+    let project = temp_project("turn-completion-selective-operational");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_selective_operational_hook_config(&project, &fake_ruff);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let clean = project.join("src/clean.py");
+    let operational = project.join("src/operational.rs");
+    std::fs::write(&clean, "print('clean')\n").unwrap();
+    std::fs::write(&operational, "fn main() {}\n").unwrap();
+
+    for file in ["src/clean.py", "src/operational.rs"] {
+        let tracked = run_example(
+            "session-modified-file-tracker",
+            &post_tool_use_fixture("codex", &project, file),
+            &["--harness=codex", "--state-dir", state_arg.as_str()],
+        );
+        assert!(tracked.status.success());
+    }
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block");
+
+    let state = hookkit_session_state::SessionState::open(
+        hookkit_core::HarnessId::CODEX,
+        hookkit_session_state::SessionIdentity::Session("codex-ruff-test".into()),
+        hookkit_session_state::StateRoot::new(&state_dir),
+    )
+    .unwrap();
+    let store = hookkit_file_activity::FileActivityStore::from_state(state).unwrap();
+    store
+        .pending()
+        .with_entity(|view| {
+            assert_eq!(view.state().targets().len(), 1);
+            assert!(
+                view.state()
+                    .targets()
+                    .contains(&hookkit_file_activity::FileActivityTarget::exact(
+                        hookkit_core::Utf8PathBuf::from_path_buf(
+                            std::fs::canonicalize(&operational).unwrap()
+                        )
+                        .unwrap()
+                    ))
+            );
+            Ok(hookkit_session_state::EntityOutcome::retain(()))
+        })
+        .unwrap();
+
+    let summaries = files_named(&state_dir, "summary.json");
+    assert_eq!(summaries.len(), 1);
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
+    assert_eq!(summary["status"], "operational-failure");
+    assert_eq!(summary["result"]["files"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        summary["result"]["operationalProblems"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
     );
 }
 

@@ -338,35 +338,35 @@ Likely files:
 
 Tasks:
 
-- [ ] Design and version the handled-baseline state representation.
-- [ ] Store normalized path, existence/type, content digest, handled timestamp/run id, and enough metadata to diagnose suppression decisions.
-- [ ] Add a file-activity API for recording handled clean/auto-fixed baselines.
-- [ ] Suppress only fallback mtime/VCS observations whose current fingerprint matches the handled baseline.
-- [ ] Never suppress direct structured, patch, or shell post-tool evidence merely because a baseline matches.
-- [ ] Add an idempotent API for requeueing exact manual/operational files into the active generation.
-- [ ] Preserve unresolved scoped targets according to the selected coverage-gap policy; do not collapse them into silently discharged exact files.
-- [ ] Commit artifacts and summary before changing pending disposition.
-- [ ] Requeue manual and operationally unprocessed files durably before acknowledging sealed source generations.
-- [ ] Record handled baselines for clean and auto-fixed files before acknowledgement.
-- [ ] Acknowledge the sealed window even when some files remain pending via the new retry entries.
-- [ ] Confirm observations arriving during execution remain pending independently.
-- [ ] Keep state directories excluded from reconciliation scans.
-- [ ] Update persisted schema/family/entity versions when compatibility requires it; document why migration is or is not needed.
+- [x] Design and version the handled-baseline state representation.
+- [x] Store normalized path, existence/type, content digest, handled timestamp/run id, and enough metadata to diagnose suppression decisions.
+- [x] Add a file-activity API for recording handled clean/auto-fixed baselines.
+- [x] Suppress only fallback mtime/VCS observations whose current fingerprint matches the handled baseline.
+- [x] Never suppress direct structured, patch, or shell post-tool evidence merely because a baseline matches.
+- [x] Add an idempotent API for requeueing exact manual/operational files into the active generation.
+- [x] Preserve unresolved scoped targets according to the selected coverage-gap policy; do not collapse them into silently discharged exact files.
+- [x] Commit artifacts and summary before changing pending disposition.
+- [x] Requeue manual and operationally unprocessed files durably before acknowledging sealed source generations.
+- [x] Record handled baselines for clean and auto-fixed files before acknowledgement.
+- [x] Acknowledge the sealed window even when some files remain pending via the new retry entries.
+- [x] Confirm observations arriving during execution remain pending independently.
+- [x] Keep state directories excluded from reconciliation scans.
+- [x] Update persisted schema/family/entity versions when compatibility requires it; document why migration is or is not needed.
 
 Crash/concurrency tests:
 
-- [ ] clean and manual files in one sealed generation: clean is discharged, manual remains;
-- [ ] clean and auto-fixed files remain absent on a second Stop with no new edits;
-- [ ] the runner's own auto-fix mtime does not resurrect the file;
-- [ ] Git-dirty fallback does not resurrect an unchanged handled dirty file;
-- [ ] content change with the same length invalidates the baseline and becomes pending;
-- [ ] a direct post-tool observation requeues a path even when its content matches a prior baseline;
-- [ ] a concurrent observation written during checking survives acknowledgement;
-- [ ] duplicate manual retry append is idempotent;
-- [ ] crash after retry append but before acknowledgement cannot lose the manual file;
-- [ ] crash after summary commit but before state disposition safely retries;
-- [ ] operational failure retains only affected/skipped files while already completed clean files discharge;
-- [ ] retained unresolved scoped target is not lost after partial materialization.
+- [x] clean and manual files in one sealed generation: clean is discharged, manual remains;
+- [x] clean and auto-fixed files remain absent on a second Stop with no new edits;
+- [x] the runner's own auto-fix mtime does not resurrect the file;
+- [x] Git-dirty fallback does not resurrect an unchanged handled dirty file;
+- [x] content change with the same length invalidates the baseline and becomes pending;
+- [x] a direct post-tool observation requeues a path even when its content matches a prior baseline;
+- [x] a concurrent observation written during checking survives acknowledgement;
+- [x] duplicate manual retry append is idempotent;
+- [x] crash after retry append but before acknowledgement cannot lose the manual file;
+- [x] crash after summary commit but before state disposition safely retries;
+- [x] operational failure retains only affected/skipped files while already completed clean files discharge;
+- [x] retained unresolved scoped target is not lost after partial materialization.
 
 Exit criteria:
 

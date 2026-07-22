@@ -130,6 +130,7 @@ pub struct FileActivitySettings {
     pub vcs: FileActivityVcsFallback,
     pub timestamp_tolerance_millis: u64,
     pub max_entries: usize,
+    pub coverage_gap_policy: CoverageGapPolicy,
     pub ignored_directory_names: Vec<String>,
 }
 
@@ -140,6 +141,7 @@ impl Default for FileActivitySettings {
             vcs: FileActivityVcsFallback::Disabled,
             timestamp_tolerance_millis: 2_000,
             max_entries: 100_000,
+            coverage_gap_policy: CoverageGapPolicy::BestEffort,
             ignored_directory_names: vec![
                 ".context".into(),
                 ".git".into(),
@@ -150,6 +152,14 @@ impl Default for FileActivitySettings {
             ],
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CoverageGapPolicy {
+    #[default]
+    BestEffort,
+    Strict,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

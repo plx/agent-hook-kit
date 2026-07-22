@@ -52,6 +52,10 @@ class FileActivity {
   /// Bound recursive scans and record a coverage gap when the limit is hit.
   maxEntries: UInt = 100000
 
+  /// Best effort retains and reports incomplete targets without blocking a
+  /// stop solely for coverage. Strict also asks the harness to continue.
+  coverageGapPolicy: "best-effort" | "strict" = "best-effort"
+
   ignoredDirectoryNames: Listing<String> = new Listing<String> {
     ".context"
     ".git"

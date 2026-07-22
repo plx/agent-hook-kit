@@ -21,10 +21,10 @@ use hookkit_common::{
     NoticeLevel, PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput,
     TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput, UserNotice,
 };
-use hookkit_core::{HarnessId, HookkitError, RuntimeContext};
+use hookkit_core::{HarnessId, HookkitError, RuntimeContext, Utf8PathBuf};
 use hookkit_file_activity::{
-    FileActivityStore, PendingFileActivity, ReconciliationOptions, ResolveOptions, VcsFallback,
-    reconcile, resolve_files,
+    FileActivityEvent, FileActivityStore, FileActivityTarget, PendingFileActivity,
+    ReconciliationOptions, ResolveOptions, VcsFallback, reconcile, resolve_files,
 };
 use hookkit_pkl_config::schema as pkl;
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
@@ -910,8 +910,24 @@ struct BatchRunSummary {
     source_entry_ids: Vec<String>,
     files: Vec<String>,
     tools: Vec<BatchToolSummary>,
-    acknowledged: bool,
+    planned_source_acknowledgement: bool,
     result: DeferredRunResult,
+}
+
+#[derive(Debug)]
+struct ActivityResolution {
+    not_applicable_files: BTreeSet<PathBuf>,
+    unresolved_targets: Vec<FileActivityTarget>,
+    gap_messages: BTreeSet<String>,
+    truncated: bool,
+}
+
+#[derive(Debug)]
+struct DeferredStateDisposition {
+    retry_files: BTreeSet<Utf8PathBuf>,
+    retry_targets: Vec<FileActivityTarget>,
+    retry_gaps: BTreeSet<String>,
+    handled_files: BTreeSet<Utf8PathBuf>,
 }
 
 fn run_turn_completion_input(
@@ -964,7 +980,14 @@ fn run_turn_completion_input(
     activity_store
         .pending()
         .try_with_entity(|view| {
-            run_turn_completion_view(ctx, loaded, &activity_settings, &runner_family, view)
+            run_turn_completion_view(
+                ctx,
+                loaded,
+                &activity_settings,
+                &activity_store,
+                &runner_family,
+                view,
+            )
         })
         .map_err(|error| match error {
             EntityOperationError::State(error) => state_error(error),
@@ -976,6 +999,7 @@ fn run_turn_completion_view(
     ctx: &RuntimeContext<'_>,
     loaded: Result<hookkit_pkl_config::Loaded, hookkit_pkl_config::PklConfigError>,
     activity_settings: &pkl::FileActivitySettings,
+    activity_store: &FileActivityStore,
     runner_family: &StateFamily,
     view: &EntityView<'_, PendingFileActivity>,
 ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
@@ -993,7 +1017,22 @@ fn run_turn_completion_view(
         .iter()
         .cloned()
         .collect();
+    if let Ok(state_directory) =
+        Utf8PathBuf::from_path_buf(activity_store.state().directory().into())
+    {
+        resolve_options.excluded_roots.insert(state_directory);
+    }
     let resolved = resolve_files(view.state(), &resolve_options).map_err(activity_error)?;
+    let resolution = ActivityResolution {
+        not_applicable_files: resolved
+            .not_applicable_files
+            .into_iter()
+            .map(|path| normalize_path(path.as_std_path()))
+            .collect(),
+        unresolved_targets: resolved.unresolved_targets,
+        gap_messages: source_gap_messages(view),
+        truncated: resolved.truncated,
+    };
     let mut candidates = resolved
         .files
         .into_iter()
@@ -1041,6 +1080,9 @@ fn run_turn_completion_view(
                 message: contents,
                 artifact_ids: vec!["configuration".into()],
             });
+            record_activity_resolution(&mut result, &resolution);
+            let disposition = plan_deferred_state_disposition(&result, &resolution)?;
+            let run_id = run_id(run.directory())?;
             let summary_path = run
                 .commit(&BatchRunSummary {
                     status: "operational-failure",
@@ -1048,11 +1090,12 @@ fn run_turn_completion_view(
                     source_entry_ids: source_entry_ids.clone(),
                     files: candidates.iter().map(|path| slash_path(path)).collect(),
                     tools: Vec::new(),
-                    acknowledged: false,
+                    planned_source_acknowledgement: true,
                     result,
                 })
                 .map_err(state_error)?;
-            return Ok(EntityOutcome::retain(lower_turn_completion(
+            apply_deferred_state_disposition(activity_store, disposition, run_id)?;
+            return Ok(EntityOutcome::acknowledge(lower_turn_completion(
                 ctx.harness(),
                 Some(&summary_path),
             )?));
@@ -1089,6 +1132,9 @@ fn run_turn_completion_view(
                 message: contents,
                 artifact_ids: vec!["configuration".into()],
             });
+            record_activity_resolution(&mut result, &resolution);
+            let disposition = plan_deferred_state_disposition(&result, &resolution)?;
+            let run_id = run_id(run.directory())?;
             let summary_path = run
                 .commit(&BatchRunSummary {
                     status: "operational-failure",
@@ -1096,11 +1142,12 @@ fn run_turn_completion_view(
                     source_entry_ids: source_entry_ids.clone(),
                     files: candidates.iter().map(|path| slash_path(path)).collect(),
                     tools: Vec::new(),
-                    acknowledged: false,
+                    planned_source_acknowledgement: true,
                     result,
                 })
                 .map_err(state_error)?;
-            return Ok(EntityOutcome::retain(lower_turn_completion(
+            apply_deferred_state_disposition(activity_store, disposition, run_id)?;
+            return Ok(EntityOutcome::acknowledge(lower_turn_completion(
                 ctx.harness(),
                 Some(&summary_path),
             )?));
@@ -1118,10 +1165,11 @@ fn run_turn_completion_view(
             let run = run.take().expect("run bundle is available");
             return commit_deferred_config_failure(
                 ctx,
+                activity_store,
                 run,
                 &candidates,
-                source_entry_count,
-                source_entry_ids,
+                &resolution,
+                (source_entry_count, source_entry_ids),
                 error.to_string(),
             );
         }
@@ -1138,6 +1186,7 @@ fn run_turn_completion_view(
         &mut execution.result,
     )?;
     let mut result = execution.result;
+    record_activity_resolution(&mut result, &resolution);
 
     let operational_files = result
         .operational_problems
@@ -1150,7 +1199,8 @@ fn run_turn_completion_view(
         }
     }
 
-    let should_block = result.has_manual_fixes() || result.has_operational_problems();
+    let should_block = deferred_should_block(&result, activity_settings.coverage_gap_policy);
+    let disposition = plan_deferred_state_disposition(&result, &resolution)?;
     let status = if result.has_operational_problems() {
         "operational-failure"
     } else if result.has_manual_fixes() {
@@ -1161,6 +1211,7 @@ fn run_turn_completion_view(
         "clean"
     };
     let run = run.take().expect("run bundle is available");
+    let run_id = run_id(run.directory())?;
     let summary_path = run
         .commit(&BatchRunSummary {
             status,
@@ -1168,13 +1219,14 @@ fn run_turn_completion_view(
             source_entry_ids,
             files: candidates.iter().map(|path| slash_path(path)).collect(),
             tools: summaries,
-            acknowledged: !should_block,
+            planned_source_acknowledgement: true,
             result,
         })
         .map_err(state_error)?;
+    apply_deferred_state_disposition(activity_store, disposition, run_id)?;
 
     if should_block {
-        Ok(EntityOutcome::retain(lower_turn_completion(
+        Ok(EntityOutcome::acknowledge(lower_turn_completion(
             ctx.harness(),
             Some(&summary_path),
         )?))
@@ -1392,14 +1444,169 @@ fn format_deferred_logs(logs: &[&DeferredLog]) -> String {
     output
 }
 
+fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) -> BTreeSet<String> {
+    view.events()
+        .iter()
+        .filter_map(|record| match record.event() {
+            FileActivityEvent::Gap(gap) => Some(gap.detail.clone()),
+            FileActivityEvent::Retry(retry) if retry.target.is_none() => Some(retry.reason.clone()),
+            FileActivityEvent::Evidence(_) | FileActivityEvent::Retry(_) => None,
+        })
+        .collect()
+}
+
+fn deferred_should_block(
+    result: &DeferredRunResult,
+    coverage_policy: pkl::CoverageGapPolicy,
+) -> bool {
+    result.has_manual_fixes()
+        || result.has_operational_problems()
+        || (coverage_policy == pkl::CoverageGapPolicy::Strict && !result.coverage_gaps.is_empty())
+}
+
+fn record_activity_resolution(result: &mut DeferredRunResult, resolution: &ActivityResolution) {
+    for path in &resolution.not_applicable_files {
+        result.record_not_applicable(path.clone());
+    }
+    for (index, target) in resolution.unresolved_targets.iter().enumerate() {
+        let target = serde_json::to_string(target)
+            .unwrap_or_else(|_| "unserializable file activity target".into());
+        result.record_coverage_gap(CoverageGap {
+            id: format!("unresolved-target-{index:03}"),
+            target: Some(target.clone()),
+            message: format!("file activity target could not be fully materialized: {target}"),
+            retained: true,
+        });
+    }
+    for (index, message) in resolution.gap_messages.iter().enumerate() {
+        result.record_coverage_gap(CoverageGap {
+            id: format!("source-gap-{index:03}"),
+            target: None,
+            message: message.clone(),
+            retained: true,
+        });
+    }
+    if resolution.truncated {
+        result.record_coverage_gap(CoverageGap {
+            id: "resolution-budget-exhausted".into(),
+            target: None,
+            message: "file activity target resolution exhausted its traversal budget".into(),
+            retained: true,
+        });
+    }
+}
+
+fn plan_deferred_state_disposition(
+    result: &DeferredRunResult,
+    resolution: &ActivityResolution,
+) -> hookkit_core::Result<DeferredStateDisposition> {
+    let mut retry_files = BTreeSet::new();
+    for file in result.files.values() {
+        if file.status == FileStatus::ManualFixesNeeded {
+            retry_files.insert(utf8_activity_path(&file.path)?);
+        }
+    }
+    for problem in result.operational_problems.values() {
+        for path in &problem.affected_files {
+            retry_files.insert(utf8_activity_path(path)?);
+        }
+    }
+
+    let mut handled_files = BTreeSet::new();
+    for file in result.files.values() {
+        if matches!(file.status, FileStatus::Clean | FileStatus::AutoFixed) {
+            handled_files.insert(utf8_activity_path(&file.path)?);
+        }
+    }
+    // A missing exact path is itself a stable handled state. Recording it
+    // prevents an opt-in Git-dirty fallback from resurrecting the same
+    // deletion immediately after the source observation is discharged.
+    for path in &resolution.not_applicable_files {
+        handled_files.insert(utf8_activity_path(path)?);
+    }
+    handled_files.retain(|path| !retry_files.contains(path));
+
+    let mut retry_targets = resolution.unresolved_targets.clone();
+    retry_targets.sort();
+    retry_targets.dedup();
+    let mut retry_gaps = resolution.gap_messages.clone();
+    if resolution.truncated {
+        retry_gaps.insert("file activity target resolution exhausted its traversal budget".into());
+    }
+    Ok(DeferredStateDisposition {
+        retry_files,
+        retry_targets,
+        retry_gaps,
+        handled_files,
+    })
+}
+
+fn apply_deferred_state_disposition(
+    activity_store: &FileActivityStore,
+    disposition: DeferredStateDisposition,
+    run_id: String,
+) -> hookkit_core::Result<()> {
+    activity_store
+        .requeue_exact("deferred-unresolved-file", disposition.retry_files)
+        .map_err(activity_error)?;
+    activity_store
+        .requeue_targets("deferred-unresolved-target", disposition.retry_targets)
+        .map_err(activity_error)?;
+    activity_store
+        .requeue_gaps("deferred-coverage-gap", disposition.retry_gaps)
+        .map_err(activity_error)?;
+    if disposition.handled_files.is_empty() {
+        return Ok(());
+    }
+    let baseline_report = activity_store
+        .record_handled_baselines(disposition.handled_files, run_id)
+        .map_err(activity_error)?;
+    if baseline_report.failures.is_empty() {
+        return Ok(());
+    }
+    let failures = baseline_report
+        .failures
+        .iter()
+        .map(|failure| format!("{}: {}", failure.path, failure.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(invalid_data(format!(
+        "could not record all handled file baselines; source window retained: {failures}"
+    )))
+}
+
+fn utf8_activity_path(path: &Path) -> hookkit_core::Result<Utf8PathBuf> {
+    Utf8PathBuf::from_path_buf(normalize_path(path)).map_err(|path| {
+        invalid_data(format!(
+            "deferred file activity path is not valid UTF-8: {}",
+            path.display()
+        ))
+    })
+}
+
+fn run_id(directory: &Path) -> hookkit_core::Result<String> {
+    directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            invalid_data(format!(
+                "run directory has no UTF-8 id: {}",
+                directory.display()
+            ))
+        })
+}
+
 fn commit_deferred_config_failure(
     ctx: &RuntimeContext<'_>,
+    activity_store: &FileActivityStore,
     run: RunBundle,
     candidates: &[PathBuf],
-    source_entry_count: usize,
-    source_entry_ids: Vec<String>,
+    resolution: &ActivityResolution,
+    source: (usize, Vec<String>),
     contents: String,
 ) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+    let (source_entry_count, source_entry_ids) = source;
     let artifact_path = run
         .write_text("config-error.log", &contents)
         .map_err(state_error)?;
@@ -1424,6 +1631,9 @@ fn commit_deferred_config_failure(
         message: contents,
         artifact_ids: vec!["configuration".into()],
     });
+    record_activity_resolution(&mut result, resolution);
+    let disposition = plan_deferred_state_disposition(&result, resolution)?;
+    let run_id = run_id(run.directory())?;
     let summary_path = run
         .commit(&BatchRunSummary {
             status: "operational-failure",
@@ -1431,11 +1641,12 @@ fn commit_deferred_config_failure(
             source_entry_ids,
             files: candidates.iter().map(|path| slash_path(path)).collect(),
             tools: Vec::new(),
-            acknowledged: false,
+            planned_source_acknowledgement: true,
             result,
         })
         .map_err(state_error)?;
-    Ok(EntityOutcome::retain(lower_turn_completion(
+    apply_deferred_state_disposition(activity_store, disposition, run_id)?;
+    Ok(EntityOutcome::acknowledge(lower_turn_completion(
         ctx.harness(),
         Some(&summary_path),
     )?))
@@ -3129,6 +3340,80 @@ mod tests {
         // no jobs means no workers.
         assert_eq!(resolve_worker_count(4, 0), 0);
         assert_eq!(resolve_worker_count(0, 0), 0);
+    }
+
+    #[test]
+    fn state_disposition_discharges_successes_and_retries_only_unfinished_files() {
+        let root = PathBuf::from("/tmp/hookkit-selective-disposition");
+        let clean = root.join("clean.rs");
+        let auto_fixed = root.join("auto.rs");
+        let manual = root.join("manual.rs");
+        let operational = root.join("operational.rs");
+        let deleted = root.join("deleted.rs");
+        let mut result = DeferredRunResult::default();
+        result.record_file(FileAssessment::new(&clean, FileStatus::Clean));
+        result.record_file(FileAssessment::new(&auto_fixed, FileStatus::AutoFixed));
+        result.record_file(FileAssessment::new(&manual, FileStatus::ManualFixesNeeded));
+        result.record_operational_problem(OperationalProblem {
+            id: "tool-failure".into(),
+            tool_id: Some("tool".into()),
+            phase: Some("initial-check".into()),
+            affected_files: vec![operational.clone()],
+            message: "tool crashed".into(),
+            artifact_ids: Vec::new(),
+        });
+        let unresolved = FileActivityTarget::Workspace {
+            root: Some(Utf8PathBuf::from("/tmp/hookkit-selective-disposition")),
+        };
+        let resolution = ActivityResolution {
+            not_applicable_files: BTreeSet::from([deleted.clone()]),
+            unresolved_targets: vec![unresolved.clone()],
+            gap_messages: BTreeSet::from(["dynamic shell target".into()]),
+            truncated: false,
+        };
+
+        let disposition = plan_deferred_state_disposition(&result, &resolution).unwrap();
+        assert_eq!(
+            disposition.retry_files,
+            BTreeSet::from([
+                Utf8PathBuf::from_path_buf(manual).unwrap(),
+                Utf8PathBuf::from_path_buf(operational).unwrap(),
+            ])
+        );
+        assert_eq!(disposition.retry_targets, vec![unresolved]);
+        assert_eq!(
+            disposition.retry_gaps,
+            BTreeSet::from(["dynamic shell target".into()])
+        );
+        assert_eq!(
+            disposition.handled_files,
+            BTreeSet::from([
+                Utf8PathBuf::from_path_buf(auto_fixed).unwrap(),
+                Utf8PathBuf::from_path_buf(clean).unwrap(),
+                Utf8PathBuf::from_path_buf(deleted).unwrap(),
+            ])
+        );
+    }
+
+    #[test]
+    fn coverage_gap_policy_is_best_effort_by_default_and_strict_on_request() {
+        let mut result = DeferredRunResult::default();
+        result.record_file(FileAssessment::new("clean.rs", FileStatus::Clean));
+        result.record_coverage_gap(CoverageGap {
+            id: "gap".into(),
+            target: None,
+            message: "dynamic target".into(),
+            retained: true,
+        });
+
+        assert!(!deferred_should_block(
+            &result,
+            pkl::CoverageGapPolicy::BestEffort
+        ));
+        assert!(deferred_should_block(
+            &result,
+            pkl::CoverageGapPolicy::Strict
+        ));
     }
 
     proptest! {

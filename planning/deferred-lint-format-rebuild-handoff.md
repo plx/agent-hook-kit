@@ -139,3 +139,50 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 3. The per-file result now supplies the exact disposition sets needed for retry entries and handled baselines.
+
+## Item 3 — Implement selective discharge and handled baselines
+
+Outcome:
+
+- Turn completion now commits its run summary, appends retry evidence for only manual, operationally incomplete, and unresolved work, records handled fingerprints for discharged clean/auto-fixed/not-applicable paths, and then acknowledges the sealed source generations.
+- Retry ids are deterministic and deduplicate in the pending projection. A fresh retry record is still appended outside every sealed window so a crash or acknowledgement cannot consume the only remaining copy.
+- Mtime and opt-in Git-dirty reconciliation suppress unchanged handled fingerprints. Direct observations bypass the baseline, and equal-length content changes are detected by SHA-256.
+- Exact deleted/non-file targets become not applicable, while partially materialized and unresolved scoped targets remain durable coverage gaps.
+- Added explicit `best-effort` (default) and `strict` Pkl coverage-gap policies. Both retain gaps; strict additionally blocks Stop.
+
+Public API/config/state changes:
+
+- `hookkit-file-activity` adds `FileActivityRetry`, handled fingerprint/baseline types, handled-baseline inspection/recording, exact/scoped/gap requeue APIs, suppression counts, and not-applicable resolution output.
+- `FileActivitySettings.coverageGapPolicy` accepts `best-effort` or `strict`.
+- The `pending-files` entity is version 2 because its event and aggregate schema now includes retries. `handled-baselines` is a new version-1 monotonic entity; the reconciliation cursor and family remain version 1.
+- Batch summaries replace the misleading completed-state `acknowledged` boolean with `plannedSourceAcknowledgement` because the summary is durably committed before state disposition.
+
+Compatibility decision:
+
+- There is no migration from pending entity v1: session coordination state is transient, old readers cannot safely interpret the new retry variant, and fallback reconciliation can recover best-effort candidates after upgrade. Restarting the agent session is the documented choice when exact continuity is required.
+- Handled keys canonicalize the nearest existing ancestor, preserving missing suffixes and file type while collapsing platform aliases such as macOS `/var` and `/private/var`.
+- Not-applicable exact paths also receive missing-state baselines so Git-dirty deletion evidence does not immediately resurrect a discharged deletion.
+- Best-effort coverage gaps are already retained and exposed in `summary.json`; user-facing gap rendering is completed with the bucket templates and native lowering in Items 5 and 6.
+
+Focused validation:
+
+- `cargo test -p hookkit-pkl-config --all-targets` (29 passed with Pkl available)
+- `cargo test -p hookkit-file-activity --all-targets` (17 passed)
+- `cargo test -p hookkit-tool-runner --all-targets` (27 unit tests passed; real-tool lane ignored by design)
+- `cargo test -p hookkit-runtime --test integration` (39 passed)
+- `cargo clippy -p hookkit-file-activity -p hookkit-pkl-config -p hookkit-tool-runner -p hookkit-runtime --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+Known gaps:
+
+- Durable command output is still combined per tool. Item 4 creates one artifact per command and enriches the summary with the completed state-disposition details.
+- Best-effort coverage-gap user warnings await the configurable reporting templates and exact native lowering in Items 5 and 6; gaps are already structured, summarized, and retained.
+
+Commit/PR:
+
+- This item is committed as the selective-discharge and handled-baseline review unit.
+
+Next item readiness:
+
+- Ready for Item 4. The transaction boundary and per-file disposition sets are now stable inputs to richer artifact and summary records.

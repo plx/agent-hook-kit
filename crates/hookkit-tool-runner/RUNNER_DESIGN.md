@@ -44,11 +44,17 @@ workflows receive one ordered remedy, and snapshot-discovered writes invalidate
 intersecting target-file or workspace checks for one authoritative final sweep.
 Check stages retain bounded job parallelism and deterministic result ordering.
 
-The runner writes logs to a unique run bundle and commits `summary.json` last.
-The summary carries per-file clean, auto-fixed, and manual results plus separate
-operational failures; native lowering remains exact per harness. At this stage
-of the rebuild, clean batches are acknowledged while manual/operational batches
-retain their sealed generations. Selective retry entries and handled fallback
-baselines are added by the following persistence unit. New observations written
-during execution are outside the snapshot and remain pending even when the
-completed batch is acknowledged.
+The runner writes logs to a unique run bundle and commits `summary.json` before
+changing pending state. The summary carries per-file clean, auto-fixed, and
+manual results plus separate operational failures and describes the planned
+source acknowledgement. The runner then appends stable retry evidence for only
+manual, operationally incomplete, and unresolved work, records content-based
+handled baselines for discharged work, and acknowledges the sealed source
+generations. New observations written during execution are outside the snapshot
+and remain pending independently. Mtime and opt-in Git-dirty reconciliation
+suppress only fingerprints that still match a handled baseline; direct
+observations always requeue the path.
+
+Coverage gaps use the Pkl `fileActivity.coverageGapPolicy`. The default
+`best-effort` policy retains and summarizes incomplete targets without treating
+resolved clean files as manual. `strict` also blocks Stop until the gap clears.

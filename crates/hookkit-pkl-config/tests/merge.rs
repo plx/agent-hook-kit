@@ -5,8 +5,8 @@ use hookkit_pkl_config::merge::merge_chain;
 use hookkit_pkl_config::{
     evaluate_pkl_source,
     schema::{
-        CheckScope, FileActivityVcsFallback, InvocationGranularity, MissingToolPolicy,
-        WriteBehavior,
+        CheckScope, CoverageGapPolicy, FileActivityVcsFallback, InvocationGranularity,
+        MissingToolPolicy, WriteBehavior,
     },
 };
 
@@ -40,6 +40,7 @@ settings {
     vcs = "git-dirty"
     timestampToleranceMillis = 750
     maxEntries = 1234
+    coverageGapPolicy = "strict"
     ignoredDirectoryNames = new Listing<String> { ".git"; "vendor" }
   }
 }
@@ -52,6 +53,7 @@ settings {
     assert_eq!(activity.vcs, FileActivityVcsFallback::GitDirty);
     assert_eq!(activity.timestamp_tolerance_millis, 750);
     assert_eq!(activity.max_entries, 1234);
+    assert_eq!(activity.coverage_gap_policy, CoverageGapPolicy::Strict);
     assert_eq!(activity.ignored_directory_names, vec![".git", "vendor"]);
 }
 

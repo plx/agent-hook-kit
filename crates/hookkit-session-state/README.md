@@ -247,14 +247,17 @@ to the windowed `agent-hook-kit.file-activity` entity. At turn completion,
    descendant, glob, and workspace targets;
 3. runs matching Pkl-configured format/fix/verify phases over the path set;
 4. writes complete per-tool output and commits a run summary;
-5. acknowledges the exact generations and emits a native no-op when clean or
-   fully auto-corrected;
-6. otherwise retains the projection, asks the harness to continue, informs the
-   user, and points the agent at the committed logs.
+5. appends idempotent retry evidence for manual, operationally incomplete, and
+   unresolved work into the active generation;
+6. records content-based handled baselines for discharged files; and
+7. acknowledges only the sealed source generations, then either emits a native
+   no-op or asks the harness to continue and points it at the committed run.
 
-Retries reuse the cached set and add only newly sealed observations. Files
-modified while linters run land in the next generation and remain pending even
-when the completed window is acknowledged.
+The summary describes this planned disposition because it is committed before
+the state transition. A crash before disposition leaves the sealed source
+pending; a crash after retry append may duplicate an idempotent retry but cannot
+lose it. Files modified while linters run also land in the next generation and
+remain pending when the completed window is acknowledged.
 
 The older `ModifiedFiles`/`ModifiedFileEvent` projection remains a small
 session-state convenience for callers that only need an exact-path set. It does
