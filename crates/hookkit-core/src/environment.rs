@@ -11,10 +11,12 @@ use std::fmt;
 pub struct EnvironmentVariables(BTreeMap<String, String>);
 
 impl EnvironmentVariables {
+    /// Creates an empty variable set.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Collects name/value pairs, replacing earlier duplicate names.
     pub fn from_pairs<I, K, V>(pairs: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -29,32 +31,39 @@ impl EnvironmentVariables {
         )
     }
 
+    /// Inserts a variable and returns its previous value, if any.
     pub fn insert(&mut self, name: impl Into<String>, value: impl Into<String>) -> Option<String> {
         self.0.insert(name.into(), value.into())
     }
 
+    /// Returns a variable's value.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.0.get(name).map(String::as_str)
     }
 
+    /// Reports whether the set contains `name`.
     pub fn contains_key(&self, name: &str) -> bool {
         self.0.contains_key(name)
     }
 
+    /// Iterates through names and values in lexicographic name order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.0
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
     }
 
+    /// Iterates through variable names in lexicographic order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)
     }
 
+    /// Reports whether no variables were captured.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Returns the number of captured variables.
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -104,6 +113,11 @@ pub trait CommandEnvironmentSpec: Sized {
     /// Dynamic native prefixes, such as Claude plugin option variables.
     const VARIABLE_PREFIXES: &'static [&'static str] = &[];
 
+    /// Parses a captured variable set for `event`.
+    ///
+    /// The map contains only names selected by [`Self::VARIABLE_NAMES`] and
+    /// [`Self::VARIABLE_PREFIXES`]. Implementations should reject malformed
+    /// values but may treat declared, absent variables as optional.
     fn from_variables(event: &EventId, variables: &EnvironmentVariables) -> crate::Result<Self>;
 
     /// Cross-check redundant environment and native-input values.

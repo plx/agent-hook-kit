@@ -13,9 +13,13 @@ use tree_sitter::{Node, ParseOptions, Parser, Point};
 /// Resource limits applied before and during parsing and AST traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BashAnalyzerLimits {
+    /// Maximum UTF-8 source length accepted before parsing.
     pub max_source_bytes: usize,
+    /// Wall-clock budget passed to Tree-sitter's cancellation callback.
     pub max_parse_time: Duration,
+    /// Maximum AST nodes visited while extracting facts.
     pub max_nodes: usize,
+    /// Maximum recursive AST traversal depth.
     pub max_depth: usize,
 }
 
@@ -37,10 +41,12 @@ pub struct BashAnalyzer {
 }
 
 impl BashAnalyzer {
+    /// Creates an analyzer with explicit resource limits.
     pub const fn new(limits: BashAnalyzerLimits) -> Self {
         Self { limits }
     }
 
+    /// Returns the configured resource limits.
     pub const fn limits(&self) -> BashAnalyzerLimits {
         self.limits
     }
@@ -110,12 +116,18 @@ impl BashAnalyzer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
+/// Result of bounded Bash parsing and fact extraction.
 pub enum BashAnalysisOutcome {
+    /// Parsing and traversal completed without syntax errors or limit hits.
     Complete(BashAnalysis),
+    /// Some facts were recovered, but the report is known to be incomplete.
     Partial {
+        /// Facts recovered before or despite the incomplete condition.
         analysis: BashAnalysis,
+        /// Condition that made the report incomplete.
         reason: IncompleteReason,
     },
+    /// No analysis facts are available.
     Unavailable(UnavailableReason),
 }
 
@@ -128,6 +140,7 @@ impl BashAnalysisOutcome {
         }
     }
 
+    /// Reports whether analysis is complete and free of known syntax errors.
     pub fn is_complete(&self) -> bool {
         matches!(self, Self::Complete(_))
     }
@@ -135,8 +148,11 @@ impl BashAnalysisOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Commands and notable constructs recovered from one Bash source string.
 pub struct BashAnalysis {
+    /// Command occurrences in traversal/source order.
     pub commands: Vec<CommandOccurrence>,
+    /// Notable syntax constructs in traversal/source order.
     pub constructs: Vec<ConstructOccurrence>,
 }
 
@@ -150,6 +166,7 @@ impl BashAnalysis {
             .filter_map(CommandOccurrence::literal_argv)
     }
 
+    /// Iterates over literal command names recovered without expansion.
     pub fn command_names(&self) -> impl Iterator<Item = &str> {
         self.commands
             .iter()
@@ -176,6 +193,7 @@ impl BashAnalysis {
             })
     }
 
+    /// Iterates over occurrences of one construct kind.
     pub fn constructs(&self, kind: ConstructKind) -> impl Iterator<Item = &ConstructOccurrence> {
         self.constructs
             .iter()
@@ -185,17 +203,26 @@ impl BashAnalysis {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// One simple command occurrence and its surrounding syntax context.
 pub struct CommandOccurrence {
+    /// Byte/line span of the complete command node.
     pub span: SourceSpan,
+    /// Exact source slice covered by [`Self::span`].
     pub raw: String,
+    /// Command-name word, when the node has one.
     pub name: Option<ShellWord>,
+    /// Argument words excluding the command name.
     pub arguments: Vec<ShellWord>,
+    /// Complete literal argv or reasons exact recovery was impossible.
     pub argv: ArgvStatus,
+    /// Ordered enclosing execution contexts, outermost first.
     pub context: Vec<ExecutionContext>,
+    /// Redirections attached to the command.
     pub redirections: Vec<Redirection>,
 }
 
 impl CommandOccurrence {
+    /// Returns the complete recovered argv only when every word is literal.
     pub fn literal_argv(&self) -> Option<&[String]> {
         match &self.argv {
             ArgvStatus::Literal(argv) => Some(argv),
@@ -207,102 +234,172 @@ impl CommandOccurrence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
+/// Whether a command's complete argv was statically recoverable.
 pub enum ArgvStatus {
+    /// Exact argv after static quote removal and concatenation.
     Literal(Vec<String>),
-    Dynamic { reasons: Vec<DynamicReason> },
+    /// At least one word depends on runtime behavior or unsupported syntax.
+    Dynamic {
+        /// Deduplicated reasons literal recovery was not sound.
+        reasons: Vec<DynamicReason>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// One shell word with exact source and conservative literal recovery.
 pub struct ShellWord {
+    /// Byte/line span of the word.
     pub span: SourceSpan,
+    /// Exact source slice covered by [`Self::span`].
     pub raw: String,
+    /// Statically evaluated value, or `None` when runtime behavior is needed.
     pub literal: Option<String>,
+    /// Reasons the word could not be recovered literally.
     pub dynamic_reasons: Vec<DynamicReason>,
 }
 
+/// Syntax feature preventing conservative literal word recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum DynamicReason {
+    /// `$name` or `${...}` parameter expansion.
     ParameterExpansion,
+    /// `$(...)` or backtick command substitution.
     CommandSubstitution,
+    /// `<(...)` or `>(...)` process substitution.
     ProcessSubstitution,
+    /// `$((...))` arithmetic expansion.
     ArithmeticExpansion,
+    /// `{...}` brace expansion.
     BraceExpansion,
+    /// Unquoted glob metacharacters.
     Glob,
+    /// Leading tilde expansion.
     TildeExpansion,
+    /// Escape whose runtime value is not statically modeled.
     EscapeSequence,
+    /// ANSI-C `$'...'` quoting.
     AnsiCString,
+    /// Locale-translated `$"..."` quoting.
     LocaleTranslation,
+    /// Tree-sitter error-recovery syntax.
     ParseError,
+    /// Valid or recovered syntax outside the analyzer's literal model.
     UnsupportedSyntax,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
+/// Enclosing syntax that affects when or where a command executes.
 pub enum ExecutionContext {
+    /// A pipeline element.
     Pipeline,
+    /// An `&&` or `||` list element.
     AndOrList,
+    /// A sequential command-list element.
     Sequence,
+    /// An `if`/`elif`/conditional command body or condition.
     Conditional,
+    /// A loop body or condition.
     Loop,
+    /// A `case` expression or arm.
     Case,
+    /// A function definition body.
     FunctionDefinition,
+    /// A parenthesized subshell.
     Subshell,
+    /// A command substitution body.
     CommandSubstitution,
+    /// A process substitution body.
     ProcessSubstitution,
+    /// A backgrounded command.
     Background,
+    /// A command under shell negation (`!`).
     Negated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// One notable Bash syntax construct.
 pub struct ConstructOccurrence {
+    /// Construct classification.
     pub kind: ConstructKind,
+    /// Byte/line span of the construct.
     pub span: SourceSpan,
+    /// Exact source slice covered by [`Self::span`].
     pub raw: String,
 }
 
+/// Notable syntax construct retained independently of command argv.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum ConstructKind {
+    /// Pipeline.
     Pipeline,
+    /// `&&` or `||` list.
     AndOrList,
+    /// Sequential command list.
     Sequence,
+    /// Background execution.
     Background,
+    /// Conditional statement.
     Conditional,
+    /// Loop statement.
     Loop,
+    /// Case statement.
     Case,
+    /// Function definition.
     FunctionDefinition,
+    /// Parenthesized subshell.
     Subshell,
+    /// Command substitution.
     CommandSubstitution,
+    /// Process substitution.
     ProcessSubstitution,
+    /// Variable declaration command.
     Declaration,
+    /// Variable unset command.
     Unset,
+    /// Shell test expression.
     Test,
+    /// Shell negation.
     Negation,
+    /// Variable assignment.
     VariableAssignment,
+    /// File or descriptor redirection.
     FileRedirection,
+    /// Here-document redirection.
     HereDocument,
+    /// Here-string redirection.
     HereString,
+    /// Parameter expansion.
     ParameterExpansion,
+    /// Arithmetic expansion.
     ArithmeticExpansion,
+    /// Brace expansion.
     BraceExpansion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// One redirection attached to a command.
 pub struct Redirection {
+    /// Broad redirection target kind.
     pub kind: RedirectionKind,
     /// Typed shell operator. This is `None` only when error-recovered syntax
     /// did not contain a recognizable operator.
     pub operator: Option<RedirectionOperator>,
+    /// Byte/line span of the complete redirection.
     pub span: SourceSpan,
+    /// Exact source slice covered by [`Self::span`].
     pub raw: String,
+    /// Optional source file descriptor text preceding the operator.
     pub descriptor: Option<String>,
+    /// Redirection target word, when the syntax has one.
     pub target: Option<ShellWord>,
     /// Source-backed delimiter and body facts for a here-document.
     pub here_document: Option<HereDocument>,
@@ -310,54 +407,82 @@ pub struct Redirection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Source-backed facts for a here-document.
 pub struct HereDocument {
+    /// Delimiter word as written and conservatively decoded.
     pub delimiter: ShellWord,
+    /// Span of the here-document body, excluding its delimiter line.
     pub body_span: Option<SourceSpan>,
     /// The bytes supplied on stdin after quote handling and optional tab
     /// stripping, but only when no runtime expansion is possible.
     pub literal_body: Option<String>,
+    /// Runtime-expansion reasons that prevented a literal body.
     pub dynamic_reasons: Vec<DynamicReason>,
 }
 
+/// Broad destination class of a Bash redirection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum RedirectionKind {
+    /// Filesystem path or file-descriptor redirection.
     File,
+    /// Multi-line here-document input.
     HereDocument,
+    /// Single-word here-string input.
     HereString,
 }
 
+/// Parsed Bash redirection operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum RedirectionOperator {
+    /// Input from a file (`<`).
     Input,
+    /// Truncating output to a file (`>`).
     Output,
+    /// Appending output to a file (`>>`).
     Append,
+    /// Combined stdout/stderr output (`&>` or `>&word`).
     OutputAndError,
+    /// Appending combined stdout/stderr (`&>>`).
     AppendOutputAndError,
+    /// Input file-descriptor duplication (`<&`).
     DuplicateInput,
+    /// Output file-descriptor duplication (`>&`).
     DuplicateOutput,
+    /// Output that overrides noclobber (`>|`).
     Clobber,
+    /// Closing an input descriptor (`<&-`).
     CloseInput,
+    /// Closing an output descriptor (`>&-`).
     CloseOutput,
+    /// Here-document input (`<<`).
     HereDocument,
+    /// Tab-stripping here-document input (`<<-`).
     HereDocumentStripTabs,
+    /// Here-string input (`<<<`).
     HereString,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Half-open byte range with corresponding Tree-sitter source positions.
 pub struct SourceSpan {
+    /// Inclusive UTF-8 byte offset.
     pub start_byte: usize,
+    /// Exclusive UTF-8 byte offset.
     pub end_byte: usize,
+    /// Inclusive start position.
     pub start: SourcePosition,
+    /// Exclusive end position.
     pub end: SourcePosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Zero-based position in Bash source.
 pub struct SourcePosition {
     /// Zero-based row.
     pub row: usize,
@@ -365,27 +490,45 @@ pub struct SourcePosition {
     pub column: usize,
 }
 
+/// Reason an analysis contains useful but incomplete facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum IncompleteReason {
+    /// Tree-sitter reported syntax errors in its recovered tree.
     SyntaxErrors,
-    NodeLimit { max_nodes: usize },
-    DepthLimit { max_depth: usize },
+    /// AST traversal stopped at the configured node limit.
+    NodeLimit {
+        /// Configured maximum nodes.
+        max_nodes: usize,
+    },
+    /// AST traversal stopped at the configured recursion limit.
+    DepthLimit {
+        /// Configured maximum depth.
+        max_depth: usize,
+    },
 }
 
+/// Reason no Bash analysis facts could be produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum UnavailableReason {
+    /// Source exceeded the pre-parse byte limit.
     InputTooLarge {
+        /// Actual UTF-8 source length.
         actual_bytes: usize,
+        /// Configured maximum source length.
         max_bytes: usize,
     },
+    /// Tree-sitter parsing exceeded the wall-clock budget.
     ParseTimeLimit {
+        /// Configured budget rounded up to whole milliseconds.
         max_millis: u64,
     },
+    /// The bundled Bash grammar could not be installed in the parser.
     ParserInitialization(String),
+    /// Tree-sitter returned no syntax tree without reporting a timeout.
     ParserReturnedNoTree,
 }
 

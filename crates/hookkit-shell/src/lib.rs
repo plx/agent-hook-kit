@@ -1,4 +1,5 @@
 //! Opt-in shell tool-call extraction and bounded Bash syntax analysis.
+#![deny(missing_docs)]
 //!
 //! This crate deliberately separates four concerns:
 //!
@@ -17,6 +18,7 @@
 
 pub mod bash;
 pub mod call;
+/// Loss-aware inference of explicit file reads and modifications from Bash.
 pub mod file_access;
 pub mod summary;
 

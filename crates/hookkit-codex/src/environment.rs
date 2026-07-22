@@ -9,17 +9,28 @@ use hookkit_core::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Canonical paths injected for a hook discovered from a Codex plugin.
 pub struct CodexPluginEnvironment {
+    /// Root directory containing the installed plugin.
     pub root: Utf8PathBuf,
+    /// Plugin-specific persistent data directory.
     pub data: Utf8PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Native process environment available to a Codex command hook.
 pub struct CodexCommandEnvironment {
+    /// Plugin paths when all canonical and compatibility variables are present
+    /// and agree; otherwise `None` for an ordinary hook.
     pub plugin: Option<CodexPluginEnvironment>,
 }
 
 impl CodexCommandEnvironment {
+    /// Parses Codex's declared hook variables for `event`.
+    ///
+    /// Partial plugin variable sets are ignored because Codex inherits ambient
+    /// process state. A complete set must contain non-empty canonical values
+    /// and matching Claude-compatible aliases.
     pub fn from_map(
         event: &EventId,
         variables: &EnvironmentVariables,

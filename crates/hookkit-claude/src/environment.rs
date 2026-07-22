@@ -11,30 +11,45 @@ use hookkit_core::{
 use std::collections::BTreeMap;
 use std::fmt;
 
+/// Native events for which Claude exposes a required `CLAUDE_ENV_FILE` path.
 pub const ENVIRONMENT_FILE_EVENTS: &[&str] =
     &["SessionStart", "Setup", "CwdChanged", "FileChanged"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Whether the hook runs in a local or Claude-hosted session.
 pub enum ClaudeExecutionLocation {
+    /// A local Claude Code process.
     Local {
+        /// Remote-control bridge session, when the local process is controlled
+        /// from another client.
         remote_control_session_id: Option<String>,
     },
+    /// A Claude-hosted remote process.
     Cloud {
+        /// Native cloud session identifier.
         remote_session_id: String,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effort level supplied by Claude's hook environment.
 pub enum ClaudeEffort {
+    /// Low effort.
     Low,
+    /// Medium effort.
     Medium,
+    /// High effort.
     High,
+    /// Extra-high effort.
     Xhigh,
+    /// Maximum effort.
     Max,
+    /// Forward-compatible value not known to this snapshot.
     Unknown(String),
 }
 
 impl ClaudeEffort {
+    /// Returns the exact environment string for this effort level.
     pub fn as_str(&self) -> &str {
         match self {
             Self::Low => "low",
@@ -53,20 +68,24 @@ impl ClaudeEffort {
 pub struct ClaudePluginOptions(BTreeMap<String, String>);
 
 impl ClaudePluginOptions {
+    /// Returns the raw value for an uppercased option suffix.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(String::as_str)
     }
 
+    /// Iterates through option names and values in lexicographic name order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.0
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
     }
 
+    /// Iterates through option names in lexicographic order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)
     }
 
+    /// Reports whether no plugin options were exported.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -82,24 +101,41 @@ impl fmt::Debug for ClaudePluginOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Paths and options injected for a plugin-provided Claude hook.
 pub struct ClaudePluginEnvironment {
+    /// Root directory containing the installed plugin.
     pub root: Utf8PathBuf,
+    /// Plugin-specific persistent data directory.
     pub data: Utf8PathBuf,
+    /// Raw plugin options with values redacted from `Debug`.
     pub options: ClaudePluginOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Native process environment supplied to a Claude Code command hook.
 pub struct ClaudeCommandEnvironment {
+    /// Project root from `CLAUDE_PROJECT_DIR`.
     pub project_dir: Utf8PathBuf,
+    /// Native session identity from `CLAUDE_CODE_SESSION_ID`.
     pub session_id: SessionId,
+    /// Writable environment file exposed only for
+    /// [`ENVIRONMENT_FILE_EVENTS`].
     pub environment_file: Option<Utf8PathBuf>,
+    /// Local, remote-control, or cloud execution context.
     pub execution_location: ClaudeExecutionLocation,
+    /// Plugin paths and options when the hook belongs to a plugin.
     pub plugin: Option<ClaudePluginEnvironment>,
+    /// Optional effort level, preserving forward-compatible unknown values.
     pub effort: Option<ClaudeEffort>,
+    /// Optional W3C trace context supplied by Claude.
     pub traceparent: Option<String>,
 }
 
 impl ClaudeCommandEnvironment {
+    /// Parses Claude's declared hook variables for `event`.
+    ///
+    /// Fixed marker values and conditional all-or-none profiles for cloud,
+    /// remote-control, environment-file, and plugin state are validated.
     pub fn from_map(
         event: &EventId,
         variables: &EnvironmentVariables,
@@ -107,6 +143,10 @@ impl ClaudeCommandEnvironment {
         <Self as CommandEnvironmentSpec>::from_variables(event, variables)
     }
 
+    /// Cross-checks session and effort values duplicated in native JSON input.
+    ///
+    /// Session identity must always agree. Effort is compared only when both
+    /// the environment and event payload supply it.
     pub fn validate_input(
         &self,
         event: &EventId,

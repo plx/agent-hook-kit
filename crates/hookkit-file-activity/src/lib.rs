@@ -1,4 +1,5 @@
 //! Loss-aware file activity observation and reconciliation.
+#![deny(missing_docs)]
 //!
 //! Tool inspection is evidence, not an audit log. This crate retains both the
 //! candidate target and the limits of the inference, then provides timestamp
@@ -22,76 +23,119 @@ use std::process::Command;
 use std::time::{Duration, SystemTime};
 use walkdir::{DirEntry, WalkDir};
 
+/// Session-state family name used by [`FileActivityStore`].
 pub const FILE_ACTIVITY_FAMILY: &str = "agent-hook-kit.file-activity";
+/// Windowed entity name containing pending file-activity events.
 pub const PENDING_ACTIVITY_ENTITY: &str = "pending-files";
+/// Monotonic entity name containing the fallback reconciliation cursor.
 pub const RECONCILIATION_CURSOR_ENTITY: &str = "reconciliation-cursor";
 
+/// Error returned by file-activity persistence, traversal, or reconciliation.
 #[derive(Debug, thiserror::Error)]
 pub enum FileActivityError {
+    /// Session-state operation failed.
     #[error(transparent)]
     State(#[from] hookkit_session_state::StateError),
+    /// Filesystem or subprocess I/O failed.
     #[error("file activity I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// Persisted or subprocess JSON could not be decoded.
     #[error("file activity JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    /// A filesystem path cannot be represented by this UTF-8-only API.
     #[error("file activity path is not valid UTF-8: {0}")]
     NonUtf8Path(PathBuf),
+    /// A configured activity glob is invalid.
     #[error("invalid file activity glob `{pattern}`: {message}")]
-    InvalidGlob { pattern: String, message: String },
+    InvalidGlob {
+        /// Invalid glob text.
+        pattern: String,
+        /// Glob parser diagnostic.
+        message: String,
+    },
 }
 
+/// Result type returned by file-activity operations.
 pub type Result<T> = std::result::Result<T, FileActivityError>;
 
+/// Possible mutating effect retained for a file target.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum FileActivityEffect {
+    /// Creates a path or changes an existing path.
     CreateOrModify,
+    /// Removes a path.
     Delete,
+    /// Reads and removes the source side of a move.
     MoveSource,
+    /// Creates or replaces the destination side of a move.
     MoveDestination,
+    /// Some write may occur, but its exact role is unknown.
     MaybeWrite,
 }
 
+/// Analyzer or fallback that produced an activity event.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum FileActivitySource {
+    /// A path-bearing field in structured tool input.
     StructuredToolInput,
+    /// A literal patch payload.
     Patch,
+    /// Shell syntax, argv semantics, or a shell patch here-document.
     ShellInference,
+    /// Filesystem modification-time reconciliation.
     FilesystemMtime,
+    /// Opt-in version-control dirty-state reconciliation.
     VcsDirty,
 }
 
+/// Strength of the static or fallback association with a target.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityCertainty {
+    /// Directly observed in tool input or fallback state.
     Direct,
+    /// Directly identified, but located in conditional or deferred shell code.
     Conditional,
+    /// Conservatively inferred and potentially over-inclusive.
     Heuristic,
 }
 
+/// Region selected by a file-activity target.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum FileActivityScope {
+    /// Only the named path.
     Exact,
+    /// Children of the directory, excluding the directory itself.
     Descendants,
+    /// The named path and, when applicable, its descendants.
     ExactOrDescendants,
+    /// Paths matched by the glob expression.
     Glob,
 }
 
+/// Persistence-compatible target for deferred file discovery.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum FileActivityTarget {
+    /// A lexically resolved path and its selection scope.
     Path {
+        /// Resolved path or glob expression.
         path: Utf8PathBuf,
+        /// Portion of the file tree selected by `path`.
         scope: FileActivityScope,
     },
+    /// A whole workspace, optionally rooted at a known path.
     Workspace {
+        /// Known root, or `None` for all roots supplied during resolution.
         root: Option<Utf8PathBuf>,
     },
 }
 
 impl FileActivityTarget {
+    /// Creates an exact-path target.
     pub fn exact(path: Utf8PathBuf) -> Self {
         Self::Path {
             path,
@@ -100,38 +144,62 @@ impl FileActivityTarget {
     }
 }
 
+/// One possible mutating file activity with correlation metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileActivityEvidence {
+    /// File or workspace region that may have changed.
     pub target: FileActivityTarget,
+    /// Possible mutating effect.
     pub effect: FileActivityEffect,
+    /// Analyzer or fallback that supplied the evidence.
     pub source: FileActivitySource,
+    /// Strength of the association.
     pub certainty: ActivityCertainty,
+    /// Time at which the evidence was observed, not necessarily the write time.
     pub observed_at: UtcTimestamp,
+    /// Native hook event name, when available.
     pub event: Option<String>,
+    /// Native tool-call correlation identifier, when available.
     pub tool_call_id: Option<String>,
+    /// Native turn identifier, when available.
     pub turn_id: Option<String>,
+    /// Human-readable provenance or qualification.
     pub detail: Option<String>,
 }
 
+/// Known blind spot encountered while observing file activity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileActivityGap {
+    /// Analyzer or fallback that encountered the gap.
     pub source: FileActivitySource,
+    /// Time at which the gap was observed.
     pub observed_at: UtcTimestamp,
+    /// Native hook event name, when available.
     pub event: Option<String>,
+    /// Native tool-call correlation identifier, when available.
     pub tool_call_id: Option<String>,
+    /// Native turn identifier, when available.
     pub turn_id: Option<String>,
+    /// Human-readable description of the missing evidence.
     pub detail: String,
 }
 
+/// Journal event retained by [`PendingFileActivity`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "type", content = "value")]
 pub enum FileActivityEvent {
+    /// A possible mutating file activity.
     Evidence(FileActivityEvidence),
+    /// A known gap in activity observation.
     Gap(FileActivityGap),
 }
 
+/// Windowed aggregate of targets awaiting downstream processing.
+///
+/// Compaction preserves the target set and event counts; individual event
+/// provenance remains in the journal only until that window is consumed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingFileActivity {
@@ -141,18 +209,22 @@ pub struct PendingFileActivity {
 }
 
 impl PendingFileActivity {
+    /// Returns the deduplicated targets accumulated in the current window.
     pub fn targets(&self) -> &BTreeSet<FileActivityTarget> {
         &self.targets
     }
 
+    /// Returns the number of evidence events applied to the window.
     pub fn evidence_count(&self) -> usize {
         self.evidence_count
     }
 
+    /// Returns the number of gap events applied to the window.
     pub fn gap_count(&self) -> usize {
         self.gap_count
     }
 
+    /// Returns whether observation recorded at least one known blind spot.
     pub fn has_gaps(&self) -> bool {
         self.gap_count != 0
     }
@@ -176,9 +248,11 @@ impl JournalEntity for PendingFileActivity {
     }
 }
 
+/// Monotonic cursor through the interval covered by fallback reconciliation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ReconciliationCursor {
+    /// Latest instant through which fallback discoveries were durably appended.
     pub reconciled_through: Option<UtcTimestamp>,
 }
 
@@ -197,12 +271,15 @@ impl JournalEntity for ReconciliationCursor {
     }
 }
 
+/// Activity events derived from one observation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActivityReport {
+    /// Evidence and gaps in deterministic analyzer order.
     pub events: Vec<FileActivityEvent>,
 }
 
 impl ActivityReport {
+    /// Iterates over evidence events.
     pub fn evidence(&self) -> impl Iterator<Item = &FileActivityEvidence> {
         self.events.iter().filter_map(|event| match event {
             FileActivityEvent::Evidence(evidence) => Some(evidence),
@@ -210,6 +287,7 @@ impl ActivityReport {
         })
     }
 
+    /// Iterates over gap events.
     pub fn gaps(&self) -> impl Iterator<Item = &FileActivityGap> {
         self.events.iter().filter_map(|event| match event {
             FileActivityEvent::Evidence(_) => None,
@@ -217,11 +295,13 @@ impl ActivityReport {
         })
     }
 
+    /// Returns whether the report contains neither evidence nor gaps.
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
 }
 
+/// Session-scoped journals used for pending activity and reconciliation state.
 #[derive(Debug, Clone)]
 pub struct FileActivityStore {
     state: SessionState,
@@ -230,10 +310,12 @@ pub struct FileActivityStore {
 }
 
 impl FileActivityStore {
+    /// Ensures session state from the runtime context and opens the activity journals.
     pub fn ensure(context: &RuntimeContext<'_>, root: StateRoot) -> Result<Self> {
         Self::from_state(SessionState::ensure(context, root)?)
     }
 
+    /// Opens the activity journals within an existing session state.
     pub fn from_state(state: SessionState) -> Result<Self> {
         let scope = state
             .family(FamilyId::new(FILE_ACTIVITY_FAMILY, 1)?)?
@@ -253,14 +335,20 @@ impl FileActivityStore {
         })
     }
 
+    /// Returns the underlying session state.
     pub fn state(&self) -> &SessionState {
         &self.state
     }
 
+    /// Returns the windowed pending-activity journal.
     pub fn pending(&self) -> &EntityJournal<PendingFileActivity> {
         &self.pending
     }
 
+    /// Appends every report event under a stable, per-observation key prefix.
+    ///
+    /// The event index is appended to `event_key_prefix`, so callers must use a
+    /// prefix that uniquely and repeatably identifies the source observation.
     pub fn append_report(&self, event_key_prefix: &str, report: &ActivityReport) -> Result<()> {
         for (index, event) in report.events.iter().enumerate() {
             self.pending
@@ -269,6 +357,7 @@ impl FileActivityStore {
         Ok(())
     }
 
+    /// Reads the latest durably recorded reconciliation cursor.
     pub fn reconciled_through(&self) -> Result<Option<UtcTimestamp>> {
         Ok(self
             .cursor
@@ -287,6 +376,7 @@ impl FileActivityStore {
         Ok(())
     }
 
+    /// Returns the current session's start time for initial reconciliation.
     pub fn bootstrap_started_at(&self) -> Result<UtcTimestamp> {
         self.state.current_session_started_at().map_err(Into::into)
     }
@@ -424,28 +514,44 @@ impl ObservationMetadata {
     }
 }
 
+/// Optional version-control fallback used during reconciliation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum VcsFallback {
+    /// Do not inspect version-control state.
     #[default]
     Disabled,
     /// Broad fallback. Includes changes that may predate the agent session.
     GitDirty,
 }
 
+/// Bounds and evidence sources for one reconciliation interval.
 #[derive(Debug, Clone)]
 pub struct ReconciliationOptions {
+    /// Workspace roots to scan or query.
     pub roots: Vec<Utf8PathBuf>,
+    /// Lower bound used only when no durable cursor is present.
     pub fallback_since: Option<UtcTimestamp>,
+    /// Inclusive upper bound recorded after successful reconciliation.
     pub through: UtcTimestamp,
+    /// Clock-resolution allowance applied around the interval bounds.
     pub timestamp_tolerance: Duration,
+    /// Whether to scan filesystem modification times.
     pub filesystem_mtime: bool,
+    /// Optional version-control dirty-state fallback.
     pub vcs: VcsFallback,
+    /// Maximum directory entries visited by the filesystem scan.
     pub max_entries: usize,
+    /// Directory basenames pruned from recursive traversal.
     pub ignored_directory_names: BTreeSet<String>,
+    /// Roots excluded from fallback evidence and traversal.
     pub excluded_roots: BTreeSet<Utf8PathBuf>,
 }
 
 impl ReconciliationOptions {
+    /// Creates options with mtime scanning enabled and VCS fallback disabled.
+    ///
+    /// The lower bound is selected later from the durable cursor, the explicit
+    /// fallback, or the session start time, in that precedence order.
     pub fn new(roots: Vec<Utf8PathBuf>, through: UtcTimestamp) -> Self {
         Self {
             roots,
@@ -461,20 +567,31 @@ impl ReconciliationOptions {
     }
 }
 
+/// Summary of fallback evidence and traversal limits for one reconciliation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReconciliationReport {
+    /// Effective lower bound, if one could be established.
     pub since: Option<UtcTimestamp>,
+    /// Requested upper bound.
     pub through: Option<UtcTimestamp>,
+    /// Files discovered through modification-time scanning.
     pub filesystem_files: usize,
+    /// Files discovered through version-control dirty state.
     pub vcs_files: usize,
+    /// Directory entries charged to the traversal budget.
     pub scanned_entries: usize,
+    /// Whether the filesystem scan stopped at its entry budget.
     pub truncated: bool,
+    /// Non-fatal fallback failures and coverage limitations.
     pub gaps: Vec<ReconciliationGap>,
 }
 
+/// Non-fatal gap encountered during fallback reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReconciliationGap {
+    /// Fallback source that encountered the gap.
     pub source: FileActivitySource,
+    /// Human-readable description of the limitation.
     pub detail: String,
 }
 
@@ -776,15 +893,21 @@ fn push_reconciliation_gap(
     });
 }
 
+/// Bounds for materializing pending activity into existing files.
 #[derive(Debug, Clone)]
 pub struct ResolveOptions {
+    /// Workspace roots used for unrooted workspace and relative glob targets.
     pub roots: Vec<Utf8PathBuf>,
+    /// Maximum directory entries visited across all targets.
     pub max_entries: usize,
+    /// Directory basenames pruned from recursive traversal.
     pub ignored_directory_names: BTreeSet<String>,
+    /// Roots excluded from results and traversal.
     pub excluded_roots: BTreeSet<Utf8PathBuf>,
 }
 
 impl ResolveOptions {
+    /// Creates bounded resolution options with the default ignored directories.
     pub fn new(roots: Vec<Utf8PathBuf>) -> Self {
         Self {
             roots,
@@ -795,14 +918,25 @@ impl ResolveOptions {
     }
 }
 
+/// Existing files materialized from a pending activity window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolvedFileActivity {
+    /// Deterministic set of existing regular files.
     pub files: BTreeSet<Utf8PathBuf>,
+    /// Targets left unresolved after budget exhaustion.
     pub unresolved_targets: Vec<FileActivityTarget>,
+    /// Directory entries charged to the shared traversal budget.
     pub scanned_entries: usize,
+    /// Whether resolution stopped at `ResolveOptions::max_entries`.
     pub truncated: bool,
 }
 
+/// Materializes pending targets into existing regular files within explicit bounds.
+///
+/// Directory symlinks are not followed. Exact regular-file probes are retained
+/// for backward compatibility and do not consume the traversal-entry budget.
+/// Invalid glob syntax is returned as an error; other target-local traversal
+/// failures are ignored by this compatibility API.
 pub fn resolve_files(
     activity: &PendingFileActivity,
     options: &ResolveOptions,

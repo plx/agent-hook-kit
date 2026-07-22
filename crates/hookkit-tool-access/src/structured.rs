@@ -44,6 +44,7 @@ impl Default for StructuredFieldAnalyzer {
 }
 
 impl StructuredFieldAnalyzer {
+    /// Creates an analyzer with the default path-like key heuristics.
     pub fn new() -> Self {
         Self::default()
     }
@@ -69,10 +70,12 @@ impl StructuredFieldAnalyzer {
         Ok(self)
     }
 
+    /// Returns the exact key names treated as path-bearing at any object depth.
     pub fn path_keys(&self) -> &BTreeSet<String> {
         &self.path_keys
     }
 
+    /// Returns explicitly configured JSON Pointers and their access intents.
     pub fn exact_pointers(&self) -> &BTreeMap<String, AccessIntent> {
         &self.exact_pointers
     }
@@ -221,8 +224,11 @@ impl StructuredFieldAnalyzer {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+/// Invalid exact-pointer configuration for [`StructuredFieldAnalyzer`].
 pub enum StructuredFieldConfigError {
+    /// The pointer is empty and would select the entire tool input.
     EmptyPointer,
+    /// The pointer is not an RFC 6901 absolute JSON Pointer.
     InvalidPointer,
 }
 

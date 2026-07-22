@@ -9,13 +9,18 @@ use std::path::{Path, PathBuf};
 /// Key for locating artifacts scoped to a session, turn, or tool use.
 #[derive(Debug, Clone)]
 pub struct ArtifactKey {
+    /// Native session identifier.
     pub session_id: String,
+    /// Optional native turn identifier.
     pub turn_id: Option<String>,
+    /// Optional native tool-call identifier.
     pub tool_use_id: Option<String>,
+    /// Application-defined artifact label.
     pub label: String,
 }
 
 impl ArtifactKey {
+    /// Creates a session-scoped artifact key.
     pub fn new(session_id: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
             session_id: session_id.into(),
@@ -25,11 +30,13 @@ impl ArtifactKey {
         }
     }
 
+    /// Adds a turn scope to the key.
     pub fn with_turn(mut self, turn_id: impl Into<String>) -> Self {
         self.turn_id = Some(turn_id.into());
         self
     }
 
+    /// Adds a tool-call scope to the key.
     pub fn with_tool_use(mut self, tool_use_id: impl Into<String>) -> Self {
         self.tool_use_id = Some(tool_use_id.into());
         self

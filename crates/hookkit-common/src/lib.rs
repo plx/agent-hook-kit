@@ -1,4 +1,5 @@
 //! Cross-harness wrapper enums and message/output helpers.
+#![deny(missing_docs)]
 //!
 //! This crate provides common wrapper enums that align semantically
 //! equivalent events across Claude Code, Codex, Gemini CLI, and Antigravity while preserving

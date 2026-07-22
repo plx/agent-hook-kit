@@ -10,21 +10,32 @@ use std::collections::BTreeMap;
 use crate::{GeminiCommandEnvironment, protocol::SNAPSHOT_ID};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Shared native input envelope for implemented Gemini CLI catalog events.
+///
+/// Event-specific and unknown fields are retained losslessly in the flattened
+/// field map and can be accessed through [`Self::field`] or [`Self::fields`].
 pub struct CatalogInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Native event timestamp, retained as supplied.
     pub timestamp: String,
     #[serde(flatten)]
     fields: BTreeMap<String, serde_json::Value>,
 }
 
 impl CatalogInput {
+    /// Returns one event-specific or unknown top-level field.
     pub fn field(&self, name: &str) -> Option<&serde_json::Value> {
         self.fields.get(name)
     }
 
+    /// Returns all event-specific and unknown top-level fields.
     pub fn fields(&self) -> &BTreeMap<String, serde_json::Value> {
         &self.fields
     }
@@ -77,6 +88,10 @@ enum Outcome {
 }
 
 #[derive(Debug, Clone)]
+/// Type-erased output used by Gemini CLI catalog event wrappers.
+///
+/// Public event-specific output types are the intended constructors. This type
+/// exists so dynamic harness dispatch can retain the exact event arm.
 pub struct CatalogOutput {
     event: &'static str,
     outcome: Outcome,
@@ -166,6 +181,7 @@ fn specific(event: &'static str, fields: serde_json::Value) -> serde_json::Value
 
 macro_rules! event_spec {
     ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
+        #[doc = concat!("Native Gemini CLI `", $name, "` command contract.")]
         pub enum $event {}
 
         impl EventSpec for $event {
@@ -206,21 +222,30 @@ macro_rules! event_spec {
     };
 }
 
+/// Hook decision shared by Gemini CLI's structured catalog responses.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Decision {
+    /// Allow the lifecycle operation.
     Allow,
+    /// Deny the lifecycle operation.
     Deny,
+    /// Block using the legacy decision form.
     Block,
 }
 
 macro_rules! common_controls {
     ($output:ident, $name:literal) => {
         impl $output {
+            /// Creates an empty structured response.
             pub fn no_op() -> Self {
                 Self(CatalogOutput::json($name, serde_json::json!({})))
             }
 
+            /// Sets a top-level decision and optional reason.
+            ///
+            /// Returns an error if the response is already a blocking stderr
+            /// outcome.
             pub fn with_decision(
                 self,
                 decision: Decision,
@@ -236,24 +261,28 @@ macro_rules! common_controls {
                 }
             }
 
+            /// Sets the top-level `continue` control.
             pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("continue", continue_session.into())
                     .map(Self)
             }
 
+            /// Sets the top-level stop reason on a structured response.
             pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("stopReason", reason.into().into())
                     .map(Self)
             }
 
+            /// Sets whether Gemini suppresses ordinary hook output.
             pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("suppressOutput", suppress.into())
                     .map(Self)
             }
 
+            /// Sets a top-level system message on a structured response.
             pub fn with_system_message(
                 self,
                 message: impl Into<String>,
@@ -269,13 +298,16 @@ macro_rules! common_controls {
 macro_rules! system_event {
     ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
+        #[doc = concat!("Native response from a Gemini CLI `", $name, "` command hook.")]
         pub struct $output(CatalogOutput);
 
         impl $output {
+            /// Creates an empty structured response.
             pub fn no_op() -> Self {
                 Self(CatalogOutput::json($name, serde_json::json!({})))
             }
 
+            /// Creates a response containing a top-level system message.
             pub fn with_system_message(message: impl Into<String>) -> Self {
                 Self(CatalogOutput::json(
                     $name,
@@ -311,13 +343,16 @@ system_event!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Gemini CLI session-start command hook.
 pub struct SessionStartOutput(CatalogOutput);
 
 impl SessionStartOutput {
+    /// Creates an empty structured response.
     pub fn no_op() -> Self {
         Self(CatalogOutput::json("SessionStart", serde_json::json!({})))
     }
 
+    /// Creates a response containing a top-level system message.
     pub fn with_system_message(message: impl Into<String>) -> Self {
         Self(CatalogOutput::json(
             "SessionStart",
@@ -325,6 +360,7 @@ impl SessionStartOutput {
         ))
     }
 
+    /// Creates a response containing both agent context and a system message.
     pub fn with_context_and_system_message(
         additional_context: impl Into<String>,
         system_message: impl Into<String>,
@@ -340,6 +376,7 @@ impl SessionStartOutput {
         Self(CatalogOutput::json("SessionStart", value))
     }
 
+    /// Creates a hook-specific response that appends agent context.
     pub fn with_context(additional_context: impl Into<String>) -> Self {
         Self(CatalogOutput::json(
             "SessionStart",
@@ -359,9 +396,11 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Gemini CLI before-agent command hook.
 pub struct BeforeAgentOutput(CatalogOutput);
 
 impl BeforeAgentOutput {
+    /// Creates a hook-specific response that appends agent context.
     pub fn with_context(additional_context: impl Into<String>) -> Self {
         Self(CatalogOutput::json(
             "BeforeAgent",
@@ -372,6 +411,7 @@ impl BeforeAgentOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("BeforeAgent", message))
     }
@@ -386,9 +426,11 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Gemini CLI before-model command hook.
 pub struct BeforeModelOutput(CatalogOutput);
 
 impl BeforeModelOutput {
+    /// Replaces the pending native model request.
     pub fn replace_request(request: serde_json::Value) -> Self {
         Self(CatalogOutput::json(
             "BeforeModel",
@@ -396,6 +438,7 @@ impl BeforeModelOutput {
         ))
     }
 
+    /// Supplies a native model response without executing the request.
     pub fn replace_response(response: serde_json::Value) -> Self {
         Self(CatalogOutput::json(
             "BeforeModel",
@@ -403,6 +446,7 @@ impl BeforeModelOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("BeforeModel", message))
     }
@@ -417,9 +461,11 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Gemini CLI after-model command hook.
 pub struct AfterModelOutput(CatalogOutput);
 
 impl AfterModelOutput {
+    /// Replaces the native model response.
     pub fn replace_response(response: serde_json::Value) -> Self {
         Self(CatalogOutput::json(
             "AfterModel",
@@ -427,6 +473,7 @@ impl AfterModelOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("AfterModel", message))
     }
@@ -441,9 +488,11 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Gemini CLI after-agent command hook.
 pub struct AfterAgentOutput(CatalogOutput);
 
 impl AfterAgentOutput {
+    /// Denies completion and chooses whether Gemini clears accumulated context.
     pub fn deny(reason: impl Into<String>, clear_context: bool) -> Self {
         let mut value = specific(
             "AfterAgent",
@@ -455,6 +504,7 @@ impl AfterAgentOutput {
         Self(CatalogOutput::json("AfterAgent", value))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("AfterAgent", message))
     }
@@ -468,6 +518,7 @@ event_spec!(
     ["prompt", "prompt_response", "stop_hook_active"]
 );
 
+/// Returns every native command implementation defined in this catalog module.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     vec![
         hookkit_core::NativeEventDescriptor::command::<AfterAgent>(&["structured", "exit-2"]),
@@ -481,6 +532,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     ]
 }
 
+/// Returns definitive discriminator metadata for catalog-module events.
 pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescriptor> {
     vec![
         hookkit_core::IdentificationDescriptor::definitive::<AfterAgent>(
@@ -518,6 +570,10 @@ pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescripto
     ]
 }
 
+/// Decodes a catalog-module event.
+///
+/// Returns `Ok(None)` when `event` is not implemented by this module. A known
+/// event with malformed native input returns an error.
 pub fn decode(event: &EventId, raw: &RawInvocation) -> hookkit_core::Result<Option<CatalogInput>> {
     let input = match event.name() {
         "AfterAgent" => AfterAgent::parse(raw)?,

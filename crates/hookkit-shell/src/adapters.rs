@@ -10,15 +10,19 @@ use crate::call::ShellToolCallError;
 use crate::call::{ShellToolCallExt, ShellToolCallMatch, ShellToolProfile, ToolPhase};
 
 #[cfg(feature = "claude")]
+/// Exact Claude Code `Bash` tool profile.
 pub const CLAUDE_BASH_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("Bash", "/command", None);
 #[cfg(feature = "codex")]
+/// Exact Codex `Bash` tool profile.
 pub const CODEX_BASH_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("Bash", "/command", None);
 #[cfg(feature = "gemini")]
+/// Exact Gemini CLI `run_shell_command` tool profile.
 pub const GEMINI_RUN_SHELL_COMMAND_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("run_shell_command", "/command", None);
 #[cfg(feature = "antigravity")]
+/// Exact Antigravity `run_command` tool profile, including its optional cwd.
 pub const ANTIGRAVITY_RUN_COMMAND_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("run_command", "/CommandLine", Some("/Cwd"));
 

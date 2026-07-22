@@ -1,3 +1,9 @@
+//! Exact, profile-driven extraction of shell commands from native tool calls.
+//!
+//! Extraction intentionally does not probe alternate field names: a profile
+//! either matches its documented tool name and JSON path or returns a typed
+//! mismatch/error.
+
 use std::{borrow::Cow, error::Error, fmt};
 
 use hookkit_core::{EventId, HarnessId, Utf8Path};
@@ -8,7 +14,9 @@ use serde_json::{Map, Value};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum ToolPhase {
+    /// Input observed before tool execution.
     Pre,
+    /// Input and optional response observed after tool execution.
     Post,
 }
 
@@ -16,7 +24,9 @@ pub enum ToolPhase {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum JsonRef<'a> {
+    /// Borrowed arbitrary JSON value.
     Value(&'a Value),
+    /// Borrowed JSON object guaranteed by a native contract.
     Object(&'a Map<String, Value>),
 }
 
@@ -89,14 +99,17 @@ impl ShellToolProfile {
         Ok(self)
     }
 
+    /// Returns the exact tool name matched by this profile.
     pub fn tool_name(&self) -> &str {
         &self.tool_name
     }
 
+    /// Returns the JSON Pointer locating the shell command string.
     pub fn command_pointer(&self) -> &str {
         &self.command_pointer
     }
 
+    /// Returns the optional JSON Pointer locating a command-specific cwd.
     pub fn cwd_pointer(&self) -> Option<&str> {
         self.cwd_pointer.as_deref()
     }
@@ -207,13 +220,21 @@ impl ShellToolProfile {
 /// A borrowed, normalized shell call with its native JSON retained losslessly.
 #[derive(Debug, Clone)]
 pub struct ShellToolCallRef<'a> {
+    /// Harness that owns the native event.
     pub harness: HarnessId,
+    /// Exact native event identity.
     pub event: EventId,
+    /// Whether the call was observed before or after execution.
     pub phase: ToolPhase,
+    /// Exact harness-native tool name.
     pub tool_name: &'a str,
+    /// Borrowed command source.
     pub command: &'a str,
+    /// Command-specific or native-event working directory, if supplied.
     pub cwd: Option<&'a Utf8Path>,
+    /// Complete native tool input.
     pub tool_input: JsonRef<'a>,
+    /// Complete native response for post-tool observations, if supplied.
     pub response: Option<JsonRef<'a>>,
 }
 
@@ -221,30 +242,44 @@ pub struct ShellToolCallRef<'a> {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ShellToolCallMatch<'a> {
+    /// The native tool name does not match the profile.
     NotShell,
+    /// A well-formed shell call matched the profile.
     Matched(ShellToolCallRef<'a>),
+    /// The tool name matched but a required field was missing or malformed.
     Malformed(ShellToolCallError),
 }
 
 /// Extension implemented for supported native hook input types.
 pub trait ShellToolCallExt {
+    /// Attempts exact shell-tool extraction without guessing aliases or fields.
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Details of a malformed native tool call whose name matched a shell profile.
 pub struct ShellToolCallError {
+    /// Harness that owns the native event.
     pub harness: HarnessId,
+    /// Exact native event identity.
     pub event: EventId,
+    /// Matched harness-native tool name.
     pub tool_name: String,
+    /// JSON Pointer at which extraction failed.
     pub pointer: String,
+    /// Kind of malformed field.
     pub kind: ShellToolCallErrorKind,
 }
 
+/// Classification of a malformed shell-tool field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShellToolCallErrorKind {
+    /// The configured command field was absent.
     MissingCommand,
+    /// The configured command field existed but was not a string.
     CommandNotString,
+    /// The configured cwd field existed but was not a string.
     CwdNotString,
 }
 
@@ -280,8 +315,11 @@ impl ShellToolCallError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+/// Invalid [`ShellToolProfile`] definition.
 pub enum ShellToolProfileError {
+    /// The exact tool name was empty.
     EmptyToolName,
+    /// A command or cwd pointer was not a valid nonempty JSON Pointer.
     InvalidJsonPointer(String),
 }
 
