@@ -58,3 +58,40 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 1. The runner-owned per-file model can be added without changing native lowering.
+
+## Item 1 — Add the per-file deferred outcome model
+
+Outcome:
+
+- Added a runner-owned deferred domain module with the explicit `clean < auto-fixed < manual-fixes-needed` join, per-file results, stable report references, operational problems, uncovered/not-applicable files, coverage gaps, and typed artifact metadata.
+- Conservative job attribution reuses one report across every candidate, preserves all reports when tools overlap, and adds exact snapshot-changed non-candidates.
+- The legacy deferred executor now builds this model and bases its block/allow decision on per-file manual results plus separate operational problems. Native Stop lowering and legacy phase execution order are unchanged for this item.
+
+Public API/config/state changes:
+
+- Exported `FileStatus`, `FileResult`, `FileAssessment`, `CheckOutcome`, `ToolReport`, `ToolReportRef`, `OperationalProblem`, `CoverageGap`, `RunArtifact`, `CommandPhase`, and `DeferredRunResult` from `hookkit-tool-runner`.
+- No config or persisted-state change.
+
+Compatibility decision:
+
+- Existing phase-list executions are represented as a temporary `legacy-phases` workflow report. This is an honest compatibility wrapper: it records that an initial check was unavailable and is replaced by the staged workflow engine in Item 2.
+- Existing native output strings and wire formats remain unchanged.
+
+Focused validation:
+
+- `cargo test -p hookkit-tool-runner --lib deferred::model::tests`
+- `cargo test -p hookkit-tool-runner --all-targets` (real-tool lane remained ignored by design)
+- `cargo fmt --all`
+
+Known gaps:
+
+- Legacy deferred phases are still mutator-first. Item 2 replaces their execution semantics with explicit initial check, conditional remedy, and final verification.
+- Artifact construction still produces one combined legacy log per tool; Item 4 makes every command phase independently durable.
+
+Commit/PR:
+
+- This item is committed as the domain-model review unit.
+
+Next item readiness:
+
+- Ready for Item 2. The staged engine can emit `ToolReport` values directly without changing native lowering.

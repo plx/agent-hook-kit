@@ -241,25 +241,25 @@ Likely files:
 
 Tasks:
 
-- [ ] Introduce `FileStatus` with the explicit severity order clean < auto-fixed < manual.
-- [ ] Add per-file results, per-tool/workflow reports, operational problems, uncovered files, not-applicable files, coverage gaps, and artifact metadata.
-- [ ] Implement a deterministic aggregation function that joins results from multiple tools and jobs.
-- [ ] Preserve every report reference when more than one tool reports on the same file.
-- [ ] Ensure operational failures do not participate in the normal status join.
-- [ ] Define conservative attribution for batched/workspace results.
-- [ ] Include exact snapshot-changed files even when they were not original candidates.
-- [ ] Replace batch-wide boolean-only decision logic in the deferred path.
-- [ ] Do not change native output lowering yet; test the pure domain layer first.
+- [x] Introduce `FileStatus` with the explicit severity order clean < auto-fixed < manual.
+- [x] Add per-file results, per-tool/workflow reports, operational problems, uncovered files, not-applicable files, coverage gaps, and artifact metadata.
+- [x] Implement a deterministic aggregation function that joins results from multiple tools and jobs.
+- [x] Preserve every report reference when more than one tool reports on the same file.
+- [x] Ensure operational failures do not participate in the normal status join.
+- [x] Define conservative attribution for batched/workspace results.
+- [x] Include exact snapshot-changed files even when they were not original candidates.
+- [x] Replace batch-wide boolean-only decision logic in the deferred path.
+- [x] Do not change native output lowering yet; test the pure domain layer first.
 
 Required tests:
 
-- [ ] every pairwise and multi-value status join;
-- [ ] deterministic ordering independent of tool/job completion order;
-- [ ] one file with formatter auto-fix plus manual linter issue becomes manual and keeps both reports;
-- [ ] one tool report attached to multiple conservative batch candidates;
-- [ ] operational failure alongside successful file results remains separate;
-- [ ] changed non-candidate workspace file is added to the result;
-- [ ] uncovered and deleted files are not called clean.
+- [x] every pairwise and multi-value status join;
+- [x] deterministic ordering independent of tool/job completion order;
+- [x] one file with formatter auto-fix plus manual linter issue becomes manual and keeps both reports;
+- [x] one tool report attached to multiple conservative batch candidates;
+- [x] operational failure alongside successful file results remains separate;
+- [x] changed non-candidate workspace file is added to the result;
+- [x] uncovered and deleted files are not called clean.
 
 Exit criteria:
 

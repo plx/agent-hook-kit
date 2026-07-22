@@ -7,6 +7,13 @@
 //! [`hookkit_session_state`] and commits detailed run bundles before deciding
 //! whether a turn may stop.
 
+mod deferred;
+
+pub use deferred::{
+    CheckOutcome, CommandPhase, CoverageGap, DeferredRunResult, FileAssessment, FileResult,
+    FileStatus, OperationalProblem, RunArtifact, ToolReport, ToolReportRef,
+};
+
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
 use hookkit_common::{
@@ -867,6 +874,7 @@ struct BatchRunSummary {
     files: Vec<String>,
     tools: Vec<BatchToolSummary>,
     acknowledged: bool,
+    result: DeferredRunResult,
 }
 
 fn run_turn_completion_input(
@@ -971,8 +979,31 @@ fn run_turn_completion_view(
         Ok(loaded) => loaded,
         Err(error) => {
             let run = run.take().expect("run bundle is available");
-            run.write_text("config-error.log", &error.to_string())
+            let contents = error.to_string();
+            let artifact_path = run
+                .write_text("config-error.log", &contents)
                 .map_err(state_error)?;
+            let mut result = DeferredRunResult::default();
+            result.record_artifact(RunArtifact {
+                id: "configuration".into(),
+                absolute_path: artifact_path,
+                run_relative_path: "config-error.log".into(),
+                media_type: "text/plain; charset=utf-8".into(),
+                tool_id: None,
+                workflow_id: None,
+                job_id: None,
+                phase: CommandPhase::Configuration,
+                files: candidates.clone(),
+                contents: contents.clone(),
+            });
+            result.record_operational_problem(OperationalProblem {
+                id: "configuration".into(),
+                tool_id: None,
+                phase: Some("configuration".into()),
+                affected_files: candidates.clone(),
+                message: contents,
+                artifact_ids: vec!["configuration".into()],
+            });
             let summary_path = run
                 .commit(&BatchRunSummary {
                     status: "operational-failure",
@@ -981,6 +1012,7 @@ fn run_turn_completion_view(
                     files: candidates.iter().map(|path| slash_path(path)).collect(),
                     tools: Vec::new(),
                     acknowledged: false,
+                    result,
                 })
                 .map_err(state_error)?;
             return Ok(EntityOutcome::retain(lower_turn_completion(
@@ -995,8 +1027,31 @@ fn run_turn_completion_view(
         Ok(tools) => tools,
         Err(error) => {
             let run = run.take().expect("run bundle is available");
-            run.write_text("config-error.log", &error.to_string())
+            let contents = error.to_string();
+            let artifact_path = run
+                .write_text("config-error.log", &contents)
                 .map_err(state_error)?;
+            let mut result = DeferredRunResult::default();
+            result.record_artifact(RunArtifact {
+                id: "configuration".into(),
+                absolute_path: artifact_path,
+                run_relative_path: "config-error.log".into(),
+                media_type: "text/plain; charset=utf-8".into(),
+                tool_id: None,
+                workflow_id: None,
+                job_id: None,
+                phase: CommandPhase::Configuration,
+                files: candidates.clone(),
+                contents: contents.clone(),
+            });
+            result.record_operational_problem(OperationalProblem {
+                id: "configuration".into(),
+                tool_id: None,
+                phase: Some("configuration".into()),
+                affected_files: candidates.clone(),
+                message: contents,
+                artifact_ids: vec!["configuration".into()],
+            });
             let summary_path = run
                 .commit(&BatchRunSummary {
                     status: "operational-failure",
@@ -1005,6 +1060,7 @@ fn run_turn_completion_view(
                     files: candidates.iter().map(|path| slash_path(path)).collect(),
                     tools: Vec::new(),
                     acknowledged: false,
+                    result,
                 })
                 .map_err(state_error)?;
             return Ok(EntityOutcome::retain(lower_turn_completion(
@@ -1017,8 +1073,7 @@ fn run_turn_completion_view(
     let global_exclude = &loaded.config.settings.exclude;
     let global_diagnostics_dir = loaded.config.settings.diagnostics_directory.as_deref();
     let mut summaries = Vec::new();
-    let mut has_issues = false;
-    let mut has_operational_failure = false;
+    let mut result = DeferredRunResult::default();
 
     for (index, schema_spec) in tools.into_iter().enumerate() {
         if !schema_spec.enabled {
@@ -1045,12 +1100,36 @@ fn run_turn_completion_view(
         }
 
         let outcomes = run_jobs(&jobs, &context, loaded.config.settings.jobs);
-        let status = batch_outcome_status(&outcomes);
         let log_path = format!("tools/{index:03}.log");
-        run.as_ref()
+        let log_contents = format_batch_outcomes(&outcomes);
+        let absolute_log_path = run
+            .as_ref()
             .expect("run bundle is available")
-            .write_text(&log_path, &format_batch_outcomes(&outcomes))
+            .write_text(&log_path, &log_contents)
             .map_err(state_error)?;
+        let artifact_id = format!("{index:03}-{}-legacy", spec.id);
+        let status = record_legacy_tool_result(
+            &mut result,
+            &spec,
+            &jobs,
+            &outcomes,
+            index,
+            RunArtifact {
+                id: artifact_id,
+                absolute_path: absolute_log_path,
+                run_relative_path: log_path.clone().into(),
+                media_type: "text/plain; charset=utf-8".into(),
+                tool_id: Some(spec.id.clone()),
+                workflow_id: Some("legacy-phases".into()),
+                job_id: None,
+                phase: CommandPhase::FinalCheck,
+                files: jobs
+                    .iter()
+                    .flat_map(|job| job.files.iter().cloned())
+                    .collect(),
+                contents: log_contents,
+            },
+        );
         summaries.push(BatchToolSummary {
             tool_id: spec.id.clone(),
             file_count: runnable_paths.len(),
@@ -1058,8 +1137,6 @@ fn run_turn_completion_view(
             operational_failure: status.operational_failure,
             log: log_path,
         });
-        has_issues |= status.issues;
-        has_operational_failure |= status.operational_failure;
 
         if (loaded.config.settings.fail_fast && status.operational_failure)
             || (!loaded.config.settings.continue_after_issues && status.issues)
@@ -1068,11 +1145,24 @@ fn run_turn_completion_view(
         }
     }
 
-    let should_block = has_issues || has_operational_failure;
-    let status = if has_operational_failure {
+    let operational_files = result
+        .operational_problems
+        .values()
+        .flat_map(|problem| problem.affected_files.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    for candidate in &candidates {
+        if !result.files.contains_key(candidate) && !operational_files.contains(candidate) {
+            result.record_uncovered(candidate.clone());
+        }
+    }
+
+    let should_block = result.has_manual_fixes() || result.has_operational_problems();
+    let status = if result.has_operational_problems() {
         "operational-failure"
-    } else if has_issues {
+    } else if result.has_manual_fixes() {
         "issues"
+    } else if !result.uncovered_files.is_empty() && result.files.is_empty() {
+        "not-applicable"
     } else {
         "clean"
     };
@@ -1085,6 +1175,7 @@ fn run_turn_completion_view(
             files: candidates.iter().map(|path| slash_path(path)).collect(),
             tools: summaries,
             acknowledged: !should_block,
+            result,
         })
         .map_err(state_error)?;
 
@@ -1101,18 +1192,127 @@ fn run_turn_completion_view(
     }
 }
 
-fn batch_outcome_status(outcomes: &[ToolRunOutcome]) -> ToolBatchStatus {
+fn record_legacy_tool_result(
+    result: &mut DeferredRunResult,
+    spec: &ToolSpec,
+    jobs: &[ToolJob],
+    outcomes: &[ToolRunOutcome],
+    tool_index: usize,
+    artifact: RunArtifact,
+) -> ToolBatchStatus {
     let mut status = ToolBatchStatus {
         operational_failure: false,
         issues: false,
     };
-    for outcome in outcomes {
+    let artifact_id = artifact.id.clone();
+    result.record_artifact(artifact);
+    let mutating = spec
+        .phases
+        .iter()
+        .any(|phase| phase.enabled && phase.writes != WriteBehavior::None);
+    for (job_index, (job, outcome)) in jobs.iter().zip(outcomes).enumerate() {
+        let report_id = format!("{tool_index:03}-{}-{job_index:03}", spec.id);
         match outcome {
             ToolRunOutcome::Completed(completed) => {
-                status.issues |= completed.issues == IssueState::Issues;
+                let changed_files = match &completed.changes {
+                    ChangeState::Unchanged => Vec::new(),
+                    ChangeState::Changed { files } => files.clone(),
+                };
+                let file_status = if completed.issues == IssueState::Issues {
+                    status.issues = true;
+                    FileStatus::ManualFixesNeeded
+                } else if mutating || !changed_files.is_empty() {
+                    FileStatus::AutoFixed
+                } else {
+                    FileStatus::Clean
+                };
+                result.record_conservative_report(
+                    ToolReport {
+                        id: report_id,
+                        tool_id: spec.id.clone(),
+                        tool_name: spec.display_name.clone(),
+                        workflow_id: "legacy-phases".into(),
+                        job_id: format!("{job_index:03}"),
+                        candidate_files: completed.files.clone(),
+                        changed_files,
+                        initial_check: None,
+                        fix_attempted: mutating,
+                        final_check: Some(if completed.issues == IssueState::Issues {
+                            CheckOutcome::Issues
+                        } else {
+                            CheckOutcome::Clean
+                        }),
+                        conservative_attribution: completed.files.len() > 1,
+                        artifact_ids: vec![artifact_id.clone()],
+                    },
+                    file_status,
+                );
             }
-            ToolRunOutcome::ToolUnavailable { .. } | ToolRunOutcome::ToolFailed { .. } => {
+            ToolRunOutcome::ToolUnavailable {
+                phase,
+                executable,
+                changed_files,
+                ..
+            } => {
                 status.operational_failure = true;
+                result.record_operational_problem(OperationalProblem {
+                    id: report_id,
+                    tool_id: Some(spec.id.clone()),
+                    phase: Some(phase.clone()),
+                    affected_files: job.files.clone(),
+                    message: format!("executable `{executable}` is unavailable"),
+                    artifact_ids: vec![artifact_id.clone()],
+                });
+                result.reports.insert(
+                    format!("{tool_index:03}-{}-{job_index:03}", spec.id),
+                    ToolReport {
+                        id: format!("{tool_index:03}-{}-{job_index:03}", spec.id),
+                        tool_id: spec.id.clone(),
+                        tool_name: spec.display_name.clone(),
+                        workflow_id: "legacy-phases".into(),
+                        job_id: format!("{job_index:03}"),
+                        candidate_files: job.files.clone(),
+                        changed_files: changed_files.clone(),
+                        initial_check: None,
+                        fix_attempted: mutating,
+                        final_check: None,
+                        conservative_attribution: job.files.len() > 1,
+                        artifact_ids: vec![artifact_id.clone()],
+                    },
+                );
+            }
+            ToolRunOutcome::ToolFailed {
+                phase,
+                exit_code,
+                changed_files,
+                ..
+            } => {
+                status.operational_failure = true;
+                result.record_operational_problem(OperationalProblem {
+                    id: report_id.clone(),
+                    tool_id: Some(spec.id.clone()),
+                    phase: Some(phase.clone()),
+                    affected_files: job.files.clone(),
+                    message: format!("tool failed with exit code {exit_code:?}"),
+                    artifact_ids: vec![artifact_id.clone()],
+                });
+                result.reports.insert(
+                    report_id.clone(),
+                    ToolReport {
+                        id: report_id,
+                        tool_id: spec.id.clone(),
+                        tool_name: spec.display_name.clone(),
+                        workflow_id: "legacy-phases".into(),
+                        job_id: format!("{job_index:03}"),
+                        candidate_files: job.files.clone(),
+                        changed_files: changed_files.clone(),
+                        initial_check: None,
+                        fix_attempted: mutating,
+                        final_check: None,
+                        conservative_attribution: job.files.len() > 1,
+                        artifact_ids: vec![artifact_id.clone()],
+                    },
+                );
             }
         }
     }
