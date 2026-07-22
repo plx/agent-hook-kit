@@ -40,6 +40,17 @@ pub enum CommandPhase {
     Configuration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArtifactClassification {
+    Clean,
+    Issues,
+    Failure,
+    SpawnError,
+    ConfigurationError,
+    Unclassified,
+}
+
 /// A durable command report exposed to summaries and templates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +62,16 @@ pub struct RunArtifact {
     pub tool_id: Option<String>,
     pub workflow_id: Option<String>,
     pub job_id: Option<String>,
+    pub report_id: Option<String>,
     pub phase: CommandPhase,
+    pub classification: ArtifactClassification,
+    pub exit_code: Option<i32>,
+    pub program: Option<String>,
+    pub arguments: Vec<String>,
+    pub working_directory: Option<PathBuf>,
     pub files: Vec<PathBuf>,
+    pub candidate_files: Vec<PathBuf>,
+    pub changed_files: Vec<PathBuf>,
     pub contents: String,
 }
 
@@ -285,6 +304,8 @@ impl DeferredRunResult {
 
     pub fn record_artifact(&mut self, mut artifact: RunArtifact) {
         sort_paths(&mut artifact.files);
+        sort_paths(&mut artifact.candidate_files);
+        sort_paths(&mut artifact.changed_files);
         self.artifacts.insert(artifact.id.clone(), artifact);
     }
 

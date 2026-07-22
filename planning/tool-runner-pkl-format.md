@@ -214,6 +214,14 @@ Pkl config declares exit-code semantics and write scopes. Rust still owns:
 - common output construction;
 - harness lowering.
 
+For deferred turn completion, every executed initial check, remedy, and final
+check is persisted separately in a unique session-state run bundle. Stable
+run-relative paths encode deterministic tool/workflow/job/phase identity.
+`summary.json` is the commit marker and includes typed artifact objects plus
+separate artifact-path and artifact-content views for later templates. It is
+written before pending-state disposition and therefore records that disposition
+as planned rather than already acknowledged.
+
 ### 5.5 Configuration merging is the default
 
 The binary should merge discovered config files by default, with project config

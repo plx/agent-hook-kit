@@ -379,6 +379,59 @@ run = new Listing {{ "clean-python"; "missing-rust" }}
         .expect("failed to write post-tool-use.pkl");
 }
 
+fn write_artifact_linking_hook_config(
+    project: &Path,
+    fake_ruff: &Path,
+    tool_ids: &[&str],
+    invocation: &str,
+) {
+    let config_dir = project.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
+    let executable = fake_ruff.to_string_lossy().replace('\\', "\\\\");
+    let tools = tool_ids
+        .iter()
+        .map(|id| {
+            format!(
+                r#"  ["{id}"] = new ToolSpec {{
+    id = "{id}"
+    displayName = "{id}"
+    executable = "{executable}"
+    files {{ include = new Listing {{ "**/*.py" }} }}
+    workflows {{
+      ["lint"] = new Workflow {{
+        check = new WorkflowCommand {{
+          argv = new Listing {{ "check"; new Files {{}} }}
+          exitCodes {{ issues = new Listing {{ 1 }}; failure = new Listing {{ 2 }} }}
+        }}
+        invocation = "{invocation}"
+      }}
+    }}
+    workflowOrder = new Listing {{ "lint" }}
+  }}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let run = tool_ids
+        .iter()
+        .map(|id| format!("\"{id}\""))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let config = format!(
+        r#"amends "Config.pkl"
+
+settings {{ fileActivity {{ filesystemMtime = false }} }}
+
+tools {{
+{tools}
+}}
+run = new Listing {{ {run} }}
+"#
+    );
+    std::fs::write(config_dir.join("post-tool-use.pkl"), config)
+        .expect("failed to write post-tool-use.pkl");
+}
+
 fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u8> {
     let fixture = match harness {
         "claude" => serde_json::json!({
@@ -1124,7 +1177,10 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     let summary: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
     assert_eq!(summary["status"], "clean");
-    assert_eq!(summary["plannedSourceAcknowledgement"], true);
+    assert_eq!(
+        summary["stateDisposition"]["source"],
+        "acknowledge-sealed-window"
+    );
 
     let second = run_example(
         "turn-completion-agent-hook",
@@ -1228,14 +1284,31 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
     let summary: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&summaries[0]).unwrap()).unwrap();
     assert_eq!(summary["status"], "issues");
-    assert_eq!(summary["plannedSourceAcknowledgement"], true);
-    let logs = files_named(&state_dir, "000.log");
-    assert_eq!(logs.len(), 1);
-    assert!(
-        std::fs::read_to_string(&logs[0])
+    assert!(summary.get("acknowledged").is_none());
+    assert_eq!(
+        summary["stateDisposition"]["source"],
+        "acknowledge-sealed-window"
+    );
+    assert_eq!(
+        summary["renderedMessages"]["user"],
+        response["systemMessage"]
+    );
+    assert_eq!(summary["renderedMessages"]["agent"], response["reason"]);
+    let artifacts = summary["result"]["artifacts"].as_object().unwrap();
+    assert!(artifacts.len() >= 4);
+    assert!(artifacts.values().any(|artifact| {
+        artifact["contents"]
+            .as_str()
             .unwrap()
             .contains("F821 undefined name manual_issue")
-    );
+    }));
+    for artifact in artifacts.values() {
+        let path = artifact["absolutePath"].as_str().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            artifact["contents"].as_str().unwrap()
+        );
+    }
 
     std::fs::write(&file, "print('fixed')\n").unwrap();
     let retried = run_example(
@@ -1342,8 +1415,13 @@ fn turn_completion_selectively_discharges_clean_and_retries_manual_files() {
     assert_eq!(summaries.len(), 2);
     let second: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&summaries[1]).unwrap()).unwrap();
-    assert_eq!(second["files"].as_array().unwrap().len(), 1);
-    assert!(second["files"][0].as_str().unwrap().ends_with("manual.py"));
+    assert_eq!(second["candidateFiles"].as_array().unwrap().len(), 1);
+    assert!(
+        second["candidateFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("manual.py")
+    );
 }
 
 #[test]
@@ -1415,6 +1493,119 @@ fn turn_completion_operational_failure_retries_only_affected_files() {
             .len(),
         1
     );
+    let artifacts = summary["result"]["artifacts"].as_object().unwrap();
+    assert_eq!(artifacts.len(), 2);
+    assert!(
+        artifacts
+            .values()
+            .any(|artifact| artifact["classification"] == "clean")
+    );
+    assert!(
+        artifacts
+            .values()
+            .any(|artifact| artifact["classification"] == "spawn-error")
+    );
+    for artifact in artifacts.values() {
+        assert_eq!(
+            std::fs::read_to_string(artifact["absolutePath"].as_str().unwrap()).unwrap(),
+            artifact["contents"].as_str().unwrap()
+        );
+    }
+}
+
+#[test]
+fn turn_completion_links_distinct_tool_artifacts_to_one_file() {
+    require_pkl!();
+    let project = temp_project("turn-completion-multi-tool-artifacts");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_artifact_linking_hook_config(
+        &project,
+        &fake_ruff,
+        &["first-check", "second-check"],
+        "per-file",
+    );
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/shared.py"), "print('clean')\n").unwrap();
+    let tracked = run_example(
+        "session-modified-file-tracker",
+        &post_tool_use_fixture("codex", &project, "src/shared.py"),
+        &["--harness=codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(tracked.status.success());
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+
+    let summary_path = files_named(&state_dir, "summary.json").pop().unwrap();
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(summary_path).unwrap()).unwrap();
+    let file = summary["result"]["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    let reports = file["reports"].as_array().unwrap();
+    assert_eq!(reports.len(), 2);
+    let artifact_ids = reports
+        .iter()
+        .flat_map(|report| report["artifactIds"].as_array().unwrap())
+        .map(|id| id.as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(artifact_ids.len(), 2);
+    assert_eq!(summary["artifactPaths"].as_array().unwrap().len(), 2);
+    assert_eq!(summary["artifactContents"].as_object().unwrap().len(), 2);
+}
+
+#[test]
+fn turn_completion_reuses_one_batch_artifact_for_multiple_files() {
+    require_pkl!();
+    let project = temp_project("turn-completion-batch-artifact");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_artifact_linking_hook_config(&project, &fake_ruff, &["batch-check"], "batch");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/first.py"), "print('first')\n").unwrap();
+    std::fs::write(project.join("src/second.py"), "print('second')\n").unwrap();
+    for file in ["src/first.py", "src/second.py"] {
+        let tracked = run_example(
+            "session-modified-file-tracker",
+            &post_tool_use_fixture("codex", &project, file),
+            &["--harness=codex", "--state-dir", state_arg.as_str()],
+        );
+        assert!(tracked.status.success());
+    }
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+
+    let summary_path = files_named(&state_dir, "summary.json").pop().unwrap();
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(summary_path).unwrap()).unwrap();
+    let files = summary["result"]["files"].as_object().unwrap();
+    assert_eq!(files.len(), 2);
+    let artifact_ids = files
+        .values()
+        .map(|file| file["reports"][0]["artifactIds"][0].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(artifact_ids.len(), 1);
+    let artifact = summary["result"]["artifacts"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(artifact["candidateFiles"].as_array().unwrap().len(), 2);
+    assert_eq!(artifact["classification"], "clean");
 }
 
 // --- post-tool-use-agent-hook driven by Pkl configs ---

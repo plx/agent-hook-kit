@@ -44,10 +44,18 @@ workflows receive one ordered remedy, and snapshot-discovered writes invalidate
 intersecting target-file or workspace checks for one authoritative final sweep.
 Check stages retain bounded job parallelism and deterministic result ordering.
 
-The runner writes logs to a unique run bundle and commits `summary.json` before
-changing pending state. The summary carries per-file clean, auto-fixed, and
-manual results plus separate operational failures and describes the planned
-source acknowledgement. The runner then appends stable retry evidence for only
+Every executed deferred command writes its own artifact under a deterministic
+tool/workflow/job/phase path in a unique run bundle. Artifact metadata includes
+structured argv, working directory, candidate and changed files, exit code,
+classification, full output, and its report identity. One report/artifact can
+therefore be linked by every conservatively attributed file, while a file
+covered by several tools retains all distinct links.
+
+The runner commits `summary.json` only after every command artifact is durable
+and before changing pending state. The summary contains run identity, counts,
+normal buckets, current groups, artifact paths and a separate path-to-contents
+map, the complete result model, rendered-message metadata, and the planned
+source disposition. The runner then appends stable retry evidence for only
 manual, operationally incomplete, and unresolved work, records content-based
 handled baselines for discharged work, and acknowledges the sealed source
 generations. New observations written during execution are outside the snapshot

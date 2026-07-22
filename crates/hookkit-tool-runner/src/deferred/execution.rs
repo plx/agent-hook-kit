@@ -27,7 +27,7 @@ pub(crate) struct ScheduledWorkflow {
 }
 
 impl ScheduledWorkflow {
-    fn report_id(&self) -> String {
+    pub(crate) fn report_id(&self) -> String {
         format!(
             "{:03}-{}-{:03}-{:03}",
             self.tool_index, self.spec.id, self.workflow_index, self.job_index

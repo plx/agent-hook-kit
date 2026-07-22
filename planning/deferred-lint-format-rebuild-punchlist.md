@@ -387,25 +387,25 @@ Likely files:
 
 Tasks:
 
-- [ ] Continue using a unique `RunBundle` and commit `summary.json` last.
-- [ ] Write complete output for every check/remedy/final-check workflow, not only failing tools.
-- [ ] Give artifacts stable run-relative names that include deterministic tool/workflow/job identity.
-- [ ] Record absolute path, run-relative path, media type, tool/workflow identity, candidate files, changed files, classification, and contents in the in-memory template context.
-- [ ] Make one artifact reference reusable by multiple file results.
-- [ ] Preserve multiple artifacts for a file reported by multiple tools.
-- [ ] Enrich `summary.json` with all file buckets, groups, reports, operational problems, uncovered/not-applicable files, coverage gaps, state disposition, and rendered message metadata.
-- [ ] Because `summary.json` is committed before acknowledgement for crash safety, record the planned disposition there; do not write a false `acknowledged: true`. If confirmed disposition must be inspectable, write a separate post-transition receipt.
-- [ ] Do not put unbounded tool output directly into a default agent message; keep full output in artifacts.
-- [ ] Make command rendering in artifacts unambiguous enough for debugging arguments with spaces or control characters.
+- [x] Continue using a unique `RunBundle` and commit `summary.json` last.
+- [x] Write complete output for every check/remedy/final-check workflow, not only failing tools.
+- [x] Give artifacts stable run-relative names that include deterministic tool/workflow/job identity.
+- [x] Record absolute path, run-relative path, media type, tool/workflow identity, candidate files, changed files, classification, and contents in the in-memory template context.
+- [x] Make one artifact reference reusable by multiple file results.
+- [x] Preserve multiple artifacts for a file reported by multiple tools.
+- [x] Enrich `summary.json` with all file buckets, groups, reports, operational problems, uncovered/not-applicable files, coverage gaps, state disposition, and rendered message metadata.
+- [x] Because `summary.json` is committed before acknowledgement for crash safety, record the planned disposition there; do not write a false `acknowledged: true`. If confirmed disposition must be inspectable, write a separate post-transition receipt.
+- [x] Do not put unbounded tool output directly into a default agent message; keep full output in artifacts.
+- [x] Make command rendering in artifacts unambiguous enough for debugging arguments with spaces or control characters.
 
 Required tests:
 
-- [ ] multiple tools on one file produce multiple distinct artifact references;
-- [ ] one batched artifact can be linked from multiple conservative file results;
-- [ ] summary is absent until commit and complete afterward;
-- [ ] artifact contents exposed to templates match the bytes written to disk;
-- [ ] failed and successful phases both remain inspectable;
-- [ ] paths cannot escape the run bundle.
+- [x] multiple tools on one file produce multiple distinct artifact references;
+- [x] one batched artifact can be linked from multiple conservative file results;
+- [x] summary is absent until commit and complete afterward;
+- [x] artifact contents exposed to templates match the bytes written to disk;
+- [x] failed and successful phases both remain inspectable;
+- [x] paths cannot escape the run bundle.
 
 Exit criteria:
 

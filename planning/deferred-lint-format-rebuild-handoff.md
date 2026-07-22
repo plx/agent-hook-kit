@@ -186,3 +186,46 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 4. The transaction boundary and per-file disposition sets are now stable inputs to richer artifact and summary records.
+
+## Item 4 — Build durable per-tool artifacts and a rich run summary
+
+Outcome:
+
+- Replaced combined per-tool logs with one complete artifact for every executed initial check, remedy, and final check, including successful commands and operational failures.
+- Stable artifact ids and run-relative paths encode deterministic tool, workflow, job, and command-phase identity. User-controlled ids are sanitized as path components and `RunBundle` continues to reject absolute or parent-traversal paths.
+- Each artifact records structured program/arguments, working directory, exit code, classification, candidate files, changed files, full contents, and its exact report id. Report references update in place, so batched files reuse one artifact while overlapping tools retain distinct artifacts.
+- Expanded `summary.json` with run identity, counts, normal buckets, groups, artifact paths, a separate path-to-contents map, the complete result/report/problem/gap model, planned state disposition, and current rendered-message metadata.
+
+Public API/config/state changes:
+
+- Exported `ArtifactClassification` and enriched `RunArtifact` with report, command, classification, candidate/change, and working-directory metadata.
+- `BatchToolSummary.log` is replaced by an ordered artifact-path list.
+- `BatchRunSummary` is versioned as schema 1 and no longer exposes a completed-state acknowledgement boolean; the nested state disposition explicitly says `acknowledge-sealed-window` is planned.
+- No Pkl or persisted-state schema changes.
+
+Compatibility decision:
+
+- Immediate PostToolUse diagnostics retain their existing combined formatting and behavior. The per-command artifact layout is confined to deferred turn completion.
+- Human-readable command lines remain for compatibility, while every deferred artifact adds JSON-encoded argv so spaces, empty values, quoting, and control characters are unambiguous.
+- A post-transition receipt is not written: exact-generation acknowledgement is already recoverable, while the crash-safe summary truthfully records only the planned transition.
+
+Focused validation:
+
+- `cargo test -p hookkit-session-state --all-targets` (18 passed)
+- `cargo test -p hookkit-tool-runner --all-targets` (28 unit tests passed; real-tool lane ignored by design)
+- `cargo test -p hookkit-runtime --test integration` (41 passed)
+- `cargo clippy -p hookkit-session-state -p hookkit-tool-runner -p hookkit-runtime --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+Known gaps:
+
+- All current file results still use the built-in `other` group and rendered messages still reflect the legacy fixed Stop text. Item 5 adds configured groups and bucket/master templates over the now-complete context.
+
+Commit/PR:
+
+- This item is committed as the per-command-artifact and rich-summary review unit.
+
+Next item readiness:
+
+- Ready for Item 5. Templates can consume typed artifacts, artifact paths, and artifact contents without reopening files or reverse-engineering numeric tool indices.

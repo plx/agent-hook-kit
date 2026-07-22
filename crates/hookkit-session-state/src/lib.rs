@@ -1055,11 +1055,37 @@ mod tests {
     fn run_is_discoverable_only_after_summary_commit() {
         let root = temporary_root("run");
         let run = family(&root).start_run("lint").unwrap();
+        let run_directory = run.directory().to_path_buf();
         run.write_text("tools/rustfmt/stdout.txt", "changed")
             .unwrap();
         assert!(!run.is_committed());
-        let summary = run.commit(&serde_json::json!({"status": "clean"})).unwrap();
+        assert!(!run_directory.join("summary.json").exists());
+        let expected = serde_json::json!({
+            "status": "clean",
+            "artifacts": ["tools/rustfmt/stdout.txt"]
+        });
+        let summary = run.commit(&expected).unwrap();
         assert_eq!(summary.file_name().unwrap(), "summary.json");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(summary).unwrap()).unwrap(),
+            expected
+        );
+        let _ = std::fs::remove_dir_all(root.path());
+    }
+
+    #[test]
+    fn run_artifact_paths_cannot_escape_the_bundle() {
+        let root = temporary_root("run-path-escape");
+        let run = family(&root).start_run("lint").unwrap();
+        assert!(matches!(
+            run.write_text("../escaped.txt", "no"),
+            Err(StateError::InvalidRelativePath(_))
+        ));
+        assert!(matches!(
+            run.write_text(root.path().join("escaped.txt"), "no"),
+            Err(StateError::InvalidRelativePath(_))
+        ));
+        assert!(!root.path().join("escaped.txt").exists());
         let _ = std::fs::remove_dir_all(root.path());
     }
 
