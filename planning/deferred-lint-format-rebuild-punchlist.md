@@ -428,20 +428,20 @@ Likely files:
 
 Tasks:
 
-- [ ] Add an ordered file-group configuration with id, display name, and include globs.
-- [ ] Supply useful built-in groups, including one C/C++ group covering headers and implementation extensions, plus a final `other` fallback.
-- [ ] Add template pairs for clean, auto-fixed, manual, and operational results.
-- [ ] Add optional/default master user and master agent templates.
-- [ ] Provide the requested built-in default wording and plural handling.
-- [ ] Render bucket templates only for nonempty buckets unless the user explicitly asks otherwise.
-- [ ] Pass rendered bucket strings plus raw structured buckets into master templates.
-- [ ] Expose at least the template context described in Section 7.
-- [ ] Compile/validate configured templates before executing external tools when practical, so syntax errors do not occur after mutations.
-- [ ] Treat template rendering failures as operational configuration errors with a durable artifact.
-- [ ] Define field-preserving nested merge behavior so a local override of one audience/bucket does not reset unrelated templates to built-in defaults.
-- [ ] Add explicit reset semantics if Pkl's emitted defaults make omission indistinguishable from reset.
-- [ ] Retain the current config discovery order and explicit `--config` behavior.
-- [ ] Document old per-tool immediate-runner messages separately; do not overload them with deferred bucket meaning.
+- [x] Add an ordered file-group configuration with id, display name, and include globs.
+- [x] Supply useful built-in groups, including one C/C++ group covering headers and implementation extensions, plus a final `other` fallback.
+- [x] Add template pairs for clean, auto-fixed, manual, and operational results.
+- [x] Add optional/default master user and master agent templates.
+- [x] Provide the requested built-in default wording and plural handling.
+- [x] Render bucket templates only for nonempty buckets unless the user explicitly asks otherwise.
+- [x] Pass rendered bucket strings plus raw structured buckets into master templates.
+- [x] Expose at least the template context described in Section 7.
+- [x] Compile/validate configured templates before executing external tools when practical, so syntax errors do not occur after mutations.
+- [x] Treat template rendering failures as operational configuration errors with a durable artifact.
+- [x] Define field-preserving nested merge behavior so a local override of one audience/bucket does not reset unrelated templates to built-in defaults.
+- [x] Add explicit reset semantics if Pkl's emitted defaults make omission indistinguishable from reset.
+- [x] Retain the current config discovery order and explicit `--config` behavior.
+- [x] Document old per-tool immediate-runner messages separately; do not overload them with deferred bucket meaning.
 
 Suggested Pkl shape:
 
@@ -472,18 +472,18 @@ Exact nesting under `settings` or another top-level field is an implementation c
 
 Required tests:
 
-- [ ] built-in defaults render the specified clean, auto-fixed, and manual messages;
-- [ ] clean agent output is empty;
-- [ ] C/C++ header and implementation files land in one group;
-- [ ] first matching custom group wins;
-- [ ] fallback group catches unmatched extensions;
-- [ ] manual agent output groups files and links every associated artifact;
-- [ ] multiple reports for one file all render;
-- [ ] master templates receive raw buckets and rendered submessages;
-- [ ] artifact path list and artifact contents can be used independently;
-- [ ] overriding only `manualFixesNeeded.agent` preserves every other inherited template;
-- [ ] empty user or agent template suppresses that audience cleanly;
-- [ ] invalid template syntax fails before any remedy command runs.
+- [x] built-in defaults render the specified clean, auto-fixed, and manual messages;
+- [x] clean agent output is empty;
+- [x] C/C++ header and implementation files land in one group;
+- [x] first matching custom group wins;
+- [x] fallback group catches unmatched extensions;
+- [x] manual agent output groups files and links every associated artifact;
+- [x] multiple reports for one file all render;
+- [x] master templates receive raw buckets and rendered submessages;
+- [x] artifact path list and artifact contents can be used independently;
+- [x] overriding only `manualFixesNeeded.agent` preserves every other inherited template;
+- [x] empty user or agent template suppresses that audience cleanly;
+- [x] invalid template syntax fails before any remedy command runs.
 
 Exit criteria:
 

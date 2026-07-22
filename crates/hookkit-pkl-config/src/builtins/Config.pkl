@@ -34,6 +34,35 @@ class Settings {
   /// Optional stop-time file-activity fallback overrides. Omit to use the
   /// runtime defaults represented by FileActivity.
   fileActivity: FileActivity?
+
+  /// Optional field-preserving overrides for deferred Stop reporting. Rust
+  /// supplies the built-in defaults; null nested fields inherit prior layers.
+  deferredReporting: DeferredReporting?
+}
+
+class TemplatePair {
+  user: String?
+  agent: String?
+}
+
+class FileGroup {
+  id: String
+  displayName: String
+  include: Listing<String>
+}
+
+/// A patch over the built-in deferred reporting contract. Empty strings
+/// intentionally suppress that audience. Set merge.resetDeferredReporting to
+/// restore all defaults before applying this patch.
+class DeferredReporting {
+  groups: Listing<FileGroup>?
+  clean: TemplatePair?
+  autoFixed: TemplatePair?
+  manualFixesNeeded: TemplatePair?
+  operationalError: TemplatePair?
+  masterUser: String?
+  masterAgent: String?
+  renderEmptyBuckets: Boolean?
 }
 
 class FileActivity {
@@ -75,6 +104,10 @@ class Merge {
 
   /// Drop named tool entries before applying this file.
   resetTools: Listing<String> = new Listing<String> {}
+
+  /// Restore built-in groups/templates before applying this file's optional
+  /// deferredReporting patch.
+  resetDeferredReporting: Boolean = false
 }
 
 class FileSelection {

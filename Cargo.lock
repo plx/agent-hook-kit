@@ -722,6 +722,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "thiserror",
  "walkdir",
 ]
 

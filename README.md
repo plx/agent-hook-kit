@@ -439,6 +439,33 @@ run = new Listing<String> { "ruff"; "prettier" }
 | `settings.diagnosticsDirectory` | `".agent-hook-kit/post-tool-use"` | Where to write diagnostic artifacts. |
 | `settings.missingToolPolicy` | `"user-notice"` | What to do when a configured tool executable is missing. Options: `"user-notice"`, `"hard-failure"`, `"harness-block"`. |
 
+### Deferred reporting templates
+
+`settings.deferredReporting` controls only the session-batched
+`turn-completion-agent-hook` report. Its ordered `groups` assign the first
+matching file group, then fall back to `other`. The `clean`, `autoFixed`,
+`manualFixesNeeded`, and `operationalError` fields each contain `user` and
+`agent` MiniJinja templates; `masterUser` and `masterAgent` combine the
+rendered nonempty buckets. Set `renderEmptyBuckets = true` to render empty
+buckets too, or use an empty template to suppress one audience.
+
+Templates receive run paths, counts, typed file/report/artifact records,
+ordered groups, operational problems and coverage gaps. They also receive
+`artifact_paths`, `artifact_contents`, raw `buckets`, and
+`rendered_buckets` as independent views. Paths stored in file `displayPath`
+are project-relative when possible. Reporting syntax is validated before any
+configured tool runs; a later rendering error is retained as a durable
+operational artifact.
+
+Layered Pkl files merge this block field by field, including nested template
+pairs, so overriding only `manualFixesNeeded.agent` preserves inherited
+siblings. `merge { resetDeferredReporting = true }` restores the built-in
+block before applying that file's local overrides.
+
+The `messages` block inside an individual `ToolSpec` is separate: it remains
+the per-tool message policy for the immediate `post-tool-use-agent-hook` and
+does not define deferred bucket meaning.
+
 ### Migration from per-tool binaries
 
 Prior versions shipped six per-tool binaries (`ruff-agent-hook`,

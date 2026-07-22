@@ -53,6 +53,7 @@ pub struct Settings {
     pub diagnostics_directory: Option<String>,
     pub missing_tool_policy: MissingToolPolicy,
     pub file_activity: Option<FileActivitySettings>,
+    pub deferred_reporting: DeferredReporting,
 }
 
 impl Default for Settings {
@@ -66,6 +67,7 @@ impl Default for Settings {
             diagnostics_directory: Some(".agent-hook-kit/post-tool-use".into()),
             missing_tool_policy: MissingToolPolicy::default(),
             file_activity: None,
+            deferred_reporting: DeferredReporting::default(),
         }
     }
 }
@@ -91,6 +93,7 @@ pub struct SettingsPatch {
     pub diagnostics_directory: Option<String>,
     pub missing_tool_policy: Option<MissingToolPolicy>,
     pub file_activity: Option<FileActivitySettings>,
+    pub deferred_reporting: Option<DeferredReportingPatch>,
 }
 
 impl SettingsPatch {
@@ -118,6 +121,177 @@ impl SettingsPatch {
         }
         if let Some(file_activity) = self.file_activity {
             settings.file_activity = Some(file_activity);
+        }
+        if let Some(deferred_reporting) = self.deferred_reporting {
+            deferred_reporting.apply_to(&mut settings.deferred_reporting);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TemplatePair {
+    pub user: String,
+    pub agent: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileGroup {
+    pub id: String,
+    pub display_name: String,
+    pub include: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DeferredReporting {
+    pub groups: Vec<FileGroup>,
+    pub clean: TemplatePair,
+    pub auto_fixed: TemplatePair,
+    pub manual_fixes_needed: TemplatePair,
+    pub operational_error: TemplatePair,
+    pub master_user: String,
+    pub master_agent: String,
+    pub render_empty_buckets: bool,
+}
+
+impl Default for DeferredReporting {
+    fn default() -> Self {
+        Self {
+            groups: default_file_groups(),
+            clean: TemplatePair {
+                user: "Checked {{ counts.clean }} clean file{% if counts.clean != 1 %}s{% endif %}: {% for file in clean_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
+                agent: String::new(),
+            },
+            auto_fixed: TemplatePair {
+                user: "Auto-fixed {{ counts.auto_fixed }} file{% if counts.auto_fixed != 1 %}s{% endif %}: {% for file in auto_fixed_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
+                agent: "Auto-fixed {{ counts.auto_fixed }} file{% if counts.auto_fixed != 1 %}s{% endif %}; re-read changed files before editing further.".into(),
+            },
+            manual_fixes_needed: TemplatePair {
+                user: "{{ counts.manual_fixes_needed }} file{% if counts.manual_fixes_needed != 1 %}s{% endif %} need{% if counts.manual_fixes_needed == 1 %}s{% endif %} manual fixes across {{ counts.manual_groups }} group{% if counts.manual_groups != 1 %}s{% endif %}: {% for file in manual_fix_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
+                agent: "{% for group in groups %}{% if group.manual_fix_files | length %}{{ group.display_name }}: {% for file in group.manual_fix_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}. Reports: {% for path in group.artifact_paths %}{{ path }}{% if not loop.last %}, {% endif %}{% endfor %}{% if not loop.last %}\n{% endif %}{% endif %}{% endfor %}".into(),
+            },
+            operational_error: TemplatePair {
+                user: "{{ counts.operational_errors }} operational formatter/linter error{% if counts.operational_errors != 1 %}s{% endif %}. Details: {{ artifact_paths | join(\", \") }}".into(),
+                agent: "Operational formatter/linter failures remain. Inspect {{ artifact_paths | join(\", \") }} before retrying Stop.".into(),
+            },
+            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.user | length %}\n{% endif %}File-activity coverage is incomplete for {{ counts.coverage_gaps }} retained gap{% if counts.coverage_gaps != 1 %}s{% endif %}; see {{ run.summary_path }}.{% endif %}".into(),
+            master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.agent | length %}\n{% endif %}File-activity coverage is incomplete; inspect retained gaps in {{ run.summary_path }} before treating the run as exhaustive.{% endif %}".into(),
+            render_empty_buckets: false,
+        }
+    }
+}
+
+fn default_file_groups() -> Vec<FileGroup> {
+    vec![
+        FileGroup {
+            id: "c-cpp".into(),
+            display_name: "C/C++".into(),
+            include: [
+                "*.c", "**/*.c", "*.h", "**/*.h", "*.cc", "**/*.cc", "*.cpp", "**/*.cpp", "*.cxx",
+                "**/*.cxx", "*.hh", "**/*.hh", "*.hpp", "**/*.hpp", "*.hxx", "**/*.hxx",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        },
+        FileGroup {
+            id: "rust".into(),
+            display_name: "Rust".into(),
+            include: vec!["*.rs".into(), "**/*.rs".into()],
+        },
+        FileGroup {
+            id: "python".into(),
+            display_name: "Python".into(),
+            include: ["*.py", "**/*.py", "*.pyi", "**/*.pyi"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        },
+        FileGroup {
+            id: "javascript-typescript".into(),
+            display_name: "JavaScript/TypeScript".into(),
+            include: [
+                "*.js", "**/*.js", "*.jsx", "**/*.jsx", "*.ts", "**/*.ts", "*.tsx", "**/*.tsx",
+                "*.mjs", "**/*.mjs", "*.cjs", "**/*.cjs",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        },
+        FileGroup {
+            id: "documentation".into(),
+            display_name: "Documentation".into(),
+            include: ["*.md", "**/*.md", "*.mdx", "**/*.mdx"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        },
+        FileGroup {
+            id: "other".into(),
+            display_name: "Other".into(),
+            include: vec!["**".into()],
+        },
+    ]
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TemplatePairPatch {
+    pub user: Option<String>,
+    pub agent: Option<String>,
+}
+
+impl TemplatePairPatch {
+    fn apply_to(self, pair: &mut TemplatePair) {
+        if let Some(user) = self.user {
+            pair.user = user;
+        }
+        if let Some(agent) = self.agent {
+            pair.agent = agent;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DeferredReportingPatch {
+    pub groups: Option<Vec<FileGroup>>,
+    pub clean: Option<TemplatePairPatch>,
+    pub auto_fixed: Option<TemplatePairPatch>,
+    pub manual_fixes_needed: Option<TemplatePairPatch>,
+    pub operational_error: Option<TemplatePairPatch>,
+    pub master_user: Option<String>,
+    pub master_agent: Option<String>,
+    pub render_empty_buckets: Option<bool>,
+}
+
+impl DeferredReportingPatch {
+    pub fn apply_to(self, reporting: &mut DeferredReporting) {
+        if let Some(groups) = self.groups {
+            reporting.groups = groups;
+        }
+        if let Some(pair) = self.clean {
+            pair.apply_to(&mut reporting.clean);
+        }
+        if let Some(pair) = self.auto_fixed {
+            pair.apply_to(&mut reporting.auto_fixed);
+        }
+        if let Some(pair) = self.manual_fixes_needed {
+            pair.apply_to(&mut reporting.manual_fixes_needed);
+        }
+        if let Some(pair) = self.operational_error {
+            pair.apply_to(&mut reporting.operational_error);
+        }
+        if let Some(master_user) = self.master_user {
+            reporting.master_user = master_user;
+        }
+        if let Some(master_agent) = self.master_agent {
+            reporting.master_agent = master_agent;
+        }
+        if let Some(render_empty_buckets) = self.render_empty_buckets {
+            reporting.render_empty_buckets = render_empty_buckets;
         }
     }
 }
@@ -197,6 +371,7 @@ pub struct Merge {
     pub reset_all: bool,
     pub reset: Vec<MergeResetKey>,
     pub reset_tools: Vec<String>,
+    pub reset_deferred_reporting: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

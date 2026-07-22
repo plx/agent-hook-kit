@@ -14,7 +14,10 @@ pub use deferred::{
     FileAssessment, FileResult, FileStatus, OperationalProblem, RunArtifact, ToolReport,
     ToolReportRef,
 };
-use deferred::{DeferredLog, ScheduledWorkflow, execute_deferred_workflows};
+use deferred::{
+    DeferredLog, DeferredReporter, RenderedBuckets, RenderedMessages, ScheduledWorkflow,
+    TemplateRun, execute_deferred_workflows,
+};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
@@ -971,6 +974,7 @@ struct PlannedStateDisposition {
 struct RenderedMessageMetadata {
     harness: String,
     lowering: &'static str,
+    buckets: RenderedBuckets,
     user: Option<String>,
     agent: Option<String>,
     references_summary: bool,
@@ -982,7 +986,7 @@ struct BatchSummaryParts<'a> {
     state_directory: &'a Path,
     harness: &'a HarnessId,
     status: &'static str,
-    should_block: bool,
+    rendered_messages: RenderedMessages,
     source: (usize, Vec<String>),
     candidates: &'a [PathBuf],
     tools: Vec<BatchToolSummary>,
@@ -1183,7 +1187,9 @@ fn run_turn_completion_view(
                 state_directory: activity_store.state().directory(),
                 harness: ctx.harness(),
                 status: "operational-failure",
-                should_block: true,
+                rendered_messages: fallback_rendered_messages(
+                    &run.directory().join("summary.json"),
+                ),
                 source: (source_entry_count, source_entry_ids.clone()),
                 candidates: &candidates,
                 tools: Vec::new(),
@@ -1201,6 +1207,24 @@ fn run_turn_completion_view(
     };
 
     let project_root = normalize_path(&loaded.project_root);
+    let reporter = match DeferredReporter::new(&loaded.config.settings.deferred_reporting) {
+        Ok(reporter) => reporter,
+        Err(error) => {
+            let run = run.take().expect("run bundle is available");
+            return commit_deferred_config_failure(
+                ctx,
+                activity_store,
+                run,
+                DeferredFailureContext {
+                    project_root: &project_root,
+                    candidates: &candidates,
+                    resolution: &resolution,
+                },
+                (source_entry_count, source_entry_ids),
+                error.to_string(),
+            );
+        }
+    };
     let tools = match resolve_run_order(&loaded.config) {
         Ok(tools) => tools,
         Err(error) => {
@@ -1246,7 +1270,9 @@ fn run_turn_completion_view(
                 state_directory: activity_store.state().directory(),
                 harness: ctx.harness(),
                 status: "operational-failure",
-                should_block: true,
+                rendered_messages: fallback_rendered_messages(
+                    &run.directory().join("summary.json"),
+                ),
                 source: (source_entry_count, source_entry_ids.clone()),
                 candidates: &candidates,
                 tools: Vec::new(),
@@ -1312,6 +1338,31 @@ fn run_turn_completion_view(
         }
     }
 
+    reporter.apply_groups(&mut result, &project_root);
+    let rendered_messages = {
+        let active_run = run.as_ref().expect("run bundle is available");
+        let template_run_id = run_id(active_run.directory())?;
+        let summary_path = active_run.directory().join("summary.json");
+        match reporter.render(
+            &result,
+            TemplateRun {
+                id: &template_run_id,
+                project_root: &project_root,
+                summary_path: &summary_path,
+                state_directory: activity_store.state().directory(),
+            },
+        ) {
+            Ok(messages) => messages,
+            Err(error) => record_reporting_failure(
+                active_run,
+                &mut result,
+                &candidates,
+                &summary_path,
+                error.to_string(),
+            )?,
+        }
+    };
+
     let should_block = deferred_should_block(&result, activity_settings.coverage_gap_policy);
     let disposition = plan_deferred_state_disposition(&result, &resolution)?;
     let status = if result.has_operational_problems() {
@@ -1330,7 +1381,7 @@ fn run_turn_completion_view(
         state_directory: activity_store.state().directory(),
         harness: ctx.harness(),
         status,
-        should_block,
+        rendered_messages,
         source: (source_entry_count, source_entry_ids),
         candidates: &candidates,
         tools: summaries,
@@ -1639,12 +1690,16 @@ fn safe_artifact_component(value: &str) -> String {
 fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<BatchRunSummary> {
     let run_id = run_id(parts.run.directory())?;
     let summary_path = parts.run.directory().join("summary.json");
-    let (user, agent) = if parts.should_block {
-        let (user, agent) = blocking_turn_completion_messages(&summary_path);
-        (Some(user), Some(agent))
-    } else {
-        (None, None)
-    };
+    let RenderedMessages {
+        buckets,
+        user,
+        agent,
+    } = parts.rendered_messages;
+    let summary_text = summary_path.to_string_lossy();
+    let references_summary = user
+        .iter()
+        .chain(agent.iter())
+        .any(|message| message.contains(summary_text.as_ref()));
     let clean_files = files_with_status(&parts.result, FileStatus::Clean);
     let auto_fixed_files = files_with_status(&parts.result, FileStatus::AutoFixed);
     let manual_fix_files = files_with_status(&parts.result, FileStatus::ManualFixesNeeded);
@@ -1726,10 +1781,11 @@ fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<Bat
         state_disposition,
         rendered_messages: RenderedMessageMetadata {
             harness: parts.harness.to_string(),
-            lowering: "legacy-exact",
+            lowering: "pending-item-6",
+            buckets,
             user,
             agent,
-            references_summary: parts.should_block,
+            references_summary,
         },
         tools: parts.tools,
         result: parts.result,
@@ -1755,6 +1811,15 @@ fn blocking_turn_completion_messages(summary: &Path) -> (String, String) {
         summary.display()
     );
     (user, agent)
+}
+
+fn fallback_rendered_messages(summary: &Path) -> RenderedMessages {
+    let (user, agent) = blocking_turn_completion_messages(summary);
+    RenderedMessages {
+        buckets: RenderedBuckets::default(),
+        user: Some(user),
+        agent: Some(agent),
+    }
 }
 
 fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) -> BTreeSet<String> {
@@ -1910,6 +1975,47 @@ fn run_id(directory: &Path) -> hookkit_core::Result<String> {
         })
 }
 
+fn record_reporting_failure(
+    run: &RunBundle,
+    result: &mut DeferredRunResult,
+    candidates: &[PathBuf],
+    summary_path: &Path,
+    contents: String,
+) -> hookkit_core::Result<RenderedMessages> {
+    let artifact_path = run
+        .write_text("reporting-error.log", &contents)
+        .map_err(state_error)?;
+    result.record_artifact(RunArtifact {
+        id: "reporting-configuration".into(),
+        absolute_path: artifact_path,
+        run_relative_path: "reporting-error.log".into(),
+        media_type: "text/plain; charset=utf-8".into(),
+        tool_id: None,
+        workflow_id: None,
+        job_id: None,
+        report_id: None,
+        phase: CommandPhase::Configuration,
+        classification: ArtifactClassification::ConfigurationError,
+        exit_code: None,
+        program: None,
+        arguments: Vec::new(),
+        working_directory: None,
+        files: candidates.to_vec(),
+        candidate_files: candidates.to_vec(),
+        changed_files: Vec::new(),
+        contents: contents.clone(),
+    });
+    result.record_operational_problem(OperationalProblem {
+        id: "reporting-configuration".into(),
+        tool_id: None,
+        phase: Some("configuration".into()),
+        affected_files: candidates.to_vec(),
+        message: contents,
+        artifact_ids: vec!["reporting-configuration".into()],
+    });
+    Ok(fallback_rendered_messages(summary_path))
+}
+
 fn commit_deferred_config_failure(
     ctx: &RuntimeContext<'_>,
     activity_store: &FileActivityStore,
@@ -1959,7 +2065,7 @@ fn commit_deferred_config_failure(
         state_directory: activity_store.state().directory(),
         harness: ctx.harness(),
         status: "operational-failure",
-        should_block: true,
+        rendered_messages: fallback_rendered_messages(&run.directory().join("summary.json")),
         source: (source_entry_count, source_entry_ids),
         candidates: failure.candidates,
         tools: Vec::new(),

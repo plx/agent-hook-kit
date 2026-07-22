@@ -229,3 +229,46 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 5. Templates can consume typed artifacts, artifact paths, and artifact contents without reopening files or reverse-engineering numeric tool indices.
+
+## Item 5 — Add groups and configurable bucket/master templates to Pkl
+
+Outcome:
+
+- Added ordered first-match file groups with built-in C/C++, Rust, Python, JavaScript/TypeScript, documentation, and final `other` coverage. Default output uses project-relative display paths where possible.
+- Added independently configurable user/agent templates for clean, auto-fixed, manual, and operational buckets plus master templates over raw and rendered bucket views. Empty audiences suppress cleanly and empty buckets render only when explicitly enabled.
+- Compiled all group globs and MiniJinja templates before tool execution. Runtime rendering failures preserve completed command artifacts, add a durable reporting configuration artifact, block completion, and retry affected files.
+- Exposed typed run, count, file, bucket, group, report, artifact, problem, and gap context, including independent artifact path and path-to-content views.
+
+Public API/config/state changes:
+
+- `settings.deferredReporting` adds `groups`, four template pairs, `masterUser`, `masterAgent`, and `renderEmptyBuckets`.
+- Nested reporting patches are field-preserving across discovered configuration layers. `merge.resetDeferredReporting` restores the built-in reporting block before the current file's overrides.
+- `summary.json.renderedMessages` now contains the configured bucket and master renderings; its lowering marker is `pending-item-6` until native lowering consumes these values.
+- No persisted coordination-state versions changed.
+
+Compatibility decision:
+
+- Existing `ToolSpec.messages` continue to control only the immediate PostToolUse runner. Deferred reporting has a separate namespace and does not reinterpret per-tool message fields.
+- Configuration discovery order and explicit `--config` bypass behavior are unchanged.
+- Syntax failures prevent every external command, while failures that genuinely arise only during rendering are represented as operational configuration failures without discarding earlier results.
+
+Focused validation:
+
+- `cargo test -p hookkit-pkl-config --all-targets` (31 passed with Pkl available)
+- `cargo test -p hookkit-tool-runner --all-targets` (34 unit tests passed; real-tool lane ignored by design)
+- `cargo test -p hookkit-runtime --test integration` (43 passed)
+- `cargo clippy -p hookkit-pkl-config -p hookkit-tool-runner -p hookkit-runtime --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+Known gaps:
+
+- Native Stop responses still use the legacy fixed blocking text and do not yet emit allowed clean/auto-fixed reporting. Item 6 applies the rendered master audiences with explicit harness capability policy and removes those hard-coded strings.
+
+Commit/PR:
+
+- This item is ready to commit as the groups, templates, and merge-behavior review unit.
+
+Next item readiness:
+
+- Ready for Item 6. Configured master messages, bucket metadata, and durable reporting errors are available to exact native lowering.

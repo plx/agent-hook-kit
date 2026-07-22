@@ -276,6 +276,16 @@ run = new Listing {{ "ruff" }}
         .expect("failed to write post-tool-use.pkl");
 }
 
+fn add_deferred_reporting_config(project: &Path, reporting_body: &str) {
+    let path = project.join(".agent-hook-kit/post-tool-use.pkl");
+    let config = std::fs::read_to_string(&path).expect("read generated hook config");
+    let replacement = format!(
+        "settings {{\n  deferredReporting = new DeferredReporting {{\n{reporting_body}\n  }}"
+    );
+    let config = config.replacen("settings {", &replacement, 1);
+    std::fs::write(path, config).expect("write deferred reporting config");
+}
+
 fn write_per_file_ruff_hook_config(project: &Path, fake_ruff: &Path) {
     let config_dir = project.join(".agent-hook-kit");
     std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
@@ -1200,6 +1210,102 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
 }
 
 #[test]
+fn invalid_deferred_template_syntax_fails_before_any_remedy_runs() {
+    require_pkl!();
+    let project = temp_project("turn-completion-invalid-reporting-syntax");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    add_deferred_reporting_config(&project, r#"    clean = new TemplatePair { user = "{{" }"#);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/dirty.py");
+    std::fs::write(&file, "import os  # unused_import\n").unwrap();
+    let tracked = run_example(
+        "session-modified-file-tracker",
+        &post_tool_use_fixture("codex", &project, "src/dirty.py"),
+        &["--harness=codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(tracked.status.success());
+
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block");
+    assert!(
+        std::fs::read_to_string(file)
+            .unwrap()
+            .contains("unused_import")
+    );
+    assert_eq!(files_named(&state_dir, "config-error.log").len(), 1);
+    let summary_path = files_named(&state_dir, "summary.json").pop().unwrap();
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(summary_path).unwrap()).unwrap();
+    assert_eq!(summary["status"], "operational-failure");
+    assert_eq!(summary["result"]["artifacts"].as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn deferred_template_render_failure_is_a_durable_operational_error() {
+    require_pkl!();
+    let project = temp_project("turn-completion-reporting-render-failure");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+    add_deferred_reporting_config(
+        &project,
+        r#"    masterUser = "{{ unavailable_reporting_function() }}""#,
+    );
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/clean.py"), "print('clean')\n").unwrap();
+    let tracked = run_example(
+        "session-modified-file-tracker",
+        &post_tool_use_fixture("codex", &project, "src/clean.py"),
+        &["--harness=codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(tracked.status.success());
+
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block");
+    let reporting_logs = files_named(&state_dir, "reporting-error.log");
+    assert_eq!(reporting_logs.len(), 1);
+    assert!(
+        !std::fs::read_to_string(&reporting_logs[0])
+            .unwrap()
+            .is_empty()
+    );
+    let summary_path = files_named(&state_dir, "summary.json").pop().unwrap();
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(summary_path).unwrap()).unwrap();
+    assert_eq!(summary["status"], "operational-failure");
+    assert_eq!(summary["result"]["files"].as_object().unwrap().len(), 1);
+    let artifacts = summary["result"]["artifacts"].as_object().unwrap();
+    assert!(
+        artifacts.len() >= 2,
+        "tool artifacts must survive rendering failure"
+    );
+    assert!(artifacts.values().any(|artifact| {
+        artifact["classification"] == "configuration-error"
+            && artifact["absolutePath"]
+                .as_str()
+                .unwrap()
+                .ends_with("reporting-error.log")
+    }));
+    assert!(session_journal_len(&state_dir, "codex", "codex-ruff-test") >= 1);
+}
+
+#[test]
 fn turn_completion_mtime_fallback_finds_files_without_tool_observations() {
     require_pkl!();
     let project = temp_project("turn-completion-mtime-fallback");
@@ -1289,11 +1395,19 @@ fn turn_completion_batch_retains_issues_and_points_at_detailed_logs() {
         summary["stateDisposition"]["source"],
         "acknowledge-sealed-window"
     );
-    assert_eq!(
-        summary["renderedMessages"]["user"],
-        response["systemMessage"]
+    assert_eq!(summary["renderedMessages"]["lowering"], "pending-item-6");
+    assert!(
+        summary["renderedMessages"]["user"]
+            .as_str()
+            .unwrap()
+            .contains("manual fixes")
     );
-    assert_eq!(summary["renderedMessages"]["agent"], response["reason"]);
+    assert!(
+        summary["renderedMessages"]["agent"]
+            .as_str()
+            .unwrap()
+            .contains("Python: src/broken.py")
+    );
     let artifacts = summary["result"]["artifacts"].as_object().unwrap();
     assert!(artifacts.len() >= 4);
     assert!(artifacts.values().any(|artifact| {
