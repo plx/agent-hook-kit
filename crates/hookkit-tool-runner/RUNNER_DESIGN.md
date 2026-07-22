@@ -47,6 +47,17 @@ runner's legacy `phases`: all non-mutating initial checks run first, only dirty
 workflows receive one ordered remedy, and snapshot-discovered writes invalidate
 intersecting target-file or workspace checks for one authoritative final sweep.
 Check stages retain bounded job parallelism and deterministic result ordering.
+The complex deferred policy is split across `deferred/model.rs`,
+`deferred/execution.rs`, `deferred/reporting.rs`, and `deferred/lowering.rs`;
+the main module retains CLI, state transaction, artifact, and immediate-runner
+orchestration so the two product paths share conversion and process plumbing.
+
+When a builtin has no explicit `workflows`, catalog validation proves its
+compatibility translation has a read-only final phase before it can ship as
+enabled. The generated
+[`builtin-deferred-workflow-audit.md`](../../planning/builtin-deferred-workflow-audit.md)
+records every command, inferred or explicit scope, invocation granularity, and
+known limitation. Immediate PostToolUse continues to use legacy `phases`.
 
 Every executed deferred command writes its own artifact under a deterministic
 tool/workflow/job/phase path in a unique run bundle. Artifact metadata includes
@@ -70,6 +81,10 @@ observations always requeue the path.
 Coverage gaps use the Pkl `fileActivity.coverageGapPolicy`. The default
 `best-effort` policy retains and summarizes incomplete targets without treating
 resolved clean files as manual. `strict` also blocks Stop until the gap clears.
+Recursive target expansion is bounded by `fileActivity.maxEntries`; exhaustion
+is both summarized and requeued. Batch/workspace findings are conservatively
+attributed to all job candidates, while byte snapshots preserve exact files
+actually changed by remedies.
 
 ### Exact Stop lowering
 

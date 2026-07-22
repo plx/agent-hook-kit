@@ -42,6 +42,29 @@ fn run_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::proces
         .unwrap_or_else(|e| panic!("failed to run {binary_path}: {e}"))
 }
 
+fn spawn_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::process::Child {
+    use std::io::Write;
+
+    ensure_built(binary);
+    let binary_path = format!("{}/target/debug/{binary}", workspace_root());
+    let mut command = Command::new(&binary_path);
+    command.args(extra_args);
+    configure_hook_environment(&mut command, binary, fixture, extra_args);
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("failed to run {binary_path}: {error}"));
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(fixture)
+        .expect("write fixture");
+    child
+}
+
 fn configure_hook_environment(
     command: &mut Command,
     binary: &str,
@@ -150,6 +173,31 @@ fn temp_project(name: &str) -> PathBuf {
     path
 }
 
+fn wait_for_path(path: &Path) {
+    for _ in 0..500 {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
+fn run_git(project: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn write_executable(project: &Path, name: &str, body: &str) -> PathBuf {
     let bin_dir = project.join("bin");
     std::fs::create_dir_all(&bin_dir).expect("failed to create bin dir");
@@ -181,13 +229,24 @@ shift || true
 file="${@: -1}"
 
 if [[ "$mode" == "format" ]]; then
+  check=0
+  for arg in "$@"; do
+    if [[ "$arg" == "--check" ]]; then
+      check=1
+    fi
+  done
   if grep -q "format_crash" "$file"; then
     echo "format crashed" >&2
     exit 2
   fi
   if grep -q "needs_format" "$file"; then
-    perl -0pi -e 's/needs_format/formatted/g' "$file"
-    echo "1 file reformatted"
+    if [[ "$check" == "1" ]]; then
+      echo "Would reformat: $file"
+      exit 1
+    else
+      perl -0pi -e 's/needs_format/formatted/g' "$file"
+      echo "1 file reformatted"
+    fi
   else
     echo "1 file left unchanged"
   fi
@@ -208,12 +267,25 @@ if [[ "$mode" == "check" ]]; then
     prev="$arg"
   done
 
+  if grep -q "wait_for_release" "$file"; then
+    : > "${file}.started"
+    for _ in $(seq 1 1000); do
+      [[ -e "${file}.release" ]] && break
+      sleep 0.01
+    done
+    [[ -e "${file}.release" ]] || exit 2
+  fi
+
   if grep -q "check_crash" "$file"; then
     echo "check crashed" >&2
     exit 2
   fi
 
   if grep -q "manual_issue" "$file"; then
+    if grep -q "large_diagnostic" "$file"; then
+      head -c 131072 /dev/zero | tr '\0' x >&2
+      echo >&2
+    fi
     echo "${file}:1:1: F821 undefined name manual_issue" >&2
     exit 1
   fi
@@ -300,6 +372,17 @@ fn add_runner_setting(project: &Path, setting: &str) {
     let replacement = format!("settings {{\n  {setting}");
     let config = config.replacen("settings {", &replacement, 1);
     std::fs::write(path, config).expect("write runner setting");
+}
+
+fn replace_file_activity_settings(project: &Path, body: &str) {
+    let path = project.join(".agent-hook-kit/post-tool-use.pkl");
+    let config = std::fs::read_to_string(&path).expect("read generated hook config");
+    let config = config.replacen(
+        "fileActivity { filesystemMtime = false }",
+        &format!("fileActivity {{ {body} }}"),
+        1,
+    );
+    std::fs::write(path, config).expect("write file activity settings");
 }
 
 fn write_per_file_ruff_hook_config(project: &Path, fake_ruff: &Path) {
@@ -581,6 +664,20 @@ fn turn_completion_fixture(harness: &str, project: &Path) -> Vec<u8> {
 }
 
 fn seed_pending_file(state_dir: &Path, harness: &str, path: &Path) {
+    seed_pending_target(
+        state_dir,
+        harness,
+        hookkit_file_activity::FileActivityTarget::exact(
+            hookkit_core::Utf8PathBuf::from_path_buf(path.to_path_buf()).unwrap(),
+        ),
+    );
+}
+
+fn seed_pending_target(
+    state_dir: &Path,
+    harness: &str,
+    target: hookkit_file_activity::FileActivityTarget,
+) {
     let (harness, identity) = match harness {
         "claude" => (
             hookkit_core::HarnessId::CLAUDE_CODE,
@@ -607,12 +704,7 @@ fn seed_pending_file(state_dir: &Path, harness: &str, path: &Path) {
     )
     .unwrap();
     let store = hookkit_file_activity::FileActivityStore::from_state(state).unwrap();
-    store
-        .requeue_exact(
-            "integration-test",
-            [hookkit_core::Utf8PathBuf::from_path_buf(path.to_path_buf()).unwrap()],
-        )
-        .unwrap();
+    store.requeue_targets("integration-test", [target]).unwrap();
 }
 
 fn prepare_deferred_ruff_case(
@@ -1539,6 +1631,54 @@ fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
 }
 
 #[test]
+fn turn_completion_one_window_contains_clean_auto_fixed_and_manual_files() {
+    require_pkl!();
+    let project = temp_project("turn-completion-three-normal-buckets");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    for (path, contents) in [
+        ("src/clean.py", "print('clean')\n"),
+        ("src/auto.py", "import os  # unused_import\n"),
+        ("src/manual.py", "print(manual_issue)\n"),
+    ] {
+        std::fs::write(project.join(path), contents).unwrap();
+        let observed = run_example(
+            "file-activity-agent-hook",
+            &post_tool_use_fixture("codex", &project, path),
+            &["--codex", "--state-dir", state_arg.as_str()],
+        );
+        assert!(observed.status.success());
+    }
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(response["decision"], "block");
+    let user = response["systemMessage"].as_str().unwrap();
+    assert!(user.contains("Checked 1 clean file: src/clean.py"));
+    assert!(user.contains("Auto-fixed 1 file: src/auto.py"));
+    assert!(user.contains("1 file needs manual fixes"));
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["clean"], 1);
+    assert_eq!(summary["counts"]["autoFixed"], 1);
+    assert_eq!(summary["counts"]["manualFixesNeeded"], 1);
+    let statuses = summary["result"]["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|file| file["status"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        statuses,
+        std::collections::BTreeSet::from(["auto-fixed", "clean", "manual-fixes-needed"])
+    );
+}
+
+#[test]
 fn turn_completion_blocked_manual_and_operational_matrix_is_native() {
     require_pkl!();
     for harness in ["claude", "codex", "gemini", "antigravity"] {
@@ -1737,6 +1877,70 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
         files_named(&state_dir, "summary.json").len(),
         1,
         "the runner's own writes must not resurrect an auto-fixed file"
+    );
+}
+
+#[test]
+fn turn_completion_handled_baseline_suppresses_unchanged_git_dirty_fallback() {
+    require_pkl!();
+    let project = temp_project("turn-completion-git-dirty-baseline");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    replace_file_activity_settings(&project, r#"filesystemMtime = false; vcs = "git-dirty""#);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/tracked.py");
+    std::fs::write(&file, "print('original')\n").unwrap();
+    run_git(&project, &["init", "-q"]);
+    run_git(&project, &["add", "."]);
+    run_git(
+        &project,
+        &[
+            "-c",
+            "user.name=HookKit",
+            "-c",
+            "user.email=hookkit@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+    );
+    std::fs::write(&file, "print('agent edit')\n").unwrap();
+    let observed = run_example(
+        "file-activity-agent-hook",
+        &post_tool_use_fixture("codex", &project, "src/tracked.py"),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(observed.status.success());
+
+    let first = run_deferred_case("codex", &project, &state_arg);
+    assert!(first.status.success());
+    assert_eq!(only_summary(&state_dir)["counts"]["clean"], 1);
+    assert!(
+        String::from_utf8_lossy(
+            &Command::new("git")
+                .arg("-C")
+                .arg(&project)
+                .args(["status", "--short", "--", "src/tracked.py"])
+                .output()
+                .unwrap()
+                .stdout
+        )
+        .contains("src/tracked.py")
+    );
+
+    let second = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(second.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&second.stdout).unwrap(),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        files_named(&state_dir, "summary.json").len(),
+        1,
+        "an unchanged handled Git-dirty file must not run checks again"
     );
 }
 
@@ -2093,6 +2297,76 @@ fn turn_completion_selectively_discharges_clean_and_retries_manual_files() {
 }
 
 #[test]
+fn turn_completion_preserves_observation_appended_while_stop_is_running() {
+    require_pkl!();
+    let project = temp_project("turn-completion-concurrent-observation");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let slow = project.join("src/slow.py");
+    let concurrent = project.join("src/concurrent.py");
+    std::fs::write(&slow, "print('wait_for_release')\n").unwrap();
+    std::fs::write(&concurrent, "print('concurrent')\n").unwrap();
+    let observed = run_example(
+        "file-activity-agent-hook",
+        &post_tool_use_fixture("codex", &project, "src/slow.py"),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(observed.status.success());
+
+    let fixture = turn_completion_fixture("codex", &project);
+    let child = spawn_example(
+        "turn-completion-agent-hook",
+        &fixture,
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    wait_for_path(&project.join("src/slow.py.started"));
+    let concurrent_observation = run_example(
+        "file-activity-agent-hook",
+        &post_tool_use_fixture("codex", &project, "src/concurrent.py"),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+    assert!(concurrent_observation.status.success());
+    std::fs::write(project.join("src/slow.py.release"), "release\n").unwrap();
+    let first = child.wait_with_output().expect("wait for running Stop");
+
+    assert!(first.status.success());
+    let first_summary = only_summary(&state_dir);
+    assert_eq!(first_summary["candidateFiles"].as_array().unwrap().len(), 1);
+    assert!(
+        first_summary["candidateFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("slow.py")
+    );
+    assert_eq!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
+        1,
+        "the post-seal observation must remain in the active generation"
+    );
+
+    let second = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(second.status.success());
+    let summaries = files_named(&state_dir, "summary.json");
+    assert_eq!(summaries.len(), 2);
+    let second_summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&summaries[1]).unwrap()).unwrap();
+    assert_eq!(
+        second_summary["candidateFiles"].as_array().unwrap().len(),
+        1
+    );
+    assert!(
+        second_summary["candidateFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("concurrent.py")
+    );
+}
+
+#[test]
 fn turn_completion_operational_failure_retries_only_affected_files() {
     require_pkl!();
     let project = temp_project("turn-completion-selective-operational");
@@ -2182,6 +2456,174 @@ fn turn_completion_operational_failure_retries_only_affected_files() {
 }
 
 #[test]
+fn turn_completion_per_file_batch_isolates_one_operational_failure() {
+    require_pkl!();
+    let project = temp_project("turn-completion-partial-batch-failure");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let clean = project.join("src/clean.py");
+    let failed = project.join("src/failed.py");
+    std::fs::write(&clean, "print('clean')\n").unwrap();
+    std::fs::write(&failed, "print('check_crash')\n").unwrap();
+    for path in [&clean, &failed] {
+        seed_pending_file(&state_dir, "codex", path);
+    }
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["result"]["files"].as_object().unwrap().len(), 2);
+    let normal_paths = summary["result"]["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(normal_paths.iter().any(|path| path.ends_with("clean.py")));
+    assert!(
+        normal_paths.iter().any(|path| path.ends_with("failed.py")),
+        "a successful independent format check remains a normal result"
+    );
+    let problem = summary["result"]["operationalProblems"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(problem["affectedFiles"].as_array().unwrap().len(), 1);
+    assert!(
+        problem["affectedFiles"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("failed.py")
+    );
+    let state = hookkit_session_state::SessionState::open(
+        hookkit_core::HarnessId::CODEX,
+        hookkit_session_state::SessionIdentity::Session("codex-ruff-test".into()),
+        hookkit_session_state::StateRoot::new(&state_dir),
+    )
+    .unwrap();
+    let store = hookkit_file_activity::FileActivityStore::from_state(state).unwrap();
+    store
+        .pending()
+        .with_entity(|view| {
+            assert_eq!(
+                view.state().targets(),
+                &std::collections::BTreeSet::from([
+                    hookkit_file_activity::FileActivityTarget::exact(
+                        hookkit_core::Utf8PathBuf::from_path_buf(
+                            std::fs::canonicalize(&failed).unwrap(),
+                        )
+                        .unwrap(),
+                    ),
+                ])
+            );
+            Ok(hookkit_session_state::EntityOutcome::retain(()))
+        })
+        .unwrap();
+}
+
+#[test]
+fn turn_completion_records_uncovered_deleted_unresolved_and_truncated_activity() {
+    require_pkl!();
+
+    for case in ["uncovered", "deleted", "unresolved", "truncated"] {
+        let project = temp_project(&format!("turn-completion-coverage-{case}"));
+        let state_dir = project.join("state");
+        let state_arg = state_dir.to_string_lossy().into_owned();
+        let fake_ruff = write_fake_ruff(&project);
+        write_per_file_ruff_hook_config(&project, &fake_ruff);
+        if case == "truncated" {
+            replace_file_activity_settings(&project, "filesystemMtime = false; maxEntries = 1");
+        }
+        std::fs::create_dir_all(project.join("src/nested")).unwrap();
+        std::fs::write(project.join("src/nested/one.py"), "print('one')\n").unwrap();
+        std::fs::write(project.join("src/nested/two.py"), "print('two')\n").unwrap();
+
+        match case {
+            "uncovered" => {
+                let path = project.join("src/note.unknown");
+                std::fs::write(&path, "not covered\n").unwrap();
+                seed_pending_file(&state_dir, "codex", &path);
+            }
+            "deleted" => {
+                let path = project.join("src/deleted.py");
+                std::fs::write(&path, "print('gone')\n").unwrap();
+                seed_pending_file(&state_dir, "codex", &path);
+                std::fs::remove_file(path).unwrap();
+            }
+            "unresolved" => seed_pending_target(
+                &state_dir,
+                "codex",
+                hookkit_file_activity::FileActivityTarget::Path {
+                    path: hookkit_core::Utf8PathBuf::from_path_buf(
+                        project.join("missing-directory"),
+                    )
+                    .unwrap(),
+                    scope: hookkit_file_activity::FileActivityScope::Descendants,
+                },
+            ),
+            "truncated" => seed_pending_target(
+                &state_dir,
+                "codex",
+                hookkit_file_activity::FileActivityTarget::Workspace {
+                    root: Some(hookkit_core::Utf8PathBuf::from_path_buf(project.clone()).unwrap()),
+                },
+            ),
+            _ => unreachable!(),
+        }
+
+        let stopped = run_deferred_case("codex", &project, &state_arg);
+
+        assert!(
+            stopped.status.success(),
+            "{case}: {}",
+            String::from_utf8_lossy(&stopped.stderr)
+        );
+        let summary = only_summary(&state_dir);
+        match case {
+            "uncovered" => assert_eq!(
+                summary["result"]["uncoveredFiles"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            ),
+            "deleted" => assert_eq!(
+                summary["result"]["notApplicableFiles"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            ),
+            "unresolved" => {
+                assert!(summary["counts"]["coverageGaps"].as_u64().unwrap() >= 1);
+                assert!(
+                    summary["stateDisposition"]["retryTargets"]
+                        .as_array()
+                        .is_some_and(|targets| !targets.is_empty())
+                );
+            }
+            "truncated" => {
+                assert!(summary["counts"]["coverageGaps"].as_u64().unwrap() >= 1);
+                assert!(
+                    summary["stateDisposition"]["retryGaps"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|gap| gap.as_str().unwrap().contains("traversal budget"))
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
 fn turn_completion_links_distinct_tool_artifacts_to_one_file() {
     require_pkl!();
     let project = temp_project("turn-completion-multi-tool-artifacts");
@@ -2228,6 +2670,91 @@ fn turn_completion_links_distinct_tool_artifacts_to_one_file() {
     assert_eq!(artifact_ids.len(), 2);
     assert_eq!(summary["artifactPaths"].as_array().unwrap().len(), 2);
     assert_eq!(summary["artifactContents"].as_object().unwrap().len(), 2);
+}
+
+#[test]
+fn turn_completion_applies_custom_group_bucket_and_master_templates() {
+    require_pkl!();
+    let project = temp_project("turn-completion-custom-reporting");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    add_deferred_reporting_config(
+        &project,
+        r#"    groups = new Listing<FileGroup> {
+      new FileGroup { id = "special-python"; displayName = "Special Python"; include = new Listing { "**/*.py" } }
+      new FileGroup { id = "other"; displayName = "Other"; include = new Listing { "**" } }
+    }
+    manualFixesNeeded = new TemplatePair {
+      user = "BUCKET-U {{ manual_fix_files[0].displayPath }} {{ groups[0].display_name }}"
+      agent = "BUCKET-A {{ manual_fix_files[0].groupId }} {{ artifact_paths | length }}"
+    }
+    masterUser = "MASTER-U {{ rendered_buckets.manual_fixes_needed.user }}"
+    masterAgent = "MASTER-A {{ rendered_buckets.manual_fixes_needed.agent }}""#,
+    );
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/custom.py");
+    std::fs::write(&file, "print(manual_issue)\n").unwrap();
+    seed_pending_file(&state_dir, "codex", &file);
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(
+        response["systemMessage"],
+        "MASTER-U BUCKET-U src/custom.py Special Python"
+    );
+    assert!(
+        response["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MASTER-A BUCKET-A special-python ")
+    );
+    let summary = only_summary(&state_dir);
+    let file = summary["result"]["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(file["groupId"], "special-python");
+}
+
+#[test]
+fn turn_completion_keeps_large_diagnostics_in_artifacts_not_native_context() {
+    require_pkl!();
+    let project = temp_project("turn-completion-large-diagnostics");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let file = project.join("src/large.py");
+    std::fs::write(&file, "print(manual_issue)  # large_diagnostic\n").unwrap();
+    seed_pending_file(&state_dir, "codex", &file);
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(stopped.status.success());
+    assert!(
+        stopped.stdout.len() < 16_384,
+        "native output must stay concise"
+    );
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert!(!response["systemMessage"].as_str().unwrap().contains("xxxx"));
+    assert!(!response["reason"].as_str().unwrap().contains("xxxx"));
+    let summary = only_summary(&state_dir);
+    assert!(
+        summary["result"]["artifacts"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|artifact| artifact["contents"]
+                .as_str()
+                .is_some_and(|text| text.len() > 100_000))
+    );
 }
 
 #[test]

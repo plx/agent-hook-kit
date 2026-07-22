@@ -245,7 +245,8 @@ to the windowed `agent-hook-kit.file-activity` entity. At turn completion,
    monotonic cursor only after discoveries are durable;
 2. obtains a `PendingFileActivity` entity view and expands its exact,
    descendant, glob, and workspace targets;
-3. runs matching Pkl-configured format/fix/verify phases over the path set;
+3. runs matching Pkl-configured read-only checks, one remedy for each initially
+   dirty workflow, and authoritative checks invalidated by observed writes;
 4. writes complete per-tool output and commits a run summary;
 5. appends idempotent retry evidence for manual, operationally incomplete, and
    unresolved work into the active generation;
@@ -258,6 +259,9 @@ the state transition. A crash before disposition leaves the sealed source
 pending; a crash after retry append may duplicate an idempotent retry but cannot
 lose it. Files modified while linters run also land in the next generation and
 remain pending when the completed window is acknowledged.
+Normal clean, auto-fixed, and manual results are recorded per file with
+worst-wins aggregation across tools. Operational failures remain a separate
+bucket, and conservative batch findings retain their shared report provenance.
 
 The older `ModifiedFiles`/`ModifiedFileEvent` projection remains a small
 session-state convenience for callers that only need an exact-path set. It does

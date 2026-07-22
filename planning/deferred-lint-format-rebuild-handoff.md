@@ -401,3 +401,45 @@ Commit/PR:
 Next item readiness:
 
 - Ready for Item 9. Every enabled built-in has an authoritative deferred check or a validated compatibility pairing, and catalog regressions fail before execution.
+
+## Item 9 — End-to-end regression matrix, documentation, and cleanup
+
+Outcome:
+
+- Expanded the hermetic turn-completion matrix to 56 integration tests while retaining the prior Stop cases. One sealed generation now proves clean, auto-fixed, and manual outcomes together; separate cases prove multi-tool artifacts, invalidation, selective retry/discharge, partial operational failure, and every exact native output arm.
+- Added an actual post-seal concurrency probe: a fake check blocks after the pending view is sealed, the file-activity producer appends another observation, and a second Stop proves that observation survived the first acknowledgement.
+- Added end-to-end handled-baseline coverage for an unchanged Git-dirty file, plus uncovered, deleted, unresolved-scope, and traversal-budget cases. The Git-dirty case proves no second summary/tool run occurs; scoped truncation remains summarized and requeued.
+- Corrected the fake Ruff formatter to honor `format --check` without mutation. Added 128 KiB diagnostic output coverage proving native user/agent channels remain concise while complete bytes stay in artifacts.
+- Added custom group, bucket-template, and master-template integration coverage. Existing pure reporting tests continue to cover every default bucket, first-match grouping, artifact views, and audience suppression.
+- Updated the root setup/config/migration guide, runner design, file-activity/session-state docs, and compatibility example. Removed obsolete whole-window retention and quiet-success descriptions.
+
+Public API/config/state changes:
+
+- None. This item adds regression coverage and documentation around the APIs/config/state formats introduced in Items 1–8.
+
+Compatibility decision:
+
+- The deferred policy remains split into runner-owned model, execution, reporting, and lowering modules. The main module retains shared CLI, conversion, state-transaction, artifact, and immediate-runner orchestration; a further mechanical split would increase cross-module coupling without isolating another policy boundary.
+- Legacy `phases` compatibility remains live for 115 validated builtin entries and is therefore not dead code. Immediate PostToolUse also still consumes it. Removal is intentionally deferred until catalog migration makes it genuinely unused.
+- Pending entity v1 is not migrated in place: v2 uses a fresh transient subtree, with restart recommended when exact upgrade continuity matters. Existing phase-only configs retain immediate behavior and receive validated Stop compatibility translation when a verifier exists.
+
+Focused validation:
+
+- `cargo test -p hookkit-runtime --test integration` (56 passed)
+- focused runner execution/reporting/lowering and file-activity/session-state concurrency/truncation tests from the prior items remain part of the workspace suite
+- `cargo clippy -p hookkit-runtime -p hookkit-tool-runner -p hookkit-file-activity -p hookkit-session-state --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- The final repository ladder also passed: workspace fmt, Clippy, and all-target tests; conformance check; contract check/report/vendor verification; and diff whitespace validation.
+
+Known gaps:
+
+- The controlled-version real-tool compatibility lane remains intentionally ignored and was not run. No performance latency guarantee is claimed; the release gate verifies bounded concurrency/walks and context size behavior, not timing targets.
+
+Commit/PR:
+
+- This item is ready to commit as the end-to-end release matrix, documentation, and cleanup review unit.
+
+Next item readiness:
+
+- All punchlist items and the full repository validation ladder are complete. Commit this item, push the branch, and open the PR against `main`.

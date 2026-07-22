@@ -73,6 +73,13 @@ The default coverage policy processes materialized files, requeues unresolved
 scopes and analyzer gaps, and exposes those gaps in the run summary without
 calling resolved files dirty. `strict` additionally blocks Stop while a gap is
 present. Both policies retain the unresolved evidence for a later attempt.
+Scoped resolution stops at `maxEntries`; truncation remains an unresolved target
+plus an explicit coverage gap rather than silently dropping the unwalked tail.
+
+Reconciliation may still stat/hash a fallback candidate once to compare its
+current fingerprint with the handled baseline. When the digest matches, it does
+not append pending work or spawn configured tools. Direct observations bypass
+that suppression by design, even when bytes happen to match an old baseline.
 
 The shipped producer is `file-activity-agent-hook` from
 `hookkit-tool-runner`. Bind it to Claude/Codex PostToolUse or Gemini AfterTool

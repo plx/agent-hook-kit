@@ -45,11 +45,13 @@ another common state root.
 The shipped `turn-completion-agent-hook` first reconciles workspace mtimes from
 the previous durable cursor (using current-session start metadata to bootstrap),
 then seals an exact generation window and runs all matching Pkl-configured
-formatter/linter phases. A clean or fully auto-corrected batch is acknowledged
-quietly. Manual findings retain the exact snapshot for a retry and point the
-agent and user at committed detailed logs. Entries appended while a batch is
-running go to a new generation and are not part of its acknowledgement.
-Retained retries load a cached set and fold only newly arrived generations.
+read-only checks, conditional remedies, and invalidated final checks. It emits
+configured clean and auto-fixed reports, appends retry evidence only for manual,
+operationally incomplete, and unresolved work, records handled baselines for
+discharged files, then acknowledges the sealed generations. Entries appended
+while a batch is running go to a new generation and are not part of its
+acknowledgement. Retried work loads a cached set and folds only newly arrived
+generations.
 
 The library also exposes an opt-in `GitDirty` fallback. It is disabled by
 default because a dirty working tree cannot distinguish agent edits from

@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-- Status: approved for implementation
+- Status: implementation and final validation complete
 - Prepared: 2026-07-21
 - Reviewed baseline: `f5cc5de168326e742edfbe6beb3d819e45648d5c`
 - Target branch: `origin/main`
@@ -608,33 +608,33 @@ Dependencies: Items 1 through 8
 
 Tasks:
 
-- [ ] Replace the three narrow Stop integration tests with a broader hermetic matrix while retaining their original coverage.
-- [ ] Add multi-file mixed-category coverage in one sealed generation.
-- [ ] Add one file covered by multiple tools, including multiple report artifacts.
-- [ ] Add a later fixer invalidating an earlier clean checker.
-- [ ] Add selective discharge followed by a second Stop.
-- [ ] Add manual retry with no new activity event, followed by a user fix and discharge.
-- [ ] Add auto-fix self-write and Git-dirty handled-baseline regressions.
-- [ ] Add observations arriving concurrently during Stop.
-- [ ] Add operational failure affecting only part of a batch.
-- [ ] Add uncovered, deleted, unresolved, and traversal-truncated candidates.
-- [ ] Add group and all template/master-template defaults and overrides.
-- [ ] Exercise exact output for Claude, Codex, Gemini, and supported Antigravity behavior.
-- [ ] Update root README, runner design, Pkl format documentation, file-activity/session-state docs, and example/setup instructions.
-- [ ] Remove stale statements that clean/auto-corrected batches are always quiet or that manual findings retain the entire source window.
-- [ ] Document best-effort tracking limitations and conservative batch attribution.
-- [ ] Document persisted-state/config migration behavior.
-- [ ] Split the current 2,900-line runner module into coherent modules if the rebuild would otherwise make it harder to review and maintain.
-- [ ] Remove dead compatibility code only after migration tests prove it is no longer needed.
+- [x] Replace the three narrow Stop integration tests with a broader hermetic matrix while retaining their original coverage.
+- [x] Add multi-file mixed-category coverage in one sealed generation.
+- [x] Add one file covered by multiple tools, including multiple report artifacts.
+- [x] Add a later fixer invalidating an earlier clean checker.
+- [x] Add selective discharge followed by a second Stop.
+- [x] Add manual retry with no new activity event, followed by a user fix and discharge.
+- [x] Add auto-fix self-write and Git-dirty handled-baseline regressions.
+- [x] Add observations arriving concurrently during Stop.
+- [x] Add operational failure affecting only part of a batch.
+- [x] Add uncovered, deleted, unresolved, and traversal-truncated candidates.
+- [x] Add group and all template/master-template defaults and overrides.
+- [x] Exercise exact output for Claude, Codex, Gemini, and supported Antigravity behavior.
+- [x] Update root README, runner design, Pkl format documentation, file-activity/session-state docs, and example/setup instructions.
+- [x] Remove stale statements that clean/auto-corrected batches are always quiet or that manual findings retain the entire source window.
+- [x] Document best-effort tracking limitations and conservative batch attribution.
+- [x] Document persisted-state/config migration behavior.
+- [x] Split the current 2,900-line runner module into coherent modules if the rebuild would otherwise make it harder to review and maintain.
+- [x] Remove dead compatibility code only after migration tests prove it is no longer needed.
 
 Performance/robustness checks:
 
-- [ ] clean files do not spawn remedy commands;
-- [ ] unchanged handled files do not repeatedly hash or run tools beyond the intended reconciliation/check boundary without justification;
-- [ ] final verification reruns only invalidated checks where exact invalidation is available;
-- [ ] job concurrency remains bounded;
-- [ ] large diagnostic output remains in artifacts rather than default agent context;
-- [ ] recursive walks remain bounded and report truncation.
+- [x] clean files do not spawn remedy commands;
+- [x] unchanged handled files do not repeatedly hash or run tools beyond the intended reconciliation/check boundary without justification;
+- [x] final verification reruns only invalidated checks where exact invalidation is available;
+- [x] job concurrency remains bounded;
+- [x] large diagnostic output remains in artifacts rather than default agent context;
+- [x] recursive walks remain bounded and report truncation.
 
 Exit criteria:
 

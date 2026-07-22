@@ -345,9 +345,11 @@ and `--config PATH` to load a single Pkl file directly (bypassing discovery).
 
 The companion `turn-completion-agent-hook` reconciles and consumes the
 NDJSON-backed pending file-activity window at Claude/Codex `Stop` or Gemini
-`AfterAgent`, runs the same configured tools over the candidate batch, and
-allows completion after clean or auto-corrected results while emitting the
-configured deferred report through each harness's native channels:
+`AfterAgent`. For each matching deferred workflow it runs a read-only check,
+runs one remedy only when that check reports source issues, and reruns every
+check invalidated by observed writes. It allows completion after clean or
+fully auto-fixed results while emitting the configured deferred report through
+each harness's native channels:
 
 ```bash
 cargo run -q -p hookkit-tool-runner --bin turn-completion-agent-hook -- \
@@ -356,9 +358,12 @@ cargo run -q -p hookkit-tool-runner --bin turn-completion-agent-hook -- \
 
 Use the same `--state-dir` for `file-activity-agent-hook`. Before sealing
 the window, the runner scans workspace mtimes since the durable reconciliation
-cursor (or the current session start on its first pass). Manual issues block
-the stop attempt, retain the sealed generations and cached set for retry, and
-point to detailed logs committed below the versioned session state. See the
+cursor (or the current session start on its first pass). It commits artifacts
+and `summary.json`, requeues only manual, operationally incomplete, and
+unresolved work into the active generation, records handled fingerprints for
+clean/auto-fixed/deleted files, and then acknowledges the sealed source
+generations. Manual issues block the stop attempt and point to those committed
+logs. See the
 [file-activity crate](crates/hookkit-file-activity/README.md) and
 [session-state walkthrough](crates/hookkit-session-state/README.md).
 
@@ -420,7 +425,12 @@ or `merge { resetTools = new Listing { "ruff" } }`.
 
 ### Bundled builtins
 
-`hookkit-pkl-config` embeds `Builtins.pkl` with reusable specs for:
+`hookkit-pkl-config` embeds `Builtins.pkl` with 134 reusable specs. Every
+enabled entry either declares explicit deferred workflows or passes catalog
+validation for the legacy-phase compatibility translation. The complete
+command, scope, granularity, and limitation inventory is
+[`planning/builtin-deferred-workflow-audit.md`](planning/builtin-deferred-workflow-audit.md).
+Representative entries include:
 
 - `Builtins.ruff` — Python format/fix/verify with ruff
 - `Builtins.prettier` — JS/TS/CSS/HTML/JSON/Markdown formatter
@@ -428,6 +438,11 @@ or `merge { resetTools = new Listing { "ruff" } }`.
 - `Builtins.biome` — JS/TS/JSON fix + verify
 - `Builtins.cargoFmt` — Rust workspace formatter
 - `Builtins.cargoClippy` — Rust workspace fix + verify
+
+Ruff has distinct lint and format workflows. `go-fmt`, `gofumpt`, `goimports`,
+and `golines` use non-mutating stdout-aware checks; `gomod-tidy` uses
+`go mod tidy -diff`; and yq uses a per-file comparator. No enabled builtin
+relies on an unchecked mutator-first fallback.
 
 ### Example project config
 
@@ -450,6 +465,14 @@ tools {
         extraArgs = new Listing<String> { "--unfixable"; "F401" }
       }
     }
+    workflows {
+      ["lint"] {
+        remedy {
+          // apply the same choice to deferred turn completion
+          extraArgs = new Listing<String> { "--unfixable"; "F401" }
+        }
+      }
+    }
   }
   ["prettier"] = Builtins.prettier
 }
@@ -468,6 +491,10 @@ run = new Listing<String> { "ruff"; "prettier" }
 | `settings.loweringPolicy` | `"best-effort-with-warnings"` | How to handle a nonempty user/agent message that the selected native event cannot represent faithfully: fail, omit, or omit with a native-channel warning. |
 | `settings.diagnosticsDirectory` | `".agent-hook-kit/post-tool-use"` | Where to write diagnostic artifacts. |
 | `settings.missingToolPolicy` | `"user-notice"` | What to do when a configured tool executable is missing. Options: `"user-notice"`, `"hard-failure"`, `"harness-block"`. |
+| `settings.fileActivity.filesystemMtime` | `true` | Reconcile mtime evidence through a durable cutoff before each Stop. |
+| `settings.fileActivity.vcs` | `"disabled"` | Optional `"git-dirty"` fallback; broad because it cannot identify which dirty changes came from the agent. |
+| `settings.fileActivity.maxEntries` | `100000` | Bound scoped/workspace traversal; truncation is retained as a coverage gap. |
+| `settings.fileActivity.coverageGapPolicy` | `"best-effort"` | Process resolved files and warn while retaining gaps, or use `"strict"` to block until coverage is complete. |
 
 ### Deferred reporting templates
 
@@ -495,6 +522,14 @@ block before applying that file's local overrides.
 The `messages` block inside an individual `ToolSpec` is separate: it remains
 the per-tool message policy for the immediate `post-tool-use-agent-hook` and
 does not define deferred bucket meaning.
+
+Deferred batch and workspace checks conservatively attach a finding to every
+candidate in that invocation unless exact changed-file snapshots or a future
+diagnostic adapter provide narrower evidence. Tracking is best effort: dynamic
+commands, changes outside supplied workspaces, timestamp limitations, and
+Antigravity's missing PostToolUse arguments can create retained coverage gaps.
+The summary distinguishes uncovered, not-applicable, unresolved, truncated,
+manual, and operational outcomes rather than calling them clean.
 
 Deferred Stop lowering uses the exact native fields below:
 
@@ -526,6 +561,14 @@ Pkl config that selects the same tool. For example:
 
 …with `.agent-hook-kit/post-tool-use.pkl` referencing `Builtins.ruff` and any
 overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
+
+For deferred config migration, existing `phases` still drive immediate
+PostToolUse and are compatibility-translated at Stop when they have a read-only
+verifier. Prefer explicit `workflows` for new or combined tools. The pending
+file-activity entity is version 2 and handled baselines are a separate version-1
+entity; an upgrade from the former pending v1 creates a fresh transient subtree,
+so restart the agent session when exact continuity matters. Mtime and optional
+Git-dirty reconciliation recover only best-effort candidates.
 
 ## Example Behavior Summary
 
@@ -565,9 +608,9 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - lowers every result through an explicit Claude, Codex, or Gemini native output arm.
 - `turn-completion-agent-hook`:
   - seals the current modified-file generations under an exclusive entity consumer lock,
-  - dispatches the same Pkl-configured phases across the accumulated file set,
+  - dispatches Pkl-configured check/conditional-remedy/final-check workflows across the accumulated file set,
   - commits detailed per-tool logs and a summary before producing its decision,
-  - discharges clean or fully auto-corrected files while retaining only unfinished work,
+  - acknowledges the sealed window after requeueing only unfinished work and recording handled baselines for discharged files,
   - emits configured clean/auto reports without blocking and uses each harness's native continue-working signal for manual or operational results.
 
 ## License
