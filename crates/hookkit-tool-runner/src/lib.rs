@@ -254,7 +254,9 @@ pub enum CommandArgTemplate {
     Literal(String),
     /// Files selected for the current job.
     Files,
-    /// All selected files in the current workspace partition.
+    /// The same files as [`CommandArgTemplate::Files`], but rewritten relative to
+    /// the current workspace partition root (falling back to the absolute path
+    /// for any file that lies outside that root).
     WorkspaceFiles,
     /// Root of the current workspace partition.
     Workspace,

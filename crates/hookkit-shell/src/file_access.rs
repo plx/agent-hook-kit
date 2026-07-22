@@ -157,7 +157,13 @@ pub enum FileTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PathExpression {
-    /// Operand exactly as represented by the analyzed shell word.
+    /// Operand value as a string.
+    ///
+    /// For a literal operand this is the statically evaluated value (quotes and
+    /// escapes removed); for a glob operand it is the word's exact source slice;
+    /// for a rule- or option-derived operand (such as the working-directory
+    /// default `.`) it is whatever the rule supplied. It is not guaranteed to be
+    /// the exact source text of a shell word.
     pub raw: String,
     /// Lexically normalized absolute path, when a stable base is known.
     ///
@@ -385,9 +391,10 @@ pub struct FileAccessSink<'command, 'report> {
 impl FileAccessSink<'_, '_> {
     /// Emits an access derived from an argv operand.
     ///
-    /// A missing or dynamic operand is recorded in [`FileAccessReport::unresolved`]
-    /// instead. `argv_index` uses conventional indexing, with the executable at
-    /// zero.
+    /// A missing operand, or a non-literal operand other than a pure glob, is
+    /// recorded in [`FileAccessReport::unresolved`] instead; a pure glob operand
+    /// is emitted as a candidate with [`FileTargetScope::Glob`]. `argv_index`
+    /// uses conventional indexing, with the executable at zero.
     pub fn emit_argument(
         &mut self,
         argv_index: usize,

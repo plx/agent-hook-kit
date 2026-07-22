@@ -173,9 +173,10 @@ pub struct SessionEpochMetadata {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-/// Latest project paths explicitly observed in native hook input.
+/// Project context aggregated from native hook input.
 pub struct ProjectMetadata {
-    /// Active workspace roots.
+    /// Deduplicated union of every workspace root observed across all
+    /// observations (sorted), not just the most recent observation.
     pub workspace_roots: Vec<Utf8PathBuf>,
     /// Native transcript path, when supplied.
     pub transcript_path: Option<Utf8PathBuf>,
@@ -194,7 +195,9 @@ pub struct SessionMetadata {
     pub harness: String,
     /// Identity namespace (`session` or `conversation`).
     pub identity_kind: String,
-    /// SHA-256 digest of the opaque native identity.
+    /// SHA-256 digest of the harness identifier, identity namespace, and opaque
+    /// native identity value (joined by NUL bytes); this is also the on-disk
+    /// session directory key.
     pub identity_hash: String,
     /// Conversation-wide timing metadata.
     pub conversation: ConversationMetadata,

@@ -39,7 +39,7 @@ pub enum FileActivityError {
     /// Filesystem or subprocess I/O failed.
     #[error("file activity I/O error: {0}")]
     Io(#[from] std::io::Error),
-    /// Persisted or subprocess JSON could not be decoded.
+    /// Persisted JSON could not be decoded.
     #[error("file activity JSON error: {0}")]
     Json(#[from] serde_json::Error),
     /// A filesystem path cannot be represented by this UTF-8-only API.
@@ -533,7 +533,9 @@ pub struct ReconciliationOptions {
     pub fallback_since: Option<UtcTimestamp>,
     /// Inclusive upper bound recorded after successful reconciliation.
     pub through: UtcTimestamp,
-    /// Clock-resolution allowance applied around the interval bounds.
+    /// Clock-resolution slack subtracted from the lower bound during the first,
+    /// cursor-less reconciliation only; the upper bound and later incremental
+    /// runs are unaffected.
     pub timestamp_tolerance: Duration,
     /// Whether to scan filesystem modification times.
     pub filesystem_mtime: bool,
@@ -543,7 +545,8 @@ pub struct ReconciliationOptions {
     pub max_entries: usize,
     /// Directory basenames pruned from recursive traversal.
     pub ignored_directory_names: BTreeSet<String>,
-    /// Roots excluded from fallback evidence and traversal.
+    /// Roots pruned from the filesystem-mtime scan and its traversal. The VCS
+    /// dirty-state fallback does not honor this set.
     pub excluded_roots: BTreeSet<Utf8PathBuf>,
 }
 
@@ -923,7 +926,10 @@ impl ResolveOptions {
 pub struct ResolvedFileActivity {
     /// Deterministic set of existing regular files.
     pub files: BTreeSet<Utf8PathBuf>,
-    /// Targets left unresolved after budget exhaustion.
+    /// The single target whose traversal exhausted the entry budget, if any; it
+    /// may be partially resolved (files found before exhaustion are still
+    /// included in `files`). Targets ordered after it in the window are skipped
+    /// and are not listed here.
     pub unresolved_targets: Vec<FileActivityTarget>,
     /// Directory entries charged to the shared traversal budget.
     pub scanned_entries: usize,

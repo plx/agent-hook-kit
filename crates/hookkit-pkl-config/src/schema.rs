@@ -58,7 +58,7 @@ pub struct Settings {
     pub jobs: u32,
     /// Whether to stop scheduling after the first failed job.
     pub fail_fast: bool,
-    /// Whether later phases may run after a phase reports issues.
+    /// Whether later tools may run after an earlier tool reports issues.
     pub continue_after_issues: bool,
     /// Glob patterns excluded from tool file selection.
     pub exclude: Vec<String>,

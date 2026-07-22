@@ -61,7 +61,10 @@ pub struct DetectionReport {
     pub candidates: Vec<DetectedCandidate>,
     /// Whether candidate evidence is insufficient for unique safe selection.
     pub ambiguous: bool,
-    /// Authoritative or sound evidence contradicting supplied constraints.
+    /// Constraint contradictions: either the supplied `harness` and `event`
+    /// constraints are mutually inconsistent, or authoritative (discriminator)
+    /// or sound-shape payload evidence identifies an event outside the supplied
+    /// constraints.
     pub constraint_mismatches: Vec<String>,
     /// Exact parser failures collected while inspecting descriptors.
     pub validation_failures: Vec<(EventId, String)>,

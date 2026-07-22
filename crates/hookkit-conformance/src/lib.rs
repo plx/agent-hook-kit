@@ -128,7 +128,11 @@ fn verify_all_negative_inputs() -> Result<(), String> {
     Ok(())
 }
 
-/// Executes all positive catalog fixtures and returns their identities.
+/// Executes every positive conformance fixture and returns their identities.
+///
+/// This covers the shared-envelope `catalog` events (via
+/// `execute_catalog_cases`), the contract-first `protocol` events for Claude
+/// Code, Codex, and Gemini CLI, and the native Antigravity events.
 ///
 /// The function stops at the first parse, emission, or exact-byte mismatch and
 /// returns a human-readable error suitable for the conformance CLI.

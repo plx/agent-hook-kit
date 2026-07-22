@@ -9,7 +9,11 @@ pub enum HookkitError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// An invocation or response was not valid JSON.
+    /// A `serde_json` error while decoding an invocation or encoding a response.
+    ///
+    /// Covers both syntactically invalid JSON and well-formed JSON that does not
+    /// match the expected native structure (e.g. missing or mistyped fields
+    /// during typed deserialization).
     #[error("invalid JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
 

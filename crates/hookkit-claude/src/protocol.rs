@@ -249,7 +249,12 @@ impl SessionStartOutput {
         })
     }
 
-    /// Creates a structured response with all session-start controls.
+    /// Creates a structured response setting the additional-context,
+    /// skill-reload, session-title, and watch-path controls.
+    ///
+    /// This constructor leaves `initial_user_message` unset (use
+    /// [`Self::with_initial_user_message`]) and `system_message` unset (use
+    /// [`Self::with_context_and_system_message`]).
     ///
     /// Empty `watch_paths` are omitted. The values are retained verbatim and
     /// are not checked for existence or uniqueness.

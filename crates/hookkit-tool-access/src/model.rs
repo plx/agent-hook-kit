@@ -93,7 +93,8 @@ pub struct PathExpression {
 pub enum AccessScope {
     /// Only the named path.
     Exact,
-    /// Children of the named directory, excluding the directory itself.
+    /// All descendants of the named directory (recursively), excluding the
+    /// directory itself.
     Descendants,
     /// The named path and, when applicable, its descendants.
     ExactOrDescendants,
@@ -152,7 +153,9 @@ pub enum PatchOperation {
     MoveSource,
     /// Creates the new path of a move.
     MoveDestination,
-    /// Reads the old path named by a unified-diff header.
+    /// The old path named by an orphaned unified-diff `---` header (one with no
+    /// matching `+++`); its access role is recorded as
+    /// [`AccessIntent::Unclassified`] because it cannot be determined.
     UnifiedOld,
     /// Writes the new path named by a unified-diff header.
     UnifiedNew,
@@ -190,7 +193,9 @@ pub enum AccessProvenance {
         payload_pointer: String,
         /// Patch role assigned to the path.
         operation: PatchOperation,
-        /// Original patch header containing the path.
+        /// Patch header marker that introduced the path (e.g. `*** Update File`,
+        /// `*** Add File`, `---`, or `+++`); the path itself lives in the
+        /// candidate's [`AccessTarget`], not in this field.
         header: String,
         /// One-based line number in the patch payload.
         line: usize,
@@ -216,7 +221,9 @@ pub enum AccessProvenance {
         delimiter: String,
         /// Patch role assigned to the path.
         operation: PatchOperation,
-        /// Original patch header containing the path.
+        /// Patch header marker that introduced the path (e.g. `*** Update File`,
+        /// `*** Add File`, `---`, or `+++`); the path itself lives in the
+        /// candidate's [`AccessTarget`], not in this field.
         header: String,
         /// One-based line number in the patch body.
         line: usize,
@@ -338,7 +345,10 @@ pub enum ToolAccessGapReason {
     MissingWorkingDirectory {
         /// Raw relative path.
         raw: String,
-        /// JSON Pointer when the path came from structured input.
+        /// Location of the raw path: an RFC 6901 JSON Pointer for structured
+        /// input or a patch payload field (e.g. `/patch`, `/input`), or the
+        /// literal sentinel `"<shell-heredoc>"` for a path recovered from a
+        /// shell `apply_patch` here-document; `None` when no location is known.
         pointer: Option<String>,
     },
     /// A configured structured path value is neither a string nor string array.

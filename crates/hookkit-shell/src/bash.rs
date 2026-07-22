@@ -523,7 +523,7 @@ pub enum UnavailableReason {
     },
     /// Tree-sitter parsing exceeded the wall-clock budget.
     ParseTimeLimit {
-        /// Configured budget rounded up to whole milliseconds.
+        /// Configured budget truncated to whole milliseconds.
         max_millis: u64,
     },
     /// The bundled Bash grammar could not be installed in the parser.
