@@ -1,3 +1,5 @@
+//! Implemented Gemini CLI native event contracts and dynamic harness adapter.
+
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSelector, EventSpec, HarnessId, HarnessSpec,
     IdentificationDescriptor, NativeContext, ProcessEmission, RawInvocation, SessionId, SnapshotId,
@@ -7,8 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::GeminiCommandEnvironment;
 
+/// Gemini CLI source snapshot implemented by this crate.
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("commit-f354eeb-r2");
 
+/// Returns every Gemini CLI event with a native command implementation.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     let mut events = vec![
         hookkit_core::NativeEventDescriptor::command::<BeforeTool>(&["structured", "exit-2"]),
@@ -22,6 +26,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     events
 }
 
+/// Returns discriminator-based identification metadata for this snapshot.
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
     let mut descriptors = vec![
         IdentificationDescriptor::definitive::<BeforeToolSelection>(
@@ -36,31 +41,52 @@ pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Native Gemini CLI input observed before a tool invocation.
 pub struct BeforeToolInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Native event timestamp, retained as supplied.
     pub timestamp: String,
+    /// Harness-native tool name.
     pub tool_name: String,
+    /// Tool arguments as an exact JSON object.
     pub tool_input: serde_json::Map<String, serde_json::Value>,
+    /// Optional MCP-specific invocation metadata.
     #[serde(default)]
     pub mcp_context: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Original requested name when Gemini remapped the tool call.
     #[serde(default)]
     pub original_request_name: Option<String>,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Native response from a Gemini CLI before-tool command hook.
 #[derive(Debug, Clone)]
 pub enum BeforeToolOutput {
+    /// Emit an empty JSON object and exit successfully.
     NoOp,
+    /// Emit a structured JSON response.
     Structured(StructuredBeforeToolOutput),
-    BlockingError { message: String },
+    /// Write a required message to stderr and exit with code 2.
+    BlockingError {
+        /// Non-empty error message; emptiness is checked during emission.
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Structured before-tool response built through [`BeforeToolOutput`].
+///
+/// Fields are private so callers cannot bypass the builder's ordering checks.
 pub struct StructuredBeforeToolOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     decision: Option<&'static str>,
@@ -87,10 +113,12 @@ struct BeforeToolSpecific {
 }
 
 impl BeforeToolOutput {
+    /// Creates an empty JSON-object response.
     pub fn no_op() -> Self {
         Self::NoOp
     }
 
+    /// Creates a hook-specific allow response.
     pub fn allow() -> Self {
         Self::Structured(StructuredBeforeToolOutput {
             decision: Some("allow"),
@@ -102,6 +130,7 @@ impl BeforeToolOutput {
         })
     }
 
+    /// Creates a hook-specific deny response.
     pub fn deny(reason: impl Into<String>) -> Self {
         Self::Structured(StructuredBeforeToolOutput {
             decision: Some("deny"),
@@ -114,6 +143,7 @@ impl BeforeToolOutput {
         })
     }
 
+    /// Creates a hook-specific legacy block response.
     pub fn block(reason: impl Into<String>) -> Self {
         Self::Structured(StructuredBeforeToolOutput {
             decision: Some("block"),
@@ -126,6 +156,7 @@ impl BeforeToolOutput {
         })
     }
 
+    /// Creates a response that replaces the pending tool-input object.
     pub fn rewrite_tool_input(tool_input: serde_json::Map<String, serde_json::Value>) -> Self {
         Self::Structured(StructuredBeforeToolOutput {
             hook_specific_output: Some(BeforeToolSpecific {
@@ -136,6 +167,7 @@ impl BeforeToolOutput {
         })
     }
 
+    /// Creates a denial that also replaces the pending tool input.
     pub fn deny_and_rewrite(
         reason: impl Into<String>,
         tool_input: serde_json::Map<String, serde_json::Value>,
@@ -151,27 +183,35 @@ impl BeforeToolOutput {
         })
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self::BlockingError {
             message: message.into(),
         }
     }
 
+    /// Sets Gemini's top-level `continue` control.
+    ///
+    /// `NoOp` is promoted to an empty structured response; a blocking error is
+    /// final and therefore returns an error.
     pub fn with_continue(mut self, continue_session: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.continue_session = Some(continue_session);
         Ok(self)
     }
 
+    /// Sets the top-level stop reason on a structured response.
     pub fn with_stop_reason(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.stop_reason = Some(reason.into());
         Ok(self)
     }
 
+    /// Sets whether Gemini suppresses ordinary tool output.
     pub fn with_suppress_output(mut self, suppress_output: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.suppress_output = Some(suppress_output);
         Ok(self)
     }
 
+    /// Sets a top-level system message on a structured response.
     pub fn with_system_message(mut self, message: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.system_message = Some(message.into());
         Ok(self)
@@ -191,6 +231,7 @@ impl BeforeToolOutput {
     }
 }
 
+/// Native Gemini CLI `BeforeTool` command contract.
 pub enum BeforeTool {}
 
 impl EventSpec for BeforeTool {
@@ -233,38 +274,61 @@ impl EventSpec for BeforeTool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Native Gemini CLI input observed after a tool invocation.
 pub struct AfterToolInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Native event timestamp, retained as supplied.
     pub timestamp: String,
+    /// Harness-native tool name.
     pub tool_name: String,
+    /// Tool arguments as an exact JSON object.
     pub tool_input: serde_json::Map<String, serde_json::Value>,
+    /// Tool result as an exact JSON object.
     pub tool_response: serde_json::Map<String, serde_json::Value>,
+    /// Optional MCP-specific invocation metadata.
     #[serde(default)]
     pub mcp_context: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Original requested name when Gemini remapped the tool call.
     #[serde(default)]
     pub original_request_name: Option<String>,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Native response from a Gemini CLI after-tool command hook.
 #[derive(Debug, Clone)]
 pub enum AfterToolOutput {
+    /// Emit an empty JSON object and exit successfully.
     NoOp,
+    /// Emit a structured JSON response.
     Structured(StructuredAfterToolOutput),
+    /// Write a required message to stderr and exit with code 2.
     BlockingError {
+        /// Non-empty error message; emptiness is checked during emission.
         message: String,
     },
+    /// Add UTF-8 protocol stderr to one otherwise successful response.
     WithProtocolStderr {
+        /// Successful response to encode as stdout.
         output: Box<AfterToolOutput>,
+        /// UTF-8 stderr bytes, validated during emission.
         stderr: Vec<u8>,
     },
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Structured after-tool response built through [`AfterToolOutput`].
+///
+/// Fields are private so callers cannot bypass the builder's ordering checks.
 pub struct StructuredAfterToolOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     decision: Option<&'static str>,
@@ -293,16 +357,22 @@ struct AfterToolSpecific {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Request for Gemini to execute a follow-up tool call immediately.
+///
+/// Construct this through [`AfterToolOutput::with_tail_tool_call`] or
+/// [`AfterToolOutput::and_tail_tool_call`].
 pub struct TailToolCallRequest {
     name: String,
     args: serde_json::Map<String, serde_json::Value>,
 }
 
 impl AfterToolOutput {
+    /// Creates an empty JSON-object response.
     pub fn no_op() -> Self {
         Self::NoOp
     }
 
+    /// Creates a structured response that appends agent context.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::Structured(StructuredAfterToolOutput {
             hook_specific_output: Some(AfterToolSpecific {
@@ -314,6 +384,7 @@ impl AfterToolOutput {
         })
     }
 
+    /// Creates a hook-specific allow response.
     pub fn allow() -> Self {
         Self::Structured(StructuredAfterToolOutput {
             decision: Some("allow"),
@@ -326,6 +397,7 @@ impl AfterToolOutput {
         })
     }
 
+    /// Creates a hook-specific deny response.
     pub fn deny(reason: impl Into<String>) -> Self {
         Self::Structured(StructuredAfterToolOutput {
             decision: Some("deny"),
@@ -339,6 +411,7 @@ impl AfterToolOutput {
         })
     }
 
+    /// Creates a response containing one immediate follow-up tool call.
     pub fn with_tail_tool_call(
         name: impl Into<String>,
         args: serde_json::Map<String, serde_json::Value>,
@@ -356,6 +429,8 @@ impl AfterToolOutput {
         })
     }
 
+    /// Adds or replaces the immediate follow-up tool call on a successful
+    /// structured response.
     pub fn and_tail_tool_call(
         mut self,
         name: impl Into<String>,
@@ -369,6 +444,7 @@ impl AfterToolOutput {
         Ok(self)
     }
 
+    /// Creates a hook-specific legacy block response.
     pub fn block(reason: impl Into<String>) -> Self {
         Self::Structured(StructuredAfterToolOutput {
             decision: Some("block"),
@@ -382,12 +458,17 @@ impl AfterToolOutput {
         })
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self::BlockingError {
             message: message.into(),
         }
     }
 
+    /// Adds protocol stderr to a successful response.
+    ///
+    /// A blocking error or an already wrapped response is rejected. The text
+    /// must be valid UTF-8 when emitted.
     pub fn with_protocol_stderr(self, stderr: impl Into<String>) -> hookkit_core::Result<Self> {
         if matches!(
             self,
@@ -403,21 +484,25 @@ impl AfterToolOutput {
         })
     }
 
+    /// Sets Gemini's top-level `continue` control.
     pub fn with_continue(mut self, continue_session: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.continue_session = Some(continue_session);
         Ok(self)
     }
 
+    /// Sets the top-level stop reason on a structured response.
     pub fn with_stop_reason(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.stop_reason = Some(reason.into());
         Ok(self)
     }
 
+    /// Sets whether Gemini suppresses ordinary tool output.
     pub fn with_suppress_output(mut self, suppress_output: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.suppress_output = Some(suppress_output);
         Ok(self)
     }
 
+    /// Sets a top-level system message on a structured response.
     pub fn with_system_message(mut self, message: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.system_message = Some(message.into());
         Ok(self)
@@ -450,6 +535,7 @@ impl AfterToolOutput {
     }
 }
 
+/// Native Gemini CLI `AfterTool` command contract.
 pub enum AfterTool {}
 
 impl EventSpec for AfterTool {
@@ -535,35 +621,53 @@ pub(crate) fn require_event(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Native Gemini CLI input observed before model tool selection.
 pub struct BeforeToolSelectionInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Native event timestamp, retained as supplied.
     pub timestamp: String,
+    /// Model request whose tool configuration may be constrained.
     pub llm_request: LlmRequest,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Relevant portion of Gemini's native model request.
 pub struct LlmRequest {
+    /// Requested model name.
     pub model: String,
+    /// Native conversation messages.
     pub messages: Vec<serde_json::Value>,
+    /// Native request configuration object.
     pub config: serde_json::Map<String, serde_json::Value>,
+    /// Unknown request fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Gemini function-calling mode for a tool-selection response.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ToolMode {
+    /// Let the model choose whether to call a tool.
     Auto,
+    /// Require the model to call an allowed tool.
     Any,
+    /// Disable tool calls.
     None,
 }
 
 #[derive(Debug, Clone)]
+/// Native response from a Gemini CLI before-tool-selection command hook.
 pub struct BeforeToolSelectionOutput(BeforeToolSelectionOutcome);
 
 #[derive(Debug, Clone)]
@@ -576,9 +680,15 @@ enum BeforeToolSelectionOutcome {
 }
 
 impl BeforeToolSelectionOutput {
+    /// Creates an empty JSON-object response.
     pub fn no_op() -> Self {
         Self(BeforeToolSelectionOutcome::NoOp)
     }
+    /// Configures function calling for the pending model request.
+    ///
+    /// At least one of `mode` or `allowed_function_names` must be supplied, and
+    /// function names must be unique. The list is otherwise retained in caller
+    /// order and is not checked against the request's declared tools.
     pub fn configure(
         mode: Option<ToolMode>,
         allowed_function_names: Vec<String>,
@@ -602,6 +712,7 @@ impl BeforeToolSelectionOutput {
     }
 }
 
+/// Native Gemini CLI `BeforeToolSelection` command contract.
 pub enum BeforeToolSelection {}
 
 impl EventSpec for BeforeToolSelection {
@@ -665,17 +776,29 @@ impl EventSpec for BeforeToolSelection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Compile-time selector for an implemented Gemini CLI event.
 pub enum Event {
+    /// Selects [`BeforeTool`].
     BeforeTool,
+    /// Selects [`AfterTool`].
     AfterTool,
+    /// Selects [`BeforeToolSelection`].
     BeforeToolSelection,
+    /// Selects [`crate::catalog::AfterAgent`].
     AfterAgent,
+    /// Selects [`crate::catalog::AfterModel`].
     AfterModel,
+    /// Selects [`crate::catalog::BeforeAgent`].
     BeforeAgent,
+    /// Selects [`crate::catalog::BeforeModel`].
     BeforeModel,
+    /// Selects [`crate::catalog::Notification`].
     Notification,
+    /// Selects [`crate::catalog::PreCompress`].
     PreCompress,
+    /// Selects [`crate::catalog::SessionEnd`].
     SessionEnd,
+    /// Selects [`crate::catalog::SessionStart`].
     SessionStart,
 }
 
@@ -699,21 +822,32 @@ impl EventSelector for Event {
 }
 
 #[derive(Debug, Clone)]
+/// Lossless sum type over all implemented Gemini CLI inputs.
 pub enum AnyInput {
+    /// A before-tool input.
     BeforeTool(BeforeToolInput),
+    /// An after-tool input.
     AfterTool(AfterToolInput),
+    /// A before-tool-selection input.
     BeforeToolSelection(BeforeToolSelectionInput),
+    /// An input for another implemented catalog event.
     Catalog(crate::catalog::CatalogInput),
 }
 
 #[derive(Debug, Clone)]
+/// Sum type over all implemented Gemini CLI command outputs.
 pub enum AnyCommandOutput {
+    /// A before-tool output.
     BeforeTool(BeforeToolOutput),
+    /// An after-tool output.
     AfterTool(AfterToolOutput),
+    /// A before-tool-selection output.
     BeforeToolSelection(BeforeToolSelectionOutput),
+    /// An output for another implemented catalog event.
     Catalog(crate::catalog::CatalogOutput),
 }
 
+/// Harness adapter implementing the pinned Gemini CLI snapshot.
 pub enum GeminiCli {}
 
 impl HarnessSpec for GeminiCli {

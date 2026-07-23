@@ -78,14 +78,17 @@ pub fn staged_builtins_dir() -> Result<StagedBuiltins, PklConfigError> {
 /// A temporary directory holding the embedded `Config.pkl`, `Builtins.pkl`,
 /// and `tools/*.pkl` files. Deleted on drop.
 pub struct StagedBuiltins {
+    /// Temporary directory containing the complete embedded module tree.
     pub dir: PathBuf,
 }
 
 impl StagedBuiltins {
+    /// Returns the staged `Config.pkl` path.
     pub fn config_path(&self) -> PathBuf {
         self.dir.join("Config.pkl")
     }
 
+    /// Returns the staged `Builtins.pkl` path.
     pub fn builtins_path(&self) -> PathBuf {
         self.dir.join("Builtins.pkl")
     }

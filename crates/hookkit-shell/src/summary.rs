@@ -2,9 +2,13 @@
 
 use crate::bash::CommandOccurrence;
 
+/// Converts one analyzed command occurrence into an application-defined
+/// best-effort summary.
 pub trait CommandSummarizer {
+    /// Summary representation returned by this implementation.
     type Summary;
 
+    /// Summarizes `command` without executing it.
     fn summarize(&self, command: &CommandOccurrence) -> Self::Summary;
 }
 
@@ -168,27 +172,40 @@ impl CommandSummarizer for InspectionSummarizer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
+/// Best-effort classification of a supported inspection command.
 pub enum InspectionSummary {
+    /// A recognized file-reading command with explicit path operands.
     Read {
+        /// Normalized executable name used for the summary.
         command: String,
+        /// Explicit path operands in argv order.
         paths: Vec<PathCandidate>,
     },
+    /// A recognized file-listing command.
     ListFiles {
+        /// Normalized executable or subcommand name.
         command: String,
         /// Empty means the command's current-directory default was retained.
         paths: Vec<PathCandidate>,
     },
+    /// A recognized text-search command.
     Search {
+        /// Normalized executable name.
         command: String,
+        /// Literal recovered search query.
         query: String,
+        /// Explicit search-root operands in argv order.
         paths: Vec<PathCandidate>,
     },
+    /// The command, argv, or option combination was not safely summarizable.
     Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Literal path operand recovered from a command argv.
 pub struct PathCandidate {
+    /// Exact recovered argv value.
     pub value: String,
     /// Zero-based index in the recovered argv.
     pub argument_index: usize,

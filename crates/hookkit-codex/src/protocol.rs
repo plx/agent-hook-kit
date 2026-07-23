@@ -1,3 +1,5 @@
+//! Implemented Codex native event contracts and dynamic harness adapter.
+
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSelector, EventSpec, HarnessId, HarnessSpec,
     IdentificationDescriptor, NativeContext, ProcessEmission, RawInvocation, SessionId, SnapshotId,
@@ -8,8 +10,10 @@ use std::collections::BTreeMap;
 
 use crate::CodexCommandEnvironment;
 
+/// Codex source snapshot implemented by this crate.
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("commit-9e552e9-r2");
 
+/// Returns every Codex event with a native command implementation.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     let mut events = vec![
         hookkit_core::NativeEventDescriptor::command::<PreToolUse>(&[
@@ -23,6 +27,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     events
 }
 
+/// Returns discriminator-based identification metadata for the Codex snapshot.
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
     let mut descriptors = vec![
         IdentificationDescriptor::definitive::<PreToolUse>("/hook_event_name", "PreToolUse"),
@@ -33,85 +38,128 @@ pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Native Codex input observed before a tool invocation.
 pub struct PreToolUseInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Transcript path; the key is required but its value may be JSON `null`.
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Model configured for the current turn.
     pub model: String,
+    /// Native turn identifier.
     pub turn_id: String,
+    /// Permission policy active for the tool invocation.
     pub permission_mode: PermissionMode,
+    /// Harness-native tool name.
     pub tool_name: String,
+    /// Native tool-call identifier.
     pub tool_use_id: String,
+    /// Tool arguments in their native JSON shape.
     pub tool_input: serde_json::Value,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Codex permission policy active for a hook event.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionMode {
+    /// Use the default interactive permission policy.
     Default,
+    /// Automatically accept file-edit operations.
     AcceptEdits,
+    /// Restrict the agent to planning behavior.
     Plan,
+    /// Do not prompt for otherwise disallowed operations.
     DontAsk,
+    /// Bypass normal permission checks.
     BypassPermissions,
 }
 
+/// Native response from a Codex pre-tool command hook.
 #[derive(Debug, Clone)]
 pub enum PreToolUseOutput {
+    /// Emit no stdout and exit successfully.
     NoOp,
+    /// Block with the legacy top-level decision shape.
     Block {
+        /// Human-readable reason presented by Codex.
         reason: String,
     },
+    /// Allow using the hook-specific permission decision shape.
     Allow,
+    /// Ask the user for permission.
     Ask {
+        /// Optional explanation for the permission prompt.
         reason: Option<String>,
     },
+    /// Approve using the legacy top-level decision shape.
     Approve,
+    /// Deny using the hook-specific permission decision shape.
     Deny {
+        /// Optional human-readable denial reason.
         reason: Option<String>,
     },
+    /// Allow the call after replacing its tool input.
     Rewrite {
+        /// Complete replacement for the native tool-input object.
         updated_input: serde_json::Map<String, serde_json::Value>,
     },
+    /// Add context without making a permission decision.
     AdditionalContext {
+        /// Context appended to the agent conversation.
         context: String,
     },
+    /// Block by writing a required message to stderr and exiting with code 2.
     DenyStderr {
+        /// Non-empty stderr message; emptiness is checked during emission.
         message: String,
     },
 }
 
 impl PreToolUseOutput {
+    /// Creates an empty successful response.
     pub fn no_op() -> Self {
         Self::NoOp
     }
+    /// Creates a legacy top-level block response.
     pub fn block(reason: impl Into<String>) -> Self {
         Self::Block {
             reason: reason.into(),
         }
     }
+    /// Creates a hook-specific allow response.
     pub fn allow() -> Self {
         Self::Allow
     }
+    /// Creates a hook-specific ask response.
     pub fn ask(reason: Option<String>) -> Self {
         Self::Ask { reason }
     }
+    /// Creates a legacy top-level approve response.
     pub fn approve() -> Self {
         Self::Approve
     }
+    /// Creates a hook-specific deny response.
     pub fn deny(reason: Option<String>) -> Self {
         Self::Deny { reason }
     }
+    /// Creates an allow response that replaces the tool input.
     pub fn rewrite(updated_input: serde_json::Map<String, serde_json::Value>) -> Self {
         Self::Rewrite { updated_input }
     }
+    /// Creates a response that adds agent context.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::AdditionalContext {
             context: context.into(),
         }
     }
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn deny_stderr(message: impl Into<String>) -> Self {
         Self::DenyStderr {
             message: message.into(),
@@ -119,6 +167,7 @@ impl PreToolUseOutput {
     }
 }
 
+/// Native Codex `PreToolUse` command contract.
 pub enum PreToolUse {}
 
 impl EventSpec for PreToolUse {
@@ -219,41 +268,68 @@ impl EventSpec for PreToolUse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Native Codex input observed after a tool invocation.
 pub struct PostToolUseInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Transcript path; the key is required but its value may be JSON `null`.
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Model configured for the current turn.
     pub model: String,
+    /// Native turn identifier.
     pub turn_id: String,
+    /// Permission policy active for the tool invocation.
     pub permission_mode: PermissionMode,
+    /// Harness-native tool name.
     pub tool_name: String,
+    /// Native tool-call identifier.
     pub tool_use_id: String,
+    /// Tool arguments in their native JSON shape.
     pub tool_input: serde_json::Value,
+    /// Tool result in its native JSON shape.
     pub tool_response: serde_json::Value,
+    /// Subagent identifier when the tool ran on behalf of a subagent.
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Subagent type when the tool ran on behalf of a subagent.
     #[serde(default)]
     pub agent_type: Option<String>,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Native response from a Codex post-tool command hook.
 #[derive(Debug, Clone)]
 pub enum PostToolUseOutput {
+    /// Emit an empty JSON object and exit successfully.
     NoOp,
+    /// Emit a structured JSON response.
     Structured(StructuredPostToolUseOutput),
+    /// Write a required message to stderr and exit with code 2.
     BlockingError {
+        /// Non-empty error message; emptiness is checked during emission.
         message: String,
     },
+    /// Add UTF-8 protocol stderr to one otherwise successful response.
     WithProtocolStderr {
+        /// Successful response to encode as stdout.
         output: Box<PostToolUseOutput>,
+        /// UTF-8 stderr bytes, validated during emission.
         stderr: Vec<u8>,
     },
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Structured Codex post-tool response built through [`PostToolUseOutput`].
+///
+/// Fields are private so callers cannot construct combinations that bypass the
+/// builder's ordering checks.
 pub struct StructuredPostToolUseOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     decision: Option<&'static str>,
@@ -282,10 +358,12 @@ struct PostToolUseSpecific {
 }
 
 impl PostToolUseOutput {
+    /// Creates an empty JSON-object response.
     pub fn no_op() -> Self {
         Self::NoOp
     }
 
+    /// Creates a structured response that appends agent context.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::Structured(StructuredPostToolUseOutput {
             hook_specific_output: Some(PostToolUseSpecific {
@@ -297,6 +375,7 @@ impl PostToolUseOutput {
         })
     }
 
+    /// Creates a structured legacy block response.
     pub fn block(reason: impl Into<String>) -> Self {
         Self::Structured(StructuredPostToolUseOutput {
             decision: Some("block"),
@@ -305,6 +384,10 @@ impl PostToolUseOutput {
         })
     }
 
+    /// Adds a legacy block decision to a successful structured response.
+    ///
+    /// `NoOp` is promoted to an empty structured response. Blocking-error and
+    /// stderr-wrapped outputs are rejected because their structure is final.
     pub fn with_block(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         let output = self.structured_mut()?;
         output.decision = Some("block");
@@ -312,12 +395,17 @@ impl PostToolUseOutput {
         Ok(self)
     }
 
+    /// Creates a code-2 response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self::BlockingError {
             message: message.into(),
         }
     }
 
+    /// Adds protocol stderr to a successful response.
+    ///
+    /// A blocking error or an already wrapped response is rejected. The text
+    /// must be valid UTF-8 when emitted.
     pub fn with_protocol_stderr(self, stderr: impl Into<String>) -> hookkit_core::Result<Self> {
         if matches!(
             self,
@@ -333,6 +421,7 @@ impl PostToolUseOutput {
         })
     }
 
+    /// Replaces the MCP tool output in a structured hook-specific response.
     pub fn with_updated_mcp_tool_output(
         mut self,
         output: serde_json::Value,
@@ -341,21 +430,25 @@ impl PostToolUseOutput {
         Ok(self)
     }
 
+    /// Sets Codex's top-level `continue` control on a structured response.
     pub fn with_continue(mut self, continue_session: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.continue_session = Some(continue_session);
         Ok(self)
     }
 
+    /// Sets the top-level stop reason on a structured response.
     pub fn with_stop_reason(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.stop_reason = Some(reason.into());
         Ok(self)
     }
 
+    /// Sets whether Codex suppresses ordinary tool output.
     pub fn with_suppress_output(mut self, suppress_output: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.suppress_output = Some(suppress_output);
         Ok(self)
     }
 
+    /// Sets a top-level system message on a structured response.
     pub fn with_system_message(mut self, message: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.system_message = Some(message.into());
         Ok(self)
@@ -388,6 +481,7 @@ impl PostToolUseOutput {
     }
 }
 
+/// Native Codex `PostToolUse` command contract.
 pub enum PostToolUse {}
 
 impl EventSpec for PostToolUse {
@@ -491,16 +585,27 @@ pub(crate) fn require_field(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Compile-time selector for an implemented Codex event.
 pub enum Event {
+    /// Selects [`PreToolUse`].
     PreToolUse,
+    /// Selects [`PostToolUse`].
     PostToolUse,
+    /// Selects [`crate::catalog::PermissionRequest`].
     PermissionRequest,
+    /// Selects [`crate::catalog::PostCompact`].
     PostCompact,
+    /// Selects [`crate::catalog::PreCompact`].
     PreCompact,
+    /// Selects [`crate::catalog::SessionStart`].
     SessionStart,
+    /// Selects [`crate::catalog::Stop`].
     Stop,
+    /// Selects [`crate::catalog::SubagentStart`].
     SubagentStart,
+    /// Selects [`crate::catalog::SubagentStop`].
     SubagentStop,
+    /// Selects [`crate::catalog::UserPromptSubmit`].
     UserPromptSubmit,
 }
 
@@ -523,19 +628,28 @@ impl EventSelector for Event {
 }
 
 #[derive(Debug, Clone)]
+/// Lossless sum type over all implemented Codex inputs.
 pub enum AnyInput {
+    /// A pre-tool input.
     PreToolUse(PreToolUseInput),
+    /// A post-tool input.
     PostToolUse(PostToolUseInput),
+    /// An input for another implemented catalog event.
     Catalog(crate::catalog::CatalogInput),
 }
 
 #[derive(Debug, Clone)]
+/// Sum type over all implemented Codex command outputs.
 pub enum AnyCommandOutput {
+    /// A pre-tool output.
     PreToolUse(PreToolUseOutput),
+    /// A post-tool output.
     PostToolUse(PostToolUseOutput),
+    /// An output for another implemented catalog event.
     Catalog(crate::catalog::CatalogOutput),
 }
 
+/// Harness adapter implementing the pinned Codex snapshot.
 pub enum Codex {}
 
 impl HarnessSpec for Codex {

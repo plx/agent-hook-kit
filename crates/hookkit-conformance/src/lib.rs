@@ -1,11 +1,18 @@
+//! Executable conformance registry for every built-in native event adapter.
+#![deny(missing_docs)]
+
 use base64::Engine as _;
 use hookkit_core::{EventSpec, NativeEventDescriptor, ProcessEmission, RawInvocation};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// One conformance fixture that was executed successfully.
 pub struct ExecutedCase {
+    /// Stable native event/binding contract identifier.
     pub contract: &'static str,
+    /// Native handler mechanism exercised by the fixture.
     pub binding: &'static str,
+    /// Fixture identifier within the contract.
     pub case: &'static str,
 }
 
@@ -121,6 +128,14 @@ fn verify_all_negative_inputs() -> Result<(), String> {
     Ok(())
 }
 
+/// Executes every positive conformance fixture and returns their identities.
+///
+/// This covers the shared-envelope `catalog` events (via
+/// `execute_catalog_cases`), the contract-first `protocol` events for Claude
+/// Code, Codex, and Gemini CLI, and the native Antigravity events.
+///
+/// The function stops at the first parse, emission, or exact-byte mismatch and
+/// returns a human-readable error suitable for the conformance CLI.
 pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
     let mut executed = execute_catalog_cases()?;
 

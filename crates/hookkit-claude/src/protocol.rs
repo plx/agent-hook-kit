@@ -10,8 +10,10 @@ use std::collections::BTreeMap;
 
 use crate::ClaudeCommandEnvironment;
 
+/// Claude Code protocol documentation snapshot implemented by this crate.
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-07-12-r2");
 
+/// Returns every Claude Code event with a native command implementation.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     let mut events = vec![
         hookkit_core::NativeEventDescriptor::command::<SessionStart>(&[
@@ -28,6 +30,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     events
 }
 
+/// Returns discriminator-based identification metadata for this snapshot.
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
     let mut descriptors = vec![
         IdentificationDescriptor::definitive::<SessionStart>("/hook_event_name", "SessionStart"),
@@ -42,67 +45,102 @@ pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Native Claude Code input observed at a session boundary.
 pub struct SessionStartInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Cause of the session boundary.
     pub source: SessionSource,
+    /// Subagent identifier when a subagent session starts.
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Subagent type when a subagent session starts.
     #[serde(default)]
     pub agent_type: Option<String>,
+    /// Optional nested effort setting.
     #[serde(default)]
     pub effort: Option<Effort>,
+    /// Model configured for the session.
     #[serde(default)]
     pub model: Option<String>,
+    /// Permission policy active for the session.
     #[serde(default)]
     pub permission_mode: Option<PermissionMode>,
+    /// Prompt identifier associated with session startup.
     #[serde(default)]
     pub prompt_id: Option<String>,
+    /// Existing or requested session title.
     #[serde(default)]
     pub session_title: Option<String>,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Native cause of a Claude Code session-start event.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionSource {
+    /// A newly started session.
     Startup,
+    /// A previously persisted session was resumed.
     Resume,
+    /// The current conversation context was cleared.
     Clear,
+    /// The current conversation context was compacted.
     Compact,
 }
 
+/// Claude Code permission policy active for a hook event.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionMode {
+    /// Use the default interactive permission policy.
     Default,
+    /// Restrict the agent to planning behavior.
     Plan,
+    /// Automatically accept file-edit operations.
     AcceptEdits,
+    /// Automatically choose permissions under Claude's automatic policy.
     Auto,
+    /// Do not prompt for otherwise disallowed operations.
     DontAsk,
+    /// Bypass normal permission checks.
     BypassPermissions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Nested effort object used by Claude native event payloads.
 pub struct Effort {
+    /// Requested effort level.
     pub level: EffortLevel,
 }
 
+/// Known Claude effort levels.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EffortLevel {
+    /// Low effort.
     Low,
+    /// Medium effort.
     Medium,
+    /// High effort.
     High,
+    /// Extra-high effort.
     Xhigh,
+    /// Maximum effort.
     Max,
 }
 
 impl EffortLevel {
+    /// Returns the native lowercase wire spelling.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Low => "low",
@@ -115,13 +153,20 @@ impl EffortLevel {
 }
 
 #[derive(Debug, Clone)]
+/// Native response from a Claude Code session-start command hook.
 pub enum SessionStartOutput {
+    /// Structured JSON response.
     Structured(StructuredSessionStartOutput),
+    /// Plain-text context response, emitted without a trailing newline.
     Text(String),
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Structured session-start response built through [`SessionStartOutput`].
+///
+/// Fields are private so the required hook-specific discriminator cannot be
+/// omitted when hook-specific values are present.
 pub struct StructuredSessionStartOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     hook_specific_output: Option<SessionStartSpecific>,
@@ -146,10 +191,12 @@ struct SessionStartSpecific {
 }
 
 impl SessionStartOutput {
+    /// Creates an empty structured response.
     pub fn no_op() -> Self {
         Self::Structured(StructuredSessionStartOutput::default())
     }
 
+    /// Creates a structured response that appends agent context.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::Structured(StructuredSessionStartOutput {
             hook_specific_output: Some(SessionStartSpecific {
@@ -164,6 +211,7 @@ impl SessionStartOutput {
         })
     }
 
+    /// Creates a response containing both agent context and a system message.
     pub fn with_context_and_system_message(
         context: impl Into<String>,
         system_message: impl Into<String>,
@@ -181,10 +229,12 @@ impl SessionStartOutput {
         })
     }
 
+    /// Creates a successful plain-text context response.
     pub fn text_context(context: impl Into<String>) -> Self {
         Self::Text(context.into())
     }
 
+    /// Creates a structured response that injects an initial user message.
     pub fn with_initial_user_message(message: impl Into<String>) -> Self {
         Self::Structured(StructuredSessionStartOutput {
             hook_specific_output: Some(SessionStartSpecific {
@@ -199,6 +249,15 @@ impl SessionStartOutput {
         })
     }
 
+    /// Creates a structured response setting the additional-context,
+    /// skill-reload, session-title, and watch-path controls.
+    ///
+    /// This constructor leaves `initial_user_message` unset (use
+    /// [`Self::with_initial_user_message`]) and `system_message` unset (use
+    /// [`Self::with_context_and_system_message`]).
+    ///
+    /// Empty `watch_paths` are omitted. The values are retained verbatim and
+    /// are not checked for existence or uniqueness.
     pub fn structured(
         context: Option<String>,
         reload_skills: Option<bool>,
@@ -219,6 +278,7 @@ impl SessionStartOutput {
     }
 }
 
+/// Native Claude Code `SessionStart` command contract.
 pub enum SessionStart {}
 
 impl EventSpec for SessionStart {
@@ -276,46 +336,73 @@ impl EventSpec for SessionStart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Native Claude Code input observed after a tool invocation.
 pub struct PostToolUseInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Harness-native tool name.
     pub tool_name: String,
+    /// Tool arguments in their native JSON shape.
     pub tool_input: serde_json::Value,
+    /// Native tool-call identifier.
     pub tool_use_id: String,
+    /// Tool result in its native JSON shape.
     pub tool_response: serde_json::Value,
+    /// Subagent identifier when the tool ran on behalf of a subagent.
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Subagent type when the tool ran on behalf of a subagent.
     #[serde(default)]
     pub agent_type: Option<String>,
+    /// Tool duration in milliseconds; when present it must be non-negative.
     #[serde(default)]
     pub duration_ms: Option<f64>,
+    /// Optional nested effort setting.
     #[serde(default)]
     pub effort: Option<Effort>,
+    /// Permission policy active for the tool invocation.
     #[serde(default)]
     pub permission_mode: Option<PermissionMode>,
+    /// Prompt identifier associated with the current turn.
     #[serde(default)]
     pub prompt_id: Option<String>,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Native response from a Claude Code post-tool command hook.
 #[derive(Debug, Clone)]
 pub enum PostToolUseOutput {
+    /// Emit an empty JSON object and exit successfully.
     NoOp,
+    /// Emit a structured JSON response.
     Structured(StructuredPostToolUseOutput),
+    /// Write a required message to stderr and exit with code 2.
     BlockingError {
+        /// Non-empty error message; emptiness is checked during emission.
         message: String,
     },
+    /// Add UTF-8 protocol stderr to one otherwise successful response.
     WithProtocolStderr {
+        /// Successful response to encode as stdout.
         output: Box<PostToolUseOutput>,
+        /// UTF-8 stderr bytes, validated during emission.
         stderr: Vec<u8>,
     },
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Structured post-tool response built through [`PostToolUseOutput`].
+///
+/// Fields are private so callers cannot bypass the builder's ordering checks.
 pub struct StructuredPostToolUseOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     decision: Option<&'static str>,
@@ -346,10 +433,12 @@ struct PostToolUseSpecific {
 }
 
 impl PostToolUseOutput {
+    /// Creates an empty JSON-object response.
     pub fn no_op() -> Self {
         Self::NoOp
     }
 
+    /// Creates a structured response that appends agent context.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::Structured(StructuredPostToolUseOutput {
             hook_specific_output: Some(PostToolUseSpecific {
@@ -362,6 +451,7 @@ impl PostToolUseOutput {
         })
     }
 
+    /// Creates a structured legacy block response.
     pub fn block(reason: impl Into<String>) -> Self {
         Self::Structured(StructuredPostToolUseOutput {
             decision: Some("block"),
@@ -370,6 +460,10 @@ impl PostToolUseOutput {
         })
     }
 
+    /// Adds a legacy block decision to a successful structured response.
+    ///
+    /// `NoOp` is promoted to an empty structured response. Blocking-error and
+    /// stderr-wrapped outputs are rejected because their structure is final.
     pub fn with_block(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         let output = self.structured_mut()?;
         output.decision = Some("block");
@@ -377,12 +471,17 @@ impl PostToolUseOutput {
         Ok(self)
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self::BlockingError {
             message: message.into(),
         }
     }
 
+    /// Adds protocol stderr to a successful response.
+    ///
+    /// A blocking error or an already wrapped response is rejected. The text
+    /// must be valid UTF-8 when emitted.
     pub fn with_protocol_stderr(self, stderr: impl Into<String>) -> hookkit_core::Result<Self> {
         if matches!(
             self,
@@ -398,6 +497,7 @@ impl PostToolUseOutput {
         })
     }
 
+    /// Replaces the MCP tool output in a structured hook-specific response.
     pub fn with_updated_mcp_tool_output(
         mut self,
         output: serde_json::Value,
@@ -406,6 +506,7 @@ impl PostToolUseOutput {
         Ok(self)
     }
 
+    /// Replaces the non-MCP tool output in a structured hook-specific response.
     pub fn with_updated_tool_output(
         mut self,
         output: serde_json::Value,
@@ -414,21 +515,25 @@ impl PostToolUseOutput {
         Ok(self)
     }
 
+    /// Sets Claude's top-level `continue` control on a structured response.
     pub fn with_continue(mut self, continue_session: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.continue_session = Some(continue_session);
         Ok(self)
     }
 
+    /// Sets the top-level stop reason on a structured response.
     pub fn with_stop_reason(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.stop_reason = Some(reason.into());
         Ok(self)
     }
 
+    /// Sets whether Claude suppresses ordinary tool output.
     pub fn with_suppress_output(mut self, suppress_output: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.suppress_output = Some(suppress_output);
         Ok(self)
     }
 
+    /// Sets a top-level system message on a structured response.
     pub fn with_system_message(mut self, message: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.system_message = Some(message.into());
         Ok(self)
@@ -462,6 +567,7 @@ impl PostToolUseOutput {
     }
 }
 
+/// Native Claude Code `PostToolUse` command contract.
 pub enum PostToolUse {}
 
 impl EventSpec for PostToolUse {
@@ -547,17 +653,25 @@ impl EventSpec for PostToolUse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Native Claude Code input requesting creation of a worktree.
 pub struct WorktreeCreateInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Requested worktree name.
     pub name: String,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
+/// Native response from a Claude Code worktree-create command hook.
 pub struct WorktreeCreateOutput(WorktreeCreateOutcome);
 
 #[derive(Debug, Clone)]
@@ -573,6 +687,9 @@ enum WorktreeCreateOutcome {
 }
 
 impl WorktreeCreateOutput {
+    /// Creates a successful response containing an absolute worktree path.
+    ///
+    /// The path is emitted as exact UTF-8 text without a trailing newline.
     pub fn path(path: hookkit_core::Utf8PathBuf) -> hookkit_core::Result<Self> {
         if !path.is_absolute() {
             return Err(hookkit_core::HookkitError::InvalidProcessEmission(
@@ -585,6 +702,7 @@ impl WorktreeCreateOutput {
         }))
     }
 
+    /// Creates a successful absolute-path response with one trailing newline.
     pub fn path_with_newline(path: hookkit_core::Utf8PathBuf) -> hookkit_core::Result<Self> {
         let output = Self::path(path)?;
         Ok(Self(match output.0 {
@@ -596,6 +714,10 @@ impl WorktreeCreateOutput {
         }))
     }
 
+    /// Creates a failed response written to stderr.
+    ///
+    /// `exit_code` must be nonzero. Unlike required-stderr outcomes, the
+    /// message may be empty because the native worktree contract permits it.
     pub fn failed(message: impl Into<String>, exit_code: u8) -> hookkit_core::Result<Self> {
         if exit_code == 0 {
             return Err(hookkit_core::HookkitError::InvalidProcessEmission(
@@ -609,6 +731,7 @@ impl WorktreeCreateOutput {
     }
 }
 
+/// Native Claude Code `WorktreeCreate` command contract.
 pub enum WorktreeCreate {}
 
 impl EventSpec for WorktreeCreate {
@@ -689,36 +812,67 @@ fn invalid_input(event: &'static str, message: impl Into<String>) -> hookkit_cor
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Compile-time selector for an implemented Claude Code event.
 pub enum Event {
+    /// Selects [`SessionStart`].
     SessionStart,
+    /// Selects [`PostToolUse`].
     PostToolUse,
+    /// Selects [`WorktreeCreate`].
     WorktreeCreate,
+    /// Selects [`crate::catalog::ConfigChange`].
     ConfigChange,
+    /// Selects [`crate::catalog::CwdChanged`].
     CwdChanged,
+    /// Selects [`crate::catalog::Elicitation`].
     Elicitation,
+    /// Selects [`crate::catalog::ElicitationResult`].
     ElicitationResult,
+    /// Selects [`crate::catalog::FileChanged`].
     FileChanged,
+    /// Selects [`crate::catalog::InstructionsLoaded`].
     InstructionsLoaded,
+    /// Selects [`crate::catalog::MessageDisplay`].
     MessageDisplay,
+    /// Selects [`crate::catalog::Notification`].
     Notification,
+    /// Selects [`crate::catalog::PermissionDenied`].
     PermissionDenied,
+    /// Selects [`crate::catalog::PermissionRequest`].
     PermissionRequest,
+    /// Selects [`crate::catalog::PostCompact`].
     PostCompact,
+    /// Selects [`crate::catalog::PostToolBatch`].
     PostToolBatch,
+    /// Selects [`crate::catalog::PostToolUseFailure`].
     PostToolUseFailure,
+    /// Selects [`crate::catalog::PreCompact`].
     PreCompact,
+    /// Selects [`crate::catalog::PreToolUse`].
     PreToolUse,
+    /// Selects [`crate::catalog::SessionEnd`].
     SessionEnd,
+    /// Selects [`crate::catalog::Setup`].
     Setup,
+    /// Selects [`crate::catalog::Stop`].
     Stop,
+    /// Selects [`crate::catalog::StopFailure`].
     StopFailure,
+    /// Selects [`crate::catalog::SubagentStart`].
     SubagentStart,
+    /// Selects [`crate::catalog::SubagentStop`].
     SubagentStop,
+    /// Selects [`crate::catalog::TaskCompleted`].
     TaskCompleted,
+    /// Selects [`crate::catalog::TaskCreated`].
     TaskCreated,
+    /// Selects [`crate::catalog::TeammateIdle`].
     TeammateIdle,
+    /// Selects [`crate::catalog::UserPromptExpansion`].
     UserPromptExpansion,
+    /// Selects [`crate::catalog::UserPromptSubmit`].
     UserPromptSubmit,
+    /// Selects [`crate::catalog::WorktreeRemove`].
     WorktreeRemove,
 }
 
@@ -761,21 +915,32 @@ impl EventSelector for Event {
 }
 
 #[derive(Debug, Clone)]
+/// Lossless sum type over all implemented Claude Code inputs.
 pub enum AnyInput {
+    /// A session-start input.
     SessionStart(SessionStartInput),
+    /// A post-tool input.
     PostToolUse(PostToolUseInput),
+    /// A worktree-create input.
     WorktreeCreate(WorktreeCreateInput),
+    /// An input for another implemented catalog event.
     Catalog(crate::catalog::CatalogInput),
 }
 
 #[derive(Debug, Clone)]
+/// Sum type over all implemented Claude Code command outputs.
 pub enum AnyCommandOutput {
+    /// A session-start output.
     SessionStart(SessionStartOutput),
+    /// A post-tool output.
     PostToolUse(PostToolUseOutput),
+    /// A worktree-create output.
     WorktreeCreate(WorktreeCreateOutput),
+    /// An output for another implemented catalog event.
     Catalog(crate::catalog::CatalogOutput),
 }
 
+/// Harness adapter implementing the pinned Claude Code snapshot.
 pub enum ClaudeCode {}
 
 impl HarnessSpec for ClaudeCode {

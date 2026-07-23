@@ -9,11 +9,14 @@ use std::borrow::Cow;
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum JsonRef<'a> {
+    /// Any borrowed JSON value, which may or may not be an object.
     Value(&'a Value),
+    /// A borrowed JSON object without allocating a wrapping [`Value`].
     Object(&'a Map<String, Value>),
 }
 
 impl<'a> JsonRef<'a> {
+    /// Returns an object member by key.
     pub fn get(self, key: &str) -> Option<&'a Value> {
         match self {
             Self::Value(value) => value.get(key),
@@ -21,6 +24,7 @@ impl<'a> JsonRef<'a> {
         }
     }
 
+    /// Resolves an RFC 6901 JSON Pointer relative to this value or object.
     pub fn pointer(self, pointer: &str) -> Option<&'a Value> {
         match self {
             Self::Value(value) => value.pointer(pointer),
@@ -28,6 +32,7 @@ impl<'a> JsonRef<'a> {
         }
     }
 
+    /// Returns the underlying object, if this reference denotes one.
     pub fn as_object(self) -> Option<&'a Map<String, Value>> {
         match self {
             Self::Value(value) => value.as_object(),
@@ -39,13 +44,21 @@ impl<'a> JsonRef<'a> {
 /// Lossless borrowed view of an observable native tool call.
 #[derive(Debug, Clone)]
 pub struct ToolCallRef<'a> {
+    /// Native harness event identity.
     pub event: EventId,
+    /// Whether the observation precedes or follows tool execution.
     pub phase: ToolPhase,
+    /// Native tool name.
     pub tool_name: &'a str,
+    /// Native input without flattening or object cloning.
     pub tool_input: JsonRef<'a>,
+    /// Invocation working directory, when supplied by the harness.
     pub cwd: Option<&'a Utf8Path>,
+    /// Observable workspace roots in native order.
     pub workspace_roots: Cow<'a, [Utf8PathBuf]>,
+    /// Native post-tool response, when observable.
     pub response: Option<JsonRef<'a>>,
+    /// Harness tool-call correlation identifier, when supplied.
     pub tool_call_id: Option<&'a str>,
     pub(crate) shell_call: ShellToolCallMatch<'a>,
 }
@@ -74,16 +87,19 @@ impl<'a> ToolCallRef<'a> {
         }
     }
 
+    /// Attaches the native post-tool response.
     pub fn with_response(mut self, response: JsonRef<'a>) -> Self {
         self.response = Some(response);
         self
     }
 
+    /// Attaches the harness tool-call correlation identifier.
     pub fn with_tool_call_id(mut self, tool_call_id: &'a str) -> Self {
         self.tool_call_id = Some(tool_call_id);
         self
     }
 
+    /// Returns the harness that emitted the event.
     pub fn harness(&self) -> &hookkit_core::HarnessId {
         self.event.harness()
     }
@@ -93,7 +109,9 @@ impl<'a> ToolCallRef<'a> {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ToolCallObservation<'a> {
+    /// An observable tool call that can be analyzed.
     Call(ToolCallRef<'a>),
+    /// A typed reason no tool call could be observed.
     Gap(ToolAccessGap),
 }
 

@@ -1,4 +1,5 @@
 //! Native Antigravity hook contracts.
+#![deny(missing_docs)]
 
 pub mod environment;
 
@@ -12,8 +13,10 @@ use hookkit_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Antigravity protocol documentation snapshot implemented by this crate.
 pub const SNAPSHOT: SnapshotId = SnapshotId::builtin("docs-2026-07-12-r2");
 
+/// Returns all Antigravity events with native command implementations.
 pub fn events() -> Vec<NativeEventDescriptor> {
     vec![
         NativeEventDescriptor::command::<PreInvocation>(&["inject-reminder"]),
@@ -24,6 +27,10 @@ pub fn events() -> Vec<NativeEventDescriptor> {
     ]
 }
 
+/// Returns event-identification metadata for the Antigravity snapshot.
+///
+/// Invocation events share a discriminator-free shape and require an explicit
+/// event hint. Tool and stop events have distinct, validated shapes.
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
     vec![
         IdentificationDescriptor::ambiguous::<PreInvocation>(&["PostInvocation"]),
@@ -38,28 +45,42 @@ pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreInvocationInput {
+    /// Native conversation identifier.
     pub conversation_id: String,
+    /// Non-empty set of active workspace roots.
     pub workspace_paths: Vec<hookkit_core::Utf8PathBuf>,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Directory where hooks may write diagnostic artifacts.
     pub artifact_directory_path: hookkit_core::Utf8PathBuf,
+    /// Zero-based invocation number; zero marks an invocation-session boundary.
     pub invocation_num: u64,
+    /// Number of model steps initially budgeted for the invocation.
     pub initial_num_steps: u64,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Step to inject before an Antigravity invocation begins.
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum InjectStep {
+    /// Injects a native tool-call object.
     ToolCall {
+        /// Tool call serialized under the native `toolCall` key.
         #[serde(rename = "toolCall")]
         tool_call: serde_json::Map<String, serde_json::Value>,
     },
+    /// Injects a persistent user message.
     UserMessage {
+        /// Message serialized under the native `userMessage` key.
         #[serde(rename = "userMessage")]
         user_message: String,
     },
+    /// Injects a message visible only for the current invocation.
     EphemeralMessage {
+        /// Message serialized under the native `ephemeralMessage` key.
         #[serde(rename = "ephemeralMessage")]
         ephemeral_message: String,
     },
@@ -67,16 +88,20 @@ pub enum InjectStep {
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Native response from a pre-invocation command hook.
 pub struct PreInvocationOutput {
+    /// Ordered steps to inject; an empty list is omitted from JSON.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub inject_steps: Vec<InjectStep>,
 }
 
 impl PreInvocationOutput {
+    /// Creates a response that injects no steps.
     pub fn no_op() -> Self {
         Self::default()
     }
 
+    /// Creates a response containing exactly one injected step.
     pub fn inject(step: InjectStep) -> Self {
         Self {
             inject_steps: vec![step],
@@ -84,6 +109,7 @@ impl PreInvocationOutput {
     }
 }
 
+/// Native Antigravity `PreInvocation` command contract.
 pub enum PreInvocation {}
 
 impl EventSpec for PreInvocation {
@@ -113,23 +139,33 @@ impl EventSpec for PreInvocation {
     }
 }
 
+/// Native post-invocation input, which shares the pre-invocation wire shape.
 pub type PostInvocationInput = PreInvocationInput;
 
+/// Whether Antigravity should end after a post-invocation hook response.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminationBehavior {
+    /// Continue execution even if the invocation would otherwise terminate.
     ForceContinue,
+    /// Terminate the invocation.
     Terminate,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Native response from a post-invocation command hook.
 pub struct PostInvocationOutput {
+    /// Raw native step objects to inject.
+    ///
+    /// Emission rejects entries that are not JSON objects.
     pub inject_steps: Vec<serde_json::Value>,
+    /// Optional override for the invocation's termination behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub termination_behavior: Option<TerminationBehavior>,
 }
 
+/// Native Antigravity `PostInvocation` command contract.
 pub enum PostInvocation {}
 
 impl EventSpec for PostInvocation {
@@ -162,45 +198,69 @@ impl EventSpec for PostInvocation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Native tool-call payload nested inside a pre-tool event.
 pub struct ToolCall {
+    /// Harness-native tool name.
     pub name: String,
+    /// Tool arguments as an exact JSON object.
     pub args: serde_json::Map<String, serde_json::Value>,
+    /// Unknown tool-call fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Native Antigravity input observed before a tool runs.
 pub struct PreToolUseInput {
+    /// Native conversation identifier.
     pub conversation_id: String,
+    /// Non-empty set of active workspace roots.
     pub workspace_paths: Vec<hookkit_core::Utf8PathBuf>,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Directory where hooks may write diagnostic artifacts.
     pub artifact_directory_path: hookkit_core::Utf8PathBuf,
+    /// Tool call about to execute.
     pub tool_call: ToolCall,
+    /// Zero-based step index within the invocation.
     pub step_idx: u64,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Authorization decision returned by a pre-tool hook.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolDecision {
+    /// Allow the tool call without prompting.
     Allow,
+    /// Reject the tool call.
     Deny,
+    /// Ask the user for permission under normal harness policy.
     Ask,
+    /// Require a user permission prompt even if policy would bypass one.
     ForceAsk,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Native response from an Antigravity pre-tool command hook.
 pub struct PreToolUseOutput {
+    /// Authorization decision for the pending tool call.
     pub decision: ToolDecision,
+    /// Optional human-readable explanation of the decision.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Permission identifiers to override for this decision.
+    ///
+    /// Emission rejects duplicate entries.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub permission_overrides: Vec<String>,
 }
 
+/// Native Antigravity `PreToolUse` command contract.
 pub enum PreToolUse {}
 impl EventSpec for PreToolUse {
     type Input = PreToolUseInput;
@@ -243,20 +303,30 @@ impl EventSpec for PreToolUse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Native Antigravity input observed after a tool finishes.
 pub struct PostToolUseInput {
+    /// Native conversation identifier.
     pub conversation_id: String,
+    /// Non-empty set of active workspace roots.
     pub workspace_paths: Vec<hookkit_core::Utf8PathBuf>,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Directory where hooks may write diagnostic artifacts.
     pub artifact_directory_path: hookkit_core::Utf8PathBuf,
+    /// Zero-based step index within the invocation.
     pub step_idx: u64,
+    /// Tool failure text, or `None` when the call succeeded.
     #[serde(default)]
     pub error: Option<String>,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// Empty successful response from an Antigravity post-tool command hook.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct PostToolUseOutput {}
+/// Native Antigravity `PostToolUse` command contract.
 pub enum PostToolUse {}
 impl EventSpec for PostToolUse {
     type Input = PostToolUseInput;
@@ -288,26 +358,40 @@ impl EventSpec for PostToolUse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Native Antigravity input observed when an invocation attempts to stop.
 pub struct StopInput {
+    /// Native conversation identifier.
     pub conversation_id: String,
+    /// Non-empty set of active workspace roots.
     pub workspace_paths: Vec<hookkit_core::Utf8PathBuf>,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Directory where hooks may write diagnostic artifacts.
     pub artifact_directory_path: hookkit_core::Utf8PathBuf,
+    /// Zero-based execution number within the conversation.
     pub execution_num: u64,
+    /// Harness-provided explanation for the attempted termination.
     pub termination_reason: String,
+    /// Whether every agent and tool is idle.
     pub fully_idle: bool,
+    /// Invocation failure text, if termination follows an error.
     #[serde(default)]
     pub error: Option<String>,
+    /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Native response from an Antigravity stop command hook.
 pub struct StopOutput {
+    /// Native stop decision string; emission rejects an empty value.
     pub decision: String,
+    /// Optional human-readable explanation of the decision.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
+/// Native Antigravity `Stop` command contract.
 pub enum Stop {}
 impl EventSpec for Stop {
     type Input = StopInput;
@@ -376,11 +460,17 @@ fn require_workspace(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Compile-time selector for an implemented Antigravity event.
 pub enum Event {
+    /// Selects [`PreInvocation`].
     PreInvocation,
+    /// Selects [`PostInvocation`].
     PostInvocation,
+    /// Selects [`PreToolUse`].
     PreToolUse,
+    /// Selects [`PostToolUse`].
     PostToolUse,
+    /// Selects [`Stop`].
     Stop,
 }
 
@@ -398,23 +488,36 @@ impl EventSelector for Event {
 }
 
 #[derive(Debug, Clone)]
+/// Lossless sum type over all implemented Antigravity inputs.
 pub enum AnyInput {
+    /// A pre-invocation input.
     PreInvocation(PreInvocationInput),
+    /// A post-invocation input.
     PostInvocation(PostInvocationInput),
+    /// A pre-tool input.
     PreToolUse(PreToolUseInput),
+    /// A post-tool input.
     PostToolUse(PostToolUseInput),
+    /// A stop input.
     Stop(StopInput),
 }
 
 #[derive(Debug, Clone)]
+/// Sum type over all implemented Antigravity command outputs.
 pub enum AnyCommandOutput {
+    /// A pre-invocation output.
     PreInvocation(PreInvocationOutput),
+    /// A post-invocation output.
     PostInvocation(PostInvocationOutput),
+    /// A pre-tool output.
     PreToolUse(PreToolUseOutput),
+    /// A post-tool output.
     PostToolUse(PostToolUseOutput),
+    /// A stop output.
     Stop(StopOutput),
 }
 
+/// Harness adapter implementing the documented Antigravity snapshot.
 pub enum Antigravity {}
 
 impl HarnessSpec for Antigravity {
