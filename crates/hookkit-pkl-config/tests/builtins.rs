@@ -436,11 +436,22 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
     }
 
     let tidy = spec(&specs, "gomodTidy");
-    let tidy = tidy.workflows.get("tidy").expect("tidy workflow");
-    assert_eq!(tidy.check_scope, CheckScope::Workspace);
-    assert_eq!(tidy.invocation, InvocationGranularity::Workspace);
+    assert_eq!(
+        tidy.files.include,
+        vec![
+            "*.go",
+            "**/*.go",
+            "go.mod",
+            "**/go.mod",
+            "go.sum",
+            "**/go.sum"
+        ]
+    );
+    let tidy_workflow = tidy.workflows.get("tidy").expect("tidy workflow");
+    assert_eq!(tidy_workflow.check_scope, CheckScope::Workspace);
+    assert_eq!(tidy_workflow.invocation, InvocationGranularity::Workspace);
     assert_workflow_argv(
-        tidy.check.as_ref().expect("tidy check"),
+        tidy_workflow.check.as_ref().expect("tidy check"),
         vec![
             literal("mod"),
             literal("tidy"),
@@ -449,7 +460,7 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
         ],
     );
     assert_eq!(
-        tidy.remedy.as_ref().expect("tidy remedy").writes,
+        tidy_workflow.remedy.as_ref().expect("tidy remedy").writes,
         WriteBehavior::Workspace
     );
 

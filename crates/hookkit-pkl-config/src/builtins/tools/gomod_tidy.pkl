@@ -12,7 +12,14 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   workspaceIndicator = "go.mod"
 
   files = new Config.FileSelection {
-    include = new Listing<String> { "go.mod"; "**/go.mod"; "go.sum"; "**/go.sum" }
+    include = new Listing<String> {
+      "*.go"
+      "**/*.go"
+      "go.mod"
+      "**/go.mod"
+      "go.sum"
+      "**/go.sum"
+    }
   }
 
   workflows = new Mapping<String, Config.Workflow> {

@@ -401,6 +401,66 @@ fn operational_initial_check_never_runs_remedy() {
 }
 
 #[test]
+fn operational_initial_check_stops_later_remedies_under_fail_fast() {
+    let fixture = Fixture::new("initial-failure-stops-remedies");
+    let earlier = fixture.file("earlier.rs", "DIRTY\n");
+    let failed = fixture.file("failed.rs", "DIRTY\n");
+    let later = fixture.file("later.rs", "DIRTY\n");
+    let plan = vec![
+        scheduled(&fixture, 0, earlier.clone(), "check", Some("fix")),
+        scheduled(&fixture, 1, failed, "crash", Some("fix")),
+        scheduled(&fixture, 2, later.clone(), "check", Some("fix")),
+    ];
+
+    let execution = execute_deferred_workflows(&plan, 1, true);
+
+    assert!(execution.result.has_operational_problems());
+    assert_eq!(
+        std::fs::read_to_string(earlier).expect("read skipped earlier candidate"),
+        "DIRTY\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(later).expect("read skipped candidate"),
+        "DIRTY\n"
+    );
+    assert_eq!(fixture.trace_lines(), vec!["check", "crash", "check"]);
+}
+
+#[test]
+fn operational_initial_check_allows_later_remedies_without_fail_fast() {
+    let fixture = Fixture::new("initial-failure-continues-remedies");
+    let earlier = fixture.file("earlier.rs", "DIRTY\n");
+    let failed = fixture.file("failed.rs", "DIRTY\n");
+    let later = fixture.file("later.rs", "DIRTY\n");
+    let plan = vec![
+        scheduled(&fixture, 0, earlier.clone(), "check", Some("fix")),
+        scheduled(&fixture, 1, failed, "crash", Some("fix")),
+        scheduled(&fixture, 2, later.clone(), "check", Some("fix")),
+    ];
+
+    let execution = execute_deferred_workflows(&plan, 1, false);
+
+    assert!(execution.result.has_operational_problems());
+    assert_eq!(
+        only_status(&execution, &earlier),
+        Some(FileStatus::AutoFixed)
+    );
+    assert_eq!(only_status(&execution, &later), Some(FileStatus::AutoFixed));
+    assert_eq!(
+        std::fs::read_to_string(earlier).expect("read earlier fixed candidate"),
+        "CLEAN\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(later).expect("read fixed candidate"),
+        "CLEAN\n"
+    );
+    assert_eq!(
+        fixture.trace_lines(),
+        vec!["check", "crash", "check", "fix", "fix", "check", "check"]
+    );
+}
+
+#[test]
 fn failed_remedy_keeps_changed_files_and_operational_problem() {
     let fixture = Fixture::new("remedy-failure");
     let file = fixture.file("file.rs", "DIRTY\n");

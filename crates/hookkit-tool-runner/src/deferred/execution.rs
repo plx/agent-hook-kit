@@ -90,6 +90,7 @@ pub(crate) fn execute_deferred_workflows(
         .enumerate()
         .filter_map(|(index, scheduled)| scheduled.check.as_ref().map(|_| index))
         .collect::<Vec<_>>();
+    let mut remedies_stopped = false;
     for (index, log) in run_checks(plan, &initial_indices, jobs_setting) {
         let scheduled = &plan[index];
         execution
@@ -101,12 +102,14 @@ pub(crate) fn execute_deferred_workflows(
             Err(message) => {
                 states[index].operational = true;
                 record_problem(&mut execution.result, scheduled, "initial-check", message);
+                if fail_fast {
+                    remedies_stopped = true;
+                }
             }
         }
     }
 
     let mut impacts = Vec::new();
-    let mut remedies_stopped = false;
     for (index, scheduled) in plan.iter().enumerate() {
         let needs_remedy = states[index].initial_check == Some(CheckOutcome::Issues)
             || (scheduled.check.is_none()
