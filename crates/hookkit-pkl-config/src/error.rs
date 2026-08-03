@@ -51,6 +51,10 @@ pub enum PklConfigError {
         /// I/O diagnostic.
         error: String,
     },
+
+    #[error("builtin catalog validation failed:\n{0}")]
+    /// One or more embedded builtin tool definitions are inconsistent.
+    CatalogValidation(String),
 }
 
 impl From<PklConfigError> for hookkit_core::HookkitError {

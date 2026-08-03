@@ -14,6 +14,7 @@
 //! The runtime entry-point `hookkit-tool-runner` consumes a [`Loaded`] value
 //! and translates `schema::ToolSpec` into its execution-time `ToolSpec`.
 
+pub mod catalog;
 pub mod discovery;
 pub mod error;
 pub mod eval;
@@ -23,16 +24,20 @@ pub mod schema;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub use catalog::{
+    CatalogValidationError, render_builtin_catalog_markdown, validate_builtin_catalog,
+};
 pub use error::PklConfigError;
 pub use eval::{
     BUILTINS_PKL, CONFIG_PKL, StagedBuiltins, evaluate_pkl_file, evaluate_pkl_file_patch,
     evaluate_pkl_source, evaluate_pkl_source_patch, staged_builtins_dir,
 };
 pub use schema::{
-    ArgToken, ArgvElement, Diagnostics, ExitCodes, FileActivitySettings, FileActivityVcsFallback,
-    FileSelection, LoweringPolicy, Merge, MergeResetKey, Messages, MissingToolPolicy, Phase,
-    PhaseMode, RunnerConfig, RunnerConfigPatch, Settings, SettingsPatch, ToolSpec,
-    UnexpectedExitPolicy, WriteBehavior,
+    ArgToken, ArgvElement, CheckScope, DeferredReporting, DeferredReportingPatch, Diagnostics,
+    ExitCodes, FileActivitySettings, FileActivityVcsFallback, FileGroup, FileSelection,
+    InvocationGranularity, LoweringPolicy, Merge, MergeResetKey, Messages, MissingToolPolicy,
+    Phase, PhaseMode, RunnerConfig, RunnerConfigPatch, Settings, SettingsPatch, TemplatePair,
+    TemplatePairPatch, ToolSpec, UnexpectedExitPolicy, Workflow, WorkflowCommand, WriteBehavior,
 };
 
 /// Result of loading the config chain.
@@ -122,10 +127,13 @@ pub fn builtin_specs() -> Result<BTreeMap<String, ToolSpec>, PklConfigError> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<BTreeMap<String, ToolSpec>>(&stdout).map_err(|e| {
+    let specs = serde_json::from_str::<BTreeMap<String, ToolSpec>>(&stdout).map_err(|e| {
         PklConfigError::JsonDecode {
             path: builtins_path,
             error: e.to_string(),
         }
-    })
+    })?;
+    validate_builtin_catalog(&specs)
+        .map_err(|error| PklConfigError::CatalogValidation(error.to_string()))?;
+    Ok(specs)
 }

@@ -30,6 +30,9 @@ pub fn merge(acc: &mut RunnerConfig, incoming: RunnerConfig) {
     for id in &incoming.merge.reset_tools {
         acc.tools.remove(id);
     }
+    if incoming.merge.reset_deferred_reporting {
+        acc.settings.deferred_reporting = Default::default();
+    }
 
     // Settings: a present incoming settings struct wins. Since Pkl always emits
     // a settings object when the field exists, we treat any "non-default"
@@ -65,6 +68,9 @@ pub fn merge_patch(acc: &mut RunnerConfig, incoming: RunnerConfigPatch) {
 
     for id in &incoming.merge.reset_tools {
         acc.tools.remove(id);
+    }
+    if incoming.merge.reset_deferred_reporting {
+        acc.settings.deferred_reporting = Default::default();
     }
 
     incoming.settings.apply_to(&mut acc.settings);
@@ -280,7 +286,7 @@ mod tests {
             reset_all in any::<bool>(),
         ) {
             let config = RunnerConfig {
-                merge: Merge { reset_all, reset: vec![MergeResetKey::Run], reset_tools: ids.clone() },
+                merge: Merge { reset_all, reset: vec![MergeResetKey::Run], reset_tools: ids.clone(), reset_deferred_reporting: false },
                 tools: tool_map(ids),
                 run: vec!["final".into()],
                 ..RunnerConfig::default()

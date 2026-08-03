@@ -41,8 +41,8 @@ change.
   - `hookkit-runtime`
 - Pkl-driven post-tool and batched turn-completion runners with embedded tool catalog:
   - `hookkit-pkl-config` (Pkl evaluation, builtin specs, multi-file merge)
-  - `hookkit-tool-runner` (ships `post-tool-use-agent-hook`,
-    `turn-completion-agent-hook`, and the precise
+  - `hookkit-tool-runner` (ships `post-tool-use-agent-hook`, the quiet
+    `file-activity-agent-hook`, `turn-completion-agent-hook`, and the precise
     `session-start-state-agent-hook` metadata observer)
 - Shared core errors, types, and deterministic lexical path operations:
   - `hookkit-core` path helpers normalize, resolve, expand an explicitly
@@ -327,8 +327,8 @@ limitation notes:
   native pre-tool contract with `--harness=claude|codex|gemini|antigravity` and merges
   home/project YAML policy.
 - [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
-  selects `--harness=claude|codex|gemini` and appends provenance-bearing,
-  per-session file-activity evidence without consulting Git.
+  demonstrates the shipped file-activity observer while retaining the former
+  example command and flags as compatibility aliases.
 
 ## `post-tool-use-agent-hook`
 
@@ -345,19 +345,25 @@ and `--config PATH` to load a single Pkl file directly (bypassing discovery).
 
 The companion `turn-completion-agent-hook` reconciles and consumes the
 NDJSON-backed pending file-activity window at Claude/Codex `Stop` or Gemini
-`AfterAgent`, runs the same configured tools over the candidate batch, and
-stays quiet when everything is clean or auto-corrected:
+`AfterAgent`. For each matching deferred workflow it runs a read-only check,
+runs one remedy only when that check reports source issues, and reruns every
+check invalidated by observed writes. It allows completion after clean or
+fully auto-fixed results while emitting the configured deferred report through
+each harness's native channels:
 
 ```bash
 cargo run -q -p hookkit-tool-runner --bin turn-completion-agent-hook -- \
   --claude --state-dir .context/hookkit-state
 ```
 
-Use the same `--state-dir` for `session-modified-file-tracker`. Before sealing
+Use the same `--state-dir` for `file-activity-agent-hook`. Before sealing
 the window, the runner scans workspace mtimes since the durable reconciliation
-cursor (or the current session start on its first pass). Manual issues block
-the stop attempt, retain the sealed generations and cached set for retry, and
-point to detailed logs committed below the versioned session state. See the
+cursor (or the current session start on its first pass). It commits artifacts
+and `summary.json`, requeues only manual, operationally incomplete, and
+unresolved work into the active generation, records handled fingerprints for
+clean/auto-fixed/deleted files, and then acknowledges the sealed source
+generations. Manual issues block the stop attempt and point to those committed
+logs. See the
 [file-activity crate](crates/hookkit-file-activity/README.md) and
 [session-state walkthrough](crates/hookkit-session-state/README.md).
 
@@ -373,6 +379,35 @@ Codex and Gemini use `--codex` and `--gemini`. Every later
 `SessionState::ensure` still refreshes typed project metadata automatically;
 without a start binding, the timestamp is explicitly marked as a
 first-observed fallback.
+
+### Deferred hook suite
+
+A complete deferred installation binds these shipped executables to one shared
+state root:
+
+| Purpose | Claude | Codex | Gemini |
+| --- | --- | --- | --- |
+| Precise session lower bound | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` |
+| File-activity producer | `PostToolUse` → `file-activity-agent-hook` | `PostToolUse` → `file-activity-agent-hook` | `AfterTool` → `file-activity-agent-hook` |
+| Deferred consumer | `Stop` → `turn-completion-agent-hook` | `Stop` → `turn-completion-agent-hook` | `AfterAgent` → `turn-completion-agent-hook` |
+
+For example, every command below must use the same path:
+
+```bash
+session-start-state-agent-hook --claude --state-dir .context/hookkit-state
+file-activity-agent-hook --claude --state-dir .context/hookkit-state
+turn-completion-agent-hook --claude --state-dir .context/hookkit-state
+```
+
+Use `--codex` or `--gemini` consistently for those harnesses. All three also
+accept the compatibility form `--harness=claude|codex|gemini` and
+`--state-dir=PATH`; turn completion alone accepts `--config PATH`.
+
+Antigravity can bind `Stop` to `turn-completion-agent-hook --antigravity`, but
+its PostToolUse payload has no tool call or path arguments and it has no
+supported precise start/activity producer in this suite. Antigravity therefore
+uses best-effort filesystem-mtime reconciliation only (plus optional Git-dirty
+fallback) and may miss changes outside that observable window.
 
 ### Configuration discovery
 
@@ -390,7 +425,12 @@ or `merge { resetTools = new Listing { "ruff" } }`.
 
 ### Bundled builtins
 
-`hookkit-pkl-config` embeds `Builtins.pkl` with reusable specs for:
+`hookkit-pkl-config` embeds `Builtins.pkl` with 134 reusable specs. Every
+enabled entry either declares explicit deferred workflows or passes catalog
+validation for the legacy-phase compatibility translation. The complete
+command, scope, granularity, and limitation inventory is
+[`planning/builtin-deferred-workflow-audit.md`](planning/builtin-deferred-workflow-audit.md).
+Representative entries include:
 
 - `Builtins.ruff` — Python format/fix/verify with ruff
 - `Builtins.prettier` — JS/TS/CSS/HTML/JSON/Markdown formatter
@@ -398,6 +438,11 @@ or `merge { resetTools = new Listing { "ruff" } }`.
 - `Builtins.biome` — JS/TS/JSON fix + verify
 - `Builtins.cargoFmt` — Rust workspace formatter
 - `Builtins.cargoClippy` — Rust workspace fix + verify
+
+Ruff has distinct lint and format workflows. `go-fmt`, `gofumpt`, `goimports`,
+and `golines` use non-mutating stdout-aware checks; `gomod-tidy` uses
+`go mod tidy -diff`; and yq uses a per-file comparator. No enabled builtin
+relies on an unchecked mutator-first fallback.
 
 ### Example project config
 
@@ -420,6 +465,14 @@ tools {
         extraArgs = new Listing<String> { "--unfixable"; "F401" }
       }
     }
+    workflows {
+      ["lint"] {
+        remedy {
+          // apply the same choice to deferred turn completion
+          extraArgs = new Listing<String> { "--unfixable"; "F401" }
+        }
+      }
+    }
   }
   ["prettier"] = Builtins.prettier
 }
@@ -435,9 +488,64 @@ run = new Listing<String> { "ruff"; "prettier" }
 | `settings.failFast` | `true` | Stop after operational failures. |
 | `settings.continueAfterIssues` | `true` | Keep running later tools after source issues. |
 | `settings.exclude` | `[".git/**", "node_modules/**"]` | Global file exclusions applied before per-tool filters. |
-| `settings.loweringPolicy` | `"best-effort-with-warnings"` | How to handle harness intents not natively expressible. |
+| `settings.loweringPolicy` | `"best-effort-with-warnings"` | How to handle a nonempty user/agent message that the selected native event cannot represent faithfully: fail, omit, or omit with a native-channel warning. |
 | `settings.diagnosticsDirectory` | `".agent-hook-kit/post-tool-use"` | Where to write diagnostic artifacts. |
 | `settings.missingToolPolicy` | `"user-notice"` | What to do when a configured tool executable is missing. Options: `"user-notice"`, `"hard-failure"`, `"harness-block"`. |
+| `settings.fileActivity.filesystemMtime` | `true` | Reconcile mtime evidence through a durable cutoff before each Stop. |
+| `settings.fileActivity.vcs` | `"disabled"` | Optional `"git-dirty"` fallback; broad because it cannot identify which dirty changes came from the agent. |
+| `settings.fileActivity.maxEntries` | `100000` | Bound scoped/workspace traversal; truncation is retained as a coverage gap. |
+| `settings.fileActivity.coverageGapPolicy` | `"best-effort"` | Process resolved files and warn while retaining gaps, or use `"strict"` to block until coverage is complete. |
+
+### Deferred reporting templates
+
+`settings.deferredReporting` controls only the session-batched
+`turn-completion-agent-hook` report. Its ordered `groups` assign the first
+matching file group, then fall back to `other`. The `clean`, `autoFixed`,
+`manualFixesNeeded`, and `operationalError` fields each contain `user` and
+`agent` MiniJinja templates; `masterUser` and `masterAgent` combine the
+rendered nonempty buckets. Set `renderEmptyBuckets = true` to render empty
+buckets too, or use an empty template to suppress one audience.
+
+Templates receive run paths, counts, typed file/report/artifact records,
+ordered groups, operational problems and coverage gaps. They also receive
+`artifact_paths`, `artifact_contents`, raw `buckets`, and
+`rendered_buckets` as independent views. Paths stored in file `displayPath`
+are project-relative when possible. Reporting syntax is validated before any
+configured tool runs; a later rendering error is retained as a durable
+operational artifact.
+
+Layered Pkl files merge this block field by field, including nested template
+pairs, so overriding only `manualFixesNeeded.agent` preserves inherited
+siblings. `merge { resetDeferredReporting = true }` restores the built-in
+block before applying that file's local overrides.
+
+The `messages` block inside an individual `ToolSpec` is separate: it remains
+the per-tool message policy for the immediate `post-tool-use-agent-hook` and
+does not define deferred bucket meaning.
+
+Deferred batch and workspace checks conservatively attach a finding to every
+candidate in that invocation unless exact changed-file snapshots or a future
+diagnostic adapter provide narrower evidence. Tracking is best effort: dynamic
+commands, changes outside supplied workspaces, timestamp limitations, and
+Antigravity's missing PostToolUse arguments can create retained coverage gaps.
+The summary distinguishes uncovered, not-applicable, unresolved, truncated,
+manual, and operational outcomes rather than calling them clean.
+
+Deferred Stop lowering uses the exact native fields below:
+
+| Harness/event | Allowed user | Allowed agent | Blocked user | Blocked agent |
+| --- | --- | --- | --- | --- |
+| Claude `Stop` | `systemMessage` | `hookSpecificOutput.additionalContext` | `systemMessage` | `reason` plus `additionalContext` |
+| Codex `Stop` | `systemMessage` | unavailable | `systemMessage` | `reason` |
+| Gemini `AfterAgent` | `systemMessage` | unavailable | `systemMessage` | deny `reason` |
+| Antigravity `Stop` | unavailable | unavailable | unavailable | `reason` |
+
+`strict` fails before pending-state acknowledgement if a configured audience
+is unavailable. `best-effort` omits it. `best-effort-with-warnings` adds an
+omission warning to a representable native user channel, or to Antigravity's
+single `reason` fallback. The summary records each audience disposition and
+any warning. An unrepresentable allowed-stop agent note never turns a
+successful result into a block under either best-effort policy.
 
 ### Migration from per-tool binaries
 
@@ -453,6 +561,14 @@ Pkl config that selects the same tool. For example:
 
 …with `.agent-hook-kit/post-tool-use.pkl` referencing `Builtins.ruff` and any
 overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
+
+For deferred config migration, existing `phases` still drive immediate
+PostToolUse and are compatibility-translated at Stop when they have a read-only
+verifier. Prefer explicit `workflows` for new or combined tools. The pending
+file-activity entity is version 2 and handled baselines are a separate version-1
+entity; an upgrade from the former pending v1 creates a fresh transient subtree,
+so restart the agent session when exact continuity matters. Mtime and optional
+Git-dirty reconciliation recover only best-effort candidates.
 
 ## Example Behavior Summary
 
@@ -478,13 +594,13 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - merges additive YAML glob policy from home and workspace configuration,
   - applies inspect-known, deny-unresolved, or deny-all-shell posture to bounded
     structured, patch, and shell access evidence.
-- `session-modified-file-tracker`:
+- `file-activity-agent-hook`:
   - uses the aligned post-tool API for Claude, Codex, and Gemini,
-  - infers direct modifications from native open tool payloads and never shells out to Git,
+  - delegates structured writers, patches, and shell inference to the shared tool-access analyzer and never shells out to Git,
   - appends detailed observations to rotated NDJSON generations whose projection is a versioned per-session path set.
 - `post-tool-use-agent-hook`:
   - loads merged Pkl config plus embedded builtin tool catalog,
-  - discovers candidate paths from exact native input arms using runner-local tool policy,
+  - discovers exact candidate paths through the shared file-activity/tool-access analyzer,
   - runs each tool's phases for format/fix/verify commands,
   - classifies clean versus issues and changed versus unchanged from exit policies plus file snapshots,
   - reports missing tools and operational failures per `missingToolPolicy`,
@@ -492,10 +608,10 @@ overrides previously set in `.agent-hook-kit/ruff-agent-hook.toml`.
   - lowers every result through an explicit Claude, Codex, or Gemini native output arm.
 - `turn-completion-agent-hook`:
   - seals the current modified-file generations under an exclusive entity consumer lock,
-  - dispatches the same Pkl-configured phases across the accumulated file set,
+  - dispatches Pkl-configured check/conditional-remedy/final-check workflows across the accumulated file set,
   - commits detailed per-tool logs and a summary before producing its decision,
-  - acknowledges only clean or fully auto-corrected snapshots,
-  - retains manual findings for retry and emits each harness's native continue-working signal.
+  - acknowledges the sealed window after requeueing only unfinished work and recording handled baselines for discharged files,
+  - emits configured clean/auto reports without blocking and uses each harness's native continue-working signal for manual or operational results.
 
 ## License
 

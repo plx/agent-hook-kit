@@ -70,6 +70,8 @@ pub struct Settings {
     pub missing_tool_policy: MissingToolPolicy,
     /// Optional stop-time file-activity reconciliation settings.
     pub file_activity: Option<FileActivitySettings>,
+    /// Templates and file groups used to render deferred results.
+    pub deferred_reporting: DeferredReporting,
 }
 
 impl Default for Settings {
@@ -83,6 +85,7 @@ impl Default for Settings {
             diagnostics_directory: Some(".agent-hook-kit/post-tool-use".into()),
             missing_tool_policy: MissingToolPolicy::default(),
             file_activity: None,
+            deferred_reporting: DeferredReporting::default(),
         }
     }
 }
@@ -119,6 +122,8 @@ pub struct SettingsPatch {
     pub missing_tool_policy: Option<MissingToolPolicy>,
     /// Optional file-activity settings override.
     pub file_activity: Option<FileActivitySettings>,
+    /// Optional deferred-reporting settings overlay.
+    pub deferred_reporting: Option<DeferredReportingPatch>,
 }
 
 impl SettingsPatch {
@@ -148,6 +153,206 @@ impl SettingsPatch {
         if let Some(file_activity) = self.file_activity {
             settings.file_activity = Some(file_activity);
         }
+        if let Some(deferred_reporting) = self.deferred_reporting {
+            deferred_reporting.apply_to(&mut settings.deferred_reporting);
+        }
+    }
+}
+
+/// User- and agent-facing templates for one deferred result category.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TemplatePair {
+    /// Template rendered for the user.
+    pub user: String,
+    /// Template rendered for the coding agent.
+    pub agent: String,
+}
+
+/// Named file classification group used in deferred reports.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileGroup {
+    /// Stable group identifier.
+    pub id: String,
+    /// Human-readable group name.
+    pub display_name: String,
+    /// Glob patterns selecting files in the group.
+    pub include: Vec<String>,
+}
+
+/// Templates and grouping rules used to render deferred workflow results.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DeferredReporting {
+    /// Ordered groups used to classify result files.
+    pub groups: Vec<FileGroup>,
+    /// Templates for files whose checks are clean.
+    pub clean: TemplatePair,
+    /// Templates for files changed successfully by a remedy.
+    pub auto_fixed: TemplatePair,
+    /// Templates for files that still need manual changes.
+    pub manual_fixes_needed: TemplatePair,
+    /// Templates for workflow execution failures.
+    pub operational_error: TemplatePair,
+    /// Aggregate template rendered for the user.
+    pub master_user: String,
+    /// Aggregate template rendered for the coding agent.
+    pub master_agent: String,
+    /// Whether categories with no files are included in rendered output.
+    pub render_empty_buckets: bool,
+}
+
+impl Default for DeferredReporting {
+    fn default() -> Self {
+        Self {
+            groups: default_file_groups(),
+            clean: TemplatePair {
+                user: "Checked {{ counts.clean }} clean file{% if counts.clean != 1 %}s{% endif %}: {% for file in clean_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
+                agent: String::new(),
+            },
+            auto_fixed: TemplatePair {
+                user: "Auto-fixed {{ counts.auto_fixed }} file{% if counts.auto_fixed != 1 %}s{% endif %}: {% for file in auto_fixed_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
+                agent: "Auto-fixed {{ counts.auto_fixed }} file{% if counts.auto_fixed != 1 %}s{% endif %}; re-read changed files before editing further.".into(),
+            },
+            manual_fixes_needed: TemplatePair {
+                user: "{{ counts.manual_fixes_needed }} file{% if counts.manual_fixes_needed != 1 %}s{% endif %} need{% if counts.manual_fixes_needed == 1 %}s{% endif %} manual fixes across {{ counts.manual_groups }} group{% if counts.manual_groups != 1 %}s{% endif %}: {% for file in manual_fix_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}".into(),
+                agent: "{% for group in groups %}{% if group.manual_fix_files | length %}{{ group.display_name }}: {% for file in group.manual_fix_files %}{{ file.displayPath }}{% if not loop.last %}, {% endif %}{% endfor %}. Reports: {% for path in group.artifact_paths %}{{ path }}{% if not loop.last %}, {% endif %}{% endfor %}{% if not loop.last %}\n{% endif %}{% endif %}{% endfor %}".into(),
+            },
+            operational_error: TemplatePair {
+                user: "{{ counts.operational_errors }} operational formatter/linter error{% if counts.operational_errors != 1 %}s{% endif %}. Details: {{ artifact_paths | join(\", \") }}".into(),
+                agent: "Operational formatter/linter failures remain. Inspect {{ artifact_paths | join(\", \") }} before retrying Stop.".into(),
+            },
+            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.user | length %}\n{% endif %}File-activity coverage is incomplete for {{ counts.coverage_gaps }} retained gap{% if counts.coverage_gaps != 1 %}s{% endif %}; see {{ run.summary_path }}.{% endif %}".into(),
+            master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.agent | length %}\n{% endif %}File-activity coverage is incomplete; inspect retained gaps in {{ run.summary_path }} before treating the run as exhaustive.{% endif %}".into(),
+            render_empty_buckets: false,
+        }
+    }
+}
+
+fn default_file_groups() -> Vec<FileGroup> {
+    vec![
+        FileGroup {
+            id: "c-cpp".into(),
+            display_name: "C/C++".into(),
+            include: [
+                "*.c", "**/*.c", "*.h", "**/*.h", "*.cc", "**/*.cc", "*.cpp", "**/*.cpp", "*.cxx",
+                "**/*.cxx", "*.hh", "**/*.hh", "*.hpp", "**/*.hpp", "*.hxx", "**/*.hxx",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        },
+        FileGroup {
+            id: "rust".into(),
+            display_name: "Rust".into(),
+            include: vec!["*.rs".into(), "**/*.rs".into()],
+        },
+        FileGroup {
+            id: "python".into(),
+            display_name: "Python".into(),
+            include: ["*.py", "**/*.py", "*.pyi", "**/*.pyi"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        },
+        FileGroup {
+            id: "javascript-typescript".into(),
+            display_name: "JavaScript/TypeScript".into(),
+            include: [
+                "*.js", "**/*.js", "*.jsx", "**/*.jsx", "*.ts", "**/*.ts", "*.tsx", "**/*.tsx",
+                "*.mjs", "**/*.mjs", "*.cjs", "**/*.cjs",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        },
+        FileGroup {
+            id: "documentation".into(),
+            display_name: "Documentation".into(),
+            include: ["*.md", "**/*.md", "*.mdx", "**/*.mdx"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        },
+        FileGroup {
+            id: "other".into(),
+            display_name: "Other".into(),
+            include: vec!["**".into()],
+        },
+    ]
+}
+
+/// Field-preserving patch for a [`TemplatePair`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TemplatePairPatch {
+    /// Optional replacement for the user-facing template.
+    pub user: Option<String>,
+    /// Optional replacement for the agent-facing template.
+    pub agent: Option<String>,
+}
+
+impl TemplatePairPatch {
+    fn apply_to(self, pair: &mut TemplatePair) {
+        if let Some(user) = self.user {
+            pair.user = user;
+        }
+        if let Some(agent) = self.agent {
+            pair.agent = agent;
+        }
+    }
+}
+
+/// Field-preserving overlay for deferred reporting configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DeferredReportingPatch {
+    /// Optional replacement for the ordered file groups.
+    pub groups: Option<Vec<FileGroup>>,
+    /// Optional clean-result template patch.
+    pub clean: Option<TemplatePairPatch>,
+    /// Optional auto-fixed-result template patch.
+    pub auto_fixed: Option<TemplatePairPatch>,
+    /// Optional manual-fix-result template patch.
+    pub manual_fixes_needed: Option<TemplatePairPatch>,
+    /// Optional operational-error template patch.
+    pub operational_error: Option<TemplatePairPatch>,
+    /// Optional aggregate user-facing template replacement.
+    pub master_user: Option<String>,
+    /// Optional aggregate agent-facing template replacement.
+    pub master_agent: Option<String>,
+    /// Optional empty-category rendering override.
+    pub render_empty_buckets: Option<bool>,
+}
+
+impl DeferredReportingPatch {
+    /// Applies fields present in this patch to an existing reporting configuration.
+    pub fn apply_to(self, reporting: &mut DeferredReporting) {
+        if let Some(groups) = self.groups {
+            reporting.groups = groups;
+        }
+        if let Some(pair) = self.clean {
+            pair.apply_to(&mut reporting.clean);
+        }
+        if let Some(pair) = self.auto_fixed {
+            pair.apply_to(&mut reporting.auto_fixed);
+        }
+        if let Some(pair) = self.manual_fixes_needed {
+            pair.apply_to(&mut reporting.manual_fixes_needed);
+        }
+        if let Some(pair) = self.operational_error {
+            pair.apply_to(&mut reporting.operational_error);
+        }
+        if let Some(master_user) = self.master_user {
+            reporting.master_user = master_user;
+        }
+        if let Some(master_agent) = self.master_agent {
+            reporting.master_agent = master_agent;
+        }
+        if let Some(render_empty_buckets) = self.render_empty_buckets {
+            reporting.render_empty_buckets = render_empty_buckets;
+        }
     }
 }
 
@@ -163,6 +368,8 @@ pub struct FileActivitySettings {
     pub timestamp_tolerance_millis: u64,
     /// Maximum directory entries visited by reconciliation.
     pub max_entries: usize,
+    /// Behavior when reconciliation cannot establish complete activity coverage.
+    pub coverage_gap_policy: CoverageGapPolicy,
     /// Directory basenames pruned from recursive traversal.
     pub ignored_directory_names: Vec<String>,
 }
@@ -174,6 +381,7 @@ impl Default for FileActivitySettings {
             vcs: FileActivityVcsFallback::Disabled,
             timestamp_tolerance_millis: 2_000,
             max_entries: 100_000,
+            coverage_gap_policy: CoverageGapPolicy::BestEffort,
             ignored_directory_names: vec![
                 ".context".into(),
                 ".git".into(),
@@ -184,6 +392,17 @@ impl Default for FileActivitySettings {
             ],
         }
     }
+}
+
+/// Behavior when file-activity reconciliation reports incomplete coverage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CoverageGapPolicy {
+    /// Continue with the available evidence while reporting coverage gaps.
+    #[default]
+    BestEffort,
+    /// Prevent a clean result while any coverage gap remains.
+    Strict,
 }
 
 /// Optional VCS evidence used by stop-time file-activity reconciliation.
@@ -233,6 +452,8 @@ pub struct Merge {
     pub reset: Vec<MergeResetKey>,
     /// Tool identifiers to remove before merging definitions from this layer.
     pub reset_tools: Vec<String>,
+    /// Restore deferred reporting configuration to its defaults before merging.
+    pub reset_deferred_reporting: bool,
 }
 
 /// Top-level configuration section that a merge layer can reset.
@@ -263,6 +484,12 @@ pub struct ToolSpec {
     pub files: FileSelection,
     /// Optional marker used to partition files into nearest workspaces.
     pub workspace_indicator: Option<String>,
+    /// Named deferred workflows.
+    pub workflows: BTreeMap<String, Workflow>,
+    /// Deferred workflow identifiers in execution order.
+    pub workflow_order: Vec<String>,
+    /// Optional fallback diagnostic when a remedy cannot be verified.
+    pub unverified_remedy_fallback: Option<String>,
     /// Named execution phases.
     pub phases: BTreeMap<String, Phase>,
     /// Phase identifiers in execution order.
@@ -284,6 +511,9 @@ impl Default for ToolSpec {
             install_hint: None,
             files: FileSelection::default(),
             workspace_indicator: None,
+            workflows: BTreeMap::new(),
+            workflow_order: Vec::new(),
+            unverified_remedy_fallback: None,
             phases: BTreeMap::new(),
             phase_order: Vec::new(),
             messages: Messages::default(),
@@ -291,6 +521,89 @@ impl Default for ToolSpec {
             enabled: true,
         }
     }
+}
+
+/// One repeatable deferred check with an optional automatic remedy.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Workflow {
+    /// Read-only command used to detect issues.
+    pub check: Option<WorkflowCommand>,
+    /// Optional command used to repair detected issues.
+    pub remedy: Option<WorkflowCommand>,
+    /// Inputs whose changes invalidate a prior check.
+    pub check_scope: CheckScope,
+    /// Granularity used to divide candidates into invocations.
+    pub invocation: InvocationGranularity,
+    /// Whether this workflow participates in deferred execution.
+    pub enabled: bool,
+}
+
+impl Default for Workflow {
+    fn default() -> Self {
+        Self {
+            check: None,
+            remedy: None,
+            check_scope: CheckScope::default(),
+            invocation: InvocationGranularity::default(),
+            enabled: true,
+        }
+    }
+}
+
+/// One command in a deferred workflow.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkflowCommand {
+    /// Per-command executable override.
+    pub program: Option<String>,
+    /// Argument template expanded for each invocation.
+    pub argv: Vec<ArgvElement>,
+    /// Exit-code classification.
+    pub exit_codes: ExitCodes,
+    /// Whether non-empty standard output represents actionable issues.
+    pub issues_on_stdout: bool,
+    /// Paths the command may modify.
+    pub writes: WriteBehavior,
+    /// Literal values expanded by [`ArgToken::ExtraArgs`].
+    pub extra_args: Vec<String>,
+}
+
+impl Default for WorkflowCommand {
+    fn default() -> Self {
+        Self {
+            program: None,
+            argv: Vec::new(),
+            exit_codes: ExitCodes::default(),
+            issues_on_stdout: false,
+            writes: WriteBehavior::None,
+            extra_args: Vec::new(),
+        }
+    }
+}
+
+/// Inputs whose changes invalidate a prior workflow check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CheckScope {
+    /// Only changes to the workflow's target files invalidate its check.
+    #[default]
+    TargetFiles,
+    /// Any change in the workspace invalidates the workflow's check.
+    Workspace,
+}
+
+/// How candidates are divided into workflow invocations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InvocationGranularity {
+    /// Invoke once for each selected file.
+    PerFile,
+    /// Invoke once for the selected file batch.
+    #[default]
+    Batch,
+    /// Invoke once for each workspace partition.
+    Workspace,
 }
 
 /// File globs used to select inputs for a tool.
@@ -376,6 +689,8 @@ pub enum ArgToken {
     WorkspaceIndicator,
     /// Root associated with the discovered project configuration.
     ProjectRoot,
+    /// Executable selected for the current tool command.
+    ToolExecutable,
     /// Literal extra arguments configured on the phase.
     ExtraArgs,
 }

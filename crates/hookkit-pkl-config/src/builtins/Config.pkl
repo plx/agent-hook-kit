@@ -34,6 +34,35 @@ class Settings {
   /// Optional stop-time file-activity fallback overrides. Omit to use the
   /// runtime defaults represented by FileActivity.
   fileActivity: FileActivity?
+
+  /// Optional field-preserving overrides for deferred Stop reporting. Rust
+  /// supplies the built-in defaults; null nested fields inherit prior layers.
+  deferredReporting: DeferredReporting?
+}
+
+class TemplatePair {
+  user: String?
+  agent: String?
+}
+
+class FileGroup {
+  id: String
+  displayName: String
+  include: Listing<String>
+}
+
+/// A patch over the built-in deferred reporting contract. Empty strings
+/// intentionally suppress that audience. Set merge.resetDeferredReporting to
+/// restore all defaults before applying this patch.
+class DeferredReporting {
+  groups: Listing<FileGroup>?
+  clean: TemplatePair?
+  autoFixed: TemplatePair?
+  manualFixesNeeded: TemplatePair?
+  operationalError: TemplatePair?
+  masterUser: String?
+  masterAgent: String?
+  renderEmptyBuckets: Boolean?
 }
 
 class FileActivity {
@@ -51,6 +80,10 @@ class FileActivity {
 
   /// Bound recursive scans and record a coverage gap when the limit is hit.
   maxEntries: UInt = 100000
+
+  /// Best effort retains and reports incomplete targets without blocking a
+  /// stop solely for coverage. Strict also asks the harness to continue.
+  coverageGapPolicy: "best-effort" | "strict" = "best-effort"
 
   ignoredDirectoryNames: Listing<String> = new Listing<String> {
     ".context"
@@ -71,6 +104,10 @@ class Merge {
 
   /// Drop named tool entries before applying this file.
   resetTools: Listing<String> = new Listing<String> {}
+
+  /// Restore built-in groups/templates before applying this file's optional
+  /// deferredReporting patch.
+  resetDeferredReporting: Boolean = false
 }
 
 class FileSelection {
@@ -89,6 +126,7 @@ class WorkspaceFiles extends ArgToken { type = "WorkspaceFiles" }
 class Workspace extends ArgToken { type = "Workspace" }
 class WorkspaceIndicator extends ArgToken { type = "WorkspaceIndicator" }
 class ProjectRoot extends ArgToken { type = "ProjectRoot" }
+class ToolExecutable extends ArgToken { type = "ToolExecutable" }
 class ExtraArgs extends ArgToken { type = "ExtraArgs" }
 
 class ExitCodes {
@@ -123,6 +161,30 @@ class Phase {
   extraArgs: Listing<String> = new Listing<String> {}
 }
 
+/// One command in a deferred check/remedy workflow.
+class WorkflowCommand {
+  program: String?
+  argv: Listing<String | ArgToken> = new Listing<String | ArgToken> {}
+  exitCodes: ExitCodes = new ExitCodes {}
+  /// Treat non-whitespace stdout on an otherwise-clean exit as source issues.
+  /// This supports tools such as gofmt whose non-mutating list mode reports
+  /// dirty files through stdout while retaining exit status zero.
+  issuesOnStdout: Boolean = false
+  writes: "none" | "target-files" | "matching-globs" | "workspace" = "none"
+  extraArgs: Listing<String> = new Listing<String> {}
+}
+
+/// Stop-time workflow. `check` is required for authoritative explicit
+/// workflows and is optional in the schema only so validation can report a
+/// useful configuration error before any external command runs.
+class Workflow {
+  check: WorkflowCommand?
+  remedy: WorkflowCommand?
+  checkScope: "target-files" | "workspace" = "target-files"
+  invocation: "per-file" | "batch" | "workspace" = "batch"
+  enabled: Boolean = true
+}
+
 class ToolSpec {
   id: String
   displayName: String
@@ -130,6 +192,15 @@ class ToolSpec {
   installHint: String?
   files: FileSelection = new FileSelection {}
   workspaceIndicator: String?
+  /// Preferred Stop-time check/remedy workflows. When empty, the deferred
+  /// runner compatibility-translates `phases`; immediate PostToolUse continues
+  /// to execute `phases` exactly as before.
+  workflows: Mapping<String, Workflow> = new Mapping<String, Workflow> {}
+  workflowOrder: Listing<String> = new Listing<String> {}
+  /// Nonempty only when a catalog entry has no authoritative read-only check
+  /// and must retain the legacy mutator-first compatibility behavior. Built-in
+  /// validation rejects such entries unless this limitation is explicit.
+  unverifiedRemedyFallback: String?
   phases: Mapping<String, Phase> = new Mapping<String, Phase> {}
   /// Optional explicit phase ordering. If empty, runtime iterates `phases`
   /// in insertion order (Pkl mappings preserve order).

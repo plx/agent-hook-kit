@@ -3,6 +3,54 @@
 
 Version: draft 0.2
 
+> Implementation note (2026-07-21): the original document below remains the
+> immediate PostToolUse format. Stop-time deferred execution now has an
+> additive `ToolSpec.workflows` map. Each workflow contains a non-mutating
+> `check`, an optional `remedy`, `checkScope`, and `invocation`; an optional
+> `workflowOrder` provides stable override order. The immediate runner still
+> executes `phases` exactly as documented below.
+>
+> When `workflows` is empty, the deferred runner compatibility-translates
+> existing `phases`: each mutating phase is paired with the last enabled
+> verifier and check-only tools become check-only workflows. Catalog validation
+> rejects an unchecked remedy unless `unverifiedRemedyFallback` contains an
+> explicit limitation; no enabled built-in uses that escape hatch. The complete
+> checked inventory is in `builtin-deferred-workflow-audit.md`.
+>
+> `settings.deferredReporting` separately defines ordered file groups, four
+> user/agent bucket template pairs, master user/agent templates, and optional
+> empty-bucket rendering. Deferred Stop lowering applies `loweringPolicy` to
+> the rendered audiences and records exact emitted/omitted/error disposition
+> in `summary.json`; `ToolSpec.messages` remains immediate-runner-only.
+
+The implemented deferred shape is:
+
+```pkl
+workflows {
+  ["lint"] = new Workflow {
+    check = new WorkflowCommand {
+      argv = new Listing { "check"; new Files {} }
+      exitCodes { issues = new Listing { 1 } }
+    }
+    remedy = new WorkflowCommand {
+      argv = new Listing { "check"; "--fix"; new Files {} }
+      writes = "target-files"
+    }
+    checkScope = "target-files" // or "workspace"
+    invocation = "batch" // or "per-file" / "workspace"
+  }
+}
+workflowOrder = new Listing { "lint" }
+```
+
+`WorkflowCommand.issuesOnStdout = true` adapts read-only commands such as
+`gofmt -l` and `golines --dry-run`, which report dirty inputs on stdout while
+retaining exit status zero. It only upgrades an otherwise-clean exit to source
+issues. `ToolExecutable` is an argv token for the rare structured shell adapter
+that must invoke the configured executable; the yq comparator uses it so an
+executable override is preserved. Checks must declare `writes = "none"`, and
+remedies must declare their actual write scope.
+
 ## 1. Purpose
 
 This document defines a Pkl-shaped configuration format for one narrow binary:
@@ -179,6 +227,14 @@ Pkl config declares exit-code semantics and write scopes. Rust still owns:
 - message template rendering;
 - common output construction;
 - harness lowering.
+
+For deferred turn completion, every executed initial check, remedy, and final
+check is persisted separately in a unique session-state run bundle. Stable
+run-relative paths encode deterministic tool/workflow/job/phase identity.
+`summary.json` is the commit marker and includes typed artifact objects plus
+separate artifact-path and artifact-content views for later templates. It is
+written before pending-state disposition and therefore records that disposition
+as planned rather than already acknowledged.
 
 ### 5.5 Configuration merging is the default
 

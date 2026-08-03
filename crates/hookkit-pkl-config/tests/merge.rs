@@ -1,10 +1,13 @@
 //! End-to-end Pkl merge tests: evaluate small Pkl snippets and verify the
 //! merged result.
 
-use hookkit_pkl_config::merge::merge_chain;
+use hookkit_pkl_config::merge::{merge_chain, merge_patch_chain};
 use hookkit_pkl_config::{
-    evaluate_pkl_source,
-    schema::{FileActivityVcsFallback, MissingToolPolicy},
+    evaluate_pkl_source, evaluate_pkl_source_patch,
+    schema::{
+        CheckScope, CoverageGapPolicy, FileActivityVcsFallback, InvocationGranularity,
+        MissingToolPolicy, WriteBehavior,
+    },
 };
 
 fn pkl_available() -> bool {
@@ -25,6 +28,109 @@ macro_rules! require_pkl {
 }
 
 #[test]
+fn deferred_reporting_defaults_and_nested_override_are_field_preserving() {
+    require_pkl!();
+    let defaults = hookkit_pkl_config::DeferredReporting::default();
+    assert!(defaults.clean.agent.is_empty());
+    assert_eq!(defaults.groups.last().unwrap().id, "other");
+    assert!(defaults.groups.iter().any(|group| {
+        group.id == "c-cpp"
+            && group.include.iter().any(|glob| glob.ends_with("*.h"))
+            && group.include.iter().any(|glob| glob.ends_with("*.cpp"))
+    }));
+
+    let user = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+
+settings {
+  deferredReporting = new DeferredReporting {
+    clean = new TemplatePair { user = "user clean" }
+    masterAgent = "user master"
+  }
+}
+"#,
+    )
+    .expect("user reporting patch");
+    let project = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+
+settings {
+  deferredReporting = new DeferredReporting {
+    manualFixesNeeded = new TemplatePair { agent = "project manual agent" }
+  }
+}
+"#,
+    )
+    .expect("project reporting patch");
+    let merged = merge_patch_chain([user, project].into_iter());
+
+    assert_eq!(merged.settings.deferred_reporting.clean.user, "user clean");
+    assert_eq!(
+        merged.settings.deferred_reporting.clean.agent,
+        defaults.clean.agent
+    );
+    assert_eq!(
+        merged.settings.deferred_reporting.auto_fixed,
+        defaults.auto_fixed
+    );
+    assert_eq!(
+        merged.settings.deferred_reporting.manual_fixes_needed.agent,
+        "project manual agent"
+    );
+    assert_eq!(
+        merged.settings.deferred_reporting.manual_fixes_needed.user,
+        defaults.manual_fixes_needed.user
+    );
+    assert_eq!(
+        merged.settings.deferred_reporting.master_agent,
+        "user master"
+    );
+}
+
+#[test]
+fn deferred_reporting_reset_restores_defaults_before_local_patch() {
+    require_pkl!();
+    let user = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+settings {
+  deferredReporting = new DeferredReporting {
+    clean = new TemplatePair { user = "custom clean" }
+    masterAgent = "custom master"
+  }
+}
+"#,
+    )
+    .unwrap();
+    let local = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+merge { resetDeferredReporting = true }
+settings {
+  deferredReporting = new DeferredReporting {
+    manualFixesNeeded = new TemplatePair { agent = "local manual" }
+  }
+}
+"#,
+    )
+    .unwrap();
+    let merged = merge_patch_chain([user, local].into_iter());
+    let defaults = hookkit_pkl_config::DeferredReporting::default();
+
+    assert_eq!(merged.settings.deferred_reporting.clean, defaults.clean);
+    assert_eq!(
+        merged.settings.deferred_reporting.master_agent,
+        defaults.master_agent
+    );
+    assert_eq!(
+        merged.settings.deferred_reporting.manual_fixes_needed.agent,
+        "local manual"
+    );
+}
+
+#[test]
 fn file_activity_fallback_settings_round_trip() {
     require_pkl!();
     let config = evaluate_pkl_source(
@@ -37,6 +143,7 @@ settings {
     vcs = "git-dirty"
     timestampToleranceMillis = 750
     maxEntries = 1234
+    coverageGapPolicy = "strict"
     ignoredDirectoryNames = new Listing<String> { ".git"; "vendor" }
   }
 }
@@ -49,7 +156,58 @@ settings {
     assert_eq!(activity.vcs, FileActivityVcsFallback::GitDirty);
     assert_eq!(activity.timestamp_tolerance_millis, 750);
     assert_eq!(activity.max_entries, 1234);
+    assert_eq!(activity.coverage_gap_policy, CoverageGapPolicy::Strict);
     assert_eq!(activity.ignored_directory_names, vec![".git", "vendor"]);
+}
+
+#[test]
+fn deferred_workflow_schema_round_trips_structured_commands() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+
+tools {
+  ["example"] = new ToolSpec {
+    id = "example"
+    displayName = "Example"
+    executable = "example"
+    files { include = new Listing { "**/*.rs" } }
+    workflows {
+      ["lint"] = new Workflow {
+        check = new WorkflowCommand {
+          argv = new Listing { "check"; new Files {} }
+          exitCodes { issues = new Listing { 1 } }
+        }
+        remedy = new WorkflowCommand {
+          argv = new Listing { "fix"; new Files {} }
+          writes = "target-files"
+        }
+        checkScope = "workspace"
+        invocation = "per-file"
+      }
+    }
+    workflowOrder = new Listing { "lint" }
+  }
+}
+run = new Listing { "example" }
+"#,
+    )
+    .expect("workflow config");
+
+    let tool = config.tools.get("example").expect("tool");
+    assert_eq!(tool.workflow_order, vec!["lint"]);
+    let workflow = tool.workflows.get("lint").expect("workflow");
+    assert_eq!(workflow.check_scope, CheckScope::Workspace);
+    assert_eq!(workflow.invocation, InvocationGranularity::PerFile);
+    assert_eq!(
+        workflow.remedy.as_ref().expect("remedy").writes,
+        WriteBehavior::TargetFiles
+    );
+    assert_eq!(
+        workflow.check.as_ref().expect("check").exit_codes.issues,
+        vec![1]
+    );
 }
 
 #[test]

@@ -12,8 +12,50 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   workspaceIndicator = "go.mod"
 
   files = new Config.FileSelection {
-    include = new Listing<String> { "go.mod"; "**/go.mod"; "go.sum"; "**/go.sum" }
+    include = new Listing<String> {
+      "*.go"
+      "**/*.go"
+      "go.mod"
+      "**/go.mod"
+      "go.sum"
+      "**/go.sum"
+    }
   }
+
+  workflows = new Mapping<String, Config.Workflow> {
+    ["tidy"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "mod"
+          "tidy"
+          "-diff"
+          new Config.ExtraArgs {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          issues = new Listing<Int> { 1 }
+          failure = new Listing<Int> { 2 }
+          unexpected = "failure"
+        }
+      }
+      remedy = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "mod"
+          "tidy"
+          new Config.ExtraArgs {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          failure = new Listing<Int> { 2 }
+          unexpected = "failure"
+        }
+        writes = "workspace"
+      }
+      checkScope = "workspace"
+      invocation = "workspace"
+    }
+  }
+  workflowOrder = new Listing<String> { "tidy" }
 
   phases = new Mapping<String, Config.Phase> {
     ["format"] = new Config.Phase {

@@ -613,6 +613,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "walkdir",
 ]
@@ -721,6 +722,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "thiserror",
  "walkdir",
 ]
 
@@ -1446,15 +1448,7 @@ dependencies = [
 name = "session-modified-file-tracker"
 version = "0.1.0"
 dependencies = [
- "clap",
- "hookkit-claude",
- "hookkit-codex",
- "hookkit-common",
- "hookkit-core",
- "hookkit-file-activity",
- "hookkit-gemini",
- "hookkit-runtime",
- "hookkit-session-state",
+ "hookkit-tool-runner",
 ]
 
 [[package]]

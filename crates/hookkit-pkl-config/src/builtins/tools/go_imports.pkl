@@ -1,7 +1,7 @@
 /// goimports — gofmt plus automatic import management.
 ///
-/// `goimports -l` exits 0 even when files would change, so the runner relies
-/// on the format phase rewriting files and observing the snapshot diff.
+/// `goimports -l` is non-mutating and lists unformatted files on stdout while
+/// retaining exit status zero; the deferred workflow classifies that output.
 
 module agent_hook_kit.builtins.tools.GoImports
 
@@ -16,6 +16,38 @@ spec: Config.ToolSpec = new Config.ToolSpec {
   files = new Config.FileSelection {
     include = new Listing<String> { "*.go"; "**/*.go" }
   }
+
+  workflows = new Mapping<String, Config.Workflow> {
+    ["format"] = new Config.Workflow {
+      check = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "-l"
+          new Config.ExtraArgs {}
+          new Config.Files {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          failure = new Listing<Int> { 2 }
+        }
+        issuesOnStdout = true
+      }
+      remedy = new Config.WorkflowCommand {
+        argv = new Listing<String | Config.ArgToken> {
+          "-w"
+          new Config.ExtraArgs {}
+          new Config.Files {}
+        }
+        exitCodes = new Config.ExitCodes {
+          clean = new Listing<Int> { 0 }
+          failure = new Listing<Int> { 2 }
+        }
+        writes = "target-files"
+      }
+      checkScope = "target-files"
+      invocation = "batch"
+    }
+  }
+  workflowOrder = new Listing<String> { "format" }
 
   phases = new Mapping<String, Config.Phase> {
     ["format"] = new Config.Phase {
