@@ -15,11 +15,14 @@ use crate::bash::{
 /// Initial path context supplied by the native shell tool call and hook runtime.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FileInferenceContext<'a> {
+    /// Working directory in effect when the shell invocation begins.
     pub cwd: Option<&'a Utf8Path>,
+    /// Workspace root, when the surrounding harness identifies one.
     pub workspace_root: Option<&'a Utf8Path>,
 }
 
 impl<'a> FileInferenceContext<'a> {
+    /// Creates a context with an optional invocation working directory.
     pub const fn new(cwd: Option<&'a Utf8Path>) -> Self {
         Self {
             cwd,
@@ -27,6 +30,7 @@ impl<'a> FileInferenceContext<'a> {
         }
     }
 
+    /// Attaches the optional workspace root used by workspace-wide rules.
     pub const fn with_workspace_root(mut self, workspace_root: Option<&'a Utf8Path>) -> Self {
         self.workspace_root = workspace_root;
         self
@@ -37,55 +41,79 @@ impl<'a> FileInferenceContext<'a> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FileAccessReport {
+    /// File targets that the analysis could associate with an access kind.
     pub candidates: Vec<FileAccessCandidate>,
+    /// Commands or operands whose file effects could not be resolved.
     pub unresolved: Vec<UnresolvedFileAccess>,
 }
 
 impl FileAccessReport {
+    /// Iterates over candidates whose access kind may read data.
     pub fn may_read(&self) -> impl Iterator<Item = &FileAccessCandidate> {
         self.candidates
             .iter()
             .filter(|candidate| candidate.access.may_read())
     }
 
+    /// Iterates over candidates whose access kind may modify data.
     pub fn may_modify(&self) -> impl Iterator<Item = &FileAccessCandidate> {
         self.candidates
             .iter()
             .filter(|candidate| candidate.access.may_modify())
     }
 
+    /// Returns whether analysis recorded no known blind spots.
+    ///
+    /// A `true` result is not a guarantee that the process performs no other
+    /// I/O; it only means that this best-effort analyzer resolved everything
+    /// it recognized in the shell syntax and configured command semantics.
     pub fn is_fully_resolved(&self) -> bool {
         self.unresolved.is_empty()
     }
 }
 
+/// A possible access to a statically identified target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FileAccessCandidate {
+    /// Path or workspace region that may be accessed.
     pub target: FileTarget,
+    /// Operation the command may perform on the target.
     pub access: FileAccessKind,
     /// Certainty of the static association, not a promise that execution will
     /// reach or successfully perform the access.
     pub certainty: FileAccessCertainty,
+    /// Syntax or command rule from which this candidate was derived.
     pub origin: FileAccessOrigin,
+    /// Source span of the command containing the access.
     pub command_span: SourceSpan,
+    /// Identifier of the semantics implementation that emitted the candidate.
     pub inferred_by: String,
 }
 
+/// Kind of file-system operation inferred for a target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum FileAccessKind {
+    /// Reads file contents or metadata.
     Read,
+    /// Creates or changes a target without necessarily reading it.
     Modify,
+    /// Both reads and changes the target.
     ReadModify,
+    /// Lists the target or its children.
     Enumerate,
+    /// Removes the target.
     Delete,
+    /// Reads and removes the source of a move.
     MoveSource,
+    /// Creates or replaces the destination of a move.
     MoveDestination,
 }
 
 impl FileAccessKind {
+    /// Returns whether this kind includes a read-like operation.
     pub const fn may_read(self) -> bool {
         matches!(
             self,
@@ -93,6 +121,7 @@ impl FileAccessKind {
         )
     }
 
+    /// Returns whether this kind includes a mutating operation.
     pub const fn may_modify(self) -> bool {
         matches!(
             self,
@@ -105,52 +134,84 @@ impl FileAccessKind {
     }
 }
 
+/// Target region associated with an inferred access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum FileTarget {
+    /// A path expression with an explicit match scope.
     Path {
+        /// Original expression and any statically resolved path.
         expression: PathExpression,
+        /// Portion of the file tree selected by the expression.
         scope: FileTargetScope,
     },
+    /// The current workspace as a whole.
     Workspace {
+        /// Known workspace root, or `None` when the harness omitted it.
         root: Option<Utf8PathBuf>,
     },
 }
 
+/// A shell path operand and its best-effort lexical resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PathExpression {
+    /// Operand value as a string.
+    ///
+    /// For a literal operand this is the statically evaluated value (quotes and
+    /// escapes removed); for a glob operand it is the word's exact source slice;
+    /// for a rule- or option-derived operand (such as the working-directory
+    /// default `.`) it is whatever the rule supplied. It is not guaranteed to be
+    /// the exact source text of a shell word.
     pub raw: String,
+    /// Lexically normalized absolute path, when a stable base is known.
+    ///
+    /// Resolution does not access the file system, canonicalize symlinks, or
+    /// establish that the target exists.
     pub resolved: Option<Utf8PathBuf>,
+    /// Base against which `raw` was, or would need to be, interpreted.
     pub base: PathBase,
 }
 
+/// Base used to interpret a [`PathExpression`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum PathBase {
+    /// The expression is already absolute.
     Absolute,
+    /// The expression is relative to the invocation's initial working directory.
     InvocationCwd,
+    /// A preceding directory-changing command makes the runtime base unknown.
     UnknownAfterDirectoryChange,
 }
 
+/// Region selected relative to a [`FileTarget::Path`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum FileTargetScope {
+    /// Only the named path.
     Exact,
+    /// Children of the named directory, but not the directory itself.
     Descendants,
+    /// The named path and, if it is a directory, its descendants.
     ExactOrDescendants,
+    /// Paths matched by the shell glob expression.
     Glob,
 }
 
+/// Strength of the static association between a command and a target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum FileAccessCertainty {
+    /// Directly identified by syntax or unambiguous command semantics.
     Direct,
+    /// Directly identified, but located in conditional or deferred shell code.
     Conditional,
+    /// Conservatively inferred by a rule that may over-approximate access.
     Heuristic,
 }
 
@@ -167,60 +228,94 @@ pub enum UnknownCommandFallback {
     LiteralPathOperands,
 }
 
+/// Location in the analyzed command from which a candidate originated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum FileAccessOrigin {
+    /// A positional command-line argument.
     Argument {
+        /// Zero-based index of the command in the analysis.
         command_index: usize,
+        /// Zero-based argv index, where zero is the command name.
         argv_index: usize,
     },
+    /// A shell redirection target.
     Redirection {
+        /// Zero-based index of the command in the analysis.
         command_index: usize,
+        /// Zero-based redirection index within the command.
         redirection_index: usize,
     },
+    /// An omitted operand that defaults to the working directory.
     WorkingDirectoryDefault {
+        /// Zero-based index of the command in the analysis.
         command_index: usize,
     },
+    /// A command-specific inference rule rather than a literal operand.
     Rule {
+        /// Zero-based index of the command in the analysis.
         command_index: usize,
+        /// Human-readable description of the rule.
         detail: String,
     },
 }
 
+/// A possible file effect that static inference could not resolve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnresolvedFileAccess {
+    /// Command index, or `None` for analysis-wide failures.
     pub command_index: Option<usize>,
+    /// Command span, or `None` for analysis-wide failures.
     pub command_span: Option<SourceSpan>,
+    /// Relevant source text, when one expression can be identified.
     pub raw: Option<String>,
+    /// Reason no concrete candidate could be emitted.
     pub reason: UnresolvedFileAccessReason,
 }
 
+/// Reason static file-access inference could not resolve an effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum UnresolvedFileAccessReason {
+    /// Parsing produced a usable prefix plus an incomplete-analysis reason.
     AnalysisIncomplete(IncompleteReason),
+    /// No usable Bash analysis was available.
     AnalysisUnavailable(UnavailableReason),
+    /// The executable name depends on runtime expansion.
     DynamicCommandName {
+        /// Shell constructs that prevent a literal command name.
         reasons: Vec<DynamicReason>,
     },
+    /// A path operand depends on runtime expansion.
     DynamicPath {
+        /// Affected argv position, when the operand came from argv.
         argv_index: Option<usize>,
+        /// Shell constructs that prevent a literal path.
         reasons: Vec<DynamicReason>,
     },
+    /// No registered semantics implementation recognized the command.
     UnknownCommandSemantics {
+        /// Literal command name.
         command: String,
     },
+    /// The command is recognized but its operands cannot be classified safely.
     AmbiguousArguments {
+        /// Human-readable description of the ambiguity.
         detail: String,
     },
+    /// The command interprets an operand as additional executable code.
     IndirectEvaluation {
+        /// Literal command name that performs the indirect evaluation.
         command: String,
     },
+    /// A preceding `cd`, `pushd`, or `popd` may have changed a relative base.
     WorkingDirectoryMayHaveChanged,
+    /// A relative operand was found but the invocation working directory is unknown.
     MissingWorkingDirectory,
+    /// The redirection form has file effects the analyzer cannot model.
     UnsupportedRedirection,
 }
 
@@ -233,14 +328,17 @@ pub struct CommandFileContext<'a> {
 }
 
 impl<'a> CommandFileContext<'a> {
+    /// Returns the zero-based command index in the enclosing analysis.
     pub const fn command_index(self) -> usize {
         self.command_index
     }
 
+    /// Returns the complete parsed command occurrence.
     pub const fn command(self) -> &'a CommandOccurrence {
         self.command
     }
 
+    /// Returns the literal command name used to select this semantics rule.
     pub const fn name(self) -> &'a str {
         self.name
     }
@@ -250,6 +348,7 @@ impl<'a> CommandFileContext<'a> {
         self.command.arguments.len() + 1
     }
 
+    /// Returns an argv word, treating the command name as `argv[0]`.
     pub fn word(self, argv_index: usize) -> Option<&'a ShellWord> {
         if argv_index == 0 {
             self.command.name.as_ref()
@@ -258,10 +357,12 @@ impl<'a> CommandFileContext<'a> {
         }
     }
 
+    /// Returns a literal argv value, or `None` for a missing or dynamic word.
     pub fn literal(self, argv_index: usize) -> Option<&'a str> {
         self.word(argv_index)?.literal.as_deref()
     }
 
+    /// Returns whether any operand after `argv[0]` equals `value` literally.
     pub fn has_literal(self, value: &str) -> bool {
         (1..self.argv_len()).any(|index| self.literal(index) == Some(value))
     }
@@ -269,6 +370,7 @@ impl<'a> CommandFileContext<'a> {
 
 /// Extension point for project- or tool-specific argv semantics.
 pub trait CommandFileSemantics: Send + Sync {
+    /// Returns the stable identifier recorded on emitted candidates.
     fn id(&self) -> &str;
 
     /// Returns `true` when this implementation recognizes the command, even
@@ -287,6 +389,12 @@ pub struct FileAccessSink<'command, 'report> {
 }
 
 impl FileAccessSink<'_, '_> {
+    /// Emits an access derived from an argv operand.
+    ///
+    /// A missing operand, or a non-literal operand other than a pure glob, is
+    /// recorded in [`FileAccessReport::unresolved`] instead; a pure glob operand
+    /// is emitted as a candidate with [`FileTargetScope::Glob`]. `argv_index`
+    /// uses conventional indexing, with the executable at zero.
     pub fn emit_argument(
         &mut self,
         argv_index: usize,
@@ -335,6 +443,7 @@ impl FileAccessSink<'_, '_> {
         );
     }
 
+    /// Emits an access to the command's effective working directory.
     pub fn emit_working_directory(&mut self, access: FileAccessKind, scope: FileTargetScope) {
         self.emit_path(
             ".",
@@ -347,6 +456,10 @@ impl FileAccessSink<'_, '_> {
         );
     }
 
+    /// Emits a heuristic access to the whole workspace.
+    ///
+    /// The candidate is retained even when the workspace root is unavailable;
+    /// in that case its [`FileTarget::Workspace::root`] is `None`.
     pub fn emit_workspace(&mut self, access: FileAccessKind) {
         self.report.candidates.push(FileAccessCandidate {
             target: FileTarget::Workspace {
@@ -363,6 +476,7 @@ impl FileAccessSink<'_, '_> {
         });
     }
 
+    /// Emits a heuristic path supplied by a command-specific rule.
     pub fn emit_rule_path(
         &mut self,
         raw: &str,
@@ -382,6 +496,7 @@ impl FileAccessSink<'_, '_> {
         );
     }
 
+    /// Records a recognized effect that cannot be resolved to a candidate.
     pub fn unresolved(&mut self, raw: Option<String>, reason: UnresolvedFileAccessReason) {
         self.report.unresolved.push(UnresolvedFileAccess {
             command_index: Some(self.command.command_index),
@@ -526,6 +641,7 @@ impl Default for FileAccessAnalyzer {
 }
 
 impl FileAccessAnalyzer {
+    /// Creates an analyzer with no command semantics registered.
     pub fn empty() -> Self {
         Self {
             semantics: Vec::new(),
@@ -533,6 +649,7 @@ impl FileAccessAnalyzer {
         }
     }
 
+    /// Creates an analyzer containing the bundled command semantics.
     pub fn with_builtins() -> Self {
         Self {
             semantics: vec![Box::new(BuiltinCommandFileSemantics)],
@@ -540,15 +657,21 @@ impl FileAccessAnalyzer {
         }
     }
 
+    /// Sets the unknown-command fallback and returns the analyzer.
     pub fn with_unknown_command_fallback(mut self, fallback: UnknownCommandFallback) -> Self {
         self.unknown_command_fallback = fallback;
         self
     }
 
+    /// Sets the unknown-command fallback for subsequent inference.
     pub fn set_unknown_command_fallback(&mut self, fallback: UnknownCommandFallback) {
         self.unknown_command_fallback = fallback;
     }
 
+    /// Registers command semantics with precedence over all existing rules.
+    ///
+    /// Rules are queried in reverse registration order and the first rule that
+    /// returns `true` from [`CommandFileSemantics::infer`] wins.
     pub fn register<S>(&mut self, semantics: S)
     where
         S: CommandFileSemantics + 'static,
@@ -556,6 +679,7 @@ impl FileAccessAnalyzer {
         self.semantics.insert(0, Box::new(semantics));
     }
 
+    /// Registers high-precedence command semantics and returns the analyzer.
     pub fn with_semantics<S>(mut self, semantics: S) -> Self
     where
         S: CommandFileSemantics + 'static,
@@ -564,6 +688,11 @@ impl FileAccessAnalyzer {
         self
     }
 
+    /// Infers file access from a complete, partial, or unavailable analysis.
+    ///
+    /// Candidates from the usable portion of a partial analysis are preserved,
+    /// and an analysis-wide unresolved record is appended. An unavailable
+    /// analysis produces only an unresolved record.
     pub fn infer(
         &self,
         outcome: &BashAnalysisOutcome,
@@ -593,6 +722,11 @@ impl FileAccessAnalyzer {
         }
     }
 
+    /// Infers file access from a parsed Bash analysis.
+    ///
+    /// Relative paths following any directory-changing command are intentionally
+    /// left unresolved because static analysis cannot know whether that command
+    /// executed or succeeded.
     pub fn infer_analysis(
         &self,
         analysis: &BashAnalysis,

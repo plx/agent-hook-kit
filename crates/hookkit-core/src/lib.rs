@@ -1,4 +1,5 @@
 //! Core types and error model for hookkit.
+#![deny(missing_docs)]
 mod context;
 mod environment;
 mod error;

@@ -24,6 +24,12 @@ where
     execute_harness_with_diagnostics::<H, _>(bytes, hint, variables, &DISABLED_DIAGNOSTICS, handler)
 }
 
+/// Executes a dynamically selected event and sends out-of-band diagnostics to
+/// `diagnostics`.
+///
+/// Parsing, event resolution, environment validation, input/output arm
+/// agreement, and emitted contract identity are checked before bytes are
+/// returned. The handler is invoked only after all input-side checks pass.
 pub fn execute_harness_with_diagnostics<H, F>(
     bytes: impl Into<Vec<u8>>,
     hint: Option<H::EventSelector>,
@@ -132,26 +138,41 @@ where
 }
 
 #[derive(Debug)]
+/// Lossless sum type over inputs from all built-in harness adapters.
 pub enum BuiltinInput {
+    /// Claude Code input.
     Claude(hookkit_claude::protocol::AnyInput),
+    /// Codex input.
     Codex(hookkit_codex::protocol::AnyInput),
+    /// Gemini CLI input.
     Gemini(hookkit_gemini::protocol::AnyInput),
+    /// Antigravity input.
     Antigravity(hookkit_antigravity::AnyInput),
 }
 
 #[derive(Debug)]
+/// Sum type over outputs from all built-in harness adapters.
 pub enum BuiltinOutput {
+    /// Claude Code output.
     Claude(hookkit_claude::protocol::AnyCommandOutput),
+    /// Codex output.
     Codex(hookkit_codex::protocol::AnyCommandOutput),
+    /// Gemini CLI output.
     Gemini(hookkit_gemini::protocol::AnyCommandOutput),
+    /// Antigravity output.
     Antigravity(hookkit_antigravity::AnyCommandOutput),
 }
 
 #[derive(Debug, Clone)]
+/// Lossless sum type over native environments from all built-in harnesses.
 pub enum BuiltinCommandEnvironment {
+    /// Claude Code environment.
     Claude(hookkit_claude::ClaudeCommandEnvironment),
+    /// Codex environment.
     Codex(hookkit_codex::CodexCommandEnvironment),
+    /// Gemini CLI environment.
     Gemini(hookkit_gemini::GeminiCommandEnvironment),
+    /// Antigravity environment.
     Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
 }
 

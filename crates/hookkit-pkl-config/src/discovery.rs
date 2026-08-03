@@ -13,21 +13,30 @@
 
 use std::path::{Path, PathBuf};
 
+/// Filename used for inherited home and project configuration.
 pub const PROJECT_CONFIG_NAME: &str = "post-tool-use.pkl";
+/// Filename used for local, normally uncommitted configuration.
 pub const LOCAL_CONFIG_NAME: &str = "post-tool-use.local.pkl";
+/// Directory searched at the home and project-ancestor levels.
 pub const CONFIG_DIR: &str = ".agent-hook-kit";
 
 /// One step in the config discovery chain.
 #[derive(Debug, Clone)]
 pub struct DiscoveredConfig {
+    /// Existing configuration file.
     pub path: PathBuf,
+    /// Discovery layer that supplied the file.
     pub kind: DiscoveredKind,
 }
 
+/// Layer in the configuration discovery and precedence chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscoveredKind {
+    /// User-wide configuration under the home directory.
     Home,
+    /// Inherited project configuration.
     Project,
+    /// Local project configuration, merged after every project file.
     Local,
 }
 
@@ -71,6 +80,7 @@ pub fn discover(cwd: &Path) -> Vec<DiscoveredConfig> {
     chain
 }
 
+/// Returns the conventional home configuration path, if a home directory exists.
 pub fn home_config_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(CONFIG_DIR).join(PROJECT_CONFIG_NAME))
 }

@@ -16,14 +16,21 @@ use crate::{ClaudeCommandEnvironment, protocol::SNAPSHOT_ID};
 /// fields common to every Claude command hook are strongly typed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Path to the native conversation transcript.
     pub transcript_path: hookkit_core::Utf8PathBuf,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Optional nested effort setting.
     #[serde(default)]
     pub effort: Option<crate::protocol::Effort>,
+    /// Permission policy active for the event.
     #[serde(default)]
     pub permission_mode: Option<crate::protocol::PermissionMode>,
+    /// Prompt identifier associated with the current turn.
     #[serde(default)]
     pub prompt_id: Option<String>,
     #[serde(flatten)]
@@ -31,10 +38,12 @@ pub struct CatalogInput {
 }
 
 impl CatalogInput {
+    /// Returns one event-specific or unknown top-level field.
     pub fn field(&self, name: &str) -> Option<&serde_json::Value> {
         self.fields.get(name)
     }
 
+    /// Returns all event-specific and unknown top-level fields.
     pub fn fields(&self) -> &BTreeMap<String, serde_json::Value> {
         &self.fields
     }
@@ -111,6 +120,10 @@ enum Outcome {
 }
 
 #[derive(Debug, Clone)]
+/// Type-erased output used by Claude Code catalog event wrappers.
+///
+/// Public event-specific output types are the intended constructors. This type
+/// exists so dynamic harness dispatch can retain the exact event arm.
 pub struct CatalogOutput {
     event: &'static str,
     outcome: Outcome,
@@ -275,6 +288,7 @@ fn block_with_context(
 
 macro_rules! event_spec {
     ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
+        #[doc = concat!("Native Claude Code `", $name, "` command contract.")]
         pub enum $event {}
 
         impl EventSpec for $event {
@@ -327,13 +341,16 @@ macro_rules! event_spec {
 macro_rules! system_event {
     ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
+        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
         pub struct $output(CatalogOutput);
 
         impl $output {
+            /// Creates an empty structured response.
             pub fn no_op() -> Self {
                 Self(CatalogOutput::json($name, serde_json::json!({})))
             }
 
+            /// Creates a response containing a top-level system message.
             pub fn with_system_message(message: impl Into<String>) -> Self {
                 Self(CatalogOutput::json(
                     $name,
@@ -349,21 +366,26 @@ macro_rules! system_event {
 macro_rules! context_event {
     ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
+        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
         pub struct $output(CatalogOutput);
 
         impl $output {
+            /// Creates an empty structured response.
             pub fn no_op() -> Self {
                 Self(CatalogOutput::json($name, serde_json::json!({})))
             }
 
+            /// Creates a structured response that appends agent context.
             pub fn with_context(additional_context: impl Into<String>) -> Self {
                 Self(CatalogOutput::json($name, context($name, additional_context)))
             }
 
+            /// Creates a structured legacy block response.
             pub fn block(reason: impl Into<String>) -> Self {
                 Self(CatalogOutput::json($name, block(reason)))
             }
 
+            /// Blocks while also appending context for the agent.
             pub fn block_with_context(
                 reason: impl Into<String>,
                 additional_context: impl Into<String>,
@@ -374,12 +396,14 @@ macro_rules! context_event {
                 ))
             }
 
+            /// Sets the top-level `continue` control.
             pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("continue", continue_session.into())
                     .map(Self)
             }
 
+            /// Sets the top-level stop reason on a structured response.
             pub fn with_stop_reason(
                 self,
                 reason: impl Into<String>,
@@ -389,12 +413,14 @@ macro_rules! context_event {
                     .map(Self)
             }
 
+            /// Sets whether Claude suppresses ordinary hook output.
             pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("suppressOutput", suppress.into())
                     .map(Self)
             }
 
+            /// Sets a top-level system message on a structured response.
             pub fn with_system_message(
                 self,
                 message: impl Into<String>,
@@ -414,6 +440,7 @@ macro_rules! blocking_context_event {
         context_event!($event, $output, $name, $category, [$($required),*]);
 
         impl $output {
+            /// Creates a code-2 blocking response with required stderr text.
             pub fn blocking_error(message: impl Into<String>) -> Self {
                 Self(CatalogOutput::blocking($name, message))
             }
@@ -569,13 +596,16 @@ blocking_context_event!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Claude Code elicitation command hook.
 pub struct ElicitationOutput(CatalogOutput);
 
 impl ElicitationOutput {
+    /// Creates an empty structured response.
     pub fn no_op() -> Self {
         Self(CatalogOutput::json("Elicitation", serde_json::json!({})))
     }
 
+    /// Accepts the elicitation with native response content.
     pub fn accept(content: serde_json::Value) -> Self {
         Self(CatalogOutput::json(
             "Elicitation",
@@ -586,6 +616,7 @@ impl ElicitationOutput {
         ))
     }
 
+    /// Declines the elicitation.
     pub fn decline() -> Self {
         Self(CatalogOutput::json(
             "Elicitation",
@@ -593,6 +624,7 @@ impl ElicitationOutput {
         ))
     }
 
+    /// Cancels the elicitation.
     pub fn cancel() -> Self {
         Self(CatalogOutput::json(
             "Elicitation",
@@ -600,6 +632,7 @@ impl ElicitationOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("Elicitation", message))
     }
@@ -613,9 +646,11 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Claude Code elicitation-result command hook.
 pub struct ElicitationResultOutput(CatalogOutput);
 
 impl ElicitationResultOutput {
+    /// Creates an empty structured response.
     pub fn no_op() -> Self {
         Self(CatalogOutput::json(
             "ElicitationResult",
@@ -623,6 +658,7 @@ impl ElicitationResultOutput {
         ))
     }
 
+    /// Replaces the result with accepted native content.
     pub fn accept(content: serde_json::Value) -> Self {
         Self(CatalogOutput::json(
             "ElicitationResult",
@@ -633,6 +669,7 @@ impl ElicitationResultOutput {
         ))
     }
 
+    /// Replaces the result with a decline action.
     pub fn decline() -> Self {
         Self(CatalogOutput::json(
             "ElicitationResult",
@@ -643,6 +680,7 @@ impl ElicitationResultOutput {
         ))
     }
 
+    /// Replaces the result with a cancellation action.
     pub fn cancel() -> Self {
         Self(CatalogOutput::json(
             "ElicitationResult",
@@ -650,6 +688,7 @@ impl ElicitationResultOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("ElicitationResult", message))
     }
@@ -663,13 +702,16 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Claude Code message-display command hook.
 pub struct MessageDisplayOutput(CatalogOutput);
 
 impl MessageDisplayOutput {
+    /// Creates an empty structured response.
     pub fn no_op() -> Self {
         Self(CatalogOutput::json("MessageDisplay", serde_json::json!({})))
     }
 
+    /// Replaces the content displayed for the streamed message.
     pub fn display(content: impl Into<String>) -> Self {
         Self(CatalogOutput::json(
             "MessageDisplay",
@@ -689,9 +731,11 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Claude Code permission-denied command hook.
 pub struct PermissionDeniedOutput(CatalogOutput);
 
 impl PermissionDeniedOutput {
+    /// Creates an empty structured response.
     pub fn no_op() -> Self {
         Self(CatalogOutput::json(
             "PermissionDenied",
@@ -699,6 +743,7 @@ impl PermissionDeniedOutput {
         ))
     }
 
+    /// Chooses whether Claude retries the denied tool operation.
     pub fn retry(retry: bool) -> Self {
         Self(CatalogOutput::json(
             "PermissionDenied",
@@ -714,17 +759,22 @@ event_spec!(
     ["tool_name", "tool_input", "tool_use_id", "reason"]
 );
 
+/// Behavior returned for a Claude permission request.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionRequestBehavior {
+    /// Allow the requested operation.
     Allow,
+    /// Deny the requested operation.
     Deny,
 }
 
 #[derive(Debug, Clone)]
+/// Native response from a Claude Code permission-request command hook.
 pub struct PermissionRequestOutput(CatalogOutput);
 
 impl PermissionRequestOutput {
+    /// Creates an empty structured response.
     pub fn no_op() -> Self {
         Self(CatalogOutput::json(
             "PermissionRequest",
@@ -732,6 +782,10 @@ impl PermissionRequestOutput {
         ))
     }
 
+    /// Creates a permission decision.
+    ///
+    /// `message` and `interrupt` are emitted only when supplied. No semantic
+    /// relationship between those optional fields and `behavior` is imposed.
     pub fn decide(
         behavior: PermissionRequestBehavior,
         message: Option<String>,
@@ -757,40 +811,50 @@ impl PermissionRequestOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("PermissionRequest", message))
     }
 
+    /// Sets the top-level `continue` control.
     pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
         self.0
             .with_top_level("continue", continue_session.into())
             .map(Self)
     }
 
+    /// Sets the top-level stop reason on a structured response.
     pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         self.0
             .with_top_level("stopReason", reason.into().into())
             .map(Self)
     }
 
+    /// Sets whether Claude suppresses ordinary hook output.
     pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
         self.0
             .with_top_level("suppressOutput", suppress.into())
             .map(Self)
     }
 
+    /// Sets a top-level system message on a structured response.
     pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
         self.0
             .with_top_level("systemMessage", message.into().into())
             .map(Self)
     }
 
+    /// Adds a replacement tool input to an existing permission decision.
+    ///
+    /// Returns an error when called on [`Self::no_op`] or a blocking outcome,
+    /// because those responses do not contain a decision object.
     pub fn with_updated_input(self, input: serde_json::Value) -> hookkit_core::Result<Self> {
         self.0
             .with_permission_decision_field("updatedInput", input)
             .map(Self)
     }
 
+    /// Adds replacement permission rules to an existing decision.
     pub fn with_updated_permissions(
         self,
         permissions: Vec<serde_json::Value>,
@@ -808,22 +872,29 @@ event_spec!(
     ["tool_name", "tool_input", "permission_suggestions"]
 );
 
+/// Permission decision returned by a Claude pre-tool hook.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PreToolPermissionDecision {
+    /// Allow the pending tool call.
     Allow,
+    /// Deny the pending tool call.
     Deny,
+    /// Ask the user for permission.
     Ask,
 }
 
 #[derive(Debug, Clone)]
+/// Native response from a Claude Code pre-tool command hook.
 pub struct PreToolUseOutput(CatalogOutput);
 
 impl PreToolUseOutput {
+    /// Creates an empty structured response.
     pub fn no_op() -> Self {
         Self(CatalogOutput::json("PreToolUse", serde_json::json!({})))
     }
 
+    /// Creates a pre-tool permission decision with optional associated fields.
     pub fn decide(
         decision: PreToolPermissionDecision,
         reason: Option<String>,
@@ -850,28 +921,33 @@ impl PreToolUseOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("PreToolUse", message))
     }
 
+    /// Sets the top-level `continue` control.
     pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
         self.0
             .with_top_level("continue", continue_session.into())
             .map(Self)
     }
 
+    /// Sets the top-level stop reason on a structured response.
     pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         self.0
             .with_top_level("stopReason", reason.into().into())
             .map(Self)
     }
 
+    /// Sets whether Claude suppresses ordinary hook output.
     pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
         self.0
             .with_top_level("suppressOutput", suppress.into())
             .map(Self)
     }
 
+    /// Sets a top-level system message on a structured response.
     pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
         self.0
             .with_top_level("systemMessage", message.into().into())
@@ -889,9 +965,11 @@ event_spec!(
 macro_rules! prompt_event {
     ($event:ident, $output:ident, $name:literal, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
+        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
         pub struct $output(CatalogOutput);
 
         impl $output {
+            /// Creates a structured response that appends agent context.
             pub fn with_context(additional_context: impl Into<String>) -> Self {
                 Self(CatalogOutput::json(
                     $name,
@@ -899,6 +977,8 @@ macro_rules! prompt_event {
                 ))
             }
 
+            /// Blocks the prompt while appending context and optional prompt
+            /// presentation controls.
             pub fn block_with_context(
                 reason: impl Into<String>,
                 additional_context: impl Into<String>,
@@ -918,10 +998,12 @@ macro_rules! prompt_event {
                 Self(CatalogOutput::json($name, value))
             }
 
+            /// Creates a successful plain-text context response.
             pub fn text_context(context: impl Into<String>) -> Self {
                 Self(CatalogOutput::text($name, context))
             }
 
+            /// Creates a code-2 blocking response with required stderr text.
             pub fn blocking_error(message: impl Into<String>) -> Self {
                 Self(CatalogOutput::blocking($name, message))
             }
@@ -950,6 +1032,7 @@ prompt_event!(
     ["prompt"]
 );
 
+/// Returns every native command implementation defined in this catalog module.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     vec![
         hookkit_core::NativeEventDescriptor::command::<ConfigChange>(&[
@@ -1026,6 +1109,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     ]
 }
 
+/// Returns definitive discriminator metadata for catalog-module events.
 pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescriptor> {
     vec![
         hookkit_core::IdentificationDescriptor::definitive::<ConfigChange>(
@@ -1133,6 +1217,10 @@ pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescripto
     ]
 }
 
+/// Decodes a catalog-module event.
+///
+/// Returns `Ok(None)` when `event` is not implemented by this module. A known
+/// event with malformed native input returns an error.
 pub fn decode(event: &EventId, raw: &RawInvocation) -> hookkit_core::Result<Option<CatalogInput>> {
     let input = match event.name() {
         "ConfigChange" => ConfigChange::parse(raw)?,

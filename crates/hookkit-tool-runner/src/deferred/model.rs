@@ -9,8 +9,11 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FileStatus {
+    /// Every applicable workflow completed without finding issues.
     Clean,
+    /// A remedy changed the file and the final check passed.
     AutoFixed,
+    /// At least one applicable workflow still reports issues.
     ManualFixesNeeded,
 }
 
@@ -25,7 +28,9 @@ impl FileStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CheckOutcome {
+    /// The check found no actionable issues.
     Clean,
+    /// The check found actionable issues.
     Issues,
 }
 
@@ -33,21 +38,33 @@ pub enum CheckOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CommandPhase {
+    /// First authoritative check before any remedy.
     InitialCheck,
+    /// Automatic repair command.
     Remedy,
+    /// Authoritative check after a remedy.
     FinalCheck,
+    /// Compatibility command combining multiple semantic roles.
     Combined,
+    /// Configuration validation rather than an external tool command.
     Configuration,
 }
 
+/// Semantic classification assigned to a durable command artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArtifactClassification {
+    /// Command completed without finding issues.
     Clean,
+    /// Command completed and found actionable issues.
     Issues,
+    /// Command ran but failed operationally.
     Failure,
+    /// Command could not be spawned.
     SpawnError,
+    /// Workflow configuration prevented execution.
     ConfigurationError,
+    /// Result could not be classified more precisely.
     Unclassified,
 }
 
@@ -55,23 +72,41 @@ pub enum ArtifactClassification {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunArtifact {
+    /// Stable artifact identifier within the run.
     pub id: String,
+    /// Absolute path to the durable artifact.
     pub absolute_path: PathBuf,
+    /// Artifact path relative to the run directory.
     pub run_relative_path: PathBuf,
+    /// Media type describing the artifact contents.
     pub media_type: String,
+    /// Tool associated with the artifact, when applicable.
     pub tool_id: Option<String>,
+    /// Workflow associated with the artifact, when applicable.
     pub workflow_id: Option<String>,
+    /// Deterministic job associated with the artifact, when applicable.
     pub job_id: Option<String>,
+    /// Tool report associated with the artifact, when applicable.
     pub report_id: Option<String>,
+    /// Command role represented by the artifact.
     pub phase: CommandPhase,
+    /// Semantic classification of the command result.
     pub classification: ArtifactClassification,
+    /// Process exit code, when a process was started and exited normally.
     pub exit_code: Option<i32>,
+    /// Executable invoked to produce the artifact.
     pub program: Option<String>,
+    /// Arguments passed to the executable.
     pub arguments: Vec<String>,
+    /// Working directory used for the command.
     pub working_directory: Option<PathBuf>,
+    /// Files directly assigned to the command invocation.
     pub files: Vec<PathBuf>,
+    /// Files considered candidates for result attribution.
     pub candidate_files: Vec<PathBuf>,
+    /// Files observed to change while the command ran.
     pub changed_files: Vec<PathBuf>,
+    /// Durable textual artifact contents.
     pub contents: String,
 }
 
@@ -79,11 +114,14 @@ pub struct RunArtifact {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolReportRef {
+    /// Identifier of the referenced tool report.
     pub report_id: String,
+    /// Artifacts that support the referenced report.
     pub artifact_ids: Vec<String>,
 }
 
 impl ToolReportRef {
+    /// Creates a report reference with sorted, deduplicated artifact identifiers.
     pub fn new(
         report_id: impl Into<String>,
         artifact_ids: impl IntoIterator<Item = String>,
@@ -102,21 +140,34 @@ impl ToolReportRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolReport {
+    /// Stable report identifier within the run.
     pub id: String,
+    /// Tool that produced the report.
     pub tool_id: String,
+    /// Human-readable tool name.
     pub tool_name: String,
+    /// Workflow that produced the report.
     pub workflow_id: String,
+    /// Deterministic job that produced the report.
     pub job_id: String,
+    /// Files eligible for attribution to this report.
     pub candidate_files: Vec<PathBuf>,
+    /// Files observed to change during the workflow.
     pub changed_files: Vec<PathBuf>,
+    /// Outcome of the initial authoritative check, when one ran.
     pub initial_check: Option<CheckOutcome>,
+    /// Whether the workflow attempted an automatic remedy.
     pub fix_attempted: bool,
+    /// Outcome of the final authoritative check, when one ran.
     pub final_check: Option<CheckOutcome>,
+    /// Whether a job-level result was conservatively attributed to every candidate.
     pub conservative_attribution: bool,
+    /// Durable artifacts supporting this report.
     pub artifact_ids: Vec<String>,
 }
 
 impl ToolReport {
+    /// Sorts and deduplicates path and artifact collections.
     pub fn normalize(&mut self) {
         sort_paths(&mut self.candidate_files);
         sort_paths(&mut self.changed_files);
@@ -124,6 +175,7 @@ impl ToolReport {
         self.artifact_ids.dedup();
     }
 
+    /// Returns a stable link to this report and its artifacts.
     pub fn reference(&self) -> ToolReportRef {
         ToolReportRef::new(self.id.clone(), self.artifact_ids.clone())
     }
@@ -133,26 +185,39 @@ impl ToolReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileResult {
+    /// Absolute or runner-normalized file path.
     pub path: PathBuf,
+    /// User-facing normalized display path.
     pub display_path: String,
+    /// Deferred reporting group identifier.
     pub group_id: String,
+    /// Worst normal outcome across applicable workflows.
     pub status: FileStatus,
+    /// Whether the runner changed this file.
     pub changed_by_runner: bool,
+    /// Tool reports contributing to this result.
     pub reports: Vec<ToolReportRef>,
 }
 
 /// One normal contribution to a per-file aggregate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileAssessment {
+    /// File receiving this contribution.
     pub path: PathBuf,
+    /// User-facing normalized display path.
     pub display_path: String,
+    /// Deferred reporting group identifier.
     pub group_id: String,
+    /// Normal outcome contributed by one workflow.
     pub status: FileStatus,
+    /// Whether the contributing workflow changed this file.
     pub changed_by_runner: bool,
+    /// Tool report supporting this contribution, when available.
     pub report: Option<ToolReportRef>,
 }
 
 impl FileAssessment {
+    /// Creates a file assessment with default display and grouping metadata.
     pub fn new(path: impl Into<PathBuf>, status: FileStatus) -> Self {
         let path = path.into();
         Self {
@@ -170,15 +235,22 @@ impl FileAssessment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationalProblem {
+    /// Stable problem identifier within the run.
     pub id: String,
+    /// Tool associated with the problem, when applicable.
     pub tool_id: Option<String>,
+    /// Command phase associated with the problem, when applicable.
     pub phase: Option<String>,
+    /// Files potentially affected by the problem.
     pub affected_files: Vec<PathBuf>,
+    /// Human-readable problem description.
     pub message: String,
+    /// Durable artifacts supporting the problem.
     pub artifact_ids: Vec<String>,
 }
 
 impl OperationalProblem {
+    /// Sorts and deduplicates file and artifact collections.
     pub fn normalize(&mut self) {
         sort_paths(&mut self.affected_files);
         self.artifact_ids.sort();
@@ -190,9 +262,13 @@ impl OperationalProblem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoverageGap {
+    /// Stable gap identifier within the run.
     pub id: String,
+    /// Unresolved target associated with the gap, when available.
     pub target: Option<String>,
+    /// Human-readable description of incomplete coverage.
     pub message: String,
+    /// Whether the gap was retained for a future deferred attempt.
     pub retained: bool,
 }
 
@@ -200,16 +276,24 @@ pub struct CoverageGap {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeferredRunResult {
+    /// Normal per-file results keyed by path.
     pub files: BTreeMap<PathBuf, FileResult>,
+    /// Tool/workflow reports keyed by report identifier.
     pub reports: BTreeMap<String, ToolReport>,
+    /// Operational failures keyed by problem identifier.
     pub operational_problems: BTreeMap<String, OperationalProblem>,
+    /// Candidate files to which no workflow could be applied conclusively.
     pub uncovered_files: BTreeSet<PathBuf>,
+    /// Candidate files deliberately excluded as inapplicable.
     pub not_applicable_files: BTreeSet<PathBuf>,
+    /// Candidate-discovery and scope-materialization gaps keyed by identifier.
     pub coverage_gaps: BTreeMap<String, CoverageGap>,
+    /// Durable run artifacts keyed by artifact identifier.
     pub artifacts: BTreeMap<String, RunArtifact>,
 }
 
 impl DeferredRunResult {
+    /// Joins one normal workflow contribution into the per-file result map.
     pub fn record_file(&mut self, assessment: FileAssessment) {
         self.uncovered_files.remove(&assessment.path);
         self.not_applicable_files.remove(&assessment.path);
@@ -278,12 +362,14 @@ impl DeferredRunResult {
         self.reports.insert(report.id.clone(), report);
     }
 
+    /// Records a normalized operational problem outside normal file status.
     pub fn record_operational_problem(&mut self, mut problem: OperationalProblem) {
         problem.normalize();
         self.operational_problems
             .insert(problem.id.clone(), problem);
     }
 
+    /// Marks a path uncovered unless it already has a conclusive disposition.
     pub fn record_uncovered(&mut self, path: impl Into<PathBuf>) {
         let path = path.into();
         if !self.files.contains_key(&path) && !self.not_applicable_files.contains(&path) {
@@ -291,6 +377,7 @@ impl DeferredRunResult {
         }
     }
 
+    /// Marks a path not applicable and removes competing normal dispositions.
     pub fn record_not_applicable(&mut self, path: impl Into<PathBuf>) {
         let path = path.into();
         self.files.remove(&path);
@@ -298,10 +385,12 @@ impl DeferredRunResult {
         self.not_applicable_files.insert(path);
     }
 
+    /// Records a candidate-discovery or scope-materialization gap.
     pub fn record_coverage_gap(&mut self, gap: CoverageGap) {
         self.coverage_gaps.insert(gap.id.clone(), gap);
     }
 
+    /// Records an artifact after normalizing its path collections.
     pub fn record_artifact(&mut self, mut artifact: RunArtifact) {
         sort_paths(&mut artifact.files);
         sort_paths(&mut artifact.candidate_files);
@@ -309,12 +398,14 @@ impl DeferredRunResult {
         self.artifacts.insert(artifact.id.clone(), artifact);
     }
 
+    /// Returns whether any file still needs manual fixes.
     pub fn has_manual_fixes(&self) -> bool {
         self.files
             .values()
             .any(|file| file.status == FileStatus::ManualFixesNeeded)
     }
 
+    /// Returns whether the run encountered any operational problem.
     pub fn has_operational_problems(&self) -> bool {
         !self.operational_problems.is_empty()
     }

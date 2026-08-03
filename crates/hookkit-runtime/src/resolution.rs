@@ -4,53 +4,89 @@ use hookkit_core::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Executable event resolution result.
 pub struct ResolvedEvent {
+    /// Exact event selected for decoding.
     pub event: EventId,
+    /// Event/binding contract that emission must preserve.
     pub contract: ContractId,
+    /// Immutable catalog snapshot associated with the event.
     pub snapshot: SnapshotId,
+    /// Evidence by which the event was selected.
     pub provenance: ResolutionProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// One possible event reported by best-effort inspection.
 pub struct DetectedCandidate {
+    /// Exact candidate event.
     pub event: EventId,
+    /// Catalog-declared strength of its identification shape.
     pub strength: IdentificationStrength,
+    /// Evidence observed in this invocation.
     pub evidence: DetectionEvidence,
+    /// Known event-shape overlaps from the descriptor.
     pub overlaps: Vec<EventId>,
+    /// Whether an exact native parser is available for validation/execution.
     pub native_parser: bool,
 }
 
+/// Evidence that caused a candidate to appear in a detection report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetectionEvidence {
-    Discriminator { pointer: String, value: String },
+    /// A documented string discriminator matched.
+    Discriminator {
+        /// JSON pointer used by the descriptor.
+        pointer: String,
+        /// Expected discriminator value that was observed.
+        value: String,
+    },
+    /// The candidate's exact native parser accepted the payload.
     NativeParserAccepted,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Optional harness/event filters for best-effort detection.
 pub struct DetectionConstraints {
+    /// Restrict reported candidates to this harness.
     pub harness: Option<HarnessId>,
+    /// Restrict reported candidates to this exact event.
     pub event: Option<EventId>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Non-executable result of best-effort event inspection.
 pub struct DetectionReport {
+    /// Candidates consistent with the requested constraints.
     pub candidates: Vec<DetectedCandidate>,
+    /// Whether candidate evidence is insufficient for unique safe selection.
     pub ambiguous: bool,
+    /// Constraint contradictions: either the supplied `harness` and `event`
+    /// constraints are mutually inconsistent, or authoritative (discriminator)
+    /// or sound-shape payload evidence identifies an event outside the supplied
+    /// constraints.
     pub constraint_mismatches: Vec<String>,
+    /// Exact parser failures collected while inspecting descriptors.
     pub validation_failures: Vec<(EventId, String)>,
 }
 
+/// Reusable best-effort detector backed by identification descriptors.
+///
+/// Detection reports evidence but never authorize execution; use
+/// [`resolve_event`] for checked runtime selection.
 pub struct Detector {
     descriptors: Vec<IdentificationDescriptor>,
 }
 
 impl Detector {
+    /// Creates a detector containing every built-in harness descriptor.
     pub fn builtins() -> Self {
         Self {
             descriptors: builtin_descriptors(),
         }
     }
 
+    /// Creates a detector from an application-supplied descriptor registry.
     pub fn new(descriptors: Vec<IdentificationDescriptor>) -> Self {
         Self { descriptors }
     }
@@ -65,6 +101,7 @@ impl Detector {
     }
 }
 
+/// Collects identification descriptors from all built-in harness adapters.
 pub fn builtin_descriptors() -> Vec<IdentificationDescriptor> {
     let mut descriptors = Vec::new();
     descriptors.extend(hookkit_claude::protocol::identification_descriptors());
@@ -74,6 +111,7 @@ pub fn builtin_descriptors() -> Vec<IdentificationDescriptor> {
     descriptors
 }
 
+/// Resolves an executable event using the complete built-in registry.
 pub fn resolve_builtin_event(
     harness: HarnessId,
     invocation: &RawInvocation,
@@ -82,6 +120,13 @@ pub fn resolve_builtin_event(
     resolve_event(&builtin_descriptors(), harness, invocation, hint)
 }
 
+/// Selects and validates one executable native event.
+///
+/// A hint must belong to `harness`, name a registered event with a native
+/// parser, agree with any authoritative discriminator, and pass that parser.
+/// Without a hint, authoritative discriminators take priority, followed by one
+/// unique sound-shape parser. Other parser matches are reported as ambiguous;
+/// weak or catalog-only shape evidence never authorizes execution.
 pub fn resolve_event(
     registry: &[IdentificationDescriptor],
     harness: HarnessId,
@@ -185,6 +230,11 @@ pub fn resolve_event(
     }
 }
 
+/// Inspects an invocation for possible events without authorizing execution.
+///
+/// Parser failures and constraint contradictions are retained in the report.
+/// `ambiguous` is true for multiple candidates, weak/ambiguous candidates, or
+/// a candidate with declared overlaps—even if only one candidate is listed.
 pub fn detect_candidates(
     registry: &[IdentificationDescriptor],
     invocation: &RawInvocation,

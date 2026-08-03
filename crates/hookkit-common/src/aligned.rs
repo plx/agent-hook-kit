@@ -1,3 +1,5 @@
+//! Lossless cross-harness wrappers for semantically aligned lifecycle events.
+
 use hookkit_core::{EventId, EventSpec, HarnessId, HookkitError, Utf8Path};
 use std::borrow::Cow;
 
@@ -5,13 +7,18 @@ use std::borrow::Cow;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PreToolUseCommandEnvironment {
+    /// Claude Code's native command environment.
     Claude(hookkit_claude::ClaudeCommandEnvironment),
+    /// Codex's native command environment.
     Codex(hookkit_codex::CodexCommandEnvironment),
+    /// Gemini CLI's native command environment.
     Gemini(hookkit_gemini::GeminiCommandEnvironment),
+    /// Antigravity's native command environment.
     Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
 }
 
 impl PreToolUseCommandEnvironment {
+    /// Returns the harness represented by this environment arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -29,11 +36,14 @@ impl PreToolUseCommandEnvironment {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum ToolInputRef<'a> {
+    /// An arbitrary native JSON value, which may or may not be an object.
     Value(&'a serde_json::Value),
+    /// A native JSON object guaranteed by the harness contract.
     Object(&'a serde_json::Map<String, serde_json::Value>),
 }
 
 impl<'a> ToolInputRef<'a> {
+    /// Returns an object member, or `None` when a value arm is not an object.
     pub fn get(self, key: &str) -> Option<&'a serde_json::Value> {
         match self {
             Self::Value(value) => value.get(key),
@@ -41,6 +51,7 @@ impl<'a> ToolInputRef<'a> {
         }
     }
 
+    /// Returns the input as an object when its native representation permits.
     pub fn as_object(self) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
         match self {
             Self::Value(value) => value.as_object(),
@@ -57,13 +68,18 @@ impl<'a> ToolInputRef<'a> {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PreToolUseInput {
+    /// Claude Code's native `PreToolUse` input.
     Claude(hookkit_claude::catalog::CatalogInput),
+    /// Codex's native `PreToolUse` input.
     Codex(hookkit_codex::protocol::PreToolUseInput),
+    /// Gemini CLI's native `BeforeTool` input.
     Gemini(hookkit_gemini::protocol::BeforeToolInput),
+    /// Antigravity's native `PreToolUse` input.
     Antigravity(hookkit_antigravity::PreToolUseInput),
 }
 
 impl PreToolUseInput {
+    /// Returns the harness represented by this input arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -73,6 +89,7 @@ impl PreToolUseInput {
         }
     }
 
+    /// Returns the exact native event represented by this input arm.
     pub fn event_id(&self) -> EventId {
         match self {
             Self::Claude(_) => hookkit_claude::catalog::PreToolUse::EVENT,
@@ -82,6 +99,10 @@ impl PreToolUseInput {
         }
     }
 
+    /// Returns workspace roots explicitly supplied by the native input.
+    ///
+    /// Single-working-directory harnesses require a one-element allocation;
+    /// Antigravity's native root slice is borrowed.
     pub fn workspace_roots(&self) -> Cow<'_, [hookkit_core::Utf8PathBuf]> {
         match self {
             Self::Claude(input) => Cow::Owned(vec![input.cwd.clone()]),
@@ -129,9 +150,13 @@ impl PreToolUseInput {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PreToolUseOutput {
+    /// Claude Code's native `PreToolUse` output.
     Claude(hookkit_claude::catalog::PreToolUseOutput),
+    /// Codex's native `PreToolUse` output.
     Codex(hookkit_codex::protocol::PreToolUseOutput),
+    /// Gemini CLI's native `BeforeTool` output.
     Gemini(hookkit_gemini::protocol::BeforeToolOutput),
+    /// Antigravity's native `PreToolUse` output.
     Antigravity(hookkit_antigravity::PreToolUseOutput),
 }
 
@@ -189,6 +214,7 @@ impl PreToolUseOutput {
         }
     }
 
+    /// Returns the harness represented by this output arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -198,6 +224,7 @@ impl PreToolUseOutput {
         }
     }
 
+    /// Returns the exact native event represented by this output arm.
     pub fn event_id(&self) -> EventId {
         match self {
             Self::Claude(_) => hookkit_claude::catalog::PreToolUse::EVENT,
@@ -219,13 +246,18 @@ fn unsupported_pre_tool_harness(harness: &HarnessId) -> HookkitError {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PostToolUseCommandEnvironment {
+    /// Claude Code's native command environment.
     Claude(hookkit_claude::ClaudeCommandEnvironment),
+    /// Codex's native command environment.
     Codex(hookkit_codex::CodexCommandEnvironment),
+    /// Gemini CLI's native command environment.
     Gemini(hookkit_gemini::GeminiCommandEnvironment),
+    /// Antigravity's native command environment.
     Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
 }
 
 impl PostToolUseCommandEnvironment {
+    /// Returns the harness represented by this environment arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -240,13 +272,18 @@ impl PostToolUseCommandEnvironment {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PostToolUseInput {
+    /// Claude Code's native `PostToolUse` input.
     Claude(hookkit_claude::protocol::PostToolUseInput),
+    /// Codex's native `PostToolUse` input.
     Codex(hookkit_codex::protocol::PostToolUseInput),
+    /// Gemini CLI's native `AfterTool` input.
     Gemini(hookkit_gemini::protocol::AfterToolInput),
+    /// Antigravity's native `PostToolUse` input.
     Antigravity(hookkit_antigravity::PostToolUseInput),
 }
 
 impl PostToolUseInput {
+    /// Returns the harness represented by this input arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -256,6 +293,7 @@ impl PostToolUseInput {
         }
     }
 
+    /// Returns the exact native event represented by this input arm.
     pub fn event_id(&self) -> EventId {
         match self {
             Self::Claude(_) => hookkit_claude::protocol::PostToolUse::EVENT,
@@ -265,6 +303,7 @@ impl PostToolUseInput {
         }
     }
 
+    /// Returns workspace roots explicitly supplied by the native input.
     pub fn workspace_roots(&self) -> Cow<'_, [hookkit_core::Utf8PathBuf]> {
         match self {
             Self::Claude(input) => Cow::Owned(vec![input.cwd.clone()]),
@@ -279,9 +318,13 @@ impl PostToolUseInput {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PostToolUseOutput {
+    /// Claude Code's native `PostToolUse` output.
     Claude(hookkit_claude::protocol::PostToolUseOutput),
+    /// Codex's native `PostToolUse` output.
     Codex(hookkit_codex::protocol::PostToolUseOutput),
+    /// Gemini CLI's native `AfterTool` output.
     Gemini(hookkit_gemini::protocol::AfterToolOutput),
+    /// Antigravity's native `PostToolUse` output.
     Antigravity(hookkit_antigravity::PostToolUseOutput),
 }
 
@@ -289,13 +332,18 @@ pub enum PostToolUseOutput {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TurnCompletionCommandEnvironment {
+    /// Claude Code's native command environment.
     Claude(hookkit_claude::ClaudeCommandEnvironment),
+    /// Codex's native command environment.
     Codex(hookkit_codex::CodexCommandEnvironment),
+    /// Gemini CLI's native command environment.
     Gemini(hookkit_gemini::GeminiCommandEnvironment),
+    /// Antigravity's native command environment.
     Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
 }
 
 impl TurnCompletionCommandEnvironment {
+    /// Returns the harness represented by this environment arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -313,13 +361,18 @@ impl TurnCompletionCommandEnvironment {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TurnCompletionInput {
+    /// Claude Code's native `Stop` input.
     Claude(hookkit_claude::catalog::CatalogInput),
+    /// Codex's native `Stop` input.
     Codex(hookkit_codex::catalog::CatalogInput),
+    /// Gemini CLI's native `AfterAgent` input.
     Gemini(hookkit_gemini::catalog::CatalogInput),
+    /// Antigravity's native `Stop` input.
     Antigravity(hookkit_antigravity::StopInput),
 }
 
 impl TurnCompletionInput {
+    /// Returns the harness represented by this input arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -329,6 +382,7 @@ impl TurnCompletionInput {
         }
     }
 
+    /// Returns the exact native event represented by this input arm.
     pub fn event_id(&self) -> EventId {
         match self {
             Self::Claude(_) => hookkit_claude::catalog::Stop::EVENT,
@@ -338,6 +392,7 @@ impl TurnCompletionInput {
         }
     }
 
+    /// Returns workspace roots explicitly supplied by the native input.
     pub fn workspace_roots(&self) -> Cow<'_, [hookkit_core::Utf8PathBuf]> {
         match self {
             Self::Claude(input) => Cow::Owned(vec![input.cwd.clone()]),
@@ -352,13 +407,18 @@ impl TurnCompletionInput {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TurnCompletionOutput {
+    /// Claude Code's native `Stop` output.
     Claude(hookkit_claude::catalog::StopOutput),
+    /// Codex's native `Stop` output.
     Codex(hookkit_codex::catalog::StopOutput),
+    /// Gemini CLI's native `AfterAgent` output.
     Gemini(hookkit_gemini::catalog::AfterAgentOutput),
+    /// Antigravity's native `Stop` output.
     Antigravity(hookkit_antigravity::StopOutput),
 }
 
 impl TurnCompletionOutput {
+    /// Returns the harness represented by this output arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -368,6 +428,7 @@ impl TurnCompletionOutput {
         }
     }
 
+    /// Returns the exact native event represented by this output arm.
     pub fn event_id(&self) -> EventId {
         match self {
             Self::Claude(_) => hookkit_claude::catalog::Stop::EVENT,
@@ -379,6 +440,7 @@ impl TurnCompletionOutput {
 }
 
 impl PostToolUseOutput {
+    /// Returns the harness represented by this output arm.
     pub fn harness(&self) -> HarnessId {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
@@ -388,6 +450,7 @@ impl PostToolUseOutput {
         }
     }
 
+    /// Returns the exact native event represented by this output arm.
     pub fn event_id(&self) -> EventId {
         match self {
             Self::Claude(_) => hookkit_claude::protocol::PostToolUse::EVENT,

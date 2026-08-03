@@ -19,10 +19,12 @@ const BOUNDARY_COALESCE_WINDOW: Duration = Duration::from_secs(30);
 pub struct UtcTimestamp(i128);
 
 impl UtcTimestamp {
+    /// Captures the current system clock time.
     pub fn now() -> Self {
         Self::from_system_time(SystemTime::now())
     }
 
+    /// Converts a [`SystemTime`] without losing subsecond precision.
     pub fn from_system_time(value: SystemTime) -> Self {
         match value.duration_since(UNIX_EPOCH) {
             Ok(duration) => Self(duration.as_nanos() as i128),
@@ -30,6 +32,7 @@ impl UtcTimestamp {
         }
     }
 
+    /// Converts this timestamp back to [`SystemTime`].
     pub fn as_system_time(self) -> SystemTime {
         if self.0 >= 0 {
             UNIX_EPOCH + nanos_duration(self.0 as u128)
@@ -38,10 +41,14 @@ impl UtcTimestamp {
         }
     }
 
+    /// Returns whole milliseconds relative to the Unix epoch, truncating any
+    /// fractional millisecond toward zero.
     pub fn unix_milliseconds(self) -> i128 {
         self.0 / 1_000_000
     }
 
+    /// Parses an RFC 3339 timestamp, returning `None` for invalid or
+    /// out-of-range input.
     pub fn parse_rfc3339(value: &str) -> Option<Self> {
         OffsetDateTime::parse(value, &Rfc3339)
             .ok()
@@ -85,30 +92,45 @@ fn nanos_duration(value: u128) -> Duration {
     Duration::new(seconds, nanos)
 }
 
+/// Origin of a timestamp retained in automatic session metadata.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TimestampProvenance {
+    /// Timestamp supplied explicitly by a native lifecycle event.
     NativeEventTimestamp,
+    /// Local observation time of a native lifecycle hook.
     LifecycleHookObservation,
+    /// Local observation time of an inferred invocation-number boundary.
     InferredInvocationBoundary,
+    /// Fallback time when the session was first observed by any hook.
     FirstHookObservation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+/// Timestamp paired with evidence describing how it was obtained.
 pub struct CapturedTimestamp {
+    /// Captured UTC instant.
     pub at: UtcTimestamp,
+    /// Source of the instant.
     pub provenance: TimestampProvenance,
 }
 
+/// Cause of a versioned native session epoch.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionEpochKind {
+    /// A newly started native session.
     Startup,
+    /// A previously persisted native session resumed.
     Resume,
+    /// The conversation context was cleared.
     Clear,
+    /// The conversation context was compacted.
     Compact,
+    /// The first invocation in an invocation-numbered harness session.
     InvocationStart,
+    /// No explicit lifecycle boundary existed; this is the first observation.
     FirstObservedFallback,
 }
 
@@ -127,25 +149,38 @@ impl From<SessionBoundaryKind> for SessionEpochKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+/// Timing metadata for the stable conversation identity.
 pub struct ConversationMetadata {
+    /// Best available conversation start time and its provenance.
     pub started_at: CapturedTimestamp,
+    /// First time any hookkit process observed the conversation.
     pub first_observed_at: UtcTimestamp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+/// Metadata for the current lifecycle epoch within a conversation.
 pub struct SessionEpochMetadata {
+    /// Content-derived epoch identifier.
     pub id: String,
+    /// Lifecycle event that began the epoch.
     pub kind: SessionEpochKind,
+    /// Best available epoch start time and its provenance.
     pub started_at: CapturedTimestamp,
+    /// First local observation associated with this epoch.
     pub first_observed_at: UtcTimestamp,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+/// Project context aggregated from native hook input.
 pub struct ProjectMetadata {
+    /// Deduplicated union of every workspace root observed across all
+    /// observations (sorted), not just the most recent observation.
     pub workspace_roots: Vec<Utf8PathBuf>,
+    /// Native transcript path, when supplied.
     pub transcript_path: Option<Utf8PathBuf>,
+    /// Native artifact directory, when supplied.
     pub artifact_directory: Option<Utf8PathBuf>,
 }
 
@@ -154,12 +189,21 @@ pub struct ProjectMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMetadata {
+    /// On-disk metadata schema version.
     pub schema_version: u32,
+    /// Stable harness identity string.
     pub harness: String,
+    /// Identity namespace (`session` or `conversation`).
     pub identity_kind: String,
+    /// SHA-256 digest of the harness identifier, identity namespace, and opaque
+    /// native identity value (joined by NUL bytes); this is also the on-disk
+    /// session directory key.
     pub identity_hash: String,
+    /// Conversation-wide timing metadata.
     pub conversation: ConversationMetadata,
+    /// Current lifecycle epoch.
     pub current_session: SessionEpochMetadata,
+    /// Latest observed project context.
     pub project: ProjectMetadata,
 }
 

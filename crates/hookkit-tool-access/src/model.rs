@@ -9,16 +9,24 @@ use std::fmt;
 pub enum AccessIntent {
     /// A path reference was observed but its access semantics are unknown.
     Unclassified,
+    /// Reads contents or metadata.
     Read,
+    /// Creates or changes a target without necessarily reading it.
     Modify,
+    /// Both reads and changes a target.
     ReadModify,
+    /// Lists a target or its children.
     Enumerate,
+    /// Removes a target.
     Delete,
+    /// Reads and removes the source of a move.
     MoveSource,
+    /// Creates or replaces the destination of a move.
     MoveDestination,
 }
 
 impl AccessIntent {
+    /// Returns whether the intent includes a read-like operation.
     pub const fn may_read(self) -> bool {
         matches!(
             self,
@@ -26,6 +34,7 @@ impl AccessIntent {
         )
     }
 
+    /// Returns whether the intent includes a mutating operation.
     pub const fn may_modify(self) -> bool {
         matches!(
             self,
@@ -42,8 +51,11 @@ impl AccessIntent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AccessCertainty {
+    /// Directly identified by syntax or explicit tool semantics.
     Direct,
+    /// Directly identified, but located in conditional or deferred shell code.
     Conditional,
+    /// Conservatively inferred and potentially over-inclusive.
     Heuristic,
 }
 
@@ -51,17 +63,27 @@ pub enum AccessCertainty {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum PathBase {
+    /// The raw expression is already absolute.
     Absolute,
+    /// The expression is relative to the invocation's initial working directory.
     InvocationCwd,
+    /// A preceding directory change makes the runtime base unknowable.
     UnknownAfterDirectoryChange,
+    /// The invocation omitted a working directory for a relative expression.
     MissingWorkingDirectory,
 }
 
 /// A raw path and any justified lexical resolution.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PathExpression {
+    /// Path text retained from the observable input.
     pub raw: String,
+    /// Lexically normalized path when a stable base is available.
+    ///
+    /// This value is not filesystem-canonicalized and does not imply that the
+    /// target exists.
     pub resolved: Option<Utf8PathBuf>,
+    /// Basis used, or needed, to interpret `raw`.
     pub base: PathBase,
 }
 
@@ -69,9 +91,14 @@ pub struct PathExpression {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum AccessScope {
+    /// Only the named path.
     Exact,
+    /// All descendants of the named directory (recursively), excluding the
+    /// directory itself.
     Descendants,
+    /// The named path and, when applicable, its descendants.
     ExactOrDescendants,
+    /// Paths selected by a glob expression.
     Glob,
 }
 
@@ -79,11 +106,16 @@ pub enum AccessScope {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum AccessTarget {
+    /// A path expression with an explicit match scope.
     Path {
+        /// Original expression and any lexical resolution.
         expression: PathExpression,
+        /// Portion of the file tree selected by the expression.
         scope: AccessScope,
     },
+    /// One observable workspace as a whole.
     Workspace {
+        /// Workspace root, or `None` when no root was observable.
         root: Option<Utf8PathBuf>,
     },
 }
@@ -92,7 +124,9 @@ pub enum AccessTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StructuredFieldMatch {
+    /// Selected by an explicitly configured JSON Pointer.
     ExactPointer,
+    /// Selected because the object's key appears in the configured key set.
     KeyHeuristic,
 }
 
@@ -109,12 +143,21 @@ impl fmt::Display for StructuredFieldMatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PatchOperation {
+    /// Adds a new file.
     Add,
+    /// Updates an existing file.
     Update,
+    /// Deletes an existing file.
     Delete,
+    /// Reads and removes the old path of a move.
     MoveSource,
+    /// Creates the new path of a move.
     MoveDestination,
+    /// The old path named by an orphaned unified-diff `---` header (one with no
+    /// matching `+++`); its access role is recorded as
+    /// [`AccessIntent::Unclassified`] because it cannot be determined.
     UnifiedOld,
+    /// Writes the new path named by a unified-diff header.
     UnifiedNew,
 }
 
@@ -137,37 +180,65 @@ impl fmt::Display for PatchOperation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AccessProvenance {
+    /// A path-bearing structured input field.
     StructuredField {
+        /// RFC 6901 JSON Pointer to the value.
         pointer: String,
+        /// Configuration mechanism that selected the value.
         matched_by: StructuredFieldMatch,
     },
+    /// A path recovered from a standalone patch-tool payload.
     Patch {
+        /// JSON Pointer to the patch string.
         payload_pointer: String,
+        /// Patch role assigned to the path.
         operation: PatchOperation,
+        /// Patch header marker that introduced the path (e.g. `*** Update File`,
+        /// `*** Add File`, `---`, or `+++`); the path itself lives in the
+        /// candidate's [`AccessTarget`], not in this field.
         header: String,
+        /// One-based line number in the patch payload.
         line: usize,
     },
+    /// A path inferred from shell syntax or argv semantics.
     Shell {
+        /// Shell syntax or argv location that supplied the path.
         origin: FileAccessOrigin,
+        /// Byte and source position span of the containing command.
         command_span: SourceSpan,
+        /// Stable identifier of the semantics implementation.
         inferred_by: String,
     },
+    /// A path recovered from an `apply_patch` shell here-document.
     ShellPatch {
+        /// Zero-based command index in the Bash analysis.
         command_index: usize,
+        /// Span of the containing `apply_patch` command.
         command_span: SourceSpan,
+        /// Span of the here-document body.
         heredoc_span: SourceSpan,
+        /// Literal here-document delimiter.
         delimiter: String,
+        /// Patch role assigned to the path.
         operation: PatchOperation,
+        /// Patch header marker that introduced the path (e.g. `*** Update File`,
+        /// `*** Add File`, `---`, or `+++`); the path itself lives in the
+        /// candidate's [`AccessTarget`], not in this field.
         header: String,
+        /// One-based line number in the patch body.
         line: usize,
     },
+    /// Evidence emitted by an application-defined analyzer.
     Custom {
+        /// Stable analyzer identifier.
         analyzer: String,
+        /// Optional human-readable origin detail.
         detail: Option<String>,
     },
 }
 
 impl AccessProvenance {
+    /// Returns the top-level analyzer source represented by this provenance.
     pub const fn source(&self) -> AccessSource {
         match self {
             Self::StructuredField { .. } => AccessSource::Structured,
@@ -228,9 +299,13 @@ impl fmt::Display for AccessProvenance {
 /// One possible file access recovered from observable tool-call data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessCandidate {
+    /// Path or workspace region that may be accessed.
     pub target: AccessTarget,
+    /// Operation that may be performed on the target.
     pub intent: AccessIntent,
+    /// Strength of the static association.
     pub certainty: AccessCertainty,
+    /// Detailed origin of the evidence.
     pub provenance: AccessProvenance,
 }
 
@@ -238,9 +313,13 @@ pub struct AccessCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AccessSource {
+    /// Structured JSON fields.
     Structured,
+    /// Literal patch payloads.
     Patch,
+    /// Shell syntax, command semantics, or shell patch payloads.
     Shell,
+    /// An application-defined analyzer.
     Custom,
 }
 
@@ -248,49 +327,86 @@ pub enum AccessSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ToolAccessGapReason {
+    /// The native event omits its originating tool call.
     MissingToolCall,
+    /// A newer or application-defined aligned input arm was encountered.
     UnknownInputArm,
+    /// The native tool name is absent or not a string.
     MissingToolName,
+    /// The native tool input is absent.
     MissingToolInput,
+    /// A recognized shell call does not match its configured JSON shape.
     MalformedShellCall(hookkit_shell::ShellToolCallError),
+    /// Shell analysis retained a specific unresolved effect.
     ShellUnresolved(UnresolvedFileAccess),
+    /// Shell extraction returned an unknown future evidence arm.
     UnsupportedShellEvidence,
+    /// A relative path cannot be resolved without an invocation directory.
     MissingWorkingDirectory {
+        /// Raw relative path.
         raw: String,
+        /// Location of the raw path: an RFC 6901 JSON Pointer for structured
+        /// input or a patch payload field (e.g. `/patch`, `/input`), or the
+        /// literal sentinel `"<shell-heredoc>"` for a path recovered from a
+        /// shell `apply_patch` here-document; `None` when no location is known.
         pointer: Option<String>,
     },
+    /// A configured structured path value is neither a string nor string array.
     PathValueNotString {
+        /// JSON Pointer to the invalid value.
         pointer: String,
     },
+    /// No built-in structured semantics recognize the tool.
     UnknownStructuredTool {
+        /// Native tool name.
         tool_name: String,
     },
+    /// A path was found but its read/write role remains unknown.
     UnclassifiedAccess {
+        /// Native tool name.
         tool_name: String,
+        /// JSON Pointer to the path.
         pointer: String,
     },
+    /// A recognized structured tool exposed no configured path value.
     RecognizedToolWithoutPath {
+        /// Native tool name.
         tool_name: String,
     },
+    /// A recognized patch tool exposed no supported payload field.
     MissingPatchPayload {
+        /// Native tool name.
         tool_name: String,
     },
+    /// The selected patch payload is not a string.
     PatchPayloadNotString {
+        /// JSON Pointer to the invalid payload.
         pointer: String,
     },
+    /// A literal patch payload is malformed or incomplete.
     MalformedPatch {
+        /// One-based source line, when the parser can localize the error.
         line: Option<usize>,
+        /// Human-readable parse failure.
         detail: String,
     },
+    /// An `apply_patch` here-document uses expansions or other dynamic syntax.
     DynamicShellPatchHereDocument {
+        /// Span of the containing shell command.
         command_span: SourceSpan,
+        /// Recovered here-document delimiter.
         delimiter: String,
+        /// Constructs that make the body dynamic.
         reasons: Vec<hookkit_shell::DynamicReason>,
     },
+    /// An `apply_patch` command has no observable here-document body.
     MissingShellPatchHereDocument {
+        /// Span of the containing shell command.
         command_span: SourceSpan,
     },
+    /// A directory-changing command precedes the shell patch.
     ShellPatchWorkingDirectoryMayHaveChanged {
+        /// Span of the containing `apply_patch` command.
         command_span: SourceSpan,
     },
 }
@@ -298,7 +414,9 @@ pub enum ToolAccessGapReason {
 /// One known blind spot retained alongside safely recovered candidates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolAccessGap {
+    /// Top-level analyzer that encountered the gap.
     pub source: AccessSource,
+    /// Specific reason analysis is incomplete.
     pub reason: ToolAccessGapReason,
 }
 
@@ -440,23 +558,31 @@ fn write_shell_gap(
 /// All retained evidence and typed gaps for one observable tool call.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolAccessReport {
+    /// Safely recovered possible accesses.
     pub candidates: Vec<AccessCandidate>,
+    /// Known blind spots retained alongside the candidates.
     pub gaps: Vec<ToolAccessGap>,
 }
 
 impl ToolAccessReport {
+    /// Iterates over candidates whose intent may read data.
     pub fn may_read(&self) -> impl Iterator<Item = &AccessCandidate> {
         self.candidates
             .iter()
             .filter(|candidate| candidate.intent.may_read())
     }
 
+    /// Iterates over candidates whose intent may modify data.
     pub fn may_modify(&self) -> impl Iterator<Item = &AccessCandidate> {
         self.candidates
             .iter()
             .filter(|candidate| candidate.intent.may_modify())
     }
 
+    /// Returns whether there are no known gaps or unclassified candidates.
+    ///
+    /// Completeness is relative to observable input and the configured static
+    /// analyzers; it is not a guarantee that a process performs no other I/O.
     pub fn is_complete(&self) -> bool {
         self.gaps.is_empty()
             && self

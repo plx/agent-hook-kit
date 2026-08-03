@@ -10,14 +10,25 @@ use std::collections::BTreeMap;
 use crate::{CodexCommandEnvironment, protocol::SNAPSHOT_ID};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Shared native input envelope for implemented Codex catalog events.
+///
+/// Event-specific and unknown fields are retained losslessly in the flattened
+/// field map and can be accessed through [`Self::field`] or [`Self::fields`].
 pub struct CatalogInput {
+    /// Native session identifier.
     pub session_id: String,
+    /// Transcript path; required by implemented parsers but allowed to be null.
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
+    /// Current workspace directory.
     pub cwd: hookkit_core::Utf8PathBuf,
+    /// Authoritative native event discriminator.
     pub hook_event_name: String,
+    /// Model configured for the event's turn.
     pub model: String,
+    /// Native turn identifier when the event carries one.
     #[serde(default)]
     pub turn_id: Option<String>,
+    /// Active permission policy when the event carries one.
     #[serde(default)]
     pub permission_mode: Option<crate::protocol::PermissionMode>,
     #[serde(flatten)]
@@ -25,10 +36,12 @@ pub struct CatalogInput {
 }
 
 impl CatalogInput {
+    /// Returns one event-specific or unknown top-level field.
     pub fn field(&self, name: &str) -> Option<&serde_json::Value> {
         self.fields.get(name)
     }
 
+    /// Returns all event-specific and unknown top-level fields.
     pub fn fields(&self) -> &BTreeMap<String, serde_json::Value> {
         &self.fields
     }
@@ -86,6 +99,10 @@ enum Outcome {
 }
 
 #[derive(Debug, Clone)]
+/// Type-erased output used by Codex catalog event wrappers.
+///
+/// Public event-specific output types are the intended constructors. This type
+/// exists so dynamic harness dispatch can retain the exact event arm.
 pub struct CatalogOutput {
     event: &'static str,
     outcome: Outcome,
@@ -189,6 +206,7 @@ fn block(reason: impl Into<String>) -> serde_json::Value {
 
 macro_rules! event_spec {
     ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
+        #[doc = concat!("Native Codex `", $name, "` command contract.")]
         pub enum $event {}
 
         impl EventSpec for $event {
@@ -232,28 +250,36 @@ macro_rules! event_spec {
 macro_rules! common_controls {
     ($output:ident, $name:literal) => {
         impl $output {
+            /// Creates an empty structured response.
             pub fn no_op() -> Self {
                 Self(CatalogOutput::json($name, serde_json::json!({})))
             }
 
+            /// Sets the top-level `continue` control.
+            ///
+            /// Returns an error if the response was constructed as text or a
+            /// blocking stderr outcome.
             pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("continue", continue_session.into())
                     .map(Self)
             }
 
+            /// Sets the top-level stop reason on a structured response.
             pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("stopReason", reason.into().into())
                     .map(Self)
             }
 
+            /// Sets whether Codex suppresses ordinary hook output.
             pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("suppressOutput", suppress.into())
                     .map(Self)
             }
 
+            /// Sets a top-level system message on a structured response.
             pub fn with_system_message(
                 self,
                 message: impl Into<String>,
@@ -267,9 +293,11 @@ macro_rules! common_controls {
 }
 
 #[derive(Debug, Clone)]
+/// Native response from a Codex permission-request command hook.
 pub struct PermissionRequestOutput(CatalogOutput);
 
 impl PermissionRequestOutput {
+    /// Creates a structured permission denial with a user-facing message.
     pub fn deny(message: impl Into<String>) -> Self {
         Self(CatalogOutput::json(
             "PermissionRequest",
@@ -282,6 +310,7 @@ impl PermissionRequestOutput {
         ))
     }
 
+    /// Creates a structured permission approval.
     pub fn allow() -> Self {
         Self(CatalogOutput::json(
             "PermissionRequest",
@@ -292,6 +321,7 @@ impl PermissionRequestOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("PermissionRequest", message))
     }
@@ -306,6 +336,7 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Codex post-compaction command hook.
 pub struct PostCompactOutput(CatalogOutput);
 
 common_controls!(PostCompactOutput, "PostCompact");
@@ -318,9 +349,11 @@ event_spec!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Codex pre-compaction command hook.
 pub struct PreCompactOutput(CatalogOutput);
 
 impl PreCompactOutput {
+    /// Stops compaction with a structured reason.
     pub fn stop(reason: impl Into<String>) -> Self {
         Self(CatalogOutput::json(
             "PreCompact",
@@ -328,6 +361,7 @@ impl PreCompactOutput {
         ))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("PreCompact", message))
     }
@@ -344,9 +378,11 @@ event_spec!(
 macro_rules! context_text_event {
     ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
+        #[doc = concat!("Native response from a Codex `", $name, "` command hook.")]
         pub struct $output(CatalogOutput);
 
         impl $output {
+            /// Creates a structured response that appends agent context.
             pub fn with_context(additional_context: impl Into<String>) -> Self {
                 Self(CatalogOutput::json(
                     $name,
@@ -354,6 +390,7 @@ macro_rules! context_text_event {
                 ))
             }
 
+            /// Creates a successful plain-text context response.
             pub fn text_context(context: impl Into<String>) -> Self {
                 Self(CatalogOutput::text($name, context))
             }
@@ -383,13 +420,16 @@ context_text_event!(
 macro_rules! blocking_event {
     ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
         #[derive(Debug, Clone)]
+        #[doc = concat!("Native response from a Codex `", $name, "` command hook.")]
         pub struct $output(CatalogOutput);
 
         impl $output {
+            /// Creates a structured legacy block response.
             pub fn block(reason: impl Into<String>) -> Self {
                 Self(CatalogOutput::json($name, block(reason)))
             }
 
+            /// Creates a code-2 blocking response with required stderr text.
             pub fn blocking_error(message: impl Into<String>) -> Self {
                 Self(CatalogOutput::blocking($name, message))
             }
@@ -430,9 +470,11 @@ blocking_event!(
 );
 
 #[derive(Debug, Clone)]
+/// Native response from a Codex user-prompt-submit command hook.
 pub struct UserPromptSubmitOutput(CatalogOutput);
 
 impl UserPromptSubmitOutput {
+    /// Blocks the prompt while also appending context for the agent.
     pub fn block_with_context(
         reason: impl Into<String>,
         additional_context: impl Into<String>,
@@ -448,10 +490,12 @@ impl UserPromptSubmitOutput {
         Self(CatalogOutput::json("UserPromptSubmit", value))
     }
 
+    /// Creates a successful plain-text context response.
     pub fn text_context(context: impl Into<String>) -> Self {
         Self(CatalogOutput::text("UserPromptSubmit", context))
     }
 
+    /// Creates a code-2 blocking response with required stderr text.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self(CatalogOutput::blocking("UserPromptSubmit", message))
     }
@@ -465,6 +509,7 @@ event_spec!(
     ["turn_id", "permission_mode", "prompt"]
 );
 
+/// Returns every native command implementation defined in this catalog module.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     vec![
         hookkit_core::NativeEventDescriptor::command::<PermissionRequest>(&[
@@ -491,6 +536,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     ]
 }
 
+/// Returns definitive discriminator metadata for catalog-module events.
 pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescriptor> {
     vec![
         hookkit_core::IdentificationDescriptor::definitive::<PermissionRequest>(
@@ -525,6 +571,10 @@ pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescripto
     ]
 }
 
+/// Decodes a catalog-module event.
+///
+/// Returns `Ok(None)` when `event` is not implemented by this module. A known
+/// event with malformed native input returns an error.
 pub fn decode(event: &EventId, raw: &RawInvocation) -> hookkit_core::Result<Option<CatalogInput>> {
     let input = match event.name() {
         "PermissionRequest" => PermissionRequest::parse(raw)?,

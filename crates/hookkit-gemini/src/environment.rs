@@ -9,15 +9,26 @@ use hookkit_core::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Native process environment supplied to every Gemini CLI command hook.
+///
+/// All five keys must be present, but values are retained exactly—including
+/// empty or mutually inconsistent values—because configured hook `env`
+/// entries may intentionally override Gemini's defaults.
 pub struct GeminiCommandEnvironment {
+    /// Gemini project root from `GEMINI_PROJECT_DIR`.
     pub project_dir: Utf8PathBuf,
+    /// Gemini plan storage directory from `GEMINI_PLANS_DIR`.
     pub plans_dir: Utf8PathBuf,
+    /// Hook working directory from `GEMINI_CWD`.
     pub cwd: Utf8PathBuf,
+    /// Native session identifier from `GEMINI_SESSION_ID`.
     pub session_id: String,
+    /// Claude-compatible project root from `CLAUDE_PROJECT_DIR`.
     pub claude_project_dir: Utf8PathBuf,
 }
 
 impl GeminiCommandEnvironment {
+    /// Parses the five required Gemini environment keys for `event`.
     pub fn from_map(
         event: &EventId,
         variables: &EnvironmentVariables,

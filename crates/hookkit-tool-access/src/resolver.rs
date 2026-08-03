@@ -23,8 +23,10 @@ pub enum ExactPathPolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SymlinkPolicy {
+    /// Do not descend into directory symlinks.
     #[default]
     DoNotFollow,
+    /// Allow the filesystem walker to descend through directory symlinks.
     Follow,
 }
 
@@ -44,17 +46,28 @@ pub enum ResolutionIssuePolicy {
 pub struct TargetResolutionOptions {
     /// Roots used for unrooted workspace and relative glob targets.
     pub workspace_roots: Vec<Utf8PathBuf>,
+    /// Directory basenames pruned from recursive traversal.
     pub ignored_directory_names: BTreeSet<String>,
+    /// Lexically normalized roots excluded from results and traversal.
     pub excluded_roots: BTreeSet<Utf8PathBuf>,
     /// Maximum directory entries and exact-path metadata probes.
     pub max_entries: usize,
+    /// Whether recursive traversal follows directory symlinks.
     pub symlinks: SymlinkPolicy,
+    /// Whether nonexistent exact paths are retained.
     pub exact_paths: ExactPathPolicy,
+    /// Policy for target-local filesystem errors.
     pub io_errors: ResolutionIssuePolicy,
+    /// Policy for invalid glob expressions.
     pub invalid_globs: ResolutionIssuePolicy,
 }
 
 impl TargetResolutionOptions {
+    /// Creates options with conservative traversal defaults.
+    ///
+    /// The default budget is 100,000 probed entries, directory symlinks are
+    /// not followed, nonexistent exact paths are omitted, and target-local
+    /// errors are reported rather than aborting the entire operation.
     pub fn new(workspace_roots: Vec<Utf8PathBuf>) -> Self {
         Self {
             workspace_roots,
@@ -73,37 +86,58 @@ impl TargetResolutionOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TargetResolutionReason {
+    /// The path expression has no statically resolved path.
     UnresolvedPathExpression,
+    /// An exact path does not exist and policy says not to retain it.
     NonexistentExactPath,
+    /// The root needed for a descendant walk does not exist.
     NonexistentTraversalRoot {
+        /// Missing traversal root.
         path: Utf8PathBuf,
     },
+    /// A workspace or relative-glob target has no workspace roots.
     MissingWorkspaceRoots,
+    /// The target falls within a configured excluded root.
     ExcludedRoot {
+        /// Excluded target or traversal root.
         path: Utf8PathBuf,
     },
+    /// Traversal reached a directory whose basename is configured as ignored.
     IgnoredDirectory {
+        /// Pruned directory.
         path: Utf8PathBuf,
     },
+    /// A glob expression could not be compiled.
     InvalidGlob {
+        /// Invalid glob text.
         pattern: String,
+        /// Parser diagnostic.
         message: String,
     },
+    /// A filesystem probe or directory walk failed.
     Io {
+        /// Affected path, when the error can be localized.
         path: Option<Utf8PathBuf>,
+        /// Portable I/O error category.
         kind: io::ErrorKind,
+        /// Original I/O error message.
         message: String,
     },
+    /// Traversal encountered a path that cannot be represented as UTF-8.
     NonUtf8Path {
+        /// Lossy display form of the path.
         path: String,
     },
+    /// The shared entry/probe budget was exhausted.
     BudgetExhausted,
 }
 
 /// One target and the target-local reason it was not fully processed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedTarget {
+    /// Original unified target.
     pub target: AccessTarget,
+    /// Target-local reason materialization was incomplete.
     pub reason: TargetResolutionReason,
 }
 
@@ -111,13 +145,18 @@ pub struct UnresolvedTarget {
 /// configured, exact paths that do not exist yet.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolvedTargets {
+    /// Deterministic set of materialized UTF-8 paths.
     pub paths: BTreeSet<Utf8PathBuf>,
+    /// Targets or traversal branches that could not be fully processed.
     pub unresolved: Vec<UnresolvedTarget>,
+    /// Number of directory entries and exact-path probes charged to the budget.
     pub scanned_entries: usize,
+    /// Whether materialization stopped after reaching `max_entries`.
     pub budget_exhausted: bool,
 }
 
 impl ResolvedTargets {
+    /// Returns whether every target was processed without a retained issue.
     pub fn is_complete(&self) -> bool {
         self.unresolved.is_empty() && !self.budget_exhausted
     }
@@ -126,7 +165,9 @@ impl ResolvedTargets {
 /// Failure returned when an issue policy is [`ResolutionIssuePolicy::Abort`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetResolutionError {
+    /// Target being processed when an abort policy triggered.
     pub target: AccessTarget,
+    /// Reason materialization failed.
     pub reason: TargetResolutionReason,
 }
 

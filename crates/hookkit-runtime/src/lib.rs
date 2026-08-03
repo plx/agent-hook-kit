@@ -1,10 +1,15 @@
 //! Contract-safe I/O and execution plumbing for hookkit executables.
+#![deny(missing_docs)]
 
 pub mod aligned;
 pub mod artifacts;
+/// Capture of declared command-hook process environment variables.
 pub mod environment;
+/// Event identification, best-effort detection, and executable resolution.
 pub mod resolution;
+/// Compile-time and runtime selected-harness execution.
 pub mod selected;
+/// Exact typed-event execution and process I/O adapters.
 pub mod typed;
 
 pub use hookkit_core::RuntimeContext;

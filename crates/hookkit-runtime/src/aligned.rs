@@ -35,10 +35,18 @@ impl sealed::Sealed for TurnCompletion {}
 
 /// Event-specific aligned execution contract.
 pub trait AlignedEventSpec: sealed::Sealed {
+    /// Lossless cross-harness input wrapper for the event family.
     type Input;
+    /// Lossless cross-harness command-environment wrapper.
     type CommandEnvironment;
+    /// Lossless cross-harness output wrapper for the event family.
     type Output;
 
+    /// Parses, validates, handles, and emits one aligned event for `harness`.
+    ///
+    /// The implementation selects an exact native contract from the explicit
+    /// harness identity. The handler must return the output arm for the same
+    /// harness or execution fails before emission.
     fn execute<F>(
         harness: HarnessId,
         bytes: Vec<u8>,

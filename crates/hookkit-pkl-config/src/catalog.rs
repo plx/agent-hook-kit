@@ -10,6 +10,7 @@ use std::fmt;
 /// All structural catalog violations found in one validation pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogValidationError {
+    /// Human-readable structural violations in deterministic order.
     pub errors: Vec<String>,
 }
 

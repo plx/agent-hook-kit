@@ -10,9 +10,15 @@ use hookkit_core::{
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Explicitly empty environment contract for Antigravity command hooks.
+///
+/// Construction still validates that the selected event belongs to the
+/// Antigravity harness. Ambient variables are ignored because the documented
+/// protocol supplies all invocation state in JSON.
 pub struct AntigravityCommandEnvironment;
 
 impl AntigravityCommandEnvironment {
+    /// Parses the environment contract from an already captured variable map.
     pub fn from_map(
         event: &EventId,
         variables: &EnvironmentVariables,

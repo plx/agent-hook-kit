@@ -1,4 +1,5 @@
 //! Phase-agnostic, loss-aware file-access evidence for observable tool calls.
+#![deny(missing_docs)]
 //!
 //! Static analysis is not a sandbox or audit log. Reports retain raw and
 //! lexically resolved paths, roles, scopes, provenance, certainty, and known
@@ -42,6 +43,10 @@ pub struct ToolAccessAnalyzer {
 }
 
 impl ToolAccessAnalyzer {
+    /// Creates an analyzer from explicit Bash, shell-semantics, and structured-field components.
+    ///
+    /// No additional shell tool profiles are registered; native profiles
+    /// supplied by aligned event adapters remain available.
     pub fn new(
         bash: BashAnalyzer,
         shell: FileAccessAnalyzer,
@@ -61,11 +66,16 @@ impl ToolAccessAnalyzer {
         self.shell_profiles.insert(0, profile);
     }
 
+    /// Registers one high-precedence shell tool profile and returns the analyzer.
     pub fn with_shell_profile(mut self, profile: ShellToolProfile) -> Self {
         self.register_shell_profile(profile);
         self
     }
 
+    /// Registers shell profiles and returns the analyzer.
+    ///
+    /// Because each registration is prepended, profiles later in the iterator
+    /// are checked before earlier profiles.
     pub fn with_shell_profiles(
         mut self,
         profiles: impl IntoIterator<Item = ShellToolProfile>,
@@ -76,22 +86,27 @@ impl ToolAccessAnalyzer {
         self
     }
 
+    /// Returns the structured-field analyzer.
     pub fn structured_fields(&self) -> &StructuredFieldAnalyzer {
         &self.structured
     }
 
+    /// Returns the structured-field analyzer for mutation.
     pub fn structured_fields_mut(&mut self) -> &mut StructuredFieldAnalyzer {
         &mut self.structured
     }
 
+    /// Analyzes observable evidence in an aligned pre-tool event.
     pub fn analyze_pre_tool(&self, input: &PreToolUseInput) -> ToolAccessReport {
         self.analyze_observation(observe_pre_tool(input))
     }
 
+    /// Analyzes observable evidence in an aligned post-tool event.
     pub fn analyze_post_tool(&self, input: &PostToolUseInput) -> ToolAccessReport {
         self.analyze_observation(observe_post_tool(input))
     }
 
+    /// Analyzes a successfully adapted call or preserves its adaptation gap.
     pub fn analyze_observation(&self, observation: ToolCallObservation<'_>) -> ToolAccessReport {
         match observation {
             ToolCallObservation::Call(call) => self.analyze_call(&call),
@@ -102,6 +117,11 @@ impl ToolAccessAnalyzer {
         }
     }
 
+    /// Analyzes one borrowed tool call without invoking the tool.
+    ///
+    /// Shell and patch shapes take precedence over generic structured-field
+    /// analysis. The report retains both recovered candidates and every known
+    /// gap; it does not claim to be a complete runtime I/O trace.
     pub fn analyze_call(&self, call: &ToolCallRef<'_>) -> ToolAccessReport {
         match &call.shell_call {
             ShellToolCallMatch::Matched(shell_call) => self.analyze_shell(call, shell_call),

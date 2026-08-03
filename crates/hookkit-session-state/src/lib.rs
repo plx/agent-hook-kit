@@ -1,4 +1,5 @@
 //! Concurrent, session-scoped filesystem state for independent hook processes.
+#![deny(missing_docs)]
 //!
 //! A native session owns a flat state root. Independently authored hook
 //! families receive versioned subtrees and coordinate only when they choose the
@@ -31,39 +32,53 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Result alias for session-state operations.
 pub type Result<T> = std::result::Result<T, StateError>;
 
 #[derive(Debug, thiserror::Error)]
+/// Error produced by session-state validation, storage, or serialization.
 pub enum StateError {
+    /// Runtime context supplied neither a native session nor conversation ID.
     #[error("session context has neither a session id nor a conversation id")]
     MissingSessionIdentity,
 
+    /// A family, entity, scope-kind, lock, or journal identifier was unsafe.
     #[error("invalid state identifier `{0}`")]
     InvalidIdentifier(String),
 
+    /// A run-bundle path was absolute or contained a parent component.
     #[error("state path must be relative and contain no parent components: {0}")]
     InvalidRelativePath(PathBuf),
 
+    /// The configured state root was itself a symbolic link.
     #[error("state root must not be a symbolic link: {0}")]
     SymlinkStateRoot(PathBuf),
 
+    /// Filesystem access failed.
     #[error("state I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Stored or supplied JSON could not be encoded or decoded.
     #[error("state JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// An entity was opened with mode or representation incompatible with its
+    /// existing descriptor, or requested an invalid disposition.
     #[error("entity state configuration error: {0}")]
     EntityConfiguration(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Native identity namespace used to isolate one conversation's state.
 pub enum SessionIdentity {
+    /// Harness-native session identity.
     Session(String),
+    /// Harness-native conversation identity used when no session ID exists.
     Conversation(String),
 }
 
 impl SessionIdentity {
+    /// Returns the stable on-disk namespace name.
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Session(_) => "session",
@@ -71,6 +86,7 @@ impl SessionIdentity {
         }
     }
 
+    /// Returns the opaque native identity value.
     pub fn value(&self) -> &str {
         match self {
             Self::Session(value) | Self::Conversation(value) => value,
@@ -79,15 +95,18 @@ impl SessionIdentity {
 }
 
 #[derive(Debug, Clone)]
+/// Configured parent directory for all versioned session state.
 pub struct StateRoot {
     path: PathBuf,
 }
 
 impl StateRoot {
+    /// Creates a state-root configuration without touching the filesystem.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
 
+    /// Returns the configured root path.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -100,12 +119,16 @@ impl Default for StateRoot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Validated name and nonzero schema version for an independent hook family.
 pub struct FamilyId {
     name: String,
     version: u32,
 }
 
 impl FamilyId {
+    /// Creates a family identity.
+    ///
+    /// `name` must be a safe state identifier and `version` must be nonzero.
     pub fn new(name: impl Into<String>, version: u32) -> Result<Self> {
         let name = name.into();
         validate_identifier(&name)?;
@@ -117,21 +140,33 @@ impl FamilyId {
         Ok(Self { name, version })
     }
 
+    /// Returns the validated family name.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns the nonzero family schema version.
     pub fn version(&self) -> u32 {
         self.version
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Isolation scope within a versioned state family.
 pub enum StateScope {
+    /// State shared by every actor and turn in the session.
     Session,
+    /// State isolated by a SHA-256 hash of an opaque actor key.
     Actor(String),
+    /// State isolated by a SHA-256 hash of an opaque turn key.
     Turn(String),
-    Custom { kind: String, key: String },
+    /// Application-defined namespace with a hashed opaque key.
+    Custom {
+        /// Validated namespace identifier retained in the directory layout.
+        kind: String,
+        /// Opaque key stored only through its SHA-256 digest.
+        key: String,
+    },
 }
 
 impl StateScope {
@@ -149,6 +184,10 @@ impl StateScope {
 }
 
 #[derive(Debug, Clone)]
+/// Open handle to one harness/session state directory.
+///
+/// Native identity values are never used as path components; the directory is
+/// keyed by their SHA-256 digest. Cloning the handle does not acquire locks.
 pub struct SessionState {
     root: PathBuf,
     harness: HarnessId,
@@ -184,6 +223,11 @@ impl SessionState {
         Self::ensure(context, root)
     }
 
+    /// Opens state from an explicit harness and native identity.
+    ///
+    /// This is intended for consumers without a [`RuntimeContext`]. It creates
+    /// fallback metadata from the first local observation and therefore cannot
+    /// recover native lifecycle timestamps or project paths.
     pub fn open(harness: HarnessId, identity: SessionIdentity, root: StateRoot) -> Result<Self> {
         let state = Self::open_uninitialized(harness, identity, root)?;
         metadata::ensure_metadata(&state.directory, &state.harness, &state.identity, None)?;
@@ -222,38 +266,47 @@ impl SessionState {
         })
     }
 
+    /// Reads the current library-owned session metadata snapshot.
     pub fn metadata(&self) -> Result<SessionMetadata> {
         metadata::read_metadata(&self.directory)
     }
 
+    /// Returns the path of the materialized metadata JSON file.
     pub fn metadata_path(&self) -> PathBuf {
         metadata::metadata_path(&self.directory)
     }
 
+    /// Returns the best available conversation start time.
     pub fn conversation_started_at(&self) -> Result<UtcTimestamp> {
         Ok(self.metadata()?.conversation.started_at.at)
     }
 
+    /// Returns the best available start time of the current session epoch.
     pub fn current_session_started_at(&self) -> Result<UtcTimestamp> {
         Ok(self.metadata()?.current_session.started_at.at)
     }
 
+    /// Returns metadata for the current session epoch.
     pub fn current_epoch(&self) -> Result<SessionEpochMetadata> {
         Ok(self.metadata()?.current_session)
     }
 
+    /// Returns the harness that owns this state directory.
     pub fn harness(&self) -> &HarnessId {
         &self.harness
     }
 
+    /// Returns the native identity namespace and opaque value.
     pub fn identity(&self) -> &SessionIdentity {
         &self.identity
     }
 
+    /// Returns the hashed, harness-scoped session directory.
     pub fn directory(&self) -> &Path {
         &self.directory
     }
 
+    /// Opens a versioned family subtree and records family activity for GC.
     pub fn family(&self, id: FamilyId) -> Result<StateFamily> {
         let directory = self
             .directory
@@ -267,22 +320,33 @@ impl SessionState {
         Ok(StateFamily { id, directory })
     }
 
+    /// Stores an immutable, content-addressed lifecycle observation.
+    ///
+    /// Identical JSON serializations map to the same path and are deduplicated.
     pub fn observe_lifecycle<T: Serialize>(&self, observation: &T) -> Result<PathBuf> {
         write_observation(&self.directory.join("lifecycle/observations"), observation)
     }
 
+    /// Reads all lifecycle observations in deterministic content-hash order.
     pub fn lifecycle_observations<T: DeserializeOwned>(&self) -> Result<Vec<T>> {
         read_observations(&self.directory.join("lifecycle/observations"))
     }
 
+    /// Stores an immutable, content-addressed topology observation.
     pub fn observe_topology<T: Serialize>(&self, observation: &T) -> Result<PathBuf> {
         write_observation(&self.directory.join("topology/observations"), observation)
     }
 
+    /// Reads all topology observations in deterministic content-hash order.
     pub fn topology_observations<T: DeserializeOwned>(&self) -> Result<Vec<T>> {
         read_observations(&self.directory.join("topology/observations"))
     }
 
+    /// Removes session directories whose newest recorded activity is older
+    /// than `max_age`.
+    ///
+    /// The scan is limited to the versioned subtree under `root`. Metadata and
+    /// family activity timestamps participate in the age calculation.
     pub fn gc(root: &StateRoot, max_age: Duration) -> Result<GcReport> {
         let version_root = root.path().join("v1");
         if !version_root.exists() {
@@ -305,36 +369,43 @@ impl SessionState {
         Ok(report)
     }
 
+    /// Returns the configured parent state root.
     pub fn state_root(&self) -> &Path {
         &self.root
     }
 }
 
 #[derive(Debug, Clone)]
+/// Open handle to one independently versioned hook-family subtree.
 pub struct StateFamily {
     id: FamilyId,
     directory: PathBuf,
 }
 
 impl StateFamily {
+    /// Returns the family identity.
     pub fn id(&self) -> &FamilyId {
         &self.id
     }
 
+    /// Returns the versioned family directory.
     pub fn directory(&self) -> &Path {
         &self.directory
     }
 
+    /// Opens an isolation scope within this family.
     pub fn scope(&self, scope: StateScope) -> Result<FamilyScope> {
         let directory = self.directory.join("scopes").join(scope.path()?);
         create_private_dir_all(&directory)?;
         Ok(FamilyScope { directory })
     }
 
+    /// Opens the session-wide family scope.
     pub fn session_scope(&self) -> Result<FamilyScope> {
         self.scope(StateScope::Session)
     }
 
+    /// Opens a named claim set in the session-wide scope.
     pub fn claims(&self, name: &str) -> Result<ClaimSet> {
         self.session_scope()?.claims(name)
     }
@@ -344,10 +415,15 @@ impl StateFamily {
         self.session_scope()?.record_journal(name)
     }
 
+    /// Starts a uniquely named run bundle in the session-wide scope.
     pub fn start_run(&self, label: &str) -> Result<RunBundle> {
         self.session_scope()?.start_run(label)
     }
 
+    /// Runs `operation` while holding an advisory exclusive family lock.
+    ///
+    /// All cooperating processes must use the same family and lock name. The
+    /// lock is released even when `operation` returns an error.
     pub fn with_exclusive_lock<T>(
         &self,
         name: &str,
@@ -393,6 +469,9 @@ impl StateFamily {
 }
 
 #[derive(Debug)]
+/// RAII guard for an advisory exclusive family lock.
+///
+/// The lock is released when the guard is dropped.
 pub struct ExclusiveLock {
     file: std::fs::File,
 }
@@ -404,15 +483,18 @@ impl Drop for ExclusiveLock {
 }
 
 #[derive(Debug, Clone)]
+/// Open handle to one family isolation scope.
 pub struct FamilyScope {
     directory: PathBuf,
 }
 
 impl FamilyScope {
+    /// Returns the scope directory.
     pub fn directory(&self) -> &Path {
         &self.directory
     }
 
+    /// Opens a named atomic claim set.
     pub fn claims(&self, name: &str) -> Result<ClaimSet> {
         validate_identifier(name)?;
         let directory = self.directory.join("claims").join(name);
@@ -434,6 +516,10 @@ impl FamilyScope {
         Ok(RecordJournal { directory })
     }
 
+    /// Opens a typed aggregate entity.
+    ///
+    /// Reopening an existing entity with a different `mode` fails rather than
+    /// reinterpreting its stored generations.
     pub fn entity<E: JournalEntity>(
         &self,
         id: EntityId,
@@ -442,6 +528,7 @@ impl FamilyScope {
         EntityJournal::open(self.directory.join("entities"), id, mode)
     }
 
+    /// Opens a typed sorted-set journal backed by an entity.
     pub fn set<T>(&self, id: EntityId, mode: EntityMode) -> Result<SetJournal<T>>
     where
         T: Serialize + DeserializeOwned + Clone + Ord,
@@ -449,6 +536,7 @@ impl FamilyScope {
         Ok(SetJournal::new(self.entity(id, mode)?))
     }
 
+    /// Creates a uniquely named directory for one multi-artifact run.
     pub fn start_run(&self, label: &str) -> Result<RunBundle> {
         validate_identifier(label)?;
         let runs = self.directory.join("runs");
@@ -469,17 +557,26 @@ impl FamilyScope {
 }
 
 #[derive(Debug, Clone)]
+/// Persistent collection of atomic, hashed-key claims.
 pub struct ClaimSet {
     directory: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Result of attempting to create a durable claim.
 pub enum ClaimResult {
+    /// This process created the claim.
     Claimed,
+    /// A claim for the same key already existed.
     AlreadyClaimed,
 }
 
 impl ClaimSet {
+    /// Atomically claims an opaque key using create-if-absent filesystem
+    /// semantics.
+    ///
+    /// Only a SHA-256 digest of `key` appears in the filename. A successful
+    /// claim is synced before [`ClaimResult::Claimed`] is returned.
     pub fn try_claim(&self, key: &str) -> Result<ClaimResult> {
         let path = self.directory.join(format!("{}.claim", sha256(key)));
         match OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -498,6 +595,9 @@ impl ClaimSet {
         }
     }
 
+    /// Reports whether the claim file for `key` currently exists.
+    ///
+    /// This is a point-in-time observation, not an atomic claim operation.
     pub fn contains(&self, key: &str) -> bool {
         self.directory
             .join(format!("{}.claim", sha256(key)))
@@ -506,46 +606,62 @@ impl ClaimSet {
 }
 
 #[derive(Debug, Clone)]
+/// Sparse content-addressed journal with one pretty-printed JSON file per
+/// record.
 pub struct RecordJournal {
     directory: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// SHA-256-derived identity of a journal entry.
 pub struct JournalEntryId(String);
 
 impl JournalEntryId {
+    /// Returns the lowercase hexadecimal digest.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 #[derive(Debug)]
+/// Typed record returned by a sparse-journal snapshot.
 pub struct RecordJournalEntry<T> {
     id: JournalEntryId,
     value: T,
 }
 
 impl<T> RecordJournalEntry<T> {
+    /// Returns the content-derived entry identity.
     pub fn id(&self) -> &JournalEntryId {
         &self.id
     }
 
+    /// Borrows the decoded entry value.
     pub fn value(&self) -> &T {
         &self.value
     }
 
+    /// Consumes the entry and returns its value.
     pub fn into_value(self) -> T {
         self.value
     }
 }
 
 #[derive(Debug)]
+/// Point-in-time batch of sparse journal records.
+///
+/// A batch can be inspected and then acknowledged, which removes only its
+/// captured entry files while tolerating files already removed by a peer.
 pub struct RecordJournalBatch<T> {
     directory: PathBuf,
     entries: Vec<RecordJournalEntry<T>>,
 }
 
 impl RecordJournal {
+    /// Writes a content-addressed JSON record.
+    ///
+    /// The entry ID hashes `event_key` and the pretty-printed JSON bytes.
+    /// Repeating the same pair replaces the same path atomically.
     pub fn append<T: Serialize>(&self, event_key: &str, value: &T) -> Result<JournalEntryId> {
         let bytes = serde_json::to_vec_pretty(value)?;
         let id = JournalEntryId(sha256_bytes(&[
@@ -557,6 +673,7 @@ impl RecordJournal {
         Ok(id)
     }
 
+    /// Captures and decodes all current records in deterministic ID order.
     pub fn snapshot<T: DeserializeOwned>(&self) -> Result<RecordJournalBatch<T>> {
         let mut files = Vec::new();
         for entry in std::fs::read_dir(&self.directory)? {
@@ -585,18 +702,26 @@ impl RecordJournal {
 }
 
 impl<T> RecordJournalBatch<T> {
+    /// Returns the captured entries in deterministic ID order.
     pub fn entries(&self) -> &[RecordJournalEntry<T>] {
         &self.entries
     }
 
+    /// Reports whether the batch contains no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    /// Returns the number of captured entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Removes every record captured by this batch.
+    ///
+    /// Missing files are treated as already acknowledged. The operation stops
+    /// at the first other filesystem error and may therefore be partially
+    /// applied.
     pub fn acknowledge(self) -> Result<()> {
         for entry in self.entries {
             let path = self.directory.join(format!("{}.json", entry.id.0));
@@ -611,20 +736,27 @@ impl<T> RecordJournalBatch<T> {
 }
 
 #[derive(Debug)]
+/// Directory for artifacts produced by one logical hook/tool run.
+///
+/// A bundle becomes committed when `summary.json` is written. Dropping an
+/// uncommitted bundle does not delete it, allowing postmortem inspection.
 pub struct RunBundle {
     directory: PathBuf,
     committed: bool,
 }
 
 impl RunBundle {
+    /// Returns the unique run directory.
     pub fn directory(&self) -> &Path {
         &self.directory
     }
 
+    /// Atomically writes UTF-8 text at a safe relative path.
     pub fn write_text(&self, relative: impl AsRef<Path>, content: &str) -> Result<PathBuf> {
         self.write_bytes(relative, content.as_bytes())
     }
 
+    /// Pretty-prints JSON and atomically writes it at a safe relative path.
     pub fn write_json<T: Serialize>(
         &self,
         relative: impl AsRef<Path>,
@@ -633,12 +765,15 @@ impl RunBundle {
         self.write_bytes(relative, &serde_json::to_vec_pretty(value)?)
     }
 
+    /// Writes `summary.json`, marking the run committed, and consumes the
+    /// bundle handle.
     pub fn commit<T: Serialize>(mut self, summary: &T) -> Result<PathBuf> {
         let path = self.write_json("summary.json", summary)?;
         self.committed = true;
         Ok(path)
     }
 
+    /// Reports whether `summary.json` exists or this handle committed it.
     pub fn is_committed(&self) -> bool {
         self.committed || self.directory.join("summary.json").is_file()
     }
@@ -658,8 +793,11 @@ impl RunBundle {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Counts from one session-state garbage-collection pass.
 pub struct GcReport {
+    /// Number of session directories whose activity was inspected.
     pub scanned: usize,
+    /// Number of stale session directories removed.
     pub removed: usize,
 }
 

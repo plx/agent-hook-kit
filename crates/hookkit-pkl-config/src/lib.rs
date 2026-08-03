@@ -1,4 +1,5 @@
 //! Pkl-driven configuration loader for the post-tool-use agent hook runner.
+#![deny(missing_docs)]
 //!
 //! Public entry points:
 //!
