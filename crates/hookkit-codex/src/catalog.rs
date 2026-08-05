@@ -23,8 +23,9 @@ pub struct CatalogInput {
     pub cwd: hookkit_core::Utf8PathBuf,
     /// Authoritative native event discriminator.
     pub hook_event_name: String,
-    /// Model configured for the event's turn.
-    pub model: String,
+    /// Model configured for the event's turn; absent from `SessionEnd`.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Native turn identifier when the event carries one.
     #[serde(default)]
     pub turn_id: Option<String>,
@@ -81,6 +82,7 @@ fn catalog_event_id(event: &str) -> EventId {
         "PermissionRequest" => "PermissionRequest",
         "PostCompact" => "PostCompact",
         "PreCompact" => "PreCompact",
+        "SessionEnd" => "SessionEnd",
         "SessionStart" => "SessionStart",
         "Stop" => "Stop",
         "SubagentStart" => "SubagentStart",
@@ -93,6 +95,7 @@ fn catalog_event_id(event: &str) -> EventId {
 
 #[derive(Debug, Clone)]
 enum Outcome {
+    Empty,
     Json(serde_json::Value),
     Text(String),
     BlockingError(String),
@@ -109,6 +112,13 @@ pub struct CatalogOutput {
 }
 
 impl CatalogOutput {
+    fn empty(event: &'static str) -> Self {
+        Self {
+            event,
+            outcome: Outcome::Empty,
+        }
+    }
+
     fn json(event: &'static str, value: serde_json::Value) -> Self {
         Self {
             event,
@@ -155,17 +165,19 @@ impl CatalogOutput {
 
     pub(crate) fn emit(self) -> hookkit_core::Result<ProcessEmission> {
         let contract = ContractId::builtin(match self.event {
-            "PermissionRequest" => "codex/commit-9e552e9-r2/PermissionRequest",
-            "PostCompact" => "codex/commit-9e552e9-r2/PostCompact",
-            "PreCompact" => "codex/commit-9e552e9-r2/PreCompact",
-            "SessionStart" => "codex/commit-9e552e9-r2/SessionStart",
-            "Stop" => "codex/commit-9e552e9-r2/Stop",
-            "SubagentStart" => "codex/commit-9e552e9-r2/SubagentStart",
-            "SubagentStop" => "codex/commit-9e552e9-r2/SubagentStop",
-            "UserPromptSubmit" => "codex/commit-9e552e9-r2/UserPromptSubmit",
+            "PermissionRequest" => "codex/commit-1e59dc5-r1/PermissionRequest",
+            "PostCompact" => "codex/commit-1e59dc5-r1/PostCompact",
+            "PreCompact" => "codex/commit-1e59dc5-r1/PreCompact",
+            "SessionEnd" => "codex/commit-1e59dc5-r1/SessionEnd",
+            "SessionStart" => "codex/commit-1e59dc5-r1/SessionStart",
+            "Stop" => "codex/commit-1e59dc5-r1/Stop",
+            "SubagentStart" => "codex/commit-1e59dc5-r1/SubagentStart",
+            "SubagentStop" => "codex/commit-1e59dc5-r1/SubagentStop",
+            "UserPromptSubmit" => "codex/commit-1e59dc5-r1/UserPromptSubmit",
             _ => unreachable!("catalog output constructors fix the event"),
         });
         match self.outcome {
+            Outcome::Empty => Ok(ProcessEmission::command_empty(contract)),
             Outcome::Json(value) => ProcessEmission::command_json(contract, &value),
             Outcome::Text(value) => Ok(ProcessEmission::command_text(contract, value)),
             Outcome::BlockingError(message) => {
@@ -183,6 +195,19 @@ fn parse(
     super::protocol::require_event(invocation, event)?;
     for field in required_fields {
         super::protocol::require_field(invocation, field, event)?;
+    }
+    if event == "SessionEnd"
+        && invocation
+            .json()
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            != Some("other")
+    {
+        return Err(hookkit_core::HookkitError::InvalidForHint {
+            harness: HarnessId::CODEX,
+            event: EventId::builtin(HarnessId::CODEX, event),
+            message: "expected reason=other".to_string(),
+        });
     }
     serde_json::from_value(invocation.json().clone()).map_err(Into::into)
 }
@@ -218,7 +243,7 @@ macro_rules! event_spec {
             const EVENT: EventId = EventId::builtin(HarnessId::CODEX, $name);
             const CATEGORY: EventCategory = EventCategory::$category;
             const CONTRACT: ContractId =
-                ContractId::builtin(concat!("codex/commit-9e552e9-r2/", $name));
+                ContractId::builtin(concat!("codex/commit-1e59dc5-r1/", $name));
 
             fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
                 parse(invocation, $name, &["transcript_path", $($required),*])
@@ -247,18 +272,21 @@ macro_rules! event_spec {
     };
 }
 
-macro_rules! common_controls {
+macro_rules! no_op_control {
     ($output:ident, $name:literal) => {
         impl $output {
             /// Creates an empty structured response.
             pub fn no_op() -> Self {
                 Self(CatalogOutput::json($name, serde_json::json!({})))
             }
+        }
+    };
+}
 
+macro_rules! continuation_controls {
+    ($output:ident) => {
+        impl $output {
             /// Sets the top-level `continue` control.
-            ///
-            /// Returns an error if the response was constructed as text or a
-            /// blocking stderr outcome.
             pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
                 self.0
                     .with_top_level("continue", continue_session.into())
@@ -271,14 +299,13 @@ macro_rules! common_controls {
                     .with_top_level("stopReason", reason.into().into())
                     .map(Self)
             }
+        }
+    };
+}
 
-            /// Sets whether Codex suppresses ordinary hook output.
-            pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("suppressOutput", suppress.into())
-                    .map(Self)
-            }
-
+macro_rules! system_message_control {
+    ($output:ident) => {
+        impl $output {
             /// Sets a top-level system message on a structured response.
             pub fn with_system_message(
                 self,
@@ -289,6 +316,14 @@ macro_rules! common_controls {
                     .map(Self)
             }
         }
+    };
+}
+
+macro_rules! common_controls {
+    ($output:ident, $name:literal) => {
+        no_op_control!($output, $name);
+        continuation_controls!($output);
+        system_message_control!($output);
     };
 }
 
@@ -326,7 +361,8 @@ impl PermissionRequestOutput {
         Self(CatalogOutput::blocking("PermissionRequest", message))
     }
 }
-common_controls!(PermissionRequestOutput, "PermissionRequest");
+no_op_control!(PermissionRequestOutput, "PermissionRequest");
+system_message_control!(PermissionRequestOutput);
 event_spec!(
     PermissionRequest,
     PermissionRequestOutput,
@@ -360,11 +396,6 @@ impl PreCompactOutput {
             serde_json::json!({"continue": false, "stopReason": reason.into()}),
         ))
     }
-
-    /// Creates a code-2 blocking response with required stderr text.
-    pub fn blocking_error(message: impl Into<String>) -> Self {
-        Self(CatalogOutput::blocking("PreCompact", message))
-    }
 }
 common_controls!(PreCompactOutput, "PreCompact");
 event_spec!(
@@ -396,8 +427,6 @@ macro_rules! context_text_event {
             }
         }
 
-        common_controls!($output, $name);
-
         event_spec!($event, $output, $name, $category, [$($required),*]);
     };
 }
@@ -409,12 +438,34 @@ context_text_event!(
     Session,
     ["permission_mode", "source"]
 );
+common_controls!(SessionStartOutput, "SessionStart");
 context_text_event!(
     SubagentStart,
     SubagentStartOutput,
     "SubagentStart",
     Agent,
     ["turn_id", "permission_mode", "agent_id", "agent_type"]
+);
+no_op_control!(SubagentStartOutput, "SubagentStart");
+system_message_control!(SubagentStartOutput);
+
+#[derive(Debug, Clone)]
+/// Native advisory response from a Codex `SessionEnd` command hook.
+pub struct SessionEndOutput(CatalogOutput);
+
+impl SessionEndOutput {
+    /// Exits successfully without emitting stdout; `SessionEnd` output is ignored.
+    pub fn no_op() -> Self {
+        Self(CatalogOutput::empty("SessionEnd"))
+    }
+}
+
+event_spec!(
+    SessionEnd,
+    SessionEndOutput,
+    "SessionEnd",
+    Session,
+    ["reason"]
 );
 
 macro_rules! blocking_event {
@@ -517,7 +568,8 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
             "exit-2",
         ]),
         hookkit_core::NativeEventDescriptor::command::<PostCompact>(&["structured"]),
-        hookkit_core::NativeEventDescriptor::command::<PreCompact>(&["structured", "exit-2"]),
+        hookkit_core::NativeEventDescriptor::command::<PreCompact>(&["structured"]),
+        hookkit_core::NativeEventDescriptor::command::<SessionEnd>(&["no-op"]),
         hookkit_core::NativeEventDescriptor::command::<SessionStart>(&[
             "structured",
             "text-context",
@@ -555,6 +607,10 @@ pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescripto
             "/hook_event_name",
             "SessionStart",
         ),
+        hookkit_core::IdentificationDescriptor::definitive::<SessionEnd>(
+            "/hook_event_name",
+            "SessionEnd",
+        ),
         hookkit_core::IdentificationDescriptor::definitive::<Stop>("/hook_event_name", "Stop"),
         hookkit_core::IdentificationDescriptor::definitive::<SubagentStart>(
             "/hook_event_name",
@@ -580,6 +636,7 @@ pub fn decode(event: &EventId, raw: &RawInvocation) -> hookkit_core::Result<Opti
         "PermissionRequest" => PermissionRequest::parse(raw)?,
         "PostCompact" => PostCompact::parse(raw)?,
         "PreCompact" => PreCompact::parse(raw)?,
+        "SessionEnd" => SessionEnd::parse(raw)?,
         "SessionStart" => SessionStart::parse(raw)?,
         "Stop" => Stop::parse(raw)?,
         "SubagentStart" => SubagentStart::parse(raw)?,
@@ -640,5 +697,27 @@ mod tests {
                 .with_system_message("notice")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn session_end_parses_its_advisory_envelope_without_turn_fields() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":null,"cwd":"/repo","hook_event_name":"SessionEnd","reason":"other"}"#.to_vec(),
+        )
+        .unwrap();
+        let input = SessionEnd::parse(&raw).unwrap();
+        assert_eq!(input.model, None);
+        assert_eq!(input.field("reason"), Some(&serde_json::json!("other")));
+
+        let emission = SessionEnd::emit(SessionEndOutput::no_op()).unwrap();
+        assert!(emission.stdout().is_empty());
+        assert!(emission.stderr().is_empty());
+        assert_eq!(emission.exit_code(), 0);
+
+        let invalid = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":null,"cwd":"/repo","hook_event_name":"SessionEnd","reason":"exit"}"#.to_vec(),
+        )
+        .unwrap();
+        assert!(SessionEnd::parse(&invalid).is_err());
     }
 }

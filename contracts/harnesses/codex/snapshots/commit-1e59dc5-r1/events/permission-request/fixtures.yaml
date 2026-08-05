@@ -1,0 +1,96 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      tool_input: {}
+      tool_name: Bash
+      transcript_path: null
+      turn_id: turn-1
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-tool_input
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      tool_name: Bash
+      transcript_path: null
+      turn_id: turn-1
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      tool_input: {}
+      tool_name: Bash
+      transcript_path: null
+      turn_id: turn-1
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      tool_input: {}
+      tool_name: Bash
+      transcript_path: /tmp/transcript.jsonl
+      turn_id: turn-1
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - codex-hooks-reference
+  - codex-generated-schemas
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: deny
+        message: Blocked by policy.
+      hookEventName: PermissionRequest
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: fa89fc8b89a3cf2ced53e5360497515594c0164ec4846cf3c76fc05dc16698e9
+- binding: command
+  exit_code: 2
+  id: exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

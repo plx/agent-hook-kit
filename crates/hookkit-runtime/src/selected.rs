@@ -335,14 +335,14 @@ mod tests {
                 };
                 assert_eq!(input.tool_name, "shell");
                 assert_eq!(context.harness(), &HarnessId::CODEX);
-                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-9e552e9-r2"));
+                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-1e59dc5-r1"));
                 assert_eq!(
                     context.event(),
                     &EventId::builtin(HarnessId::CODEX, "PreToolUse")
                 );
                 assert_eq!(
                     context.contract(),
-                    ContractId::builtin("codex/commit-9e552e9-r2/PreToolUse")
+                    ContractId::builtin("codex/commit-1e59dc5-r1/PreToolUse")
                 );
                 assert_eq!(
                     context.provenance(),
@@ -359,7 +359,7 @@ mod tests {
                 assert_eq!(context.raw().json()["hook_event_name"], "PreToolUse");
 
                 Ok(hookkit_codex::protocol::AnyCommandOutput::PreToolUse(
-                    hookkit_codex::protocol::PreToolUseOutput::deny(Some("blocked by test".into())),
+                    hookkit_codex::protocol::PreToolUseOutput::deny("blocked by test"),
                 ))
             },
         )
@@ -425,15 +425,14 @@ mod tests {
                 ));
                 Ok(BuiltinOutput::Codex(
                     hookkit_codex::protocol::AnyCommandOutput::PreToolUse(
-                        hookkit_codex::protocol::PreToolUseOutput::allow(),
+                        hookkit_codex::protocol::PreToolUseOutput::no_op(),
                     ),
                 ))
             },
         )
         .unwrap();
 
-        let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
+        assert!(emission.stdout().is_empty());
     }
 
     #[test]

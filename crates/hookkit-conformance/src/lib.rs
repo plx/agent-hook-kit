@@ -76,12 +76,12 @@ fn verify_all_negative_inputs() -> Result<(), String> {
     )?;
     verify_negative_inputs::<hookkit_codex::protocol::PreToolUse>(
         "codex",
-        "commit-9e552e9-r2",
+        "commit-1e59dc5-r1",
         "pre-tool-use",
     )?;
     verify_negative_inputs::<hookkit_codex::protocol::PostToolUse>(
         "codex",
-        "commit-9e552e9-r2",
+        "commit-1e59dc5-r1",
         "post-tool-use",
     )?;
     verify_negative_inputs::<hookkit_antigravity::PreInvocation>(
@@ -182,28 +182,28 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
 
     executed.push(verify_case::<hookkit_codex::protocol::PreToolUse>(
         "codex",
-        "commit-9e552e9-r2",
+        "commit-1e59dc5-r1",
         "pre-tool-use",
         "no-op",
         hookkit_codex::protocol::PreToolUseOutput::no_op(),
     )?);
     executed.push(verify_case::<hookkit_codex::protocol::PreToolUse>(
         "codex",
-        "commit-9e552e9-r2",
+        "commit-1e59dc5-r1",
         "pre-tool-use",
         "deny-json",
-        hookkit_codex::protocol::PreToolUseOutput::deny(Some("blocked".into())),
+        hookkit_codex::protocol::PreToolUseOutput::deny("blocked"),
     )?);
     executed.push(verify_case::<hookkit_codex::protocol::PreToolUse>(
         "codex",
-        "commit-9e552e9-r2",
+        "commit-1e59dc5-r1",
         "pre-tool-use",
         "deny-stderr",
         hookkit_codex::protocol::PreToolUseOutput::deny_stderr("blocked"),
     )?);
     executed.push(verify_case::<hookkit_codex::protocol::PostToolUse>(
         "codex",
-        "commit-9e552e9-r2",
+        "commit-1e59dc5-r1",
         "post-tool-use",
         "structured",
         hookkit_codex::protocol::PostToolUseOutput::with_context("Generated files changed.")
@@ -212,7 +212,7 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
     )?);
     executed.push(verify_case::<hookkit_codex::protocol::PostToolUse>(
         "codex",
-        "commit-9e552e9-r2",
+        "commit-1e59dc5-r1",
         "post-tool-use",
         "exit-2",
         hookkit_codex::protocol::PostToolUseOutput::blocking_error("blocked by hook"),
@@ -327,7 +327,7 @@ fn verify_codex_catalog_negative_inputs() -> Result<(), String> {
         ($event:ident, $path:literal) => {
             verify_negative_inputs::<hookkit_codex::catalog::$event>(
                 "codex",
-                "commit-9e552e9-r2",
+                "commit-1e59dc5-r1",
                 $path,
             )?;
         };
@@ -335,6 +335,7 @@ fn verify_codex_catalog_negative_inputs() -> Result<(), String> {
     verify!(PermissionRequest, "permission-request");
     verify!(PostCompact, "post-compact");
     verify!(PreCompact, "pre-compact");
+    verify!(SessionEnd, "session-end");
     verify!(SessionStart, "session-start");
     verify!(Stop, "stop");
     verify!(SubagentStart, "subagent-start");
@@ -360,7 +361,7 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         ($event:ident, $path:literal, $case:literal, $output:expr) => {
             executed.push(verify_case::<hookkit_codex::catalog::$event>(
                 "codex",
-                "commit-9e552e9-r2",
+                "commit-1e59dc5-r1",
                 $path,
                 $case,
                 $output,
@@ -723,10 +724,10 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         hookkit_codex::catalog::PreCompactOutput::stop("Save state before compacting.")
     );
     codex_case!(
-        PreCompact,
-        "pre-compact",
-        "exit-2",
-        hookkit_codex::catalog::PreCompactOutput::blocking_error("blocked by hook")
+        SessionEnd,
+        "session-end",
+        "no-op",
+        hookkit_codex::catalog::SessionEndOutput::no_op()
     );
     codex_case!(
         SessionStart,

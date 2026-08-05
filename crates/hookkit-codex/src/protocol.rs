@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use crate::CodexCommandEnvironment;
 
 /// Codex source snapshot implemented by this crate.
-pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("commit-9e552e9-r2");
+pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("commit-1e59dc5-r1");
 
 /// Returns every Codex event with a native command implementation.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -91,19 +91,10 @@ pub enum PreToolUseOutput {
         /// Human-readable reason presented by Codex.
         reason: String,
     },
-    /// Allow using the hook-specific permission decision shape.
-    Allow,
-    /// Ask the user for permission.
-    Ask {
-        /// Optional explanation for the permission prompt.
-        reason: Option<String>,
-    },
-    /// Approve using the legacy top-level decision shape.
-    Approve,
     /// Deny using the hook-specific permission decision shape.
     Deny {
-        /// Optional human-readable denial reason.
-        reason: Option<String>,
+        /// Required human-readable denial reason.
+        reason: String,
     },
     /// Allow the call after replacing its tool input.
     Rewrite {
@@ -114,6 +105,11 @@ pub enum PreToolUseOutput {
     AdditionalContext {
         /// Context appended to the agent conversation.
         context: String,
+    },
+    /// Surface a warning in the UI or event stream without blocking.
+    SystemMessage {
+        /// User-facing warning text.
+        message: String,
     },
     /// Block by writing a required message to stderr and exiting with code 2.
     DenyStderr {
@@ -133,21 +129,11 @@ impl PreToolUseOutput {
             reason: reason.into(),
         }
     }
-    /// Creates a hook-specific allow response.
-    pub fn allow() -> Self {
-        Self::Allow
-    }
-    /// Creates a hook-specific ask response.
-    pub fn ask(reason: Option<String>) -> Self {
-        Self::Ask { reason }
-    }
-    /// Creates a legacy top-level approve response.
-    pub fn approve() -> Self {
-        Self::Approve
-    }
     /// Creates a hook-specific deny response.
-    pub fn deny(reason: Option<String>) -> Self {
-        Self::Deny { reason }
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self::Deny {
+            reason: reason.into(),
+        }
     }
     /// Creates an allow response that replaces the tool input.
     pub fn rewrite(updated_input: serde_json::Map<String, serde_json::Value>) -> Self {
@@ -157,6 +143,12 @@ impl PreToolUseOutput {
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::AdditionalContext {
             context: context.into(),
+        }
+    }
+    /// Creates a nonblocking response that surfaces a system warning.
+    pub fn system_message(message: impl Into<String>) -> Self {
+        Self::SystemMessage {
+            message: message.into(),
         }
     }
     /// Creates a code-2 blocking response with required stderr text.
@@ -178,7 +170,7 @@ impl EventSpec for PreToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
     const EVENT: EventId = EventId::builtin(HarnessId::CODEX, "PreToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("codex/commit-9e552e9-r2/PreToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("codex/commit-1e59dc5-r1/PreToolUse");
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "PreToolUse")?;
@@ -201,55 +193,21 @@ impl EventSpec for PreToolUse {
                 unreachable!("handled above")
             }
             PreToolUseOutput::Block { reason } => {
+                require_nonempty_output_text(&reason, "PreToolUse block reason")?;
                 serde_json::json!({"decision":"block","reason":reason})
             }
-            PreToolUseOutput::Allow => {
-                serde_json::json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}})
-            }
-            PreToolUseOutput::Ask { reason } => {
-                let mut specific = serde_json::Map::from_iter([
-                    (
-                        "hookEventName".into(),
-                        serde_json::Value::String("PreToolUse".into()),
-                    ),
-                    (
-                        "permissionDecision".into(),
-                        serde_json::Value::String("ask".into()),
-                    ),
-                ]);
-                if let Some(reason) = reason {
-                    specific.insert(
-                        "permissionDecisionReason".into(),
-                        serde_json::Value::String(reason),
-                    );
-                }
-                serde_json::json!({"hookSpecificOutput": specific})
-            }
-            PreToolUseOutput::Approve => serde_json::json!({"decision":"approve"}),
             PreToolUseOutput::Deny { reason } => {
-                let mut specific = serde_json::Map::from_iter([
-                    (
-                        "hookEventName".into(),
-                        serde_json::Value::String("PreToolUse".into()),
-                    ),
-                    (
-                        "permissionDecision".into(),
-                        serde_json::Value::String("deny".into()),
-                    ),
-                ]);
-                if let Some(reason) = reason {
-                    specific.insert(
-                        "permissionDecisionReason".into(),
-                        serde_json::Value::String(reason),
-                    );
-                }
-                serde_json::json!({"hookSpecificOutput": specific})
+                require_nonempty_output_text(&reason, "PreToolUse denial reason")?;
+                serde_json::json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":reason}})
             }
             PreToolUseOutput::Rewrite { updated_input } => {
                 serde_json::json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":updated_input}})
             }
             PreToolUseOutput::AdditionalContext { context } => {
                 serde_json::json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":context}})
+            }
+            PreToolUseOutput::SystemMessage { message } => {
+                serde_json::json!({"systemMessage":message})
             }
         };
         ProcessEmission::command_json(Self::CONTRACT, &value)
@@ -340,8 +298,6 @@ pub struct StructuredPostToolUseOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     stop_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    suppress_output: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     system_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hook_specific_output: Option<PostToolUseSpecific>,
@@ -353,8 +309,6 @@ struct PostToolUseSpecific {
     hook_event_name: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     additional_context: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    updated_mcp_tool_output: Option<serde_json::Value>,
 }
 
 impl PostToolUseOutput {
@@ -369,7 +323,6 @@ impl PostToolUseOutput {
             hook_specific_output: Some(PostToolUseSpecific {
                 hook_event_name: "PostToolUse",
                 additional_context: Some(context.into()),
-                updated_mcp_tool_output: None,
             }),
             ..StructuredPostToolUseOutput::default()
         })
@@ -421,15 +374,6 @@ impl PostToolUseOutput {
         })
     }
 
-    /// Replaces the MCP tool output in a structured hook-specific response.
-    pub fn with_updated_mcp_tool_output(
-        mut self,
-        output: serde_json::Value,
-    ) -> hookkit_core::Result<Self> {
-        self.specific_mut()?.updated_mcp_tool_output = Some(output);
-        Ok(self)
-    }
-
     /// Sets Codex's top-level `continue` control on a structured response.
     pub fn with_continue(mut self, continue_session: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.continue_session = Some(continue_session);
@@ -439,12 +383,6 @@ impl PostToolUseOutput {
     /// Sets the top-level stop reason on a structured response.
     pub fn with_stop_reason(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.stop_reason = Some(reason.into());
-        Ok(self)
-    }
-
-    /// Sets whether Codex suppresses ordinary tool output.
-    pub fn with_suppress_output(mut self, suppress_output: bool) -> hookkit_core::Result<Self> {
-        self.structured_mut()?.suppress_output = Some(suppress_output);
         Ok(self)
     }
 
@@ -468,17 +406,6 @@ impl PostToolUseOutput {
             }
         })
     }
-
-    fn specific_mut(&mut self) -> hookkit_core::Result<&mut PostToolUseSpecific> {
-        let structured = self.structured_mut()?;
-        Ok(structured
-            .hook_specific_output
-            .get_or_insert(PostToolUseSpecific {
-                hook_event_name: "PostToolUse",
-                additional_context: None,
-                updated_mcp_tool_output: None,
-            }))
-    }
 }
 
 /// Native Codex `PostToolUse` command contract.
@@ -492,7 +419,7 @@ impl EventSpec for PostToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
     const EVENT: EventId = EventId::builtin(HarnessId::CODEX, "PostToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("codex/commit-9e552e9-r2/PostToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("codex/commit-1e59dc5-r1/PostToolUse");
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "PostToolUse")?;
@@ -584,6 +511,13 @@ pub(crate) fn require_field(
     })
 }
 
+fn require_nonempty_output_text(value: &str, field: &'static str) -> hookkit_core::Result<()> {
+    if value.trim().is_empty() {
+        return Err(hookkit_core::HookkitError::InvalidProcessEmission(field));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Compile-time selector for an implemented Codex event.
 pub enum Event {
@@ -599,6 +533,8 @@ pub enum Event {
     PreCompact,
     /// Selects [`crate::catalog::SessionStart`].
     SessionStart,
+    /// Selects [`crate::catalog::SessionEnd`].
+    SessionEnd,
     /// Selects [`crate::catalog::Stop`].
     Stop,
     /// Selects [`crate::catalog::SubagentStart`].
@@ -618,6 +554,7 @@ impl EventSelector for Event {
             Self::PostCompact => "PostCompact",
             Self::PreCompact => "PreCompact",
             Self::SessionStart => "SessionStart",
+            Self::SessionEnd => "SessionEnd",
             Self::Stop => "Stop",
             Self::SubagentStart => "SubagentStart",
             Self::SubagentStop => "SubagentStop",
@@ -724,14 +661,8 @@ mod tests {
     }
 
     #[test]
-    fn deny_without_reason_omits_reason_instead_of_emitting_null() {
-        let emission = PreToolUse::emit(PreToolUseOutput::deny(None)).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-        assert!(
-            value["hookSpecificOutput"]
-                .get("permissionDecisionReason")
-                .is_none()
-        );
+    fn deny_requires_a_nonempty_reason() {
+        assert!(PreToolUse::emit(PreToolUseOutput::deny("  ")).is_err());
     }
 
     #[test]
@@ -794,13 +725,11 @@ mod tests {
     }
 
     #[test]
-    fn ask_and_approve_are_distinct_schema_valid_outputs() {
-        let ask = PreToolUse::emit(PreToolUseOutput::ask(Some("confirm".into()))).unwrap();
-        let ask: serde_json::Value = serde_json::from_slice(ask.stdout()).unwrap();
-        assert_eq!(ask["hookSpecificOutput"]["permissionDecision"], "ask");
-        let approve = PreToolUse::emit(PreToolUseOutput::approve()).unwrap();
-        let approve: serde_json::Value = serde_json::from_slice(approve.stdout()).unwrap();
-        assert_eq!(approve["decision"], "approve");
+    fn system_message_is_the_supported_nonblocking_top_level_control() {
+        let emission =
+            PreToolUse::emit(PreToolUseOutput::system_message("policy checked")).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
+        assert_eq!(value["systemMessage"], "policy checked");
     }
 
     #[test]

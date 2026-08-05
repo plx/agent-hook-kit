@@ -26,9 +26,9 @@ fn main() -> std::process::ExitCode {
         if let Some(command) = command {
             for pattern in DENY_PATTERNS {
                 if command.contains(pattern) {
-                    return Ok(PreToolUseOutput::deny(Some(format!(
+                    return Ok(PreToolUseOutput::deny(format!(
                         "Denied: command matches blocked pattern '{pattern}'"
-                    ))));
+                    )));
                 }
             }
         }

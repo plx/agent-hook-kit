@@ -1,0 +1,52 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:codex:commit-1e59dc5-r1:subagent-start:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "SubagentStartHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "default": null,
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "SubagentStart",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SubagentStartHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "subagent-start.command.output",
+  "type": "object"
+}

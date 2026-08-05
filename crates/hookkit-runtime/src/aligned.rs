@@ -739,9 +739,13 @@ mod tests {
 
             assert_eq!(emission.exit_code(), 0);
             assert!(emission.stderr().is_empty());
+            if expected_harness == HarnessId::CODEX {
+                assert!(emission.stdout().is_empty());
+                continue;
+            }
             let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
             match expected_harness.as_str() {
-                "claude-code" | "codex" => {
+                "claude-code" => {
                     assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
                     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
                 }

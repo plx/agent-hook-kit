@@ -112,6 +112,7 @@ mod tests {
 
     const EVENTS: &[&str] = &[
         "SessionStart",
+        "SessionEnd",
         "SubagentStart",
         "PreToolUse",
         "PermissionRequest",

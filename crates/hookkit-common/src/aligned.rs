@@ -158,7 +158,7 @@ impl PreToolUseOutput {
                 ),
             )),
             "codex" => Ok(Self::Codex(
-                hookkit_codex::protocol::PreToolUseOutput::allow(),
+                hookkit_codex::protocol::PreToolUseOutput::no_op(),
             )),
             "antigravity" => Ok(Self::Antigravity(hookkit_antigravity::PreToolUseOutput {
                 decision: hookkit_antigravity::ToolDecision::Allow,
@@ -182,7 +182,7 @@ impl PreToolUseOutput {
                 ),
             )),
             "codex" => Ok(Self::Codex(
-                hookkit_codex::protocol::PreToolUseOutput::deny(Some(reason)),
+                hookkit_codex::protocol::PreToolUseOutput::deny(reason),
             )),
             "antigravity" => Ok(Self::Antigravity(hookkit_antigravity::PreToolUseOutput {
                 decision: hookkit_antigravity::ToolDecision::Deny,

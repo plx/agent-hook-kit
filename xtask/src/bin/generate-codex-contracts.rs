@@ -4,8 +4,8 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SNAPSHOT: &str = "commit-9e552e9-r2";
-const REVISION: &str = "9e552e9d15ba52bed7077d5357f3e18e330f8f38";
+const SNAPSHOT: &str = "commit-1e59dc5-r1";
+const REVISION: &str = "1e59dc5bdaa30c5cc8a488753b3a89c18f77c1bc";
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 struct Seed {
@@ -15,7 +15,7 @@ struct Seed {
     category: &'static str,
     block_effect: Option<&'static str>,
     text_context: bool,
-    structured: Value,
+    structured: Option<Value>,
 }
 
 fn main() {
@@ -37,7 +37,18 @@ fn seeds() -> Vec<Seed> {
             category: "session",
             block_effect: None,
             text_context: true,
-            structured: json!({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Load repository conventions."}}),
+            structured: Some(
+                json!({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Load repository conventions."}}),
+            ),
+        },
+        Seed {
+            file_key: "session-end",
+            wire_name: "SessionEnd",
+            rust_key: "session_end",
+            category: "session",
+            block_effect: None,
+            text_context: false,
+            structured: None,
         },
         Seed {
             file_key: "subagent-start",
@@ -46,7 +57,9 @@ fn seeds() -> Vec<Seed> {
             category: "subagent",
             block_effect: None,
             text_context: true,
-            structured: json!({"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContext":"Review test conventions."}}),
+            structured: Some(
+                json!({"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContext":"Review test conventions."}}),
+            ),
         },
         Seed {
             file_key: "permission-request",
@@ -55,7 +68,9 @@ fn seeds() -> Vec<Seed> {
             category: "tool",
             block_effect: Some("deny"),
             text_context: false,
-            structured: json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Blocked by policy."}}}),
+            structured: Some(
+                json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Blocked by policy."}}}),
+            ),
         },
         Seed {
             file_key: "post-tool-use",
@@ -64,16 +79,20 @@ fn seeds() -> Vec<Seed> {
             category: "tool",
             block_effect: Some("replace-result"),
             text_context: false,
-            structured: json!({"decision":"block","reason":"Review the output.","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Generated files changed."}}),
+            structured: Some(
+                json!({"decision":"block","reason":"Review the output.","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Generated files changed."}}),
+            ),
         },
         Seed {
             file_key: "pre-compact",
             wire_name: "PreCompact",
             rust_key: "pre_compact",
             category: "compaction",
-            block_effect: Some("deny"),
+            block_effect: None,
             text_context: false,
-            structured: json!({"continue":false,"stopReason":"Save state before compacting."}),
+            structured: Some(
+                json!({"continue":false,"stopReason":"Save state before compacting."}),
+            ),
         },
         Seed {
             file_key: "post-compact",
@@ -82,7 +101,7 @@ fn seeds() -> Vec<Seed> {
             category: "compaction",
             block_effect: None,
             text_context: false,
-            structured: json!({"systemMessage":"Compaction completed."}),
+            structured: Some(json!({"systemMessage":"Compaction completed."})),
         },
         Seed {
             file_key: "user-prompt-submit",
@@ -91,7 +110,9 @@ fn seeds() -> Vec<Seed> {
             category: "prompt",
             block_effect: Some("deny"),
             text_context: true,
-            structured: json!({"decision":"block","reason":"Ask for confirmation.","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"Clarify the reproduction."}}),
+            structured: Some(
+                json!({"decision":"block","reason":"Ask for confirmation.","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"Clarify the reproduction."}}),
+            ),
         },
         Seed {
             file_key: "subagent-stop",
@@ -100,7 +121,7 @@ fn seeds() -> Vec<Seed> {
             category: "subagent",
             block_effect: Some("continue"),
             text_context: false,
-            structured: json!({"decision":"block","reason":"Run another focused pass."}),
+            structured: Some(json!({"decision":"block","reason":"Run another focused pass."})),
         },
         Seed {
             file_key: "stop",
@@ -109,7 +130,7 @@ fn seeds() -> Vec<Seed> {
             category: "turn",
             block_effect: Some("continue"),
             text_context: false,
-            structured: json!({"decision":"block","reason":"Run the failing tests again."}),
+            structured: Some(json!({"decision":"block","reason":"Run the failing tests again."})),
         },
     ]
 }
@@ -130,10 +151,12 @@ fn generate(root: &Path, seed: Seed) {
     normalize_schema(&mut input, &seed, "input");
     write_json(&event_dir.join("input.schema.json"), &input);
 
-    let mut output =
-        read_json(&vendor.join(format!("{}.command.output.schema.json", seed.file_key)));
-    normalize_schema(&mut output, &seed, "command-output");
-    write_json(&event_dir.join("output.command.schema.json"), &output);
+    if seed.structured.is_some() {
+        let mut output =
+            read_json(&vendor.join(format!("{}.command.output.schema.json", seed.file_key)));
+        normalize_schema(&mut output, &seed, "command-output");
+        write_json(&event_dir.join("output.command.schema.json"), &output);
+    }
 
     let contract = contract(&seed);
     write_yaml(&event_dir.join("contract.yaml"), &contract);
@@ -157,16 +180,28 @@ fn normalize_schema(schema: &mut Value, seed: &Seed, suffix: &str) {
 }
 
 fn contract(seed: &Seed) -> Value {
-    let mut outcomes = vec![json!({
-        "id":"structured",
-        "effect":"event-specific-control",
-        "exit":{"exact":0},
-        "stdout":{"presence":"required","role":"protocol-value","content_kind":"json"},
-        "stderr":{"presence":"optional","role":"diagnostics","content_kind":"text","encoding":"utf-8"},
-        "output_schema":"command-response",
-        "sources":["codex-hooks-reference","codex-generated-schemas"],
-        "assurance":{"confidence":"high","verification":"source-reviewed"}
-    })];
+    let mut outcomes = if seed.structured.is_some() {
+        vec![json!({
+            "id":"structured",
+            "effect":"event-specific-control",
+            "exit":{"exact":0},
+            "stdout":{"presence":"required","role":"protocol-value","content_kind":"json"},
+            "stderr":{"presence":"optional","role":"diagnostics","content_kind":"text","encoding":"utf-8"},
+            "output_schema":"command-response",
+            "sources":["codex-hooks-reference","codex-generated-schemas"],
+            "assurance":{"confidence":"high","verification":"source-reviewed"}
+        })]
+    } else {
+        vec![json!({
+            "id":"no-op",
+            "effect":"event-specific-control",
+            "exit":{"exact":0},
+            "stdout":{"presence":"optional","role":"none","content_kind":"empty"},
+            "stderr":{"presence":"optional","role":"diagnostics","content_kind":"text","encoding":"utf-8"},
+            "sources":["codex-hooks-reference","codex-hooks-source"],
+            "assurance":{"confidence":"high","verification":"source-reviewed"}
+        })]
+    };
     if seed.text_context {
         outcomes.push(json!({
             "id":"text-context",
@@ -205,7 +240,11 @@ fn contract(seed: &Seed) -> Value {
         },
         "schemas":{
             "input":{"file":"input.schema.json","origin":"derived","sources":["codex-hooks-reference","codex-generated-schemas"],"assurance":{"confidence":"high","verification":"source-reviewed"}},
-            "outputs":[{"id":"command-response","file":"output.command.schema.json","origin":"derived","sources":["codex-hooks-reference","codex-generated-schemas"],"assurance":{"confidence":"high","verification":"source-reviewed"}}]
+            "outputs": if seed.structured.is_some() {
+                vec![json!({"id":"command-response","file":"output.command.schema.json","origin":"derived","sources":["codex-hooks-reference","codex-generated-schemas"],"assurance":{"confidence":"high","verification":"source-reviewed"}})]
+            } else {
+                Vec::<Value>::new()
+            }
         },
         "bindings":{
             "command":{
@@ -215,7 +254,7 @@ fn contract(seed: &Seed) -> Value {
             }
         },
         "fixtures":"fixtures.yaml",
-        "uncertainties":["The official generated schema includes parsed compatibility fields; runtime support restrictions from the hooks reference remain controlling."]
+        "uncertainties":["The official generated schemas include parsed compatibility fields; runtime support restrictions from the hooks reference and pinned source remain controlling."]
     })
 }
 
@@ -259,18 +298,56 @@ fn fixtures(seed: &Seed, input_schema: &Value) -> Value {
         .as_object_mut()
         .expect("input object")
         .remove(missing);
+    let mut negative = vec![
+        json!({"id":"wrong-discriminator","origin":"regression","sources":["codex-generated-schemas"],"value":wrong,"expected_pointer":"/hook_event_name","expected_keyword":"const"}),
+        json!({"id":format!("missing-{missing}"),"origin":"synthesized","sources":["codex-generated-schemas"],"value":missing_value,"expected_pointer":"","expected_keyword":"required"}),
+    ];
+    if seed.wire_name == "SessionEnd" {
+        let mut invalid_reason = minimal.clone();
+        invalid_reason["reason"] = json!("exit");
+        negative.push(json!({
+            "id":"invalid-reason",
+            "origin":"regression",
+            "sources":["codex-hooks-reference","codex-generated-schemas"],
+            "value":invalid_reason,
+            "expected_pointer":"/reason",
+            "expected_keyword":"const"
+        }));
+    }
 
-    let structured_bytes = serde_json::to_vec(&seed.structured).expect("serialize output");
-    let mut process = vec![json!({
-        "id":"structured",
-        "binding":"command",
-        "outcome":"structured",
-        "exit_code":0,
-        "stdout_base64":base64::engine::general_purpose::STANDARD.encode(&structured_bytes),
-        "stdout_sha256":sha256(&structured_bytes),
-        "stderr_base64":"",
-        "stderr_sha256":EMPTY_SHA256
-    })];
+    let mut output = Vec::new();
+    let mut process = Vec::new();
+    if let Some(structured) = &seed.structured {
+        let structured_bytes = serde_json::to_vec(structured).expect("serialize output");
+        output.push(json!({
+            "id":"structured",
+            "schema":"command-response",
+            "origin":"synthesized",
+            "sources":["codex-hooks-reference","codex-generated-schemas"],
+            "value":structured
+        }));
+        process.push(json!({
+            "id":"structured",
+            "binding":"command",
+            "outcome":"structured",
+            "exit_code":0,
+            "stdout_base64":base64::engine::general_purpose::STANDARD.encode(&structured_bytes),
+            "stdout_sha256":sha256(&structured_bytes),
+            "stderr_base64":"",
+            "stderr_sha256":EMPTY_SHA256
+        }));
+    } else {
+        process.push(json!({
+            "id":"no-op",
+            "binding":"command",
+            "outcome":"no-op",
+            "exit_code":0,
+            "stdout_base64":"",
+            "stdout_sha256":EMPTY_SHA256,
+            "stderr_base64":"",
+            "stderr_sha256":EMPTY_SHA256
+        }));
+    }
     if seed.text_context {
         let text = b"Hook-provided developer context.";
         process.push(json!({
@@ -305,14 +382,9 @@ fn fixtures(seed: &Seed, input_schema: &Value) -> Value {
                 {"id":"minimal","origin":"synthesized","sources":["codex-generated-schemas"],"value":minimal},
                 {"id":"representative","origin":"synthesized","sources":["codex-hooks-reference","codex-generated-schemas"],"value":representative}
             ],
-            "negative":[
-                {"id":"wrong-discriminator","origin":"regression","sources":["codex-generated-schemas"],"value":wrong,"expected_pointer":"/hook_event_name","expected_keyword":"const"},
-                {"id":format!("missing-{missing}"),"origin":"synthesized","sources":["codex-generated-schemas"],"value":missing_value,"expected_pointer":"","expected_keyword":"required"}
-            ]
+            "negative":negative
         },
-        "output":[
-            {"id":"structured","schema":"command-response","origin":"synthesized","sources":["codex-hooks-reference","codex-generated-schemas"],"value":seed.structured}
-        ],
+        "output":output,
         "process":process
     })
 }

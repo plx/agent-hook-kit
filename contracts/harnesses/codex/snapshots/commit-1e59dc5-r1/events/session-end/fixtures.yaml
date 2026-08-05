@@ -1,0 +1,71 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      reason: other
+      session_id: session-1
+      transcript_path: null
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-reason
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      session_id: session-1
+      transcript_path: null
+  - expected_keyword: const
+    expected_pointer: /reason
+    id: invalid-reason
+    origin: regression
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      reason: exit
+      session_id: session-1
+      transcript_path: null
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      reason: other
+      session_id: session-1
+      transcript_path: null
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      reason: other
+      session_id: session-1
+      transcript_path: /tmp/transcript.jsonl
+output: []
+process:
+- binding: command
+  exit_code: 0
+  id: no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

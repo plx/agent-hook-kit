@@ -1,0 +1,70 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:codex:commit-1e59dc5-r1:user-prompt-submit:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "BlockDecisionWire": {
+      "enum": [
+        "block"
+      ],
+      "type": "string"
+    },
+    "UserPromptSubmitHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "default": null,
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "UserPromptSubmit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "decision": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/BlockDecisionWire"
+        }
+      ],
+      "default": null
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/UserPromptSubmitHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "reason": {
+      "default": null,
+      "type": "string"
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "user-prompt-submit.command.output",
+  "type": "object"
+}

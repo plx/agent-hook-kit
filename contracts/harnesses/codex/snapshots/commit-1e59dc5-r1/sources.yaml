@@ -1,0 +1,27 @@
+format_version: 1
+sources:
+  - id: codex-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://learn.chatgpt.com/docs/hooks
+    retrieved: 2026-08-04
+    content_sha256: b5cf66c826ba473aa5bf130ae8c6201078225a17294ee60fe381b7bae3704da8
+    reproducibility: unreproducible
+    limitations:
+      - The remote documentation hash has no checked-in capture or deterministic retrieval recipe.
+  - id: codex-generated-schemas
+    kind: official-source
+    authority: primary
+    url: https://github.com/openai/codex/tree/1e59dc5bdaa30c5cc8a488753b3a89c18f77c1bc/codex-rs/hooks/schema/generated
+    retrieved: 2026-08-04
+    revision: 1e59dc5bdaa30c5cc8a488753b3a89c18f77c1bc
+    license: Apache-2.0
+    reproducibility: vendored
+  - id: codex-hooks-source
+    kind: official-source
+    authority: primary
+    url: https://github.com/openai/codex/tree/1e59dc5bdaa30c5cc8a488753b3a89c18f77c1bc/codex-rs/hooks
+    retrieved: 2026-08-04
+    revision: 1e59dc5bdaa30c5cc8a488753b3a89c18f77c1bc
+    license: Apache-2.0
+    reproducibility: pinned-revision

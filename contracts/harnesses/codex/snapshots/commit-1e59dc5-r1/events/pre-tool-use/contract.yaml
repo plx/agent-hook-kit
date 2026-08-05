@@ -1,0 +1,53 @@
+format_version: 1
+id: codex/commit-1e59dc5-r1/PreToolUse
+harness: codex
+snapshot: commit-1e59dc5-r1
+event:
+  wire_name: PreToolUse
+  rust_key: pre_tool_use
+  category: tool
+  identification:
+    inferability: definitive
+    discriminator: { json_pointer: /hook_event_name, const: PreToolUse }
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources: [codex-hooks-reference, codex-generated-schemas]
+    assurance: { confidence: high, verification: source-reviewed }
+  outputs:
+    - id: command-response
+      file: output.command.schema.json
+      origin: derived
+      sources: [codex-hooks-reference, codex-generated-schemas]
+      assurance: { confidence: high, verification: source-reviewed }
+bindings:
+  command:
+    kind: process
+    request: { channel: stdin, framing: single-document-at-eof, content_kind: json }
+    outcomes:
+      - id: no-op
+        effect: continue
+        exit: { exact: 0 }
+        stdout: { presence: optional, role: protocol-value, content_kind: empty }
+        stderr: { presence: optional, role: diagnostics, content_kind: text, encoding: utf-8 }
+        sources: [codex-hooks-reference]
+        assurance: { confidence: medium, verification: source-reviewed }
+      - id: control
+        effect: control
+        exit: { exact: 0 }
+        stdout: { presence: required, role: protocol-value, content_kind: json }
+        stderr: { presence: optional, role: diagnostics, content_kind: text, encoding: utf-8 }
+        output_schema: command-response
+        sources: [codex-hooks-reference, codex-generated-schemas]
+        assurance: { confidence: high, verification: source-reviewed }
+      - id: block-stderr
+        effect: deny
+        exit: { exact: 2 }
+        stdout: { presence: forbidden, role: none, content_kind: empty }
+        stderr: { presence: required, role: agent-context, content_kind: text, encoding: utf-8 }
+        sources: [codex-hooks-reference]
+        assurance: { confidence: medium, verification: source-reviewed }
+fixtures: fixtures.yaml
+uncertainties:
+  - The Draft 2020-12 root preserves the complete vendored output surface; contextual restrictions described by hook documentation are enforced by typed output constructors rather than by narrowing the catalog schema.
