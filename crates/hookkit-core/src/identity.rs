@@ -11,8 +11,6 @@ impl HarnessId {
     pub const CLAUDE_CODE: Self = Self(Cow::Borrowed("claude-code"));
     /// Built-in identity for Codex CLI.
     pub const CODEX: Self = Self(Cow::Borrowed("codex"));
-    /// Built-in identity for Gemini CLI.
-    pub const GEMINI_CLI: Self = Self(Cow::Borrowed("gemini-cli"));
     /// Built-in identity for Antigravity.
     pub const ANTIGRAVITY: Self = Self(Cow::Borrowed("antigravity"));
 
@@ -53,8 +51,6 @@ pub enum BuiltinHarness {
     ClaudeCode,
     /// Codex CLI's hook protocol.
     Codex,
-    /// Gemini CLI's hook protocol.
-    GeminiCli,
     /// Antigravity's hook protocol.
     Antigravity,
 }
@@ -65,7 +61,6 @@ impl BuiltinHarness {
         match self {
             Self::ClaudeCode => HarnessId::CLAUDE_CODE,
             Self::Codex => HarnessId::CODEX,
-            Self::GeminiCli => HarnessId::GEMINI_CLI,
             Self::Antigravity => HarnessId::ANTIGRAVITY,
         }
     }

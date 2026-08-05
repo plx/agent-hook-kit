@@ -50,15 +50,6 @@ fn input(harness: &str, cwd: &Path, path: &str) -> serde_json::Value {
             "tool_use_id": "call",
             "tool_input": {"path": path}
         }),
-        "gemini" => serde_json::json!({
-            "session_id": "session",
-            "transcript_path": "/tmp/transcript.jsonl",
-            "cwd": cwd,
-            "hook_event_name": "BeforeTool",
-            "timestamp": "2026-07-19T00:00:00Z",
-            "tool_name": "read_file",
-            "tool_input": {"path": path}
-        }),
         "antigravity" => serde_json::json!({
             "conversationId": "session",
             "workspacePaths": [cwd],
@@ -88,23 +79,12 @@ fn run(harness: &str, config: &Path, input: &serde_json::Value) -> std::process:
         .or_else(|| input.get("workspacePaths").and_then(|roots| roots.get(0)))
         .and_then(serde_json::Value::as_str)
         .unwrap();
-    match harness {
-        "claude" => {
-            command
-                .env("CLAUDECODE", "1")
-                .env("CLAUDE_CODE_CHILD_SESSION", "1")
-                .env("CLAUDE_CODE_SESSION_ID", "session")
-                .env("CLAUDE_PROJECT_DIR", cwd);
-        }
-        "gemini" => {
-            command
-                .env("GEMINI_PROJECT_DIR", cwd)
-                .env("GEMINI_PLANS_DIR", format!("{cwd}/.gemini/plans"))
-                .env("GEMINI_CWD", cwd)
-                .env("GEMINI_SESSION_ID", "session")
-                .env("CLAUDE_PROJECT_DIR", cwd);
-        }
-        _ => {}
+    if harness == "claude" {
+        command
+            .env("CLAUDECODE", "1")
+            .env("CLAUDE_CODE_CHILD_SESSION", "1")
+            .env("CLAUDE_CODE_SESSION_ID", "session")
+            .env("CLAUDE_PROJECT_DIR", cwd);
     }
     let mut child = command.spawn().unwrap();
     child
@@ -135,7 +115,7 @@ fn every_aligned_harness_emits_native_deny_and_allow() {
     )
     .unwrap();
 
-    for harness in ["claude", "codex", "gemini", "antigravity"] {
+    for harness in ["claude", "codex", "antigravity"] {
         let denied = run(harness, &config, &input(harness, &temporary.0, ".env"));
         assert!(denied.status.success(), "{harness}: {:?}", denied.stderr);
         assert_eq!(decision(&denied), "deny", "{harness}");
@@ -178,10 +158,6 @@ fn clear_hook_environment(command: &mut Command) {
         "CLAUDE_PLUGIN_DATA",
         "PLUGIN_ROOT",
         "PLUGIN_DATA",
-        "GEMINI_PROJECT_DIR",
-        "GEMINI_PLANS_DIR",
-        "GEMINI_CWD",
-        "GEMINI_SESSION_ID",
     ] {
         command.env_remove(name);
     }

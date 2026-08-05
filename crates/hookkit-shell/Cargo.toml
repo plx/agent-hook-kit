@@ -15,15 +15,13 @@ default = []
 serde = ["dep:serde"]
 claude = ["dep:hookkit-claude"]
 codex = ["dep:hookkit-codex"]
-gemini = ["dep:hookkit-gemini"]
 antigravity = ["dep:hookkit-antigravity"]
-all-harnesses = ["claude", "codex", "gemini", "antigravity"]
+all-harnesses = ["claude", "codex", "antigravity"]
 
 [dependencies]
 hookkit-core = { workspace = true }
 hookkit-claude = { workspace = true, optional = true }
 hookkit-codex = { workspace = true, optional = true }
-hookkit-gemini = { workspace = true, optional = true }
 hookkit-antigravity = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true }

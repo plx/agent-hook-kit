@@ -11,8 +11,6 @@ pub enum PreToolUseCommandEnvironment {
     Claude(hookkit_claude::ClaudeCommandEnvironment),
     /// Codex's native command environment.
     Codex(hookkit_codex::CodexCommandEnvironment),
-    /// Gemini CLI's native command environment.
-    Gemini(hookkit_gemini::GeminiCommandEnvironment),
     /// Antigravity's native command environment.
     Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
 }
@@ -23,7 +21,6 @@ impl PreToolUseCommandEnvironment {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -62,9 +59,7 @@ impl<'a> ToolInputRef<'a> {
 
 /// Lossless aligned pre-tool input.
 ///
-/// Native event names remain distinct: Claude Code and Codex use
-/// `PreToolUse`, Gemini CLI uses `BeforeTool`, and Antigravity uses
-/// `PreToolUse`.
+/// All supported harnesses use the native event name `PreToolUse`.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PreToolUseInput {
@@ -72,8 +67,6 @@ pub enum PreToolUseInput {
     Claude(hookkit_claude::catalog::CatalogInput),
     /// Codex's native `PreToolUse` input.
     Codex(hookkit_codex::protocol::PreToolUseInput),
-    /// Gemini CLI's native `BeforeTool` input.
-    Gemini(hookkit_gemini::protocol::BeforeToolInput),
     /// Antigravity's native `PreToolUse` input.
     Antigravity(hookkit_antigravity::PreToolUseInput),
 }
@@ -84,7 +77,6 @@ impl PreToolUseInput {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -94,7 +86,6 @@ impl PreToolUseInput {
         match self {
             Self::Claude(_) => hookkit_claude::catalog::PreToolUse::EVENT,
             Self::Codex(_) => hookkit_codex::protocol::PreToolUse::EVENT,
-            Self::Gemini(_) => hookkit_gemini::protocol::BeforeTool::EVENT,
             Self::Antigravity(_) => hookkit_antigravity::PreToolUse::EVENT,
         }
     }
@@ -107,7 +98,6 @@ impl PreToolUseInput {
         match self {
             Self::Claude(input) => Cow::Owned(vec![input.cwd.clone()]),
             Self::Codex(input) => Cow::Owned(vec![input.cwd.clone()]),
-            Self::Gemini(input) => Cow::Owned(vec![input.cwd.clone()]),
             Self::Antigravity(input) => Cow::Borrowed(&input.workspace_paths),
         }
     }
@@ -119,7 +109,6 @@ impl PreToolUseInput {
         match self {
             Self::Claude(input) => Some(&input.cwd),
             Self::Codex(input) => Some(&input.cwd),
-            Self::Gemini(input) => Some(&input.cwd),
             Self::Antigravity(_) => None,
         }
     }
@@ -129,7 +118,6 @@ impl PreToolUseInput {
         match self {
             Self::Claude(input) => input.field("tool_name").and_then(serde_json::Value::as_str),
             Self::Codex(input) => Some(&input.tool_name),
-            Self::Gemini(input) => Some(&input.tool_name),
             Self::Antigravity(input) => Some(&input.tool_call.name),
         }
     }
@@ -139,7 +127,6 @@ impl PreToolUseInput {
         match self {
             Self::Claude(input) => input.field("tool_input").map(ToolInputRef::Value),
             Self::Codex(input) => Some(ToolInputRef::Value(&input.tool_input)),
-            Self::Gemini(input) => Some(ToolInputRef::Object(&input.tool_input)),
             Self::Antigravity(input) => Some(ToolInputRef::Object(&input.tool_call.args)),
         }
     }
@@ -154,8 +141,6 @@ pub enum PreToolUseOutput {
     Claude(hookkit_claude::catalog::PreToolUseOutput),
     /// Codex's native `PreToolUse` output.
     Codex(hookkit_codex::protocol::PreToolUseOutput),
-    /// Gemini CLI's native `BeforeTool` output.
-    Gemini(hookkit_gemini::protocol::BeforeToolOutput),
     /// Antigravity's native `PreToolUse` output.
     Antigravity(hookkit_antigravity::PreToolUseOutput),
 }
@@ -174,9 +159,6 @@ impl PreToolUseOutput {
             )),
             "codex" => Ok(Self::Codex(
                 hookkit_codex::protocol::PreToolUseOutput::allow(),
-            )),
-            "gemini-cli" => Ok(Self::Gemini(
-                hookkit_gemini::protocol::BeforeToolOutput::allow(),
             )),
             "antigravity" => Ok(Self::Antigravity(hookkit_antigravity::PreToolUseOutput {
                 decision: hookkit_antigravity::ToolDecision::Allow,
@@ -202,9 +184,6 @@ impl PreToolUseOutput {
             "codex" => Ok(Self::Codex(
                 hookkit_codex::protocol::PreToolUseOutput::deny(Some(reason)),
             )),
-            "gemini-cli" => Ok(Self::Gemini(
-                hookkit_gemini::protocol::BeforeToolOutput::deny(reason),
-            )),
             "antigravity" => Ok(Self::Antigravity(hookkit_antigravity::PreToolUseOutput {
                 decision: hookkit_antigravity::ToolDecision::Deny,
                 reason: Some(reason),
@@ -219,7 +198,6 @@ impl PreToolUseOutput {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -229,7 +207,6 @@ impl PreToolUseOutput {
         match self {
             Self::Claude(_) => hookkit_claude::catalog::PreToolUse::EVENT,
             Self::Codex(_) => hookkit_codex::protocol::PreToolUse::EVENT,
-            Self::Gemini(_) => hookkit_gemini::protocol::BeforeTool::EVENT,
             Self::Antigravity(_) => hookkit_antigravity::PreToolUse::EVENT,
         }
     }
@@ -250,8 +227,6 @@ pub enum PostToolUseCommandEnvironment {
     Claude(hookkit_claude::ClaudeCommandEnvironment),
     /// Codex's native command environment.
     Codex(hookkit_codex::CodexCommandEnvironment),
-    /// Gemini CLI's native command environment.
-    Gemini(hookkit_gemini::GeminiCommandEnvironment),
     /// Antigravity's native command environment.
     Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
 }
@@ -262,7 +237,6 @@ impl PostToolUseCommandEnvironment {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -276,8 +250,6 @@ pub enum PostToolUseInput {
     Claude(hookkit_claude::protocol::PostToolUseInput),
     /// Codex's native `PostToolUse` input.
     Codex(hookkit_codex::protocol::PostToolUseInput),
-    /// Gemini CLI's native `AfterTool` input.
-    Gemini(hookkit_gemini::protocol::AfterToolInput),
     /// Antigravity's native `PostToolUse` input.
     Antigravity(hookkit_antigravity::PostToolUseInput),
 }
@@ -288,7 +260,6 @@ impl PostToolUseInput {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -298,7 +269,6 @@ impl PostToolUseInput {
         match self {
             Self::Claude(_) => hookkit_claude::protocol::PostToolUse::EVENT,
             Self::Codex(_) => hookkit_codex::protocol::PostToolUse::EVENT,
-            Self::Gemini(_) => hookkit_gemini::protocol::AfterTool::EVENT,
             Self::Antigravity(_) => hookkit_antigravity::PostToolUse::EVENT,
         }
     }
@@ -308,7 +278,6 @@ impl PostToolUseInput {
         match self {
             Self::Claude(input) => Cow::Owned(vec![input.cwd.clone()]),
             Self::Codex(input) => Cow::Owned(vec![input.cwd.clone()]),
-            Self::Gemini(input) => Cow::Owned(vec![input.cwd.clone()]),
             Self::Antigravity(input) => Cow::Borrowed(&input.workspace_paths),
         }
     }
@@ -322,8 +291,6 @@ pub enum PostToolUseOutput {
     Claude(hookkit_claude::protocol::PostToolUseOutput),
     /// Codex's native `PostToolUse` output.
     Codex(hookkit_codex::protocol::PostToolUseOutput),
-    /// Gemini CLI's native `AfterTool` output.
-    Gemini(hookkit_gemini::protocol::AfterToolOutput),
     /// Antigravity's native `PostToolUse` output.
     Antigravity(hookkit_antigravity::PostToolUseOutput),
 }
@@ -336,8 +303,6 @@ pub enum TurnCompletionCommandEnvironment {
     Claude(hookkit_claude::ClaudeCommandEnvironment),
     /// Codex's native command environment.
     Codex(hookkit_codex::CodexCommandEnvironment),
-    /// Gemini CLI's native command environment.
-    Gemini(hookkit_gemini::GeminiCommandEnvironment),
     /// Antigravity's native command environment.
     Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
 }
@@ -348,7 +313,6 @@ impl TurnCompletionCommandEnvironment {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -356,8 +320,7 @@ impl TurnCompletionCommandEnvironment {
 
 /// The event at which one agent turn is about to complete.
 ///
-/// Native names and values remain intact: Claude Code and Codex use `Stop`,
-/// Gemini CLI uses `AfterAgent`, and Antigravity uses `Stop`.
+/// All supported harnesses use the native event name `Stop`.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TurnCompletionInput {
@@ -365,8 +328,6 @@ pub enum TurnCompletionInput {
     Claude(hookkit_claude::catalog::CatalogInput),
     /// Codex's native `Stop` input.
     Codex(hookkit_codex::catalog::CatalogInput),
-    /// Gemini CLI's native `AfterAgent` input.
-    Gemini(hookkit_gemini::catalog::CatalogInput),
     /// Antigravity's native `Stop` input.
     Antigravity(hookkit_antigravity::StopInput),
 }
@@ -377,7 +338,6 @@ impl TurnCompletionInput {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -387,7 +347,6 @@ impl TurnCompletionInput {
         match self {
             Self::Claude(_) => hookkit_claude::catalog::Stop::EVENT,
             Self::Codex(_) => hookkit_codex::catalog::Stop::EVENT,
-            Self::Gemini(_) => hookkit_gemini::catalog::AfterAgent::EVENT,
             Self::Antigravity(_) => hookkit_antigravity::Stop::EVENT,
         }
     }
@@ -397,7 +356,6 @@ impl TurnCompletionInput {
         match self {
             Self::Claude(input) => Cow::Owned(vec![input.cwd.clone()]),
             Self::Codex(input) => Cow::Owned(vec![input.cwd.clone()]),
-            Self::Gemini(input) => Cow::Owned(vec![input.cwd.clone()]),
             Self::Antigravity(input) => Cow::Borrowed(&input.workspace_paths),
         }
     }
@@ -411,8 +369,6 @@ pub enum TurnCompletionOutput {
     Claude(hookkit_claude::catalog::StopOutput),
     /// Codex's native `Stop` output.
     Codex(hookkit_codex::catalog::StopOutput),
-    /// Gemini CLI's native `AfterAgent` output.
-    Gemini(hookkit_gemini::catalog::AfterAgentOutput),
     /// Antigravity's native `Stop` output.
     Antigravity(hookkit_antigravity::StopOutput),
 }
@@ -423,7 +379,6 @@ impl TurnCompletionOutput {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -433,7 +388,6 @@ impl TurnCompletionOutput {
         match self {
             Self::Claude(_) => hookkit_claude::catalog::Stop::EVENT,
             Self::Codex(_) => hookkit_codex::catalog::Stop::EVENT,
-            Self::Gemini(_) => hookkit_gemini::catalog::AfterAgent::EVENT,
             Self::Antigravity(_) => hookkit_antigravity::Stop::EVENT,
         }
     }
@@ -445,7 +399,6 @@ impl PostToolUseOutput {
         match self {
             Self::Claude(_) => HarnessId::CLAUDE_CODE,
             Self::Codex(_) => HarnessId::CODEX,
-            Self::Gemini(_) => HarnessId::GEMINI_CLI,
             Self::Antigravity(_) => HarnessId::ANTIGRAVITY,
         }
     }
@@ -455,7 +408,6 @@ impl PostToolUseOutput {
         match self {
             Self::Claude(_) => hookkit_claude::protocol::PostToolUse::EVENT,
             Self::Codex(_) => hookkit_codex::protocol::PostToolUse::EVENT,
-            Self::Gemini(_) => hookkit_gemini::protocol::AfterTool::EVENT,
             Self::Antigravity(_) => hookkit_antigravity::PostToolUse::EVENT,
         }
     }

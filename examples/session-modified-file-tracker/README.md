@@ -7,10 +7,9 @@ aligned observer; new installations should bind the shipped binary:
 ```bash
 file-activity-agent-hook --claude
 file-activity-agent-hook --codex
-file-activity-agent-hook --gemini
 ```
 
-The example keeps `--harness=claude|codex|gemini` and `--state-dir=PATH`
+The example keeps `--harness=claude|codex` and `--state-dir=PATH`
 compatible, while the shipped binary accepts those aliases as well.
 
 The hook uses `hookkit-file-activity` to classify known structured writer
@@ -57,8 +56,7 @@ The library also exposes an opt-in `GitDirty` fallback. It is disabled by
 default because a dirty working tree cannot distinguish agent edits from
 changes that predated the session.
 
-Checked-in Codex and Gemini fixtures make the state layout easy to inspect. For
-example:
+A checked-in Codex fixture makes the state layout easy to inspect. For example:
 
 ```bash
 target/debug/session-modified-file-tracker \
@@ -75,13 +73,13 @@ combined result for a complete audit log.
 
 ## API findings
 
-- The aligned `PostToolUse` API makes the Claude, Codex, and Gemini executable
+- The aligned `PostToolUse` API makes the Claude Code and Codex executable
   genuinely shared while preserving native input and output arms.
 - Antigravity is not offered as a mode: its `PostToolUse` payload has no tool
   call or arguments, while observing `PreToolUse` would require returning a
   permission decision and would record attempts rather than completed calls.
-- Aligned `TurnCompletion` maps Claude/Codex `Stop`, Gemini `AfterAgent`, and
-  Antigravity `Stop` without erasing their native contracts. Antigravity still
+- Aligned `TurnCompletion` maps Claude Code, Codex, and Antigravity `Stop`
+  without erasing their native contracts. Antigravity still
   cannot contribute modified paths because its `PostToolUse` omits the tool
   call.
 - The tracker and consumer coordinate only through the versioned

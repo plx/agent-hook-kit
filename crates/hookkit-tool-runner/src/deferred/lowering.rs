@@ -12,7 +12,7 @@ struct HarnessCapabilities {
     warning_fallback: Option<&'static str>,
 }
 
-/// The exact native Stop/AfterAgent audience capability matrix. An absent
+/// The exact native Stop audience capability matrix. An absent
 /// channel means that using a syntactically valid native field would not
 /// faithfully deliver that audience at this completion state.
 fn capabilities(harness: &HarnessId) -> Option<HarnessCapabilities> {
@@ -25,13 +25,6 @@ fn capabilities(harness: &HarnessId) -> Option<HarnessCapabilities> {
             warning_fallback: None,
         }),
         "codex" => Some(HarnessCapabilities {
-            allowed_user: Some("systemMessage"),
-            allowed_agent: None,
-            blocked_user: Some("systemMessage"),
-            blocked_agent: Some("reason"),
-            warning_fallback: None,
-        }),
-        "gemini-cli" => Some(HarnessCapabilities {
             allowed_user: Some("systemMessage"),
             allowed_agent: None,
             blocked_user: Some("systemMessage"),
@@ -269,17 +262,6 @@ fn build_native_output(
                 None => native,
             }))
         }
-        "gemini-cli" => {
-            let native = if blocked {
-                hookkit_gemini::catalog::AfterAgentOutput::deny(agent.unwrap_or_default(), false)
-            } else {
-                hookkit_gemini::catalog::AfterAgentOutput::no_op()
-            };
-            Ok(TurnCompletionOutput::Gemini(match user {
-                Some(user) => native.with_system_message(user)?,
-                None => native,
-            }))
-        }
         "antigravity" => Ok(TurnCompletionOutput::Antigravity(
             hookkit_antigravity::StopOutput {
                 decision: if blocked { "continue" } else { "stop" }.into(),
@@ -316,13 +298,11 @@ mod tests {
         assert!(claude.blocked_user.is_some());
         assert!(claude.blocked_agent.is_some());
 
-        for harness in [HarnessId::CODEX, HarnessId::GEMINI_CLI] {
-            let matrix = capabilities(&harness).unwrap();
-            assert!(matrix.allowed_user.is_some());
-            assert!(matrix.allowed_agent.is_none());
-            assert!(matrix.blocked_user.is_some());
-            assert!(matrix.blocked_agent.is_some());
-        }
+        let codex = capabilities(&HarnessId::CODEX).unwrap();
+        assert!(codex.allowed_user.is_some());
+        assert!(codex.allowed_agent.is_none());
+        assert!(codex.blocked_user.is_some());
+        assert!(codex.blocked_agent.is_some());
 
         let antigravity = capabilities(&HarnessId::ANTIGRAVITY).unwrap();
         assert!(antigravity.allowed_user.is_none());

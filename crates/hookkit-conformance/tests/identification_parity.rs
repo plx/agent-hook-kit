@@ -93,7 +93,6 @@ fn production_descriptors() -> Vec<IdentificationDescriptor> {
     let mut descriptors = Vec::new();
     descriptors.extend(hookkit_claude::protocol::identification_descriptors());
     descriptors.extend(hookkit_codex::protocol::identification_descriptors());
-    descriptors.extend(hookkit_gemini::protocol::identification_descriptors());
     descriptors.extend(hookkit_antigravity::identification_descriptors());
     descriptors
 }

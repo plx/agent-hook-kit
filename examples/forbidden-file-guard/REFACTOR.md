@@ -8,8 +8,8 @@ its shell handling onto `hookkit-shell`.
 
 The implementation has since moved again, from direct `hookkit-shell` use to
 the phase-agnostic `hookkit-tool-access` analyzer and bounded target resolver.
-One aligned `hookkit-common::PreToolUse` handler now covers Claude, Codex,
-Gemini, and Antigravity while preserving each harness's native allow/deny
+One aligned `hookkit-common::PreToolUse` handler now covers Claude Code, Codex,
+and Antigravity while preserving each harness's native allow/deny
 output.
 
 Structured fields, patch operations, shell inference, fallback evidence, and

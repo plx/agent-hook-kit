@@ -1307,9 +1307,9 @@ mod tests {
         let raw = hookkit_core::RawInvocation::parse(b"{}".to_vec()).unwrap();
         let timestamp = "2026-07-12T01:02:03Z";
         let context = hookkit_core::RuntimeContext::new(
-            HarnessId::GEMINI_CLI,
+            HarnessId::CLAUDE_CODE,
             hookkit_core::SnapshotId::builtin("test"),
-            hookkit_core::EventId::builtin(HarnessId::GEMINI_CLI, "SessionStart"),
+            hookkit_core::EventId::builtin(HarnessId::CLAUDE_CODE, "SessionStart"),
             hookkit_core::ContractId::builtin("test"),
             hookkit_core::ResolutionProvenance::TypedStatic,
             &raw,

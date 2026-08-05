@@ -49,10 +49,6 @@ fn production_environment_selectors_match_the_selected_supplement() {
             "codex".to_string(),
             selectors::<hookkit_codex::CodexCommandEnvironment>(),
         ),
-        (
-            "gemini-cli".to_string(),
-            selectors::<hookkit_gemini::GeminiCommandEnvironment>(),
-        ),
     ]);
 
     assert_eq!(actual, expected);

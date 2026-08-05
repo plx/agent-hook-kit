@@ -1,2 +1,0 @@
-buildifier format: changed BUILD.bazel
-hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

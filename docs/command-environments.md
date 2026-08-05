@@ -1,7 +1,7 @@
 # Command-hook environments
 
-Hook input is not always confined to JSON on stdin. Claude Code, Codex, and
-Gemini CLI also put harness state in a command hook's process environment.
+Hook input is not always confined to JSON on stdin. Claude Code and Codex also
+put harness state in a command hook's process environment.
 `agent-hook-kit` parses that state into a harness-native type and passes it to
 the handler explicitly:
 
@@ -12,7 +12,7 @@ stdin bytes + declared environment variables
     -> native command output
 ```
 
-This page describes the selected 57-event inventory. The contract is scoped to
+This page describes the selected 46-event inventory. The contract is scoped to
 the **command handler binding**. HTTP handlers receive request data, not a hook
 subprocess environment; Claude HTTP header interpolation is a separate,
 allowlisted configuration feature. HTTP, prompt, agent, MCP, and other
@@ -25,8 +25,8 @@ iteration, not alternate runtime paths supplied elsewhere in the workspace.
 dynamic prefixes declared by a `CommandEnvironmentSpec`. It is not a snapshot of
 the complete child process environment.
 
-A command may still inherit arbitrary parent-process variables, and Codex and
-Gemini hook configuration can add or override variables. Those ambient and
+A command may still inherit arbitrary parent-process variables, and Codex hook
+configuration can add or override variables. Those ambient and
 user-configured values are not harness identity or lifecycle state, so the
 library does not place them in the typed contract. In particular:
 
@@ -45,7 +45,7 @@ library does not place them in the typed contract. In particular:
 ## Exhaustive event/environment matrix
 
 The rows below name every event in the selected snapshots: 31 Claude Code, 10
-Codex, 11 Gemini CLI, and 5 Antigravity events.
+Codex, and 5 Antigravity events.
 
 For every Claude Code row, the required baseline is `CLAUDECODE=1`,
 `CLAUDE_CODE_CHILD_SESSION=1`, `CLAUDE_CODE_SESSION_ID`, and
@@ -64,7 +64,6 @@ For every Claude Code row, the required baseline is `CLAUDECODE=1`,
 | Claude Code — `ClaudeCommandEnvironment` | `SessionStart`, `Setup`, `CwdChanged`, `FileChanged` | Claude baseline and conditionals above; `CLAUDE_ENV_FILE` is required and non-empty on these four events. |
 | Claude Code — `ClaudeCommandEnvironment` | `InstructionsLoaded`, `UserPromptSubmit`, `UserPromptExpansion`, `MessageDisplay`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `PermissionDenied`, `Notification`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `Stop`, `StopFailure`, `TeammateIdle`, `ConfigChange`, `DirectoryAdded`, `WorktreeCreate`, `WorktreeRemove`, `PreCompact`, `PostCompact`, `SessionEnd`, `Elicitation`, `ElicitationResult` | Claude baseline and conditionals above. `CLAUDE_ENV_FILE` is ignored for these events. |
 | Codex — `CodexCommandEnvironment` | `SessionStart`, `SubagentStart`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `UserPromptSubmit`, `SubagentStop`, `Stop` | Ordinary hooks have no modeled Codex variable. Plugin hooks provide `PLUGIN_ROOT`, `PLUGIN_DATA`, `CLAUDE_PLUGIN_ROOT`, and `CLAUDE_PLUGIN_DATA` together; the Claude-compatible aliases must equal the canonical paths. |
-| Gemini CLI — `GeminiCommandEnvironment` | `SessionStart`, `BeforeAgent`, `BeforeModel`, `BeforeToolSelection`, `BeforeTool`, `AfterTool`, `AfterModel`, `AfterAgent`, `Notification`, `PreCompress`, `SessionEnd` | All five names are present: `GEMINI_PROJECT_DIR`, `GEMINI_PLANS_DIR`, `GEMINI_CWD`, `GEMINI_SESSION_ID`, and compatibility alias `CLAUDE_PROJECT_DIR`. Handler-specific `env` configuration is applied last upstream, so parsing preserves the resulting values exactly, including an empty or unequal override. |
 | Antigravity — `AntigravityCommandEnvironment` | `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop` | No environment variable is defined by the official hook contract. Invocation state remains in stdin JSON. |
 
 <!-- markdownlint-enable MD013 -->
@@ -136,25 +135,6 @@ fn execute_fixture(bytes: Vec<u8>) -> hookkit_core::Result<()> {
 }
 ```
 
-Native environment parsers can also be exercised directly with `from_map`:
-
-```rust
-use hookkit_core::{EnvironmentVariables, EventId, HarnessId};
-use hookkit_gemini::GeminiCommandEnvironment;
-
-fn gemini_environment() -> hookkit_core::Result<GeminiCommandEnvironment> {
-    let event = EventId::builtin(HarnessId::GEMINI_CLI, "BeforeTool");
-    let variables = EnvironmentVariables::from_pairs([
-        ("GEMINI_PROJECT_DIR", "/workspace"),
-        ("GEMINI_PLANS_DIR", "/workspace/.gemini/plans"),
-        ("GEMINI_CWD", "/workspace"),
-        ("GEMINI_SESSION_ID", "session-1"),
-        ("CLAUDE_PROJECT_DIR", "/workspace"),
-    ]);
-    GeminiCommandEnvironment::from_map(&event, &variables)
-}
-```
-
 Applications that need ambient capture outside a `run_*` adapter can call
 `hookkit_runtime::environment::capture_command_environment::<E>()`, where `E`
 implements `CommandEnvironmentSpec`. Most hook binaries should let the runner
@@ -203,16 +183,12 @@ source:
   [`discovery.rs`](https://github.com/openai/codex/blob/9e552e9d15ba52bed7077d5357f3e18e330f8f38/codex-rs/hooks/src/engine/discovery.rs#L227-L235),
   and pinned
   [`command_runner.rs`](https://github.com/openai/codex/blob/9e552e9d15ba52bed7077d5357f3e18e330f8f38/codex-rs/hooks/src/engine/command_runner.rs#L171-L177).
-- Gemini CLI: [hooks reference](https://geminicli.com/docs/hooks/reference/),
-  [pinned documentation](https://github.com/google-gemini/gemini-cli/blob/f354eebaf43b25bacb176007e449bb9a638fd101/docs/hooks/index.md),
-  and pinned
-  [`hookRunner.ts`](https://github.com/google-gemini/gemini-cli/blob/f354eebaf43b25bacb176007e449bb9a638fd101/packages/core/src/hooks/hookRunner.ts).
 - Antigravity: [current hooks reference](https://antigravity.google/docs/hooks)
   and the selected snapshot's
   [official Markdown source](https://antigravity.google/assets/docs/antigravity-2-0/hooks.md).
 
 The event inventory remains governed by the immutable snapshots under
 [`contracts/`](../contracts/README.md). Its separately versioned
-[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-08-05-r1/)
+[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-08-05-r2/)
 is the machine-validated evidence behind the command-process state summarized
 here.

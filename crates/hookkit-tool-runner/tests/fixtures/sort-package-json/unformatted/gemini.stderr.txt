@@ -1,2 +1,0 @@
-sort-package-json: changed package.json
-hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

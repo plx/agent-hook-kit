@@ -1,2 +1,0 @@
-Ruff: changed example.py
-hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

@@ -7,7 +7,7 @@ use hookkit_core::{
 };
 use hookkit_shell::{
     ANTIGRAVITY_RUN_COMMAND_PROFILE, BashAnalyzer, CLAUDE_BASH_PROFILE, CODEX_BASH_PROFILE,
-    FileAccessAnalyzer, GEMINI_RUN_SHELL_COMMAND_PROFILE, UnknownCommandFallback,
+    FileAccessAnalyzer, UnknownCommandFallback,
 };
 use hookkit_tool_access::{
     AccessCandidate, AccessProvenance, AccessSource, AccessTarget, ExactPathPolicy,
@@ -26,7 +26,6 @@ const TARGET_RESOLUTION_BUDGET: usize = 100_000;
 enum Harness {
     Claude,
     Codex,
-    Gemini,
     Antigravity,
 }
 
@@ -35,7 +34,6 @@ impl Harness {
         match self {
             Self::Claude => HarnessId::CLAUDE_CODE,
             Self::Codex => HarnessId::CODEX,
-            Self::Gemini => HarnessId::GEMINI_CLI,
             Self::Antigravity => HarnessId::ANTIGRAVITY,
         }
     }
@@ -326,8 +324,6 @@ fn is_exact_native_shell(input: &PreToolUseInput) -> bool {
     };
     (call.harness() == &HarnessId::CLAUDE_CODE && call.tool_name == CLAUDE_BASH_PROFILE.tool_name())
         || (call.harness() == &HarnessId::CODEX && call.tool_name == CODEX_BASH_PROFILE.tool_name())
-        || (call.harness() == &HarnessId::GEMINI_CLI
-            && call.tool_name == GEMINI_RUN_SHELL_COMMAND_PROFILE.tool_name())
         || (call.harness() == &HarnessId::ANTIGRAVITY
             && call.tool_name == ANTIGRAVITY_RUN_COMMAND_PROFILE.tool_name())
 }

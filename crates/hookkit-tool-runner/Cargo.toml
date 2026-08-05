@@ -32,7 +32,6 @@ hookkit-file-activity = { workspace = true }
 hookkit-antigravity = { workspace = true }
 hookkit-claude = { workspace = true }
 hookkit-codex = { workspace = true }
-hookkit-gemini = { workspace = true }
 hookkit-pkl-config = { workspace = true }
 hookkit-runtime = { workspace = true }
 hookkit-session-state = { workspace = true }

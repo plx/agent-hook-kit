@@ -3,8 +3,7 @@
 MSRV is Rust 1.85. The libraries publish in dependency order:
 
 1. `hookkit-core`
-2. `hookkit-claude`, `hookkit-codex`, `hookkit-gemini`, and
-   `hookkit-antigravity`
+2. `hookkit-claude`, `hookkit-codex`, and `hookkit-antigravity`
 3. `hookkit-common` and `hookkit-shell`
 4. `hookkit-runtime`
 

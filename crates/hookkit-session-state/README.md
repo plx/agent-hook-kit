@@ -46,7 +46,7 @@ bump creates a fresh subtree without requiring synchronized migration across
 every installed hook.
 
 The native-session layout is flat. No portable field identifies a parent
-session across all four harnesses, and moving a child directory after late
+session across all three harnesses, and moving a child directory after late
 evidence appears would race unrelated processes. Hooks may instead write
 immutable, content-addressed topology observations. Actor and turn scopes are
 available where native events expose those identifiers. Unknown ancestry stays
@@ -70,8 +70,8 @@ let epoch = state.current_epoch()?;
 `UtcTimestamp` serializes as RFC 3339 and converts to `SystemTime` or Unix
 milliseconds. Every `CapturedTimestamp` carries a `TimestampProvenance`:
 
-- `native_event_timestamp`: Gemini supplies an exact timestamp on
-  `SessionStart`;
+- `native_event_timestamp`: reserved for a native lifecycle event that supplies
+  an exact timestamp;
 - `lifecycle_hook_observation`: Claude and Codex expose a start cause but no
   timestamp, so HookKit records when the start hook ran;
 - `inferred_invocation_boundary`: Antigravity has no `SessionStart`; invocation
@@ -98,7 +98,6 @@ native `SessionStart` event:
 ```text
 session-start-state-agent-hook --claude [--state-dir PATH]
 session-start-state-agent-hook --codex [--state-dir PATH]
-session-start-state-agent-hook --gemini [--state-dir PATH]
 ```
 
 Without that binding, the first later stateful hook still creates metadata, but

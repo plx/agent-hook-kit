@@ -22,12 +22,7 @@ pub mod call;
 pub mod file_access;
 pub mod summary;
 
-#[cfg(any(
-    feature = "claude",
-    feature = "codex",
-    feature = "gemini",
-    feature = "antigravity"
-))]
+#[cfg(any(feature = "claude", feature = "codex", feature = "antigravity"))]
 mod adapters;
 
 #[cfg(feature = "antigravity")]
@@ -36,8 +31,6 @@ pub use adapters::ANTIGRAVITY_RUN_COMMAND_PROFILE;
 pub use adapters::CLAUDE_BASH_PROFILE;
 #[cfg(feature = "codex")]
 pub use adapters::CODEX_BASH_PROFILE;
-#[cfg(feature = "gemini")]
-pub use adapters::GEMINI_RUN_SHELL_COMMAND_PROFILE;
 
 pub use bash::{
     ArgvStatus, BashAnalysis, BashAnalysisOutcome, BashAnalyzer, BashAnalyzerLimits,

@@ -1,2 +1,0 @@
-StyLua: changed example.lua
-hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

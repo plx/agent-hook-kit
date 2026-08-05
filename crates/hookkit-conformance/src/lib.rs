@@ -59,7 +59,6 @@ pub fn verified_descriptors() -> Result<Vec<NativeEventDescriptor>, String> {
 fn verify_all_negative_inputs() -> Result<(), String> {
     verify_claude_catalog_negative_inputs()?;
     verify_codex_catalog_negative_inputs()?;
-    verify_gemini_catalog_negative_inputs()?;
     verify_negative_inputs::<hookkit_claude::protocol::SessionStart>(
         "claude-code",
         "docs-2026-08-05-r1",
@@ -84,21 +83,6 @@ fn verify_all_negative_inputs() -> Result<(), String> {
         "codex",
         "commit-9e552e9-r2",
         "post-tool-use",
-    )?;
-    verify_negative_inputs::<hookkit_gemini::protocol::BeforeTool>(
-        "gemini-cli",
-        "commit-f354eeb-r2",
-        "before-tool",
-    )?;
-    verify_negative_inputs::<hookkit_gemini::protocol::AfterTool>(
-        "gemini-cli",
-        "commit-f354eeb-r2",
-        "after-tool",
-    )?;
-    verify_negative_inputs::<hookkit_gemini::protocol::BeforeToolSelection>(
-        "gemini-cli",
-        "commit-f354eeb-r2",
-        "before-tool-selection",
     )?;
     verify_negative_inputs::<hookkit_antigravity::PreInvocation>(
         "antigravity",
@@ -132,7 +116,7 @@ fn verify_all_negative_inputs() -> Result<(), String> {
 ///
 /// This covers the shared-envelope `catalog` events (via
 /// `execute_catalog_cases`), the contract-first `protocol` events for Claude
-/// Code, Codex, and Gemini CLI, and the native Antigravity events.
+/// Claude Code, Codex, and the native Antigravity events.
 ///
 /// The function stops at the first parse, emission, or exact-byte mismatch and
 /// returns a human-readable error suitable for the conformance CLI.
@@ -233,70 +217,6 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
         "exit-2",
         hookkit_codex::protocol::PostToolUseOutput::blocking_error("blocked by hook"),
     )?);
-
-    let rewritten = serde_json::Map::from_iter([(
-        "command".into(),
-        serde_json::Value::String("echo rewritten".into()),
-    )]);
-    executed.push(verify_case::<hookkit_gemini::protocol::BeforeTool>(
-        "gemini-cli",
-        "commit-f354eeb-r2",
-        "before-tool",
-        "structured",
-        hookkit_gemini::protocol::BeforeToolOutput::deny_and_rewrite(
-            "Blocked by policy.",
-            rewritten,
-        ),
-    )?);
-    executed.push(verify_case::<hookkit_gemini::protocol::BeforeTool>(
-        "gemini-cli",
-        "commit-f354eeb-r2",
-        "before-tool",
-        "exit-2",
-        hookkit_gemini::protocol::BeforeToolOutput::blocking_error("blocked by hook"),
-    )?);
-    let tail_args = serde_json::Map::from_iter([(
-        "path".into(),
-        serde_json::Value::String("README.md".into()),
-    )]);
-    executed.push(verify_case::<hookkit_gemini::protocol::AfterTool>(
-        "gemini-cli",
-        "commit-f354eeb-r2",
-        "after-tool",
-        "structured",
-        hookkit_gemini::protocol::AfterToolOutput::with_context("Review generated files.")
-            .and_tail_tool_call("read_file", tail_args)
-            .map_err(|error| error.to_string())?,
-    )?);
-    executed.push(verify_case::<hookkit_gemini::protocol::AfterTool>(
-        "gemini-cli",
-        "commit-f354eeb-r2",
-        "after-tool",
-        "exit-2",
-        hookkit_gemini::protocol::AfterToolOutput::blocking_error("blocked by hook"),
-    )?);
-    executed.push(
-        verify_case::<hookkit_gemini::protocol::BeforeToolSelection>(
-            "gemini-cli",
-            "commit-f354eeb-r2",
-            "before-tool-selection",
-            "no-op",
-            hookkit_gemini::protocol::BeforeToolSelectionOutput::no_op(),
-        )?,
-    );
-    executed.push(
-        verify_case::<hookkit_gemini::protocol::BeforeToolSelection>(
-            "gemini-cli",
-            "commit-f354eeb-r2",
-            "before-tool-selection",
-            "disable-tools",
-            hookkit_gemini::protocol::BeforeToolSelectionOutput::configure(
-                Some(hookkit_gemini::protocol::ToolMode::None),
-                Vec::new(),
-            )
-            .map_err(|error| error.to_string())?,
-        )?,
-    );
 
     executed.push(verify_case::<hookkit_antigravity::PreInvocation>(
         "antigravity",
@@ -413,27 +333,6 @@ fn verify_codex_catalog_negative_inputs() -> Result<(), String> {
     Ok(())
 }
 
-fn verify_gemini_catalog_negative_inputs() -> Result<(), String> {
-    macro_rules! verify {
-        ($event:ident, $path:literal) => {
-            verify_negative_inputs::<hookkit_gemini::catalog::$event>(
-                "gemini-cli",
-                "commit-f354eeb-r2",
-                $path,
-            )?;
-        };
-    }
-    verify!(AfterAgent, "after-agent");
-    verify!(AfterModel, "after-model");
-    verify!(BeforeAgent, "before-agent");
-    verify!(BeforeModel, "before-model");
-    verify!(Notification, "notification");
-    verify!(PreCompress, "pre-compress");
-    verify!(SessionEnd, "session-end");
-    verify!(SessionStart, "session-start");
-    Ok(())
-}
-
 fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
     let mut executed = Vec::new();
     macro_rules! claude_case {
@@ -458,18 +357,6 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
             )?);
         };
     }
-    macro_rules! gemini_case {
-        ($event:ident, $path:literal, $case:literal, $output:expr) => {
-            executed.push(verify_case::<hookkit_gemini::catalog::$event>(
-                "gemini-cli",
-                "commit-f354eeb-r2",
-                $path,
-                $case,
-                $output,
-            )?);
-        };
-    }
-
     claude_case!(
         ConfigChange,
         "config-change",
@@ -907,92 +794,6 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         hookkit_codex::catalog::UserPromptSubmitOutput::blocking_error("blocked by hook")
     );
 
-    gemini_case!(
-        AfterAgent,
-        "after-agent",
-        "structured",
-        hookkit_gemini::catalog::AfterAgentOutput::deny("Verify the result again.", false)
-    );
-    gemini_case!(
-        AfterAgent,
-        "after-agent",
-        "exit-2",
-        hookkit_gemini::catalog::AfterAgentOutput::blocking_error("blocked by hook")
-    );
-    gemini_case!(
-        AfterModel,
-        "after-model",
-        "structured",
-        hookkit_gemini::catalog::AfterModelOutput::replace_response(
-            serde_json::json!({"candidates": []}),
-        )
-    );
-    gemini_case!(
-        AfterModel,
-        "after-model",
-        "exit-2",
-        hookkit_gemini::catalog::AfterModelOutput::blocking_error("blocked by hook")
-    );
-    gemini_case!(
-        BeforeAgent,
-        "before-agent",
-        "structured",
-        hookkit_gemini::catalog::BeforeAgentOutput::with_context("Use repository conventions.")
-    );
-    gemini_case!(
-        BeforeAgent,
-        "before-agent",
-        "exit-2",
-        hookkit_gemini::catalog::BeforeAgentOutput::blocking_error("blocked by hook")
-    );
-    gemini_case!(
-        BeforeModel,
-        "before-model",
-        "structured",
-        hookkit_gemini::catalog::BeforeModelOutput::replace_request(serde_json::json!({
-            "config": {"temperature": 0.0},
-            "messages": [],
-            "model": "gemini-test",
-        }))
-    );
-    gemini_case!(
-        BeforeModel,
-        "before-model",
-        "exit-2",
-        hookkit_gemini::catalog::BeforeModelOutput::blocking_error("blocked by hook")
-    );
-    gemini_case!(
-        Notification,
-        "notification",
-        "structured",
-        hookkit_gemini::catalog::NotificationOutput::with_system_message(
-            "A permission notification was emitted.",
-        )
-    );
-    gemini_case!(
-        PreCompress,
-        "pre-compress",
-        "structured",
-        hookkit_gemini::catalog::PreCompressOutput::with_system_message(
-            "Saving state before compression.",
-        )
-    );
-    gemini_case!(
-        SessionEnd,
-        "session-end",
-        "structured",
-        hookkit_gemini::catalog::SessionEndOutput::with_system_message("Session cleanup complete.",)
-    );
-    gemini_case!(
-        SessionStart,
-        "session-start",
-        "structured",
-        hookkit_gemini::catalog::SessionStartOutput::with_context_and_system_message(
-            "Read repository conventions.",
-            "Loading session context.",
-        )
-    );
-
     Ok(executed)
 }
 
@@ -1000,7 +801,6 @@ fn implementation_descriptors() -> Vec<NativeEventDescriptor> {
     let mut descriptors = Vec::new();
     descriptors.extend(hookkit_claude::protocol::events());
     descriptors.extend(hookkit_codex::protocol::events());
-    descriptors.extend(hookkit_gemini::protocol::events());
     descriptors.extend(hookkit_antigravity::events());
     descriptors
 }

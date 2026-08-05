@@ -6,7 +6,6 @@ members = [
     "crates/hookkit-runtime",
     "crates/hookkit-claude",
     "crates/hookkit-codex",
-    "crates/hookkit-gemini",
     "crates/hookkit-antigravity",
     "crates/hookkit-conformance",
     "crates/hookkit-common",
@@ -17,7 +16,6 @@ members = [
     "crates/hookkit-tool-runner",
     "crates/hookkit-session-state",
     "examples/codex-bash-guard",
-    "examples/gemini-beforetool-policy",
     "examples/claude-sessionstart-context",
     "examples/shared-posttool-autofix",
     "examples/antigravity-pre-invocation",
@@ -59,7 +57,6 @@ hookkit-core = { version = "0.1.0", path = "crates/hookkit-core" }
 hookkit-runtime = { version = "0.1.0", path = "crates/hookkit-runtime" }
 hookkit-claude = { version = "0.1.0", path = "crates/hookkit-claude" }
 hookkit-codex = { version = "0.1.0", path = "crates/hookkit-codex" }
-hookkit-gemini = { version = "0.1.0", path = "crates/hookkit-gemini" }
 hookkit-antigravity = { version = "0.1.0", path = "crates/hookkit-antigravity" }
 hookkit-common = { version = "0.1.0", path = "crates/hookkit-common" }
 hookkit-shell = { version = "0.1.0", path = "crates/hookkit-shell" }

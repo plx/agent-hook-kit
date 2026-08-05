@@ -401,26 +401,6 @@ fn parse_selected_pre_tool_use(
                 command_environment: PreToolUseCommandEnvironment::Codex(command_environment),
             })
         }
-        "gemini-cli" => {
-            let input = hookkit_gemini::protocol::BeforeTool::parse(invocation)?;
-            let command_environment = hookkit_gemini::GeminiCommandEnvironment::from_variables(
-                &hookkit_gemini::protocol::BeforeTool::EVENT,
-                variables,
-            )?;
-            hookkit_gemini::protocol::BeforeTool::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_gemini::protocol::BeforeTool::context(&input);
-            Ok(ParsedPreToolUse {
-                input: PreToolUseInput::Gemini(input),
-                event: hookkit_gemini::protocol::BeforeTool::EVENT,
-                snapshot: hookkit_gemini::protocol::BeforeTool::SNAPSHOT,
-                contract: hookkit_gemini::protocol::BeforeTool::CONTRACT,
-                native_context,
-                command_environment: PreToolUseCommandEnvironment::Gemini(command_environment),
-            })
-        }
         "antigravity" => {
             let input = hookkit_antigravity::PreToolUse::parse(invocation)?;
             let command_environment =
@@ -493,26 +473,6 @@ fn parse_selected(
                 contract: hookkit_codex::protocol::PostToolUse::CONTRACT,
                 native_context,
                 command_environment: PostToolUseCommandEnvironment::Codex(command_environment),
-            })
-        }
-        "gemini-cli" => {
-            let input = hookkit_gemini::protocol::AfterTool::parse(invocation)?;
-            let command_environment = hookkit_gemini::GeminiCommandEnvironment::from_variables(
-                &hookkit_gemini::protocol::AfterTool::EVENT,
-                variables,
-            )?;
-            hookkit_gemini::protocol::AfterTool::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_gemini::protocol::AfterTool::context(&input);
-            Ok(Parsed {
-                input: PostToolUseInput::Gemini(input),
-                event: hookkit_gemini::protocol::AfterTool::EVENT,
-                snapshot: hookkit_gemini::protocol::AfterTool::SNAPSHOT,
-                contract: hookkit_gemini::protocol::AfterTool::CONTRACT,
-                native_context,
-                command_environment: PostToolUseCommandEnvironment::Gemini(command_environment),
             })
         }
         "antigravity" => {
@@ -591,26 +551,6 @@ fn parse_selected_turn_completion(
                 command_environment: TurnCompletionCommandEnvironment::Codex(command_environment),
             })
         }
-        "gemini-cli" => {
-            let input = hookkit_gemini::catalog::AfterAgent::parse(invocation)?;
-            let command_environment = hookkit_gemini::GeminiCommandEnvironment::from_variables(
-                &hookkit_gemini::catalog::AfterAgent::EVENT,
-                variables,
-            )?;
-            hookkit_gemini::catalog::AfterAgent::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_gemini::catalog::AfterAgent::context(&input);
-            Ok(ParsedTurnCompletion {
-                input: TurnCompletionInput::Gemini(input),
-                event: hookkit_gemini::catalog::AfterAgent::EVENT,
-                snapshot: hookkit_gemini::catalog::AfterAgent::SNAPSHOT,
-                contract: hookkit_gemini::catalog::AfterAgent::CONTRACT,
-                native_context,
-                command_environment: TurnCompletionCommandEnvironment::Gemini(command_environment),
-            })
-        }
         "antigravity" => {
             let input = hookkit_antigravity::Stop::parse(invocation)?;
             let command_environment =
@@ -648,9 +588,6 @@ fn capture_aligned_command_environment(
         "codex" => crate::environment::capture_command_environment::<
             hookkit_codex::CodexCommandEnvironment,
         >(),
-        "gemini-cli" => crate::environment::capture_command_environment::<
-            hookkit_gemini::GeminiCommandEnvironment,
-        >(),
         "antigravity" => crate::environment::capture_command_environment::<
             hookkit_antigravity::AntigravityCommandEnvironment,
         >(),
@@ -665,7 +602,6 @@ fn emit(output: PostToolUseOutput) -> hookkit_core::Result<ProcessEmission> {
     match output {
         PostToolUseOutput::Claude(output) => hookkit_claude::protocol::PostToolUse::emit(output),
         PostToolUseOutput::Codex(output) => hookkit_codex::protocol::PostToolUse::emit(output),
-        PostToolUseOutput::Gemini(output) => hookkit_gemini::protocol::AfterTool::emit(output),
         PostToolUseOutput::Antigravity(output) => hookkit_antigravity::PostToolUse::emit(output),
         _ => Err(HookkitError::InvalidProcessEmission(
             "unknown aligned output arm cannot be emitted",
@@ -677,7 +613,6 @@ fn emit_pre_tool_use(output: PreToolUseOutput) -> hookkit_core::Result<ProcessEm
     match output {
         PreToolUseOutput::Claude(output) => hookkit_claude::catalog::PreToolUse::emit(output),
         PreToolUseOutput::Codex(output) => hookkit_codex::protocol::PreToolUse::emit(output),
-        PreToolUseOutput::Gemini(output) => hookkit_gemini::protocol::BeforeTool::emit(output),
         PreToolUseOutput::Antigravity(output) => hookkit_antigravity::PreToolUse::emit(output),
         _ => Err(HookkitError::InvalidProcessEmission(
             "unknown aligned output arm cannot be emitted",
@@ -689,7 +624,6 @@ fn emit_turn_completion(output: TurnCompletionOutput) -> hookkit_core::Result<Pr
     match output {
         TurnCompletionOutput::Claude(output) => hookkit_claude::catalog::Stop::emit(output),
         TurnCompletionOutput::Codex(output) => hookkit_codex::catalog::Stop::emit(output),
-        TurnCompletionOutput::Gemini(output) => hookkit_gemini::catalog::AfterAgent::emit(output),
         TurnCompletionOutput::Antigravity(output) => hookkit_antigravity::Stop::emit(output),
         _ => Err(HookkitError::InvalidProcessEmission(
             "unknown aligned output arm cannot be emitted",
@@ -710,16 +644,6 @@ mod tests {
         ])
     }
 
-    fn gemini_variables() -> EnvironmentVariables {
-        EnvironmentVariables::from_pairs([
-            ("GEMINI_PROJECT_DIR", "/repo"),
-            ("GEMINI_PLANS_DIR", "/repo/.gemini/plans"),
-            ("GEMINI_CWD", "/repo"),
-            ("GEMINI_SESSION_ID", "s"),
-            ("CLAUDE_PROJECT_DIR", "/repo"),
-        ])
-    }
-
     fn pre_tool_cases() -> Vec<(HarnessId, &'static [u8], EnvironmentVariables)> {
         vec![
             (
@@ -731,11 +655,6 @@ mod tests {
                 HarnessId::CODEX,
                 br#"{"session_id":"s","transcript_path":null,"cwd":"/repo","hook_event_name":"PreToolUse","model":"gpt-5","turn_id":"t","permission_mode":"default","tool_name":"Read","tool_input":{"path":".env"},"tool_use_id":"u","codex_only":"retained"}"#,
                 EnvironmentVariables::new(),
-            ),
-            (
-                HarnessId::GEMINI_CLI,
-                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"BeforeTool","timestamp":"2026-07-19T00:00:00Z","tool_name":"read_file","tool_input":{"path":".env"},"mcp_context":{"server":"files"},"gemini_only":true}"#,
-                gemini_variables(),
             ),
             (
                 HarnessId::ANTIGRAVITY,
@@ -794,23 +713,6 @@ mod tests {
                             assert_eq!(input.cwd, "/repo");
                         }
                         (
-                            PreToolUseInput::Gemini(input),
-                            PreToolUseCommandEnvironment::Gemini(environment),
-                        ) => {
-                            assert_eq!(
-                                input.extra.get("gemini_only"),
-                                Some(&serde_json::json!(true))
-                            );
-                            assert_eq!(
-                                input
-                                    .mcp_context
-                                    .as_ref()
-                                    .and_then(|value| value.get("server")),
-                                Some(&serde_json::json!("files"))
-                            );
-                            assert_eq!(environment.cwd, "/repo");
-                        }
-                        (
                             PreToolUseInput::Antigravity(input),
                             PreToolUseCommandEnvironment::Antigravity(_),
                         ) => {
@@ -842,10 +744,6 @@ mod tests {
                 "claude-code" | "codex" => {
                     assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
                     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
-                }
-                "gemini-cli" => {
-                    assert_eq!(output["decision"], "allow");
-                    assert_eq!(output["hookSpecificOutput"]["hookEventName"], "BeforeTool");
                 }
                 "antigravity" => assert_eq!(output, serde_json::json!({"decision": "allow"})),
                 _ => unreachable!(),
@@ -892,8 +790,8 @@ mod tests {
                     environment,
                     PreToolUseCommandEnvironment::Codex(_)
                 ));
-                Ok(PreToolUseOutput::Gemini(
-                    hookkit_gemini::protocol::BeforeToolOutput::allow(),
+                Ok(PreToolUseOutput::Claude(
+                    hookkit_claude::catalog::PreToolUseOutput::no_op(),
                 ))
             });
         assert!(matches!(
@@ -913,18 +811,6 @@ mod tests {
         );
         assert!(matches!(
             claude_result,
-            Err(HookkitError::InvalidHookEnvironment { .. })
-        ));
-
-        let (gemini, gemini_bytes, _) = pre_tool_cases().remove(2);
-        let gemini_result = execute_pre_tool_use(
-            gemini,
-            gemini_bytes,
-            &EnvironmentVariables::new(),
-            |_, _, _| panic!("handler must not run for an invalid environment"),
-        );
-        assert!(matches!(
-            gemini_result,
             Err(HookkitError::InvalidHookEnvironment { .. })
         ));
     }
@@ -987,11 +873,6 @@ mod tests {
                 EnvironmentVariables::new(),
             ),
             (
-                HarnessId::GEMINI_CLI,
-                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"AfterAgent","timestamp":"2026-07-15T00:00:00Z","prompt":"do it","prompt_response":"done","stop_hook_active":false}"#.as_slice(),
-                gemini_variables(),
-            ),
-            (
                 HarnessId::ANTIGRAVITY,
                 br#"{"conversationId":"s","workspacePaths":["/repo"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","executionNum":1,"terminationReason":"completed","fullyIdle":true}"#.as_slice(),
                 EnvironmentVariables::new(),
@@ -1015,9 +896,6 @@ mod tests {
                         )),
                         TurnCompletionInput::Codex(_) => Ok(TurnCompletionOutput::Codex(
                             hookkit_codex::catalog::StopOutput::no_op(),
-                        )),
-                        TurnCompletionInput::Gemini(_) => Ok(TurnCompletionOutput::Gemini(
-                            hookkit_gemini::catalog::AfterAgentOutput::no_op(),
                         )),
                         TurnCompletionInput::Antigravity(_) => Ok(
                             TurnCompletionOutput::Antigravity(hookkit_antigravity::StopOutput {
