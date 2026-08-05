@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SNAPSHOT: &str = "docs-2026-07-12-r2";
+const SNAPSHOT: &str = "docs-2026-08-05-r1";
 const SOURCE: &str = "claude-hooks-reference";
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -19,6 +19,7 @@ enum Profile {
     PostTool,
     Retry,
     Stop,
+    WatchPaths,
     Elicitation,
     NoControl,
 }
@@ -89,7 +90,7 @@ fn seeds() -> Vec<Seed> {
     use HandlerGroup::{AllFive, Three, Two};
     use Profile::{
         Context, Display, Elicitation, NoControl, PermissionRequest as Permission, PostTool,
-        PreTool, Prompt, Retry, SessionStart as Session, Stop,
+        PreTool, Prompt, Retry, SessionStart as Session, Stop, WatchPaths,
     };
     vec![
         Seed {
@@ -99,7 +100,7 @@ fn seeds() -> Vec<Seed> {
             fields: vec![
                 required(
                     "source",
-                    json!({"enum":["startup","resume","clear","compact"]}),
+                    json!({"enum":["startup","resume","clear","compact","fork"]}),
                     json!("startup"),
                 ),
                 optional_string("model", "claude-test"),
@@ -224,7 +225,7 @@ fn seeds() -> Vec<Seed> {
             fields: vec![
                 string("tool_name", "Bash"),
                 required("tool_input", json!({}), json!({"command":"cargo test"})),
-                required("permission_suggestions", json!({"type":"array"}), json!([])),
+                optional("permission_suggestions", json!({"type":"array"}), json!([])),
             ],
             profile: Permission,
             structured: json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Blocked by policy.","interrupt":false}}}),
@@ -239,7 +240,7 @@ fn seeds() -> Vec<Seed> {
             fields: tool_fields(true),
             profile: PostTool,
             structured: json!({"decision":"block","reason":"Review result.","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Generated files changed.","updatedToolOutput":{"status":"redacted"}}}),
-            exit2_effect: None,
+            exit2_effect: Some("provide-context"),
             handler_group: AllFive,
             text_context: false,
         },
@@ -261,7 +262,7 @@ fn seeds() -> Vec<Seed> {
             ],
             profile: Context,
             structured: context("PostToolUseFailure"),
-            exit2_effect: None,
+            exit2_effect: Some("provide-context"),
             handler_group: AllFive,
             text_context: false,
         },
@@ -307,10 +308,14 @@ fn seeds() -> Vec<Seed> {
             fields: vec![
                 string("message", "Permission required"),
                 optional_string("title", "Claude Code"),
-                string("notification_type", "permission_prompt"),
+                required(
+                    "notification_type",
+                    json!({"enum":["permission_prompt","idle_prompt","auth_success","elicitation_dialog","elicitation_complete","elicitation_response","agent_needs_input","agent_completed"]}),
+                    json!("permission_prompt"),
+                ),
             ],
             profile: NoControl,
-            structured: json!({"systemMessage":"Permission notification emitted."}),
+            structured: json!({"continue":true,"suppressOutput":true,"systemMessage":"Permission notification emitted.","terminalSequence":"\u{7}"}),
             exit2_effect: None,
             handler_group: Three,
             text_context: false,
@@ -339,6 +344,8 @@ fn seeds() -> Vec<Seed> {
                 string("agent_type", "Explore"),
                 string("agent_transcript_path", "/tmp/agent.jsonl"),
                 string("last_assistant_message", "Done"),
+                background_tasks(),
+                session_crons(),
             ],
             profile: Stop,
             structured: json!({"decision":"block","reason":"Run another pass.","hookSpecificOutput":{"hookEventName":"SubagentStop","additionalContext":"Check edge cases."}}),
@@ -351,8 +358,8 @@ fn seeds() -> Vec<Seed> {
             key: "task_created",
             category: "task",
             fields: task_fields(),
-            profile: Stop,
-            structured: json!({"decision":"block","reason":"Task needs an owner."}),
+            profile: NoControl,
+            structured: json!({"continue":false,"stopReason":"Task needs an owner."}),
             exit2_effect: Some("rollback"),
             handler_group: AllFive,
             text_context: false,
@@ -362,8 +369,8 @@ fn seeds() -> Vec<Seed> {
             key: "task_completed",
             category: "task",
             fields: task_fields(),
-            profile: Stop,
-            structured: json!({"decision":"block","reason":"Verification is incomplete."}),
+            profile: NoControl,
+            structured: json!({"continue":false,"stopReason":"Verification is incomplete."}),
             exit2_effect: Some("deny"),
             handler_group: AllFive,
             text_context: false,
@@ -375,6 +382,8 @@ fn seeds() -> Vec<Seed> {
             fields: vec![
                 required("stop_hook_active", json!({"type":"boolean"}), json!(false)),
                 string("last_assistant_message", "All work complete"),
+                background_tasks(),
+                session_crons(),
             ],
             profile: Stop,
             structured: json!({"decision":"block","reason":"Run tests again.","hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"Focus on failures."}}),
@@ -387,7 +396,11 @@ fn seeds() -> Vec<Seed> {
             key: "stop_failure",
             category: "turn",
             fields: vec![
-                string("error", "rate limited"),
+                required(
+                    "error",
+                    json!({"enum":["rate_limit","overloaded","authentication_failed","oauth_org_not_allowed","billing_error","invalid_request","model_not_found","server_error","max_output_tokens","unknown"]}),
+                    json!("rate_limit"),
+                ),
                 optional("error_details", json!({}), json!({"type":"rate_limit"})),
                 optional_string("last_assistant_message", "Partial response"),
             ],
@@ -405,8 +418,8 @@ fn seeds() -> Vec<Seed> {
                 string("teammate_name", "reviewer"),
                 string("team_name", "quality"),
             ],
-            profile: Stop,
-            structured: json!({"decision":"block","reason":"Continue reviewing."}),
+            profile: NoControl,
+            structured: json!({"continue":false,"stopReason":"Continue reviewing."}),
             exit2_effect: Some("continue"),
             handler_group: AllFive,
             text_context: false,
@@ -423,7 +436,7 @@ fn seeds() -> Vec<Seed> {
                 ),
                 optional_string("file_path", "/repo/.claude/settings.json"),
             ],
-            profile: Stop,
+            profile: NoControl,
             structured: json!({"decision":"block","reason":"Configuration change rejected."}),
             exit2_effect: Some("deny"),
             handler_group: Three,
@@ -434,8 +447,26 @@ fn seeds() -> Vec<Seed> {
             key: "cwd_changed",
             category: "workspace",
             fields: vec![string("old_cwd", "/repo"), string("new_cwd", "/repo/crate")],
+            profile: WatchPaths,
+            structured: json!({"systemMessage":"Working directory changed.","hookSpecificOutput":{"hookEventName":"CwdChanged","watchPaths":["/repo/crate/.env"]}}),
+            exit2_effect: None,
+            handler_group: Three,
+            text_context: false,
+        },
+        Seed {
+            wire: "DirectoryAdded",
+            key: "directory_added",
+            category: "workspace",
+            fields: vec![
+                string("directory", "/repo/related"),
+                required(
+                    "source",
+                    json!({"enum":["slash_command","register_repo_root"]}),
+                    json!("slash_command"),
+                ),
+            ],
             profile: NoControl,
-            structured: json!({"systemMessage":"Working directory changed."}),
+            structured: json!({"systemMessage":"Working directory added."}),
             exit2_effect: None,
             handler_group: Three,
             text_context: false,
@@ -444,9 +475,16 @@ fn seeds() -> Vec<Seed> {
             wire: "FileChanged",
             key: "file_changed",
             category: "workspace",
-            fields: vec![string("file_path", "/repo/.env"), string("event", "change")],
-            profile: NoControl,
-            structured: json!({"systemMessage":"Watched file changed."}),
+            fields: vec![
+                string("file_path", "/repo/.env"),
+                required(
+                    "event",
+                    json!({"enum":["change","add","unlink"]}),
+                    json!("change"),
+                ),
+            ],
+            profile: WatchPaths,
+            structured: json!({"systemMessage":"Watched file changed.","hookSpecificOutput":{"hookEventName":"FileChanged","watchPaths":["/repo/.env","/repo/.env.local"]}}),
             exit2_effect: None,
             handler_group: Three,
             text_context: false,
@@ -472,9 +510,9 @@ fn seeds() -> Vec<Seed> {
                     json!({"enum":["manual","auto"]}),
                     json!("manual"),
                 ),
-                optional_string("custom_instructions", "Preserve test results"),
+                string("custom_instructions", "Preserve test results"),
             ],
-            profile: Stop,
+            profile: NoControl,
             structured: json!({"decision":"block","reason":"Save state first."}),
             exit2_effect: Some("deny"),
             handler_group: Three,
@@ -498,7 +536,11 @@ fn seeds() -> Vec<Seed> {
             wire: "SessionEnd",
             key: "session_end",
             category: "session",
-            fields: vec![string("reason", "exit")],
+            fields: vec![required(
+                "reason",
+                json!({"enum":["clear","resume","logout","prompt_input_exit","bypass_permissions_disabled","other"]}),
+                json!("other"),
+            )],
             profile: NoControl,
             structured: json!({"systemMessage":"Session ended."}),
             exit2_effect: None,
@@ -512,10 +554,14 @@ fn seeds() -> Vec<Seed> {
             fields: vec![
                 string("mcp_server_name", "forms"),
                 string("message", "Provide values"),
-                string("mode", "form"),
+                optional("mode", json!({"enum":["form","url"]}), json!("form")),
                 optional_string("url", "https://example.test"),
-                string("elicitation_id", "e1"),
-                optional("requested_schema", json!({}), json!({"type":"object"})),
+                optional_string("elicitation_id", "e1"),
+                optional(
+                    "requested_schema",
+                    json!({"type":"object"}),
+                    json!({"type":"object"}),
+                ),
             ],
             profile: Elicitation,
             structured: json!({"hookSpecificOutput":{"hookEventName":"Elicitation","action":"accept","content":{"name":"Ada"}}}),
@@ -529,10 +575,14 @@ fn seeds() -> Vec<Seed> {
             category: "mcp",
             fields: vec![
                 string("mcp_server_name", "forms"),
-                string("action", "accept"),
-                string("mode", "form"),
-                string("elicitation_id", "e1"),
-                optional("content", json!({}), json!({"name":"Ada"})),
+                required(
+                    "action",
+                    json!({"enum":["accept","decline","cancel"]}),
+                    json!("accept"),
+                ),
+                optional("mode", json!({"enum":["form","url"]}), json!("form")),
+                optional_string("elicitation_id", "e1"),
+                optional("content", json!({"type":"object"}), json!({"name":"Ada"})),
             ],
             profile: Elicitation,
             structured: json!({"hookSpecificOutput":{"hookEventName":"ElicitationResult","action":"decline"}}),
@@ -568,10 +618,68 @@ fn task_fields() -> Vec<Field> {
     vec![
         string("task_id", "task-1"),
         string("task_subject", "Run tests"),
-        string("task_description", "Run all checks"),
-        string("teammate_name", "reviewer"),
-        string("team_name", "quality"),
+        optional_string("task_description", "Run all checks"),
+        optional_string("teammate_name", "reviewer"),
+        optional_string("team_name", "quality"),
     ]
+}
+
+fn background_tasks() -> Field {
+    optional(
+        "background_tasks",
+        json!({
+            "type":"array",
+            "items":{
+                "type":"object",
+                "required":["id","type","status","description"],
+                "properties":{
+                    "id":{"type":"string"},
+                    "type":{"type":"string"},
+                    "status":{"type":"string"},
+                    "description":{"type":"string"},
+                    "command":{"type":"string"},
+                    "agent_type":{"type":"string"},
+                    "server":{"type":"string"},
+                    "tool":{"type":"string"},
+                    "name":{"type":"string"}
+                },
+                "additionalProperties":true
+            }
+        }),
+        json!([{
+            "id":"task-1",
+            "type":"shell",
+            "status":"running",
+            "description":"Run tests",
+            "command":"cargo test"
+        }]),
+    )
+}
+
+fn session_crons() -> Field {
+    optional(
+        "session_crons",
+        json!({
+            "type":"array",
+            "items":{
+                "type":"object",
+                "required":["id","schedule","recurring","prompt"],
+                "properties":{
+                    "id":{"type":"string"},
+                    "schedule":{"type":"string"},
+                    "recurring":{"type":"boolean"},
+                    "prompt":{"type":"string"}
+                },
+                "additionalProperties":true
+            }
+        }),
+        json!([{
+            "id":"cron-1",
+            "schedule":"0 9 * * 1-5",
+            "recurring":true,
+            "prompt":"Check the build"
+        }]),
+    )
 }
 
 fn generate(root: &Path, seed: &Seed) {
@@ -620,27 +728,19 @@ fn input_schema(seed: &Seed) -> Value {
 
 fn output_schema(seed: &Seed) -> Value {
     let mut top = Map::new();
-    if !matches!(
-        seed.profile,
-        Profile::NoControl
-            | Profile::Display
-            | Profile::Retry
-            | Profile::Elicitation
-            | Profile::SessionStart
-    ) {
-        add_common(&mut top);
-    }
-    if matches!(seed.profile, Profile::NoControl | Profile::SessionStart) {
-        top.insert("systemMessage".into(), json!({"type":"string"}));
+    add_universal(&mut top);
+    if supports_top_level_block(seed.wire) {
+        add_block(&mut top);
     }
     let fields = match seed.profile {
         Profile::Context => json!({"additionalContext":{"type":"string"}}),
         Profile::SessionStart => {
             json!({"additionalContext":{"type":"string"},"initialUserMessage":{"type":"string"},"sessionTitle":{"type":"string"},"watchPaths":{"type":"array","items":{"type":"string"}},"reloadSkills":{"type":"boolean"}})
         }
-        Profile::Prompt => {
+        Profile::Prompt if seed.wire == "UserPromptSubmit" => {
             json!({"additionalContext":{"type":"string"},"sessionTitle":{"type":"string"},"suppressOriginalPrompt":{"type":"boolean"}})
         }
+        Profile::Prompt => json!({"additionalContext":{"type":"string"}}),
         Profile::Display => json!({"displayContent":{"type":"string"}}),
         Profile::PreTool => {
             json!({"permissionDecision":{"enum":["allow","deny","ask","defer"]},"permissionDecisionReason":{"type":"string"},"updatedInput":{},"additionalContext":{"type":"string"}})
@@ -653,8 +753,11 @@ fn output_schema(seed: &Seed) -> Value {
         }
         Profile::Retry => json!({"retry":{"type":"boolean"}}),
         Profile::Stop => json!({"additionalContext":{"type":"string"}}),
+        Profile::WatchPaths => {
+            json!({"watchPaths":{"type":"array","items":{"type":"string"}}})
+        }
         Profile::Elicitation => {
-            json!({"action":{"enum":["accept","decline","cancel"]},"content":{}})
+            json!({"action":{"enum":["accept","decline","cancel"]},"content":{"type":"object"}})
         }
         Profile::NoControl => json!({}),
     };
@@ -666,13 +769,32 @@ fn output_schema(seed: &Seed) -> Value {
     json!({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":format!("urn:agent-hook-kit:contracts:claude-code:{SNAPSHOT}:{}:command-output",kebab(seed.wire)),"type":"object","properties":top,"additionalProperties":false})
 }
 
-fn add_common(top: &mut Map<String, Value>) {
+fn add_universal(top: &mut Map<String, Value>) {
     top.insert("continue".into(), json!({"type":"boolean"}));
     top.insert("stopReason".into(), json!({"type":"string"}));
     top.insert("suppressOutput".into(), json!({"type":"boolean"}));
     top.insert("systemMessage".into(), json!({"type":"string"}));
+    top.insert("terminalSequence".into(), json!({"type":"string"}));
+}
+
+fn add_block(top: &mut Map<String, Value>) {
     top.insert("decision".into(), json!({"const":"block"}));
     top.insert("reason".into(), json!({"type":"string"}));
+}
+
+fn supports_top_level_block(event: &str) -> bool {
+    matches!(
+        event,
+        "UserPromptSubmit"
+            | "UserPromptExpansion"
+            | "PostToolUse"
+            | "PostToolUseFailure"
+            | "PostToolBatch"
+            | "Stop"
+            | "SubagentStop"
+            | "ConfigChange"
+            | "PreCompact"
+    )
 }
 
 fn contract(seed: &Seed) -> Value {
@@ -698,7 +820,7 @@ fn contract(seed: &Seed) -> Value {
         ));
     }
     if let Some(effect) = seed.exit2_effect {
-        command_outcomes.push(json!({"id":"exit-2","effect":effect,"exit":{"exact":2},"stdout":{"presence":"forbidden","role":"none","content_kind":"empty"},"stderr":{"presence":"required","role":"agent-context","content_kind":"text","encoding":"utf-8"},"sources":[SOURCE],"assurance":{"confidence":"low","verification":"source-reviewed"}}));
+        command_outcomes.push(json!({"id":"exit-2","effect":effect,"exit":{"exact":2},"stdout":{"presence":"optional","role":"ignored","content_kind":"opaque"},"stderr":{"presence":"required","role":"agent-context","content_kind":"text","encoding":"utf-8"},"sources":[SOURCE],"assurance":{"confidence":"low","verification":"source-reviewed"}}));
     }
     let mut bindings = Map::new();
     bindings.insert("command".into(),json!({"kind":"process","request":{"channel":"stdin","framing":"single-document-at-eof","content_kind":"json"},"outcomes":command_outcomes}));
@@ -784,6 +906,14 @@ fn fixtures(seed: &Seed) -> Value {
             "exit-2",
             2,
             b"",
+            b"blocked by hook",
+        ));
+        process.push(case(
+            "command-exit-2-invalid-stdout",
+            "command",
+            "exit-2",
+            2,
+            b"{invalid-json",
             b"blocked by hook",
         ));
     }

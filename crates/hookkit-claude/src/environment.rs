@@ -398,6 +398,7 @@ mod tests {
         "TeammateIdle",
         "ConfigChange",
         "CwdChanged",
+        "DirectoryAdded",
         "FileChanged",
         "WorktreeCreate",
         "WorktreeRemove",

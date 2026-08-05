@@ -62,17 +62,17 @@ fn verify_all_negative_inputs() -> Result<(), String> {
     verify_gemini_catalog_negative_inputs()?;
     verify_negative_inputs::<hookkit_claude::protocol::SessionStart>(
         "claude-code",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-05-r1",
         "session-start",
     )?;
     verify_negative_inputs::<hookkit_claude::protocol::PostToolUse>(
         "claude-code",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-05-r1",
         "post-tool-use",
     )?;
     verify_negative_inputs::<hookkit_claude::protocol::WorktreeCreate>(
         "claude-code",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-05-r1",
         "worktree-create",
     )?;
     verify_negative_inputs::<hookkit_codex::protocol::PreToolUse>(
@@ -141,7 +141,7 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
 
     executed.push(verify_case::<hookkit_claude::protocol::SessionStart>(
         "claude-code",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-05-r1",
         "session-start",
         "command-structured",
         hookkit_claude::protocol::SessionStartOutput::structured(
@@ -149,18 +149,19 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
             Some(true),
             Some("Review".into()),
             vec!["/repo/.env".into()],
-        ),
+        )
+        .map_err(|error| error.to_string())?,
     )?);
     executed.push(verify_case::<hookkit_claude::protocol::SessionStart>(
         "claude-code",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-05-r1",
         "session-start",
         "command-text",
         hookkit_claude::protocol::SessionStartOutput::text_context("Hook-provided context."),
     )?);
     executed.push(verify_case::<hookkit_claude::protocol::PostToolUse>(
         "claude-code",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-05-r1",
         "post-tool-use",
         "command-structured",
         hookkit_claude::protocol::PostToolUseOutput::with_context("Generated files changed.")
@@ -169,9 +170,16 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
             .with_updated_tool_output(serde_json::json!({"status":"redacted"}))
             .map_err(|error| error.to_string())?,
     )?);
+    executed.push(verify_case::<hookkit_claude::protocol::PostToolUse>(
+        "claude-code",
+        "docs-2026-08-05-r1",
+        "post-tool-use",
+        "command-exit-2",
+        hookkit_claude::protocol::PostToolUseOutput::feedback_error("blocked by hook"),
+    )?);
     executed.push(verify_case::<hookkit_claude::protocol::WorktreeCreate>(
         "claude-code",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-05-r1",
         "worktree-create",
         "command-created",
         hookkit_claude::protocol::WorktreeCreateOutput::path_with_newline(
@@ -181,7 +189,7 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
     )?);
     executed.push(verify_case::<hookkit_claude::protocol::WorktreeCreate>(
         "claude-code",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-05-r1",
         "worktree-create",
         "command-failed",
         hookkit_claude::protocol::WorktreeCreateOutput::failed("", 1)
@@ -348,13 +356,14 @@ fn verify_claude_catalog_negative_inputs() -> Result<(), String> {
         ($event:ident, $path:literal) => {
             verify_negative_inputs::<hookkit_claude::catalog::$event>(
                 "claude-code",
-                "docs-2026-07-12-r2",
+                "docs-2026-08-05-r1",
                 $path,
             )?;
         };
     }
     verify!(ConfigChange, "config-change");
     verify!(CwdChanged, "cwd-changed");
+    verify!(DirectoryAdded, "directory-added");
     verify!(Elicitation, "elicitation");
     verify!(ElicitationResult, "elicitation-result");
     verify!(FileChanged, "file-changed");
@@ -431,7 +440,7 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         ($event:ident, $path:literal, $case:literal, $output:expr) => {
             executed.push(verify_case::<hookkit_claude::catalog::$event>(
                 "claude-code",
-                "docs-2026-07-12-r2",
+                "docs-2026-08-05-r1",
                 $path,
                 $case,
                 $output,
@@ -480,12 +489,25 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         hookkit_claude::catalog::CwdChangedOutput::with_system_message(
             "Working directory changed.",
         )
+        .with_watch_paths(vec!["/repo/crate/.env".into()])
+        .map_err(|error| error.to_string())?
+    );
+    claude_case!(
+        DirectoryAdded,
+        "directory-added",
+        "command-structured",
+        hookkit_claude::catalog::DirectoryAddedOutput::with_system_message(
+            "Working directory added.",
+        )
     );
     claude_case!(
         Elicitation,
         "elicitation",
         "command-structured",
-        hookkit_claude::catalog::ElicitationOutput::accept(serde_json::json!({"name": "Ada"}))
+        hookkit_claude::catalog::ElicitationOutput::accept(serde_json::Map::from_iter([(
+            "name".into(),
+            serde_json::json!("Ada"),
+        )]))
     );
     claude_case!(
         Elicitation,
@@ -510,6 +532,8 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         "file-changed",
         "command-structured",
         hookkit_claude::catalog::FileChangedOutput::with_system_message("Watched file changed.")
+            .with_watch_paths(vec!["/repo/.env".into(), "/repo/.env.local".into()])
+            .map_err(|error| error.to_string())?
     );
     claude_case!(
         InstructionsLoaded,
@@ -530,6 +554,12 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         hookkit_claude::catalog::NotificationOutput::with_system_message(
             "Permission notification emitted.",
         )
+        .with_continue(true)
+        .map_err(|error| error.to_string())?
+        .with_suppress_output(true)
+        .map_err(|error| error.to_string())?
+        .with_terminal_sequence("\u{7}")
+        .map_err(|error| error.to_string())?
     );
     claude_case!(
         PermissionDenied,
@@ -576,6 +606,12 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         "post-tool-use-failure",
         "command-structured",
         hookkit_claude::catalog::PostToolUseFailureOutput::with_context("Hook-provided context.",)
+    );
+    claude_case!(
+        PostToolUseFailure,
+        "post-tool-use-failure",
+        "command-exit-2",
+        hookkit_claude::catalog::PostToolUseFailureOutput::feedback_error("blocked by hook")
     );
     claude_case!(
         PreCompact,
@@ -668,7 +704,11 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         TaskCompleted,
         "task-completed",
         "command-structured",
-        hookkit_claude::catalog::TaskCompletedOutput::block("Verification is incomplete.")
+        hookkit_claude::catalog::TaskCompletedOutput::no_op()
+            .with_continue(false)
+            .map_err(|error| error.to_string())?
+            .with_stop_reason("Verification is incomplete.")
+            .map_err(|error| error.to_string())?
     );
     claude_case!(
         TaskCompleted,
@@ -680,7 +720,11 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         TaskCreated,
         "task-created",
         "command-structured",
-        hookkit_claude::catalog::TaskCreatedOutput::block("Task needs an owner.")
+        hookkit_claude::catalog::TaskCreatedOutput::no_op()
+            .with_continue(false)
+            .map_err(|error| error.to_string())?
+            .with_stop_reason("Task needs an owner.")
+            .map_err(|error| error.to_string())?
     );
     claude_case!(
         TaskCreated,
@@ -692,7 +736,11 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         TeammateIdle,
         "teammate-idle",
         "command-structured",
-        hookkit_claude::catalog::TeammateIdleOutput::block("Continue reviewing.")
+        hookkit_claude::catalog::TeammateIdleOutput::no_op()
+            .with_continue(false)
+            .map_err(|error| error.to_string())?
+            .with_stop_reason("Continue reviewing.")
+            .map_err(|error| error.to_string())?
     );
     claude_case!(
         TeammateIdle,
@@ -707,8 +755,6 @@ fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
         hookkit_claude::catalog::UserPromptExpansionOutput::block_with_context(
             "Unavailable.",
             "Use the team checklist.",
-            None,
-            None,
         )
     );
     claude_case!(

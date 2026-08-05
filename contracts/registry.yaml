@@ -3,10 +3,10 @@ harnesses:
   antigravity:
     current: docs-2026-07-12-r2
   claude-code:
-    current: docs-2026-07-12-r2
+    current: docs-2026-08-05-r1
   codex:
     current: commit-9e552e9-r2
   gemini-cli:
     current: commit-f354eeb-r2
 supplements:
-  command_environments: command-environments-2026-07-13-r1
+  command_environments: command-environments-2026-08-05-r1

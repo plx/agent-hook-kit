@@ -44,15 +44,15 @@ targets:
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/SessionStart
+  - contract: claude-code/docs-2026-08-05-r1/SessionStart
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/WorktreeCreate
+  - contract: claude-code/docs-2026-08-05-r1/WorktreeCreate
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/PostToolUse
+  - contract: claude-code/docs-2026-08-05-r1/PostToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
@@ -76,111 +76,115 @@ targets:
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/ConfigChange
+  - contract: claude-code/docs-2026-08-05-r1/ConfigChange
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/CwdChanged
+  - contract: claude-code/docs-2026-08-05-r1/CwdChanged
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/Elicitation
+  - contract: claude-code/docs-2026-08-05-r1/DirectoryAdded
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/ElicitationResult
+  - contract: claude-code/docs-2026-08-05-r1/Elicitation
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/FileChanged
+  - contract: claude-code/docs-2026-08-05-r1/ElicitationResult
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/InstructionsLoaded
+  - contract: claude-code/docs-2026-08-05-r1/FileChanged
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/MessageDisplay
+  - contract: claude-code/docs-2026-08-05-r1/InstructionsLoaded
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/Notification
+  - contract: claude-code/docs-2026-08-05-r1/MessageDisplay
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/PermissionDenied
+  - contract: claude-code/docs-2026-08-05-r1/Notification
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/PermissionRequest
+  - contract: claude-code/docs-2026-08-05-r1/PermissionDenied
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/PostCompact
+  - contract: claude-code/docs-2026-08-05-r1/PermissionRequest
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/PostToolBatch
+  - contract: claude-code/docs-2026-08-05-r1/PostCompact
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/PostToolUseFailure
+  - contract: claude-code/docs-2026-08-05-r1/PostToolBatch
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/PreCompact
+  - contract: claude-code/docs-2026-08-05-r1/PostToolUseFailure
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/PreToolUse
+  - contract: claude-code/docs-2026-08-05-r1/PreCompact
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/SessionEnd
+  - contract: claude-code/docs-2026-08-05-r1/PreToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/Setup
+  - contract: claude-code/docs-2026-08-05-r1/SessionEnd
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/Stop
+  - contract: claude-code/docs-2026-08-05-r1/Setup
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/StopFailure
+  - contract: claude-code/docs-2026-08-05-r1/Stop
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/SubagentStart
+  - contract: claude-code/docs-2026-08-05-r1/StopFailure
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/SubagentStop
+  - contract: claude-code/docs-2026-08-05-r1/SubagentStart
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/TaskCompleted
+  - contract: claude-code/docs-2026-08-05-r1/SubagentStop
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/TaskCreated
+  - contract: claude-code/docs-2026-08-05-r1/TaskCompleted
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/TeammateIdle
+  - contract: claude-code/docs-2026-08-05-r1/TaskCreated
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/UserPromptExpansion
+  - contract: claude-code/docs-2026-08-05-r1/TeammateIdle
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/UserPromptSubmit
+  - contract: claude-code/docs-2026-08-05-r1/UserPromptExpansion
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-07-12-r2/WorktreeRemove
+  - contract: claude-code/docs-2026-08-05-r1/UserPromptSubmit
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: claude-code/docs-2026-08-05-r1/WorktreeRemove
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
