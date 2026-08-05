@@ -1,0 +1,44 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0 }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 } }, stepIdx: 19 }
+  negative:
+    - id: missing-tool-call
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, stepIdx: 0 }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-step-index
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: first }
+      expected_pointer: /stepIdx
+      expected_keyword: type
+output:
+  - id: allow
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { decision: allow }
+  - id: ask
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference]
+    value: { decision: ask, reason: Requires confirmation., permissionOverrides: [command(npm test)] }
+process:
+  - id: ask
+    binding: command
+    outcome: decision
+    exit_code: 0
+    stdout_base64: eyJkZWNpc2lvbiI6ImFzayIsInJlYXNvbiI6IlJlcXVpcmVzIGNvbmZpcm1hdGlvbi4iLCJwZXJtaXNzaW9uT3ZlcnJpZGVzIjpbImNvbW1hbmQobnBtIHRlc3QpIl19
+    stdout_sha256: 99bd0950e9481b6ddf53aede477e8da1ebb05ca0c48bf9a39f21a7084404dd7e
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

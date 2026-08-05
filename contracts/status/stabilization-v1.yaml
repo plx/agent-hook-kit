@@ -20,23 +20,23 @@ defaults:
     level: catalog-only
     verification: source-reviewed
 targets:
-  - contract: antigravity/docs-2026-07-12-r2/PreInvocation
+  - contract: antigravity/docs-2026-08-04-r1/PreInvocation
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: antigravity/docs-2026-07-12-r2/PostInvocation
+  - contract: antigravity/docs-2026-08-04-r1/PostInvocation
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: antigravity/docs-2026-07-12-r2/PreToolUse
+  - contract: antigravity/docs-2026-08-04-r1/PreToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: antigravity/docs-2026-07-12-r2/PostToolUse
+  - contract: antigravity/docs-2026-08-04-r1/PostToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: antigravity/docs-2026-07-12-r2/Stop
+  - contract: antigravity/docs-2026-08-04-r1/Stop
     binding: command
     level: command-runtime-beta
     verification: source-reviewed

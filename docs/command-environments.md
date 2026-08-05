@@ -189,6 +189,6 @@ source:
 
 The event inventory remains governed by the immutable snapshots under
 [`contracts/`](../contracts/README.md). Its separately versioned
-[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-08-05-r2/)
+[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-08-05-r3/)
 is the machine-validated evidence behind the command-process state summarized
 here.

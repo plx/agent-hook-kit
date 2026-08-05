@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-08-04-r1:stop:input",
+  "type": "object",
+  "required": ["conversationId", "workspacePaths", "transcriptPath", "artifactDirectoryPath", "executionNum", "terminationReason", "fullyIdle"],
+  "properties": {
+    "conversationId": { "type": "string" },
+    "workspacePaths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "transcriptPath": { "type": "string" },
+    "artifactDirectoryPath": { "type": "string" },
+    "executionNum": { "type": "integer", "minimum": 0 },
+    "terminationReason": { "type": "string" },
+    "error": { "type": "string" },
+    "fullyIdle": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

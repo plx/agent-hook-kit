@@ -86,27 +86,27 @@ fn verify_all_negative_inputs() -> Result<(), String> {
     )?;
     verify_negative_inputs::<hookkit_antigravity::PreInvocation>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "pre-invocation",
     )?;
     verify_negative_inputs::<hookkit_antigravity::PostInvocation>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "post-invocation",
     )?;
     verify_negative_inputs::<hookkit_antigravity::PreToolUse>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "pre-tool-use",
     )?;
     verify_negative_inputs::<hookkit_antigravity::PostToolUse>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "post-tool-use",
     )?;
     verify_negative_inputs::<hookkit_antigravity::Stop>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "stop",
     )?;
     Ok(())
@@ -220,7 +220,7 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
 
     executed.push(verify_case::<hookkit_antigravity::PreInvocation>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "pre-invocation",
         "inject-reminder",
         hookkit_antigravity::PreInvocationOutput::inject(
@@ -231,7 +231,17 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
     )?);
     executed.push(verify_case::<hookkit_antigravity::PostInvocation>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
+        "post-invocation",
+        "default",
+        hookkit_antigravity::PostInvocationOutput {
+            inject_steps: Vec::new(),
+            termination_behavior: Some(hookkit_antigravity::TerminationBehavior::Default),
+        },
+    )?);
+    executed.push(verify_case::<hookkit_antigravity::PostInvocation>(
+        "antigravity",
+        "docs-2026-08-04-r1",
         "post-invocation",
         "force-continue",
         hookkit_antigravity::PostInvocationOutput {
@@ -241,7 +251,7 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
     )?);
     executed.push(verify_case::<hookkit_antigravity::PreToolUse>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "pre-tool-use",
         "ask",
         hookkit_antigravity::PreToolUseOutput {
@@ -252,14 +262,14 @@ pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
     )?);
     executed.push(verify_case::<hookkit_antigravity::PostToolUse>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "post-tool-use",
         "no-op",
         hookkit_antigravity::PostToolUseOutput::default(),
     )?);
     executed.push(verify_case::<hookkit_antigravity::Stop>(
         "antigravity",
-        "docs-2026-07-12-r2",
+        "docs-2026-08-04-r1",
         "stop",
         "continue",
         hookkit_antigravity::StopOutput {

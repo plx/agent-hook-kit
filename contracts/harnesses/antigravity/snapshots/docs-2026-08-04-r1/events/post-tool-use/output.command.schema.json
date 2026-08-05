@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-08-04-r1:post-tool-use:command-output",
+  "type": "object",
+  "maxProperties": 0,
+  "additionalProperties": false
+}

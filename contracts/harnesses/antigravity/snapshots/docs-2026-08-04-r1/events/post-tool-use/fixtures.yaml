@@ -1,0 +1,39 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, stepIdx: 0 }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, stepIdx: 5, error: exit status 1 }
+  negative:
+    - id: missing-step-index
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-step-index
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, stepIdx: first }
+      expected_pointer: /stepIdx
+      expected_keyword: type
+output:
+  - id: no-op
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference]
+    value: {}
+process:
+  - id: no-op
+    binding: command
+    outcome: no-op
+    exit_code: 0
+    stdout_base64: e30=
+    stdout_sha256: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

@@ -1,0 +1,37 @@
+format_version: 1
+sources:
+- id: claude-hooks-reference
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/hooks.md
+  retrieved: 2026-08-05
+  content_sha256: 78d0c1ed983fd711291d30f21de6cfb9be570d65506705a56de194182c584661
+  reproducibility: content-hash-only
+- id: claude-environment-reference
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/env-vars
+  retrieved: 2026-07-13
+  content_sha256: 45ed86d90cee60a40e50a2e00c49b9c1d3b800c9ece9f6e2208de1135915b92f
+  reproducibility: content-hash-only
+- id: claude-plugins-reference
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/plugins-reference
+  retrieved: 2026-07-13
+  content_sha256: e91e8841bb85b5ea1cc4129d2a855f413a10544e7e5dbec40f2bea8850bac258
+  reproducibility: content-hash-only
+- id: codex-hooks-source
+  kind: official-source
+  authority: primary
+  url: https://github.com/openai/codex/tree/9e552e9d15ba52bed7077d5357f3e18e330f8f38/codex-rs/hooks
+  retrieved: 2026-07-13
+  revision: 9e552e9d15ba52bed7077d5357f3e18e330f8f38
+  reproducibility: pinned-revision
+- id: antigravity-hooks-reference
+  kind: official-documentation
+  authority: primary
+  url: https://antigravity.google/docs/hooks
+  retrieved: 2026-08-04
+  content_sha256: 8425858481fb9fdc43613c1ddfbf7e851ba4b1a9f8981974ff094c4619702669
+  reproducibility: content-hash-only

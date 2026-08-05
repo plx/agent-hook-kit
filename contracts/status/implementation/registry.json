@@ -2,7 +2,7 @@
   "format_version": 1,
   "events": [
     {
-      "contract": "antigravity/docs-2026-07-12-r2/PostInvocation",
+      "contract": "antigravity/docs-2026-08-04-r1/PostInvocation",
       "harness": "antigravity",
       "event": "PostInvocation",
       "native_input": true,
@@ -11,11 +11,12 @@
         "command"
       ],
       "conformance_cases": [
+        "default",
         "force-continue"
       ]
     },
     {
-      "contract": "antigravity/docs-2026-07-12-r2/PostToolUse",
+      "contract": "antigravity/docs-2026-08-04-r1/PostToolUse",
       "harness": "antigravity",
       "event": "PostToolUse",
       "native_input": true,
@@ -28,7 +29,7 @@
       ]
     },
     {
-      "contract": "antigravity/docs-2026-07-12-r2/PreInvocation",
+      "contract": "antigravity/docs-2026-08-04-r1/PreInvocation",
       "harness": "antigravity",
       "event": "PreInvocation",
       "native_input": true,
@@ -41,7 +42,7 @@
       ]
     },
     {
-      "contract": "antigravity/docs-2026-07-12-r2/PreToolUse",
+      "contract": "antigravity/docs-2026-08-04-r1/PreToolUse",
       "harness": "antigravity",
       "event": "PreToolUse",
       "native_input": true,
@@ -54,7 +55,7 @@
       ]
     },
     {
-      "contract": "antigravity/docs-2026-07-12-r2/Stop",
+      "contract": "antigravity/docs-2026-08-04-r1/Stop",
       "harness": "antigravity",
       "event": "Stop",
       "native_input": true,

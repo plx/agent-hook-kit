@@ -1,0 +1,11 @@
+format_version: 1
+sources:
+  - id: antigravity-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/hooks
+    retrieved: 2026-08-04
+    content_sha256: 8425858481fb9fdc43613c1ddfbf7e851ba4b1a9f8981974ff094c4619702669
+    reproducibility: content-hash-only
+    limitations:
+      - The mutable rendered page includes site chrome and has no checked-in capture.
