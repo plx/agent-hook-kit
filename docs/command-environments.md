@@ -12,7 +12,7 @@ stdin bytes + declared environment variables
     -> native command output
 ```
 
-This page describes the selected 46-event inventory. The contract is scoped to
+This page describes the selected 47-event inventory. The contract is scoped to
 the **command handler binding**. HTTP handlers receive request data, not a hook
 subprocess environment; Claude HTTP header interpolation is a separate,
 allowlisted configuration feature. HTTP, prompt, agent, MCP, and other
@@ -44,7 +44,7 @@ library does not place them in the typed contract. In particular:
 
 ## Exhaustive event/environment matrix
 
-The rows below name every event in the selected snapshots: 31 Claude Code, 10
+The rows below name every event in the selected snapshots: 31 Claude Code, 11
 Codex, and 5 Antigravity events.
 
 For every Claude Code row, the required baseline is `CLAUDECODE=1`,
@@ -63,7 +63,7 @@ For every Claude Code row, the required baseline is `CLAUDECODE=1`,
 | --- | --- | --- |
 | Claude Code — `ClaudeCommandEnvironment` | `SessionStart`, `Setup`, `CwdChanged`, `FileChanged` | Claude baseline and conditionals above; `CLAUDE_ENV_FILE` is required and non-empty on these four events. |
 | Claude Code — `ClaudeCommandEnvironment` | `InstructionsLoaded`, `UserPromptSubmit`, `UserPromptExpansion`, `MessageDisplay`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `PermissionDenied`, `Notification`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `Stop`, `StopFailure`, `TeammateIdle`, `ConfigChange`, `DirectoryAdded`, `WorktreeCreate`, `WorktreeRemove`, `PreCompact`, `PostCompact`, `SessionEnd`, `Elicitation`, `ElicitationResult` | Claude baseline and conditionals above. `CLAUDE_ENV_FILE` is ignored for these events. |
-| Codex — `CodexCommandEnvironment` | `SessionStart`, `SubagentStart`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `UserPromptSubmit`, `SubagentStop`, `Stop` | Ordinary hooks have no modeled Codex variable. Plugin hooks provide `PLUGIN_ROOT`, `PLUGIN_DATA`, `CLAUDE_PLUGIN_ROOT`, and `CLAUDE_PLUGIN_DATA` together; the Claude-compatible aliases must equal the canonical paths. |
+| Codex — `CodexCommandEnvironment` | `SessionStart`, `SessionEnd`, `SubagentStart`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `UserPromptSubmit`, `SubagentStop`, `Stop` | Ordinary hooks have no modeled Codex variable. Plugin hooks provide `PLUGIN_ROOT`, `PLUGIN_DATA`, `CLAUDE_PLUGIN_ROOT`, and `CLAUDE_PLUGIN_DATA` together; the Claude-compatible aliases must equal the canonical paths. |
 | Antigravity — `AntigravityCommandEnvironment` | `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop` | No environment variable is defined by the official hook contract. Invocation state remains in stdin JSON. |
 
 <!-- markdownlint-enable MD013 -->
@@ -189,6 +189,6 @@ source:
 
 The event inventory remains governed by the immutable snapshots under
 [`contracts/`](../contracts/README.md). Its separately versioned
-[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-08-05-r3/)
+[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-08-05-r4/)
 is the machine-validated evidence behind the command-process state summarized
 here.

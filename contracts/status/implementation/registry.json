@@ -491,7 +491,7 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/PermissionRequest",
+      "contract": "codex/commit-1e59dc5-r1/PermissionRequest",
       "harness": "codex",
       "event": "PermissionRequest",
       "native_input": true,
@@ -505,7 +505,7 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/PostCompact",
+      "contract": "codex/commit-1e59dc5-r1/PostCompact",
       "harness": "codex",
       "event": "PostCompact",
       "native_input": true,
@@ -518,7 +518,7 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/PostToolUse",
+      "contract": "codex/commit-1e59dc5-r1/PostToolUse",
       "harness": "codex",
       "event": "PostToolUse",
       "native_input": true,
@@ -532,7 +532,7 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/PreCompact",
+      "contract": "codex/commit-1e59dc5-r1/PreCompact",
       "harness": "codex",
       "event": "PreCompact",
       "native_input": true,
@@ -541,12 +541,11 @@
         "command"
       ],
       "conformance_cases": [
-        "structured",
-        "exit-2"
+        "structured"
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/PreToolUse",
+      "contract": "codex/commit-1e59dc5-r1/PreToolUse",
       "harness": "codex",
       "event": "PreToolUse",
       "native_input": true,
@@ -561,7 +560,20 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/SessionStart",
+      "contract": "codex/commit-1e59dc5-r1/SessionEnd",
+      "harness": "codex",
+      "event": "SessionEnd",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "no-op"
+      ]
+    },
+    {
+      "contract": "codex/commit-1e59dc5-r1/SessionStart",
       "harness": "codex",
       "event": "SessionStart",
       "native_input": true,
@@ -575,7 +587,7 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/Stop",
+      "contract": "codex/commit-1e59dc5-r1/Stop",
       "harness": "codex",
       "event": "Stop",
       "native_input": true,
@@ -589,7 +601,7 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/SubagentStart",
+      "contract": "codex/commit-1e59dc5-r1/SubagentStart",
       "harness": "codex",
       "event": "SubagentStart",
       "native_input": true,
@@ -603,7 +615,7 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/SubagentStop",
+      "contract": "codex/commit-1e59dc5-r1/SubagentStop",
       "harness": "codex",
       "event": "SubagentStop",
       "native_input": true,
@@ -617,7 +629,7 @@
       ]
     },
     {
-      "contract": "codex/commit-9e552e9-r2/UserPromptSubmit",
+      "contract": "codex/commit-1e59dc5-r1/UserPromptSubmit",
       "harness": "codex",
       "event": "UserPromptSubmit",
       "native_input": true,

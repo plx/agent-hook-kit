@@ -1,0 +1,54 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: empty
+        presence: optional
+        role: none
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: session
+  identification:
+    discriminator:
+      const: SessionEnd
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: session_end
+  wire_name: SessionEnd
+fixtures: fixtures.yaml
+format_version: 1
+harness: codex
+id: codex/commit-1e59dc5-r1/SessionEnd
+schemas:
+  input:
+    assurance:
+      confidence: high
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+  outputs: []
+snapshot: commit-1e59dc5-r1
+uncertainties:
+- The official generated schemas include parsed compatibility fields; runtime support restrictions from the hooks reference and pinned source remain controlling.

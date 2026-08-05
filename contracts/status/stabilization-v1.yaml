@@ -52,11 +52,11 @@ targets:
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/PreToolUse
+  - contract: codex/commit-1e59dc5-r1/PreToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/PostToolUse
+  - contract: codex/commit-1e59dc5-r1/PostToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
@@ -172,35 +172,39 @@ targets:
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/PermissionRequest
+  - contract: codex/commit-1e59dc5-r1/PermissionRequest
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/PostCompact
+  - contract: codex/commit-1e59dc5-r1/PostCompact
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/PreCompact
+  - contract: codex/commit-1e59dc5-r1/PreCompact
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/SessionStart
+  - contract: codex/commit-1e59dc5-r1/SessionEnd
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/Stop
+  - contract: codex/commit-1e59dc5-r1/SessionStart
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/SubagentStart
+  - contract: codex/commit-1e59dc5-r1/Stop
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/SubagentStop
+  - contract: codex/commit-1e59dc5-r1/SubagentStart
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-9e552e9-r2/UserPromptSubmit
+  - contract: codex/commit-1e59dc5-r1/SubagentStop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-1e59dc5-r1/UserPromptSubmit
     binding: command
     level: command-runtime-beta
     verification: source-reviewed

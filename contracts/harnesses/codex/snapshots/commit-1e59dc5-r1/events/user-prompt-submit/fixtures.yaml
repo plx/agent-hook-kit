@@ -1,0 +1,100 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      model: gpt-test
+      permission_mode: default
+      prompt: Run the tests
+      session_id: session-1
+      transcript_path: null
+      turn_id: turn-1
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-prompt
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: UserPromptSubmit
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: null
+      turn_id: turn-1
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: UserPromptSubmit
+      model: gpt-test
+      permission_mode: default
+      prompt: Run the tests
+      session_id: session-1
+      transcript_path: null
+      turn_id: turn-1
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: UserPromptSubmit
+      model: gpt-test
+      permission_mode: default
+      prompt: Run the tests
+      session_id: session-1
+      transcript_path: /tmp/transcript.jsonl
+      turn_id: turn-1
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - codex-hooks-reference
+  - codex-generated-schemas
+  value:
+    decision: block
+    hookSpecificOutput:
+      additionalContext: Clarify the reproduction.
+      hookEventName: UserPromptSubmit
+    reason: Ask for confirmation.
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiQ2xhcmlmeSB0aGUgcmVwcm9kdWN0aW9uLiIsImhvb2tFdmVudE5hbWUiOiJVc2VyUHJvbXB0U3VibWl0In0sInJlYXNvbiI6IkFzayBmb3IgY29uZmlybWF0aW9uLiJ9
+  stdout_sha256: 1d879f2e7a47eeb690398adb8b98b8e720cf0f8577bde7fe1560601e1e0cbd47
+- binding: command
+  exit_code: 0
+  id: text-context
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vay1wcm92aWRlZCBkZXZlbG9wZXIgY29udGV4dC4=
+  stdout_sha256: 257968890493fe977d24259bbcfbaa99ba8f0dbd137766751454b0ec557e07fc
+- binding: command
+  exit_code: 2
+  id: exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

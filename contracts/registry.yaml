@@ -5,6 +5,6 @@ harnesses:
   claude-code:
     current: docs-2026-08-05-r1
   codex:
-    current: commit-9e552e9-r2
+    current: commit-1e59dc5-r1
 supplements:
-  command_environments: command-environments-2026-08-05-r3
+  command_environments: command-environments-2026-08-05-r4

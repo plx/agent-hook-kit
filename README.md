@@ -241,7 +241,7 @@ harness type. In-memory `execute_*` APIs instead accept an explicit
 `EnvironmentVariables` map, keeping tests deterministic and free of
 process-global environment mutation. See the
 [command-hook environment reference](docs/command-environments.md) for the full
-46-event matrix, handler-binding boundary, and migration notes.
+47-event matrix, handler-binding boundary, and migration notes.
 
 ### Diagnostics and process streams
 

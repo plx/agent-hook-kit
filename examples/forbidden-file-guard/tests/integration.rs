@@ -122,7 +122,11 @@ fn every_aligned_harness_emits_native_deny_and_allow() {
 
         let allowed = run(harness, &config, &input(harness, &temporary.0, "notes.txt"));
         assert!(allowed.status.success(), "{harness}: {:?}", allowed.stderr);
-        assert_eq!(decision(&allowed), "allow", "{harness}");
+        if harness == "codex" {
+            assert!(allowed.stdout.is_empty(), "{harness}");
+        } else {
+            assert_eq!(decision(&allowed), "allow", "{harness}");
+        }
     }
 }
 
