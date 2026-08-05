@@ -193,6 +193,9 @@ fn parse(
     required_fields: &[&str],
 ) -> hookkit_core::Result<CatalogInput> {
     super::protocol::require_event(invocation, event)?;
+    if event != "SessionEnd" {
+        super::protocol::require_field(invocation, "model", event)?;
+    }
     for field in required_fields {
         super::protocol::require_field(invocation, field, event)?;
     }
@@ -677,6 +680,20 @@ mod tests {
             SessionStart::parse(&raw),
             Err(hookkit_core::HookkitError::InvalidForHint { message, .. })
                 if message == "missing required field permission_mode"
+        ));
+    }
+
+    #[test]
+    fn catalog_parser_keeps_model_required_outside_session_end() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"SessionStart","permission_mode":"default","source":"startup"}"#.to_vec(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            SessionStart::parse(&raw),
+            Err(hookkit_core::HookkitError::InvalidForHint { message, .. })
+                if message == "missing required field model"
         ));
     }
 
