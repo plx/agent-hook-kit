@@ -14,13 +14,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Antigravity protocol documentation snapshot implemented by this crate.
-pub const SNAPSHOT: SnapshotId = SnapshotId::builtin("docs-2026-07-12-r2");
+pub const SNAPSHOT: SnapshotId = SnapshotId::builtin("docs-2026-08-04-r1");
 
 /// Returns all Antigravity events with native command implementations.
 pub fn events() -> Vec<NativeEventDescriptor> {
     vec![
         NativeEventDescriptor::command::<PreInvocation>(&["inject-reminder"]),
-        NativeEventDescriptor::command::<PostInvocation>(&["force-continue"]),
+        NativeEventDescriptor::command::<PostInvocation>(&["default", "force-continue"]),
         NativeEventDescriptor::command::<PreToolUse>(&["ask"]),
         NativeEventDescriptor::command::<PostToolUse>(&["no-op"]),
         NativeEventDescriptor::command::<Stop>(&["continue"]),
@@ -29,14 +29,14 @@ pub fn events() -> Vec<NativeEventDescriptor> {
 
 /// Returns event-identification metadata for the Antigravity snapshot.
 ///
-/// Invocation events share a discriminator-free shape and require an explicit
-/// event hint. Tool and stop events have distinct, validated shapes.
+/// Invocation pairs and tool-use pairs share discriminator-free shapes and
+/// require an explicit event hint. Stop has a distinct, validated shape.
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
     vec![
         IdentificationDescriptor::ambiguous::<PreInvocation>(&["PostInvocation"]),
         IdentificationDescriptor::ambiguous::<PostInvocation>(&["PreInvocation"]),
-        IdentificationDescriptor::sound_shape::<PreToolUse>(&[]),
-        IdentificationDescriptor::sound_shape::<PostToolUse>(&[]),
+        IdentificationDescriptor::ambiguous::<PreToolUse>(&["PostToolUse"]),
+        IdentificationDescriptor::ambiguous::<PostToolUse>(&["PreToolUse"]),
         IdentificationDescriptor::sound_shape::<Stop>(&[]),
     ]
 }
@@ -55,7 +55,7 @@ pub struct PreInvocationInput {
     pub artifact_directory_path: hookkit_core::Utf8PathBuf,
     /// Zero-based invocation number; zero marks an invocation-session boundary.
     pub invocation_num: u64,
-    /// Number of model steps initially budgeted for the invocation.
+    /// Number of steps currently present in the trajectory.
     pub initial_num_steps: u64,
     /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
@@ -122,7 +122,7 @@ impl EventSpec for PreInvocation {
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PreInvocation");
     const CATEGORY: EventCategory = EventCategory::Agent;
     const CONTRACT: ContractId =
-        ContractId::builtin("antigravity/docs-2026-07-12-r2/PreInvocation");
+        ContractId::builtin("antigravity/docs-2026-08-04-r1/PreInvocation");
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         let input: Self::Input = serde_json::from_value(invocation.json().clone())?;
@@ -146,6 +146,9 @@ pub type PostInvocationInput = PreInvocationInput;
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminationBehavior {
+    /// Use Antigravity's default post-invocation behavior.
+    #[serde(rename = "")]
+    Default,
     /// Continue execution even if the invocation would otherwise terminate.
     ForceContinue,
     /// Terminate the invocation.
@@ -156,10 +159,8 @@ pub enum TerminationBehavior {
 #[serde(rename_all = "camelCase")]
 /// Native response from a post-invocation command hook.
 pub struct PostInvocationOutput {
-    /// Raw native step objects to inject.
-    ///
-    /// Emission rejects entries that are not JSON objects.
-    pub inject_steps: Vec<serde_json::Value>,
+    /// Ordered native steps to inject after the invocation completes.
+    pub inject_steps: Vec<InjectStep>,
     /// Optional override for the invocation's termination behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub termination_behavior: Option<TerminationBehavior>,
@@ -177,18 +178,13 @@ impl EventSpec for PostInvocation {
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PostInvocation");
     const CATEGORY: EventCategory = EventCategory::Agent;
     const CONTRACT: ContractId =
-        ContractId::builtin("antigravity/docs-2026-07-12-r2/PostInvocation");
+        ContractId::builtin("antigravity/docs-2026-08-04-r1/PostInvocation");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         let input: Self::Input = serde_json::from_value(invocation.json().clone())?;
         require_workspace(&input.workspace_paths, Self::EVENT)?;
         Ok(input)
     }
     fn emit(output: Self::CommandOutput) -> hookkit_core::Result<ProcessEmission> {
-        if output.inject_steps.iter().any(|step| !step.is_object()) {
-            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "PostInvocation injectSteps entries must be objects",
-            ));
-        }
         ProcessEmission::command_json(Self::CONTRACT, &output)
     }
     fn context(input: &Self::Input) -> NativeContext {
@@ -198,7 +194,7 @@ impl EventSpec for PostInvocation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Native tool-call payload nested inside a pre-tool event.
+/// Native tool-call payload nested inside a tool event.
 pub struct ToolCall {
     /// Harness-native tool name.
     pub name: String,
@@ -242,6 +238,8 @@ pub enum ToolDecision {
     Ask,
     /// Require a user permission prompt even if policy would bypass one.
     ForceAsk,
+    /// Deny unless a prior user grant already authorizes the resource.
+    DenyUnlessPriorGrant,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,7 +268,7 @@ impl EventSpec for PreToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PreToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-07-12-r2/PreToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-08-04-r1/PreToolUse");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         let input: Self::Input = serde_json::from_value(invocation.json().clone())?;
         require_workspace(&input.workspace_paths, Self::EVENT)?;
@@ -313,6 +311,8 @@ pub struct PostToolUseInput {
     pub transcript_path: hookkit_core::Utf8PathBuf,
     /// Directory where hooks may write diagnostic artifacts.
     pub artifact_directory_path: hookkit_core::Utf8PathBuf,
+    /// Tool call that finished executing.
+    pub tool_call: ToolCall,
     /// Zero-based step index within the invocation.
     pub step_idx: u64,
     /// Tool failure text, or `None` when the call succeeded.
@@ -336,7 +336,7 @@ impl EventSpec for PostToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PostToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-07-12-r2/PostToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-08-04-r1/PostToolUse");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         let input: Self::Input = serde_json::from_value(invocation.json().clone())?;
         require_workspace(&input.workspace_paths, Self::EVENT)?;
@@ -368,7 +368,7 @@ pub struct StopInput {
     pub transcript_path: hookkit_core::Utf8PathBuf,
     /// Directory where hooks may write diagnostic artifacts.
     pub artifact_directory_path: hookkit_core::Utf8PathBuf,
-    /// Zero-based execution number within the conversation.
+    /// Sequence number of the execution attempt.
     pub execution_num: u64,
     /// Harness-provided explanation for the attempted termination.
     pub termination_reason: String,
@@ -401,7 +401,7 @@ impl EventSpec for Stop {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "Stop");
     const CATEGORY: EventCategory = EventCategory::Agent;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-07-12-r2/Stop");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-08-04-r1/Stop");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         let input: Self::Input = serde_json::from_value(invocation.json().clone())?;
         require_workspace(&input.workspace_paths, Self::EVENT)?;
@@ -638,13 +638,6 @@ mod tests {
     #[test]
     fn output_constraints_are_revalidated_at_emission() {
         assert!(
-            PostInvocation::emit(PostInvocationOutput {
-                inject_steps: vec![serde_json::json!("not-an-object")],
-                termination_behavior: None,
-            })
-            .is_err()
-        );
-        assert!(
             PreToolUse::emit(PreToolUseOutput {
                 decision: ToolDecision::Ask,
                 reason: None,
@@ -658,6 +651,54 @@ mod tests {
                 reason: None,
             })
             .is_err()
+        );
+    }
+
+    #[test]
+    fn grant_aware_tool_decision_matches_the_native_wire_value() {
+        let emission = PreToolUse::emit(PreToolUseOutput {
+            decision: ToolDecision::DenyUnlessPriorGrant,
+            reason: None,
+            permission_overrides: Vec::new(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            emission.stdout(),
+            br#"{"decision":"deny_unless_prior_grant"}"#
+        );
+    }
+
+    #[test]
+    fn post_tool_use_requires_and_types_the_originating_call() {
+        let missing = RawInvocation::parse(
+            br#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","stepIdx":0}"#.to_vec(),
+        )
+        .unwrap();
+        assert!(PostToolUse::parse(&missing).is_err());
+
+        let present = RawInvocation::parse(
+            br#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"run_command","args":{"CommandLine":"cargo test"}},"stepIdx":0}"#.to_vec(),
+        )
+        .unwrap();
+        let input = PostToolUse::parse(&present).unwrap();
+        assert_eq!(input.tool_call.name, "run_command");
+        assert_eq!(input.tool_call.args["CommandLine"], "cargo test");
+    }
+
+    #[test]
+    fn post_invocation_represents_typed_steps_and_explicit_default_behavior() {
+        let emission = PostInvocation::emit(PostInvocationOutput {
+            inject_steps: vec![InjectStep::UserMessage {
+                user_message: "Run one more check.".into(),
+            }],
+            termination_behavior: Some(TerminationBehavior::Default),
+        })
+        .unwrap();
+
+        assert_eq!(
+            emission.stdout(),
+            br#"{"injectSteps":[{"userMessage":"Run one more check."}],"terminationBehavior":""}"#
         );
     }
 }

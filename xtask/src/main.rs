@@ -45,6 +45,8 @@ enum ContractsCommand {
         check: bool,
     },
     /// Compare event inventories and content hashes between two snapshot IDs.
+    ///
+    /// Qualify IDs shared by multiple harnesses as `harness/snapshot`.
     Diff { old: String, new: String },
     /// Verify vendored files against their checked-in SHA-256 manifests.
     VerifyVendor,
@@ -2444,6 +2446,22 @@ fn diff_snapshots(root: &Path, old: &str, new: &str) -> Result<()> {
 }
 
 fn find_snapshot(root: &Path, id: &str) -> Result<PathBuf> {
+    if let Some((harness, snapshot)) = id.split_once('/') {
+        let valid_component = |component: &str| {
+            !component.is_empty()
+                && component != "."
+                && component != ".."
+                && !component.contains(['/', '\\'])
+        };
+        if valid_component(harness) && valid_component(snapshot) {
+            let qualified = root.join(harness).join("snapshots").join(snapshot);
+            if qualified.is_dir() {
+                return Ok(qualified);
+            }
+        }
+        return Err(format!("snapshot {id} not found"));
+    }
+
     let matches: Vec<_> = walkdir::WalkDir::new(root)
         .into_iter()
         .filter_map(std::result::Result::ok)
@@ -2615,6 +2633,28 @@ mod tests {
         let error = read_yaml::<Registry>(&path).expect_err("anchor must fail");
         assert!(error.contains("anchors and aliases are forbidden"));
         fs::remove_file(path).expect("remove temporary YAML");
+    }
+
+    #[test]
+    fn qualified_snapshot_ids_disambiguate_shared_names() {
+        let root = std::env::temp_dir().join(format!(
+            "hookkit-xtask-qualified-snapshot-{}",
+            std::process::id()
+        ));
+        let alpha = root.join("alpha/snapshots/shared");
+        let beta = root.join("beta/snapshots/shared");
+        fs::create_dir_all(&alpha).expect("create alpha snapshot");
+        fs::create_dir_all(&beta).expect("create beta snapshot");
+
+        assert_eq!(find_snapshot(&root, "alpha/shared").unwrap(), alpha);
+        assert!(
+            find_snapshot(&root, "shared")
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+        assert!(find_snapshot(&root, "../shared").is_err());
+
+        fs::remove_dir_all(root).expect("remove temporary snapshot tree");
     }
 
     #[test]

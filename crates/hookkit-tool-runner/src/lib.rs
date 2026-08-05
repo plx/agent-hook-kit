@@ -472,7 +472,7 @@ pub struct FileActivityCli {
 }
 
 /// Parse a supported PostToolUse harness and optional shared state root.
-/// `--harness=claude|codex` remains a compatibility alias for the
+/// `--harness=claude|codex|antigravity` remains a compatibility alias for the
 /// former example binary.
 #[allow(clippy::result_unit_err)]
 pub fn parse_file_activity_args() -> Result<FileActivityCli, ()> {
@@ -483,6 +483,7 @@ pub fn parse_file_activity_args() -> Result<FileActivityCli, ()> {
         match arg.as_str() {
             "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
+            "--antigravity" => harness = Some(set_harness(harness, HarnessId::ANTIGRAVITY)?),
             "--harness" => {
                 let Some(value) = args.next() else {
                     eprintln!("{}", file_activity_usage());
@@ -523,7 +524,7 @@ pub fn parse_file_activity_args() -> Result<FileActivityCli, ()> {
     Ok(FileActivityCli { harness, state_dir })
 }
 
-/// Parse `--claude|--codex [--config PATH]` from `std::env::args`.
+/// Parse `--claude|--codex|--antigravity [--config PATH]` from `std::env::args`.
 #[allow(clippy::result_unit_err)]
 pub fn parse_args() -> Result<Cli, ()> {
     let mut harness = None;
@@ -534,6 +535,7 @@ pub fn parse_args() -> Result<Cli, ()> {
         match arg.as_str() {
             "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
+            "--antigravity" => harness = Some(set_harness(harness, HarnessId::ANTIGRAVITY)?),
             "--harness" => {
                 let Some(value) = args.next() else {
                     eprintln!("{}", usage());
@@ -709,26 +711,24 @@ fn post_tool_harness(value: &str) -> Result<HarnessId, ()> {
     match value {
         "claude" | "claude-code" => Ok(HarnessId::CLAUDE_CODE),
         "codex" => Ok(HarnessId::CODEX),
+        "antigravity" => Ok(HarnessId::ANTIGRAVITY),
         _ => Err(()),
     }
 }
 
 fn turn_completion_harness(value: &str) -> Result<HarnessId, ()> {
-    match value {
-        "antigravity" => Ok(HarnessId::ANTIGRAVITY),
-        _ => post_tool_harness(value),
-    }
+    post_tool_harness(value)
 }
 
 fn usage() -> String {
     format!(
-        "Usage: {BINARY_NAME} --claude|--codex [--config PATH]\n       {BINARY_NAME} --harness=claude|codex [--config PATH]"
+        "Usage: {BINARY_NAME} --claude|--codex|--antigravity [--config PATH]\n       {BINARY_NAME} --harness=claude|codex|antigravity [--config PATH]"
     )
 }
 
 fn file_activity_usage() -> String {
     format!(
-        "Usage: {FILE_ACTIVITY_BINARY_NAME} --claude|--codex [--state-dir PATH]\n       {FILE_ACTIVITY_BINARY_NAME} --harness=claude|codex [--state-dir PATH]"
+        "Usage: {FILE_ACTIVITY_BINARY_NAME} --claude|--codex|--antigravity [--state-dir PATH]\n       {FILE_ACTIVITY_BINARY_NAME} --harness=claude|codex|antigravity [--state-dir PATH]"
     )
 }
 
@@ -797,6 +797,9 @@ fn post_tool_no_op(harness: &HarnessId) -> hookkit_core::Result<PostToolUseOutpu
         )),
         "codex" => Ok(PostToolUseOutput::Codex(
             hookkit_codex::protocol::PostToolUseOutput::no_op(),
+        )),
+        "antigravity" => Ok(PostToolUseOutput::Antigravity(
+            hookkit_antigravity::PostToolUseOutput::default(),
         )),
         _ => Err(invalid_data(format!(
             "file-activity observer does not support {harness}"
@@ -2072,15 +2075,6 @@ fn run_post_tool_input(
     config_path: Option<&Path>,
 ) -> hookkit_core::Result<PostToolUseOutput> {
     let harness = ctx.harness();
-    if matches!(post_tool, PostToolUseInput::Antigravity(_)) {
-        return lower_domain_outcome(
-            harness,
-            RunnerDomainOutcome::UnsupportedHarness {
-                harness: harness.to_string(),
-                reason: "the native event has no tool call or changed-file payload".into(),
-            },
-        );
-    }
     let cwd = ctx
         .workspace_roots()
         .first()
@@ -2321,6 +2315,16 @@ fn lower_report(
                 Some(stderr) => native.with_protocol_stderr(stderr)?,
                 None => native,
             }))
+        }
+        "antigravity" => {
+            if !context.is_empty() && output.lowering == pkl::LoweringPolicy::Strict {
+                return Err(invalid_data(
+                    "antigravity PostToolUse has no structured agent-only message channel".into(),
+                ));
+            }
+            Ok(PostToolUseOutput::Antigravity(
+                hookkit_antigravity::PostToolUseOutput::default(),
+            ))
         }
         _ => Err(invalid_data(format!(
             "post-tool-use runner does not support {harness}"
@@ -3567,6 +3571,10 @@ mod tests {
             )
             .is_err()
         );
+        assert!(matches!(
+            lower_domain_outcome(&HarnessId::ANTIGRAVITY, RunnerDomainOutcome::Clean).unwrap(),
+            PostToolUseOutput::Antigravity(_)
+        ));
         assert!(
             lower_domain_outcome(
                 &HarnessId::ANTIGRAVITY,
@@ -3577,6 +3585,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn antigravity_post_tool_lowering_obeys_unavailable_message_policy() {
+        let best_effort = RunnerPostToolUseOutput::new(pkl::LoweringPolicy::BestEffort)
+            .with_user_notice(UserNotice::warning("review diagnostics"))
+            .with_agent_feedback("re-read generated.rs");
+        assert!(matches!(
+            lower_report(&HarnessId::ANTIGRAVITY, best_effort).unwrap(),
+            PostToolUseOutput::Antigravity(_)
+        ));
+
+        let strict = RunnerPostToolUseOutput::new(pkl::LoweringPolicy::Strict)
+            .with_agent_feedback("re-read generated.rs");
+        assert!(lower_report(&HarnessId::ANTIGRAVITY, strict).is_err());
     }
 
     #[test]

@@ -420,21 +420,31 @@ fn malformed_native_shell_call_is_a_typed_gap() {
 }
 
 #[test]
-fn antigravity_post_tool_reports_the_missing_originating_call() {
+fn antigravity_post_tool_analyzes_the_originating_call() {
     let input = PostToolUseInput::Antigravity(
         serde_json::from_value(serde_json::json!({
             "conversationId": "conversation",
             "workspacePaths": ["/repo"],
             "transcriptPath": "/tmp/transcript",
             "artifactDirectoryPath": "/tmp/artifacts",
+            "toolCall": {
+                "name": "run_command",
+                "args": {
+                    "CommandLine": "printf generated > src/generated.txt",
+                    "Cwd": "/repo"
+                }
+            },
             "stepIdx": 2
         }))
         .unwrap(),
     );
     let report = ToolAccessAnalyzer::default().analyze_post_tool(&input);
-    assert!(report.candidates.is_empty());
-    assert!(matches!(
-        report.gaps[0].reason,
-        ToolAccessGapReason::MissingToolCall
-    ));
+    assert!(report.may_modify().any(|candidate| {
+        candidate.intent == AccessIntent::Modify
+            && matches!(
+                &candidate.target,
+                AccessTarget::Path { expression, .. }
+                    if expression.resolved.as_deref() == Some(Utf8Path::new("/repo/src/generated.txt"))
+            )
+    }));
 }

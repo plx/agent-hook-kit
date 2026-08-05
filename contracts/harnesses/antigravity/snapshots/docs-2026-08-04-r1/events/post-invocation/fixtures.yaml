@@ -1,0 +1,60 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0 }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, invocationNum: 3, initialNumSteps: 10 }
+  negative:
+    - id: missing-workspaces
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0 }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-steps
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: many }
+      expected_pointer: /initialNumSteps
+      expected_keyword: type
+output:
+  - id: default
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference]
+    value: { injectSteps: [], terminationBehavior: "" }
+  - id: force-continue
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { injectSteps: [], terminationBehavior: force_continue }
+output_negative:
+  - id: inject-step-mutually-exclusive
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference]
+    value: { injectSteps: [{ userMessage: Remember to lint, ephemeralMessage: Hidden reminder }] }
+    expected_pointer: /injectSteps/0
+    expected_keyword: oneOf
+process:
+  - id: default
+    binding: command
+    outcome: control
+    exit_code: 0
+    stdout_base64: eyJpbmplY3RTdGVwcyI6W10sInRlcm1pbmF0aW9uQmVoYXZpb3IiOiIifQ==
+    stdout_sha256: df144335c7eef53ebcb5e2de3234be2aa8bd32c2ea35c34312a4cc4d2bd23ded
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: force-continue
+    binding: command
+    outcome: control
+    exit_code: 0
+    stdout_base64: eyJpbmplY3RTdGVwcyI6W10sInRlcm1pbmF0aW9uQmVoYXZpb3IiOiJmb3JjZV9jb250aW51ZSJ9
+    stdout_sha256: d8fc41b75658104a8baba8e4d74427b67c04968ccda9b150ab3eb7fbfe5c8514
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

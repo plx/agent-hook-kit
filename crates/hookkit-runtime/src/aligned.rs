@@ -839,8 +839,8 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_clean_path_needs_no_fabricated_tool_data() {
-        let bytes = br#"{"conversationId":"c","workspacePaths":["/repo","/lib"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","stepIdx":2}"#.to_vec();
+    fn antigravity_post_tool_preserves_typed_tool_data() {
+        let bytes = br#"{"conversationId":"c","workspacePaths":["/repo","/lib"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"run_command","args":{"CommandLine":"cargo test","Cwd":"/repo"}},"stepIdx":2}"#.to_vec();
         let emission = execute_post_tool_use(
             HarnessId::ANTIGRAVITY,
             bytes,

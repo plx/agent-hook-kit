@@ -561,6 +561,20 @@ fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u
                 "filePath": project.join(rel_path).to_string_lossy()
             }
         }),
+        "antigravity" => serde_json::json!({
+            "conversationId": "antigravity-ruff-test",
+            "workspacePaths": [project.to_string_lossy()],
+            "transcriptPath": "/tmp/antigravity-ruff-test.jsonl",
+            "artifactDirectoryPath": "/tmp/antigravity-ruff-artifacts",
+            "toolCall": {
+                "name": "run_command",
+                "args": {
+                    "CommandLine": format!("printf fixture > {rel_path}"),
+                    "Cwd": project.to_string_lossy()
+                }
+            },
+            "stepIdx": 2
+        }),
         _ => panic!("unknown harness {harness}"),
     };
     serde_json::to_vec(&fixture).unwrap()
@@ -1180,6 +1194,7 @@ fn file_activity_agent_hook_records_all_supported_posttool_paths() {
     let harnesses = [
         ("claude", "claude-code", "claude-ruff-test"),
         ("codex", "codex", "codex-ruff-test"),
+        ("antigravity", "antigravity", "antigravity-ruff-test"),
     ];
 
     for (harness, harness_id, session) in harnesses {
@@ -1196,9 +1211,14 @@ fn file_activity_agent_hook_records_all_supported_posttool_paths() {
             serde_json::json!({})
         );
 
+        let identity = if harness == "antigravity" {
+            hookkit_session_state::SessionIdentity::Conversation(session.into())
+        } else {
+            hookkit_session_state::SessionIdentity::Session(session.into())
+        };
         let state = hookkit_session_state::SessionState::open(
             hookkit_core::HarnessId::new(harness_id).unwrap(),
-            hookkit_session_state::SessionIdentity::Session(session.into()),
+            identity,
             hookkit_session_state::StateRoot::new(&state_dir),
         )
         .unwrap();
@@ -2700,6 +2720,38 @@ fn post_tool_use_clean_python_file_is_quiet() {
     assert!(
         String::from_utf8_lossy(&output.stderr).trim().is_empty(),
         "clean unchanged files should stay quiet"
+    );
+}
+
+#[test]
+fn post_tool_use_antigravity_runs_tools_for_the_originating_call_scope() {
+    require_pkl!();
+    let project = temp_project("ruff-antigravity-tool-call");
+    let fake_ruff = write_fake_ruff(&project);
+    write_ruff_hook_config(&project, &fake_ruff, "");
+
+    let file = project.join("src/dirty.py");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "print('needs_format')\n").unwrap();
+
+    let output = run_example(
+        "post-tool-use-agent-hook",
+        &post_tool_use_fixture("antigravity", &project, "src/dirty.py"),
+        &["--antigravity"],
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        std::fs::read_to_string(file).unwrap(),
+        "print('formatted')\n"
     );
 }
 
