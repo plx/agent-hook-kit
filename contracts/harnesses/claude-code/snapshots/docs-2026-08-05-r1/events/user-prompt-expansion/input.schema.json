@@ -1,0 +1,86 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-08-05-r1:user-prompt-expansion:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "command_args": {
+      "type": "string"
+    },
+    "command_name": {
+      "type": "string"
+    },
+    "command_source": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "expansion_type": {
+      "enum": [
+        "slash_command",
+        "mcp_prompt"
+      ]
+    },
+    "hook_event_name": {
+      "const": "UserPromptExpansion"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ]
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "expansion_type",
+    "command_name",
+    "command_args",
+    "command_source",
+    "prompt"
+  ],
+  "type": "object"
+}

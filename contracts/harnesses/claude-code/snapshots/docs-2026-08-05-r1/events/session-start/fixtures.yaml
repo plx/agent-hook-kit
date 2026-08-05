@@ -1,0 +1,83 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      source: startup
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-source
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionStart
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionStart
+      session_id: s1
+      source: startup
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: SessionStart
+      model: claude-test
+      permission_mode: default
+      prompt_id: prompt-1
+      session_id: s1
+      session_title: Review
+      source: startup
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      additionalContext: Read conventions.
+      hookEventName: SessionStart
+      reloadSkills: true
+      sessionTitle: Review
+      watchPaths:
+      - /repo/.env
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJSZWFkIGNvbnZlbnRpb25zLiIsImhvb2tFdmVudE5hbWUiOiJTZXNzaW9uU3RhcnQiLCJyZWxvYWRTa2lsbHMiOnRydWUsInNlc3Npb25UaXRsZSI6IlJldmlldyIsIndhdGNoUGF0aHMiOlsiL3JlcG8vLmVudiJdfX0=
+  stdout_sha256: 1196976e11715c65d7c40a4938a30043b720765d17a231d919604b7d0ebbc8da
+- binding: command
+  exit_code: 0
+  id: command-text
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vay1wcm92aWRlZCBjb250ZXh0Lg==
+  stdout_sha256: 5a9a1e0f83d894e72832408640efb2e622b634e35378d402ee8a97c47e5f3456

@@ -2283,7 +2283,7 @@ fn lower_report(
     if let Some(message) = output.harness_block {
         return match harness.as_str() {
             "claude-code" => Ok(PostToolUseOutput::Claude(
-                hookkit_claude::protocol::PostToolUseOutput::blocking_error(message),
+                hookkit_claude::protocol::PostToolUseOutput::feedback_error(message),
             )),
             "codex" => Ok(PostToolUseOutput::Codex(
                 hookkit_codex::protocol::PostToolUseOutput::blocking_error(message),

@@ -1,0 +1,9 @@
+{
+  "session_id": "abc-123-def",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
+  "cwd": "/home/user/project",
+  "hook_event_name": "DirectoryAdded",
+  "directory": "/home/user/another-project",
+  "source": "slash_command"
+}

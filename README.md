@@ -135,8 +135,9 @@ fn main() -> std::process::ExitCode {
 
 The handler returns `SessionStartOutput`, not raw bytes or a generic envelope, so
 it cannot emit another event's discriminator. `WorktreeCreate` demonstrates the
-same typed contract with a non-JSON result: its output emits an absolute path as
-exact plain text.
+same typed contract with a non-JSON result: its output emits a worktree path as
+exact plain text. Claude Code accepts absolute paths and resolves relative paths
+against the hook's working directory.
 
 ## Quick Start: Aligned `PreToolUse`
 
@@ -244,7 +245,7 @@ harness type. In-memory `execute_*` APIs instead accept an explicit
 `EnvironmentVariables` map, keeping tests deterministic and free of
 process-global environment mutation. See the
 [command-hook environment reference](docs/command-environments.md) for the full
-56-event matrix, handler-binding boundary, and migration notes.
+57-event matrix, handler-binding boundary, and migration notes.
 
 ### Diagnostics and process streams
 

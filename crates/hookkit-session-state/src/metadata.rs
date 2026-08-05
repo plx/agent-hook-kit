@@ -124,6 +124,8 @@ pub enum SessionEpochKind {
     Startup,
     /// A previously persisted native session resumed.
     Resume,
+    /// A new native session forked from an existing session.
+    Fork,
     /// The conversation context was cleared.
     Clear,
     /// The conversation context was compacted.
@@ -139,6 +141,7 @@ impl From<SessionBoundaryKind> for SessionEpochKind {
         match value {
             SessionBoundaryKind::Startup => Self::Startup,
             SessionBoundaryKind::Resume => Self::Resume,
+            SessionBoundaryKind::Fork => Self::Fork,
             SessionBoundaryKind::Clear => Self::Clear,
             SessionBoundaryKind::Compact => Self::Compact,
             SessionBoundaryKind::InvocationStart => Self::InvocationStart,

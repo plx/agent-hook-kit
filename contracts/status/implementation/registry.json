@@ -67,7 +67,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/ConfigChange",
+      "contract": "claude-code/docs-2026-08-05-r1/ConfigChange",
       "harness": "claude-code",
       "event": "ConfigChange",
       "native_input": true,
@@ -81,7 +81,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/CwdChanged",
+      "contract": "claude-code/docs-2026-08-05-r1/CwdChanged",
       "harness": "claude-code",
       "event": "CwdChanged",
       "native_input": true,
@@ -94,7 +94,20 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/Elicitation",
+      "contract": "claude-code/docs-2026-08-05-r1/DirectoryAdded",
+      "harness": "claude-code",
+      "event": "DirectoryAdded",
+      "native_input": true,
+      "native_output": true,
+      "bindings": [
+        "command"
+      ],
+      "conformance_cases": [
+        "command-structured"
+      ]
+    },
+    {
+      "contract": "claude-code/docs-2026-08-05-r1/Elicitation",
       "harness": "claude-code",
       "event": "Elicitation",
       "native_input": true,
@@ -108,7 +121,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/ElicitationResult",
+      "contract": "claude-code/docs-2026-08-05-r1/ElicitationResult",
       "harness": "claude-code",
       "event": "ElicitationResult",
       "native_input": true,
@@ -122,7 +135,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/FileChanged",
+      "contract": "claude-code/docs-2026-08-05-r1/FileChanged",
       "harness": "claude-code",
       "event": "FileChanged",
       "native_input": true,
@@ -135,7 +148,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/InstructionsLoaded",
+      "contract": "claude-code/docs-2026-08-05-r1/InstructionsLoaded",
       "harness": "claude-code",
       "event": "InstructionsLoaded",
       "native_input": true,
@@ -148,7 +161,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/MessageDisplay",
+      "contract": "claude-code/docs-2026-08-05-r1/MessageDisplay",
       "harness": "claude-code",
       "event": "MessageDisplay",
       "native_input": true,
@@ -161,7 +174,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/Notification",
+      "contract": "claude-code/docs-2026-08-05-r1/Notification",
       "harness": "claude-code",
       "event": "Notification",
       "native_input": true,
@@ -174,7 +187,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/PermissionDenied",
+      "contract": "claude-code/docs-2026-08-05-r1/PermissionDenied",
       "harness": "claude-code",
       "event": "PermissionDenied",
       "native_input": true,
@@ -187,7 +200,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/PermissionRequest",
+      "contract": "claude-code/docs-2026-08-05-r1/PermissionRequest",
       "harness": "claude-code",
       "event": "PermissionRequest",
       "native_input": true,
@@ -201,7 +214,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/PostCompact",
+      "contract": "claude-code/docs-2026-08-05-r1/PostCompact",
       "harness": "claude-code",
       "event": "PostCompact",
       "native_input": true,
@@ -214,7 +227,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/PostToolBatch",
+      "contract": "claude-code/docs-2026-08-05-r1/PostToolBatch",
       "harness": "claude-code",
       "event": "PostToolBatch",
       "native_input": true,
@@ -228,7 +241,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/PostToolUse",
+      "contract": "claude-code/docs-2026-08-05-r1/PostToolUse",
       "harness": "claude-code",
       "event": "PostToolUse",
       "native_input": true,
@@ -237,11 +250,12 @@
         "command"
       ],
       "conformance_cases": [
-        "command-structured"
+        "command-structured",
+        "command-exit-2"
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/PostToolUseFailure",
+      "contract": "claude-code/docs-2026-08-05-r1/PostToolUseFailure",
       "harness": "claude-code",
       "event": "PostToolUseFailure",
       "native_input": true,
@@ -250,11 +264,12 @@
         "command"
       ],
       "conformance_cases": [
-        "command-structured"
+        "command-structured",
+        "command-exit-2"
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/PreCompact",
+      "contract": "claude-code/docs-2026-08-05-r1/PreCompact",
       "harness": "claude-code",
       "event": "PreCompact",
       "native_input": true,
@@ -268,7 +283,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/PreToolUse",
+      "contract": "claude-code/docs-2026-08-05-r1/PreToolUse",
       "harness": "claude-code",
       "event": "PreToolUse",
       "native_input": true,
@@ -282,7 +297,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/SessionEnd",
+      "contract": "claude-code/docs-2026-08-05-r1/SessionEnd",
       "harness": "claude-code",
       "event": "SessionEnd",
       "native_input": true,
@@ -295,7 +310,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/SessionStart",
+      "contract": "claude-code/docs-2026-08-05-r1/SessionStart",
       "harness": "claude-code",
       "event": "SessionStart",
       "native_input": true,
@@ -309,7 +324,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/Setup",
+      "contract": "claude-code/docs-2026-08-05-r1/Setup",
       "harness": "claude-code",
       "event": "Setup",
       "native_input": true,
@@ -322,7 +337,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/Stop",
+      "contract": "claude-code/docs-2026-08-05-r1/Stop",
       "harness": "claude-code",
       "event": "Stop",
       "native_input": true,
@@ -336,7 +351,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/StopFailure",
+      "contract": "claude-code/docs-2026-08-05-r1/StopFailure",
       "harness": "claude-code",
       "event": "StopFailure",
       "native_input": true,
@@ -349,7 +364,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/SubagentStart",
+      "contract": "claude-code/docs-2026-08-05-r1/SubagentStart",
       "harness": "claude-code",
       "event": "SubagentStart",
       "native_input": true,
@@ -362,7 +377,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/SubagentStop",
+      "contract": "claude-code/docs-2026-08-05-r1/SubagentStop",
       "harness": "claude-code",
       "event": "SubagentStop",
       "native_input": true,
@@ -376,7 +391,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/TaskCompleted",
+      "contract": "claude-code/docs-2026-08-05-r1/TaskCompleted",
       "harness": "claude-code",
       "event": "TaskCompleted",
       "native_input": true,
@@ -390,7 +405,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/TaskCreated",
+      "contract": "claude-code/docs-2026-08-05-r1/TaskCreated",
       "harness": "claude-code",
       "event": "TaskCreated",
       "native_input": true,
@@ -404,7 +419,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/TeammateIdle",
+      "contract": "claude-code/docs-2026-08-05-r1/TeammateIdle",
       "harness": "claude-code",
       "event": "TeammateIdle",
       "native_input": true,
@@ -418,7 +433,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/UserPromptExpansion",
+      "contract": "claude-code/docs-2026-08-05-r1/UserPromptExpansion",
       "harness": "claude-code",
       "event": "UserPromptExpansion",
       "native_input": true,
@@ -433,7 +448,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/UserPromptSubmit",
+      "contract": "claude-code/docs-2026-08-05-r1/UserPromptSubmit",
       "harness": "claude-code",
       "event": "UserPromptSubmit",
       "native_input": true,
@@ -448,7 +463,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/WorktreeCreate",
+      "contract": "claude-code/docs-2026-08-05-r1/WorktreeCreate",
       "harness": "claude-code",
       "event": "WorktreeCreate",
       "native_input": true,
@@ -462,7 +477,7 @@
       ]
     },
     {
-      "contract": "claude-code/docs-2026-07-12-r2/WorktreeRemove",
+      "contract": "claude-code/docs-2026-08-05-r1/WorktreeRemove",
       "harness": "claude-code",
       "event": "WorktreeRemove",
       "native_input": true,

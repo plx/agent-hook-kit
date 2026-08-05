@@ -161,6 +161,8 @@ pub enum SessionBoundaryKind {
     Startup,
     /// A previously persisted session was resumed.
     Resume,
+    /// A new native session was forked from an existing session.
+    Fork,
     /// The harness cleared the current conversation context.
     Clear,
     /// The harness compacted the current conversation context.

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use crate::ClaudeCommandEnvironment;
 
 /// Claude Code protocol documentation snapshot implemented by this crate.
-pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-07-12-r2");
+pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-08-05-r1");
 
 /// Returns every Claude Code event with a native command implementation.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
@@ -20,7 +20,10 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
             "command-structured",
             "command-text",
         ]),
-        hookkit_core::NativeEventDescriptor::command::<PostToolUse>(&["command-structured"]),
+        hookkit_core::NativeEventDescriptor::command::<PostToolUse>(&[
+            "command-structured",
+            "command-exit-2",
+        ]),
         hookkit_core::NativeEventDescriptor::command::<WorktreeCreate>(&[
             "command-created",
             "command-failed",
@@ -91,6 +94,8 @@ pub enum SessionSource {
     Startup,
     /// A previously persisted session was resumed.
     Resume,
+    /// A new session was forked from an existing session.
+    Fork,
     /// The current conversation context was cleared.
     Clear,
     /// The current conversation context was compacted.
@@ -168,10 +173,18 @@ pub enum SessionStartOutput {
 /// Fields are private so the required hook-specific discriminator cannot be
 /// omitted when hook-specific values are present.
 pub struct StructuredSessionStartOutput {
+    #[serde(rename = "continue", skip_serializing_if = "Option::is_none")]
+    continue_session: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suppress_output: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hook_specific_output: Option<SessionStartSpecific>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_sequence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,7 +220,7 @@ impl SessionStartOutput {
                 session_title: None,
                 watch_paths: Vec::new(),
             }),
-            system_message: None,
+            ..StructuredSessionStartOutput::default()
         })
     }
 
@@ -226,6 +239,7 @@ impl SessionStartOutput {
                 watch_paths: Vec::new(),
             }),
             system_message: Some(system_message.into()),
+            ..StructuredSessionStartOutput::default()
         })
     }
 
@@ -245,7 +259,7 @@ impl SessionStartOutput {
                 session_title: None,
                 watch_paths: Vec::new(),
             }),
-            system_message: None,
+            ..StructuredSessionStartOutput::default()
         })
     }
 
@@ -256,15 +270,21 @@ impl SessionStartOutput {
     /// [`Self::with_initial_user_message`]) and `system_message` unset (use
     /// [`Self::with_context_and_system_message`]).
     ///
-    /// Empty `watch_paths` are omitted. The values are retained verbatim and
-    /// are not checked for existence or uniqueness.
+    /// Empty `watch_paths` are omitted. Every path must be absolute; values are
+    /// otherwise retained verbatim and are not checked for existence or
+    /// uniqueness.
     pub fn structured(
         context: Option<String>,
         reload_skills: Option<bool>,
         session_title: Option<String>,
         watch_paths: Vec<hookkit_core::Utf8PathBuf>,
-    ) -> Self {
-        Self::Structured(StructuredSessionStartOutput {
+    ) -> hookkit_core::Result<Self> {
+        if watch_paths.iter().any(|path| !path.is_absolute()) {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "SessionStart watch paths must be absolute",
+            ));
+        }
+        Ok(Self::Structured(StructuredSessionStartOutput {
             hook_specific_output: Some(SessionStartSpecific {
                 hook_event_name: "SessionStart",
                 additional_context: context,
@@ -273,8 +293,50 @@ impl SessionStartOutput {
                 session_title,
                 watch_paths,
             }),
-            system_message: None,
-        })
+            ..StructuredSessionStartOutput::default()
+        }))
+    }
+
+    /// Sets Claude's universal top-level `continue` control.
+    pub fn with_continue(mut self, continue_session: bool) -> hookkit_core::Result<Self> {
+        self.structured_mut()?.continue_session = Some(continue_session);
+        Ok(self)
+    }
+
+    /// Sets the universal top-level stop reason.
+    pub fn with_stop_reason(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
+        self.structured_mut()?.stop_reason = Some(reason.into());
+        Ok(self)
+    }
+
+    /// Sets whether Claude suppresses the hook's ordinary output.
+    pub fn with_suppress_output(mut self, suppress: bool) -> hookkit_core::Result<Self> {
+        self.structured_mut()?.suppress_output = Some(suppress);
+        Ok(self)
+    }
+
+    /// Sets a universal top-level system message.
+    pub fn with_system_message(mut self, message: impl Into<String>) -> hookkit_core::Result<Self> {
+        self.structured_mut()?.system_message = Some(message.into());
+        Ok(self)
+    }
+
+    /// Requests emission of an allowlisted terminal notification sequence.
+    pub fn with_terminal_sequence(
+        mut self,
+        sequence: impl Into<String>,
+    ) -> hookkit_core::Result<Self> {
+        self.structured_mut()?.terminal_sequence = Some(sequence.into());
+        Ok(self)
+    }
+
+    fn structured_mut(&mut self) -> hookkit_core::Result<&mut StructuredSessionStartOutput> {
+        match self {
+            Self::Structured(output) => Ok(output),
+            Self::Text(_) => Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "structured fields cannot be added to plain-text SessionStart output",
+            )),
+        }
     }
 }
 
@@ -289,7 +351,7 @@ impl EventSpec for SessionStart {
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
     const EVENT: EventId = EventId::builtin(HarnessId::CLAUDE_CODE, "SessionStart");
     const CATEGORY: EventCategory = EventCategory::Session;
-    const CONTRACT: ContractId = ContractId::builtin("claude-code/docs-2026-07-12-r2/SessionStart");
+    const CONTRACT: ContractId = ContractId::builtin("claude-code/docs-2026-08-05-r1/SessionStart");
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "SessionStart")?;
@@ -322,6 +384,7 @@ impl EventSpec for SessionStart {
         let boundary_kind = match input.source {
             SessionSource::Startup => SessionBoundaryKind::Startup,
             SessionSource::Resume => SessionBoundaryKind::Resume,
+            SessionSource::Fork => SessionBoundaryKind::Fork,
             SessionSource::Clear => SessionBoundaryKind::Clear,
             SessionSource::Compact => SessionBoundaryKind::Compact,
         };
@@ -417,6 +480,8 @@ pub struct StructuredPostToolUseOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     system_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_sequence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     hook_specific_output: Option<PostToolUseSpecific>,
 }
 
@@ -471,11 +536,20 @@ impl PostToolUseOutput {
         Ok(self)
     }
 
-    /// Creates a code-2 blocking response with required stderr text.
-    pub fn blocking_error(message: impl Into<String>) -> Self {
+    /// Creates a code-2 feedback response with required stderr text.
+    ///
+    /// The tool has already completed, so Claude Code shows this feedback to
+    /// Claude but does not undo or block the tool call.
+    pub fn feedback_error(message: impl Into<String>) -> Self {
         Self::BlockingError {
             message: message.into(),
         }
+    }
+
+    /// Creates a code-2 feedback response with required stderr text.
+    #[deprecated(note = "PostToolUse exit 2 does not block; use PostToolUseOutput::feedback_error")]
+    pub fn blocking_error(message: impl Into<String>) -> Self {
+        Self::feedback_error(message)
     }
 
     /// Adds protocol stderr to a successful response.
@@ -539,6 +613,15 @@ impl PostToolUseOutput {
         Ok(self)
     }
 
+    /// Requests emission of an allowlisted terminal notification sequence.
+    pub fn with_terminal_sequence(
+        mut self,
+        sequence: impl Into<String>,
+    ) -> hookkit_core::Result<Self> {
+        self.structured_mut()?.terminal_sequence = Some(sequence.into());
+        Ok(self)
+    }
+
     fn structured_mut(&mut self) -> hookkit_core::Result<&mut StructuredPostToolUseOutput> {
         if matches!(self, Self::NoOp) {
             *self = Self::Structured(StructuredPostToolUseOutput::default());
@@ -578,7 +661,7 @@ impl EventSpec for PostToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT_ID;
     const EVENT: EventId = EventId::builtin(HarnessId::CLAUDE_CODE, "PostToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("claude-code/docs-2026-07-12-r2/PostToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("claude-code/docs-2026-08-05-r1/PostToolUse");
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "PostToolUse")?;
@@ -687,13 +770,15 @@ enum WorktreeCreateOutcome {
 }
 
 impl WorktreeCreateOutput {
-    /// Creates a successful response containing an absolute worktree path.
+    /// Creates a successful response containing a non-empty worktree path.
     ///
-    /// The path is emitted as exact UTF-8 text without a trailing newline.
+    /// Claude Code accepts absolute paths and resolves relative paths against
+    /// the hook's working directory. The path is emitted as exact UTF-8 text
+    /// without a trailing newline.
     pub fn path(path: hookkit_core::Utf8PathBuf) -> hookkit_core::Result<Self> {
-        if !path.is_absolute() {
+        if path.as_str().is_empty() {
             return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "worktree path must be absolute",
+                "worktree path must not be empty",
             ));
         }
         Ok(Self(WorktreeCreateOutcome::Created {
@@ -702,7 +787,7 @@ impl WorktreeCreateOutput {
         }))
     }
 
-    /// Creates a successful absolute-path response with one trailing newline.
+    /// Creates a successful path response with one trailing newline.
     pub fn path_with_newline(path: hookkit_core::Utf8PathBuf) -> hookkit_core::Result<Self> {
         let output = Self::path(path)?;
         Ok(Self(match output.0 {
@@ -743,7 +828,7 @@ impl EventSpec for WorktreeCreate {
     const EVENT: EventId = EventId::builtin(HarnessId::CLAUDE_CODE, "WorktreeCreate");
     const CATEGORY: EventCategory = EventCategory::Worktree;
     const CONTRACT: ContractId =
-        ContractId::builtin("claude-code/docs-2026-07-12-r2/WorktreeCreate");
+        ContractId::builtin("claude-code/docs-2026-08-05-r1/WorktreeCreate");
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "WorktreeCreate")?;
@@ -824,6 +909,8 @@ pub enum Event {
     ConfigChange,
     /// Selects [`crate::catalog::CwdChanged`].
     CwdChanged,
+    /// Selects [`crate::catalog::DirectoryAdded`].
+    DirectoryAdded,
     /// Selects [`crate::catalog::Elicitation`].
     Elicitation,
     /// Selects [`crate::catalog::ElicitationResult`].
@@ -884,6 +971,7 @@ impl EventSelector for Event {
             Self::WorktreeCreate => "WorktreeCreate",
             Self::ConfigChange => "ConfigChange",
             Self::CwdChanged => "CwdChanged",
+            Self::DirectoryAdded => "DirectoryAdded",
             Self::Elicitation => "Elicitation",
             Self::ElicitationResult => "ElicitationResult",
             Self::FileChanged => "FileChanged",
@@ -1052,6 +1140,19 @@ mod tests {
     }
 
     #[test]
+    fn session_start_fork_exposes_a_distinct_boundary_cause() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"SessionStart","source":"fork"}"#.to_vec(),
+        )
+        .unwrap();
+        let context = SessionStart::context(&SessionStart::parse(&raw).unwrap());
+        assert_eq!(
+            context.session_boundary.unwrap().kind,
+            SessionBoundaryKind::Fork
+        );
+    }
+
+    #[test]
     fn session_start_context_and_system_message_keep_session_discriminator() {
         let emission = SessionStart::emit(SessionStartOutput::with_context_and_system_message(
             "ctx", "system",
@@ -1060,6 +1161,21 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
         assert_eq!(value["hookSpecificOutput"]["hookEventName"], "SessionStart");
         assert_eq!(value["systemMessage"], "system");
+    }
+
+    #[test]
+    fn session_start_emits_universal_terminal_sequence() {
+        let emission = SessionStart::emit(
+            SessionStartOutput::no_op()
+                .with_terminal_sequence("\u{7}")
+                .unwrap(),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
+        assert_eq!(value["terminalSequence"], "\u{7}");
+        assert!(
+            SessionStartOutput::structured(None, None, None, vec!["relative/.env".into()]).is_err()
+        );
     }
 
     #[test]
@@ -1119,6 +1235,13 @@ mod tests {
     }
 
     #[test]
+    fn worktree_command_accepts_relative_paths() {
+        let output = WorktreeCreateOutput::path(".claude/worktrees/feature".into()).unwrap();
+        let emission = WorktreeCreate::emit(output).unwrap();
+        assert_eq!(emission.stdout(), b".claude/worktrees/feature");
+    }
+
+    #[test]
     fn worktree_failure_is_stderr_only() {
         let output = WorktreeCreateOutput::failed("cannot create", 7).unwrap();
         let emission = WorktreeCreate::emit(output).unwrap();
@@ -1151,7 +1274,7 @@ mod tests {
     #[test]
     fn invalid_builder_order_and_raw_protocol_stderr_return_errors() {
         assert!(
-            PostToolUseOutput::blocking_error("blocked")
+            PostToolUseOutput::feedback_error("blocked")
                 .with_block("again")
                 .is_err()
         );

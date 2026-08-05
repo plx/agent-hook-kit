@@ -571,13 +571,13 @@ mod tests {
     #[test]
     fn builtin_detector_covers_every_selected_event_with_a_native_parser() {
         let descriptors = builtin_descriptors();
-        assert_eq!(descriptors.len(), 56);
+        assert_eq!(descriptors.len(), 57);
         assert_eq!(
             descriptors
                 .iter()
                 .filter(|descriptor| descriptor.has_native_parser())
                 .count(),
-            56
+            57
         );
 
         let raw = RawInvocation::parse(
