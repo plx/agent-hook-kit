@@ -7,7 +7,8 @@ event:
   rust_key: post_tool_use
   category: tool
   identification:
-    inferability: shape-based
+    inferability: ambiguous
+    overlaps: [PreToolUse]
 schemas:
   input:
     file: input.schema.json

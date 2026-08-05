@@ -33,6 +33,11 @@ output:
     origin: official
     sources: [antigravity-hooks-reference]
     value: { decision: ask, reason: Requires confirmation., permissionOverrides: [command(npm test)] }
+  - id: deny-unless-prior-grant
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { decision: deny_unless_prior_grant }
 process:
   - id: ask
     binding: command

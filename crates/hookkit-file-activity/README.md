@@ -82,9 +82,11 @@ not append pending work or spawn configured tools. Direct observations bypass
 that suppression by design, even when bytes happen to match an old baseline.
 
 The shipped producer is `file-activity-agent-hook` from
-`hookkit-tool-runner`. Bind it to Claude Code or Codex PostToolUse
-and give it the same `--state-dir` as `session-start-state-agent-hook` and
-`turn-completion-agent-hook`. The older `session-modified-file-tracker`
-example is only a compatibility wrapper around that library-owned observer.
-Antigravity has no supported post-tool producer because its payload omits the
-tool call and arguments; its Stop consumer relies on mtime reconciliation.
+`hookkit-tool-runner`. Bind it to Claude/Codex/Antigravity PostToolUse and give
+it the same `--state-dir` as `turn-completion-agent-hook`
+and, where supported, `session-start-state-agent-hook`. The older
+`session-modified-file-tracker` example is only a compatibility wrapper around
+that library-owned observer.
+Antigravity supplies the originating tool call and arguments, so structured and
+shell inference can produce direct evidence. Its missing precise session-start
+producer still makes mtime reconciliation a best-effort fallback.

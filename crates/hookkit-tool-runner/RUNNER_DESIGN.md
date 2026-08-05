@@ -5,12 +5,15 @@ classification, diagnostics artifacts, and the `RunnerDomainOutcome` semantic
 result. Core, native, common, and runtime crates do not depend on those policies.
 
 Per-harness lowering is intentionally explicit. The aligned runtime preserves a
-lossless Claude Code or Codex input arm; runner-local policy discovers
-paths from that exact value; and the runner constructs the corresponding native
-output arm. No generic output envelope or universal lowering layer participates.
-Antigravity `PostToolUse` contains a step index and optional error but no tool call,
-tool result, or changed-file list, so this runner does not claim Antigravity
-support and must not infer those fields.
+lossless Claude, Codex, or Antigravity input arm; runner-local policy
+discovers paths from that exact value; and the runner constructs the
+corresponding native output arm. No generic output envelope or universal
+lowering layer participates.
+Antigravity `PostToolUse` includes the originating tool call, so the runner can
+derive call-scoped file candidates from its name and arguments. It still has no
+tool result or changed-file list, and its empty output object cannot carry user
+or agent messages. Strict lowering rejects those messages; both best-effort
+modes omit them because there is no native warning field.
 
 The runtime context supplies exact harness, snapshot, event, and contract identity
 plus only context fields declared by the native event. Operational diagnostics are
@@ -36,9 +39,9 @@ PostToolUse observer delegates structured, patch, and shell analysis to
 The immediate runner uses the same observation path for exact file candidates
 instead of maintaining a second open-payload walker. Before taking the entity view, it
 reconciles workspace mtimes from the prior durable cursor, using current-session
-start metadata only as the first lower bound. The aligned lifecycle is Claude Code,
-Codex, or Antigravity Stop; Antigravity normally has no batch
-because its post-tool payload cannot feed the tracker.
+start metadata only as the first lower bound. The aligned lifecycle is Claude,
+Codex, or Antigravity Stop. Antigravity lacks a precise session-start
+producer but its PostToolUse tool-call evidence can feed the tracker directly.
 
 One runner-family advisory lock serializes stop attempts for a native session.
 The consumer seals NDJSON generations and obtains their cached set projection

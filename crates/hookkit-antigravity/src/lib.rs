@@ -29,14 +29,14 @@ pub fn events() -> Vec<NativeEventDescriptor> {
 
 /// Returns event-identification metadata for the Antigravity snapshot.
 ///
-/// Invocation events share a discriminator-free shape and require an explicit
-/// event hint. Tool and stop events have distinct, validated shapes.
+/// Invocation pairs and tool-use pairs share discriminator-free shapes and
+/// require an explicit event hint. Stop has a distinct, validated shape.
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
     vec![
         IdentificationDescriptor::ambiguous::<PreInvocation>(&["PostInvocation"]),
         IdentificationDescriptor::ambiguous::<PostInvocation>(&["PreInvocation"]),
-        IdentificationDescriptor::sound_shape::<PreToolUse>(&[]),
-        IdentificationDescriptor::sound_shape::<PostToolUse>(&[]),
+        IdentificationDescriptor::ambiguous::<PreToolUse>(&["PostToolUse"]),
+        IdentificationDescriptor::ambiguous::<PostToolUse>(&["PreToolUse"]),
         IdentificationDescriptor::sound_shape::<Stop>(&[]),
     ]
 }
@@ -194,7 +194,7 @@ impl EventSpec for PostInvocation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Native tool-call payload nested inside a pre-tool event.
+/// Native tool-call payload nested inside a tool event.
 pub struct ToolCall {
     /// Harness-native tool name.
     pub name: String,
@@ -238,6 +238,8 @@ pub enum ToolDecision {
     Ask,
     /// Require a user permission prompt even if policy would bypass one.
     ForceAsk,
+    /// Deny unless a prior user grant already authorizes the resource.
+    DenyUnlessPriorGrant,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -309,6 +311,8 @@ pub struct PostToolUseInput {
     pub transcript_path: hookkit_core::Utf8PathBuf,
     /// Directory where hooks may write diagnostic artifacts.
     pub artifact_directory_path: hookkit_core::Utf8PathBuf,
+    /// Tool call that finished executing.
+    pub tool_call: ToolCall,
     /// Zero-based step index within the invocation.
     pub step_idx: u64,
     /// Tool failure text, or `None` when the call succeeded.
@@ -648,6 +652,38 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn grant_aware_tool_decision_matches_the_native_wire_value() {
+        let emission = PreToolUse::emit(PreToolUseOutput {
+            decision: ToolDecision::DenyUnlessPriorGrant,
+            reason: None,
+            permission_overrides: Vec::new(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            emission.stdout(),
+            br#"{"decision":"deny_unless_prior_grant"}"#
+        );
+    }
+
+    #[test]
+    fn post_tool_use_requires_and_types_the_originating_call() {
+        let missing = RawInvocation::parse(
+            br#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","stepIdx":0}"#.to_vec(),
+        )
+        .unwrap();
+        assert!(PostToolUse::parse(&missing).is_err());
+
+        let present = RawInvocation::parse(
+            br#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"run_command","args":{"CommandLine":"cargo test"}},"stepIdx":0}"#.to_vec(),
+        )
+        .unwrap();
+        let input = PostToolUse::parse(&present).unwrap();
+        assert_eq!(input.tool_call.name, "run_command");
+        assert_eq!(input.tool_call.args["CommandLine"], "cargo test");
     }
 
     #[test]

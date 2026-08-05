@@ -1461,6 +1461,23 @@ mod tests {
         )
     }
 
+    fn antigravity_post_tool(command: &str) -> PostToolUseInput {
+        PostToolUseInput::Antigravity(
+            serde_json::from_value(serde_json::json!({
+                "conversationId": "conversation",
+                "workspacePaths": ["/repo"],
+                "transcriptPath": "/tmp/transcript.jsonl",
+                "artifactDirectoryPath": "/tmp/artifacts",
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {"CommandLine": command, "Cwd": "/repo"}
+                },
+                "stepIdx": 2
+            }))
+            .unwrap(),
+        )
+    }
+
     fn analyze_activity(input: &PostToolUseInput) -> ActivityReport {
         activity_report(
             ToolAccessAnalyzer::default().analyze_post_tool(input),
@@ -1498,6 +1515,16 @@ mod tests {
             item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/out.txt"))
         }));
         assert!(report.gaps().next().is_some());
+    }
+
+    #[test]
+    fn antigravity_post_tool_observes_shell_modifications() {
+        let report = analyze_activity(&antigravity_post_tool("printf ok > src/out.txt"));
+
+        assert!(report.evidence().any(|item| {
+            item.source == FileActivitySource::ShellInference
+                && item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/out.txt"))
+        }));
     }
 
     #[test]

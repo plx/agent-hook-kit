@@ -330,8 +330,8 @@ cat fixtures/claude/post_tool_use.json \
   | cargo run -q -p hookkit-tool-runner --bin post-tool-use-agent-hook -- --claude
 ```
 
-The CLI accepts `--claude` or `--codex` to choose the harness, and
-`--config PATH` to load a single Pkl file directly (bypassing discovery).
+The CLI accepts `--claude`, `--codex`, or `--antigravity` to choose the harness,
+and `--config PATH` to load a single Pkl file directly (bypassing discovery).
 
 The companion `turn-completion-agent-hook` reconciles and consumes the
 NDJSON-backed pending file-activity window at each supported harness's `Stop`
@@ -375,11 +375,11 @@ first-observed fallback.
 A complete deferred installation binds these shipped executables to one shared
 state root:
 
-| Purpose | Claude | Codex |
-| --- | --- | --- |
-| Precise session lower bound | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` |
-| File-activity producer | `PostToolUse` → `file-activity-agent-hook` | `PostToolUse` → `file-activity-agent-hook` |
-| Deferred consumer | `Stop` → `turn-completion-agent-hook` | `Stop` → `turn-completion-agent-hook` |
+| Purpose | Claude | Codex | Antigravity |
+| --- | --- | --- | --- |
+| Precise session lower bound | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` | unavailable |
+| File-activity producer | `PostToolUse` → `file-activity-agent-hook` | `PostToolUse` → `file-activity-agent-hook` | `PostToolUse` → `file-activity-agent-hook` |
+| Deferred consumer | `Stop` → `turn-completion-agent-hook` | `Stop` → `turn-completion-agent-hook` | `Stop` → `turn-completion-agent-hook` |
 
 For example, every command below must use the same path:
 
@@ -389,15 +389,12 @@ file-activity-agent-hook --claude --state-dir .context/hookkit-state
 turn-completion-agent-hook --claude --state-dir .context/hookkit-state
 ```
 
-Use `--codex` consistently for Codex. Both harnesses also accept the
-compatibility form `--harness=claude|codex` and
-`--state-dir=PATH`; turn completion alone accepts `--config PATH`.
-
-Antigravity can bind `Stop` to `turn-completion-agent-hook --antigravity`, but
-its PostToolUse payload has no tool call or path arguments and it has no
-supported precise start/activity producer in this suite. Antigravity therefore
-uses best-effort filesystem-mtime reconciliation only (plus optional Git-dirty
-fallback) and may miss changes outside that observable window.
+Use the matching selector consistently for each harness. The activity and turn
+completion hooks also accept `--harness=claude|codex|antigravity` and
+`--state-dir=PATH`; turn completion alone accepts `--config PATH`. Antigravity
+has no precise session-start binding, but its PostToolUse tool-call arguments
+now provide direct activity evidence; filesystem-mtime and optional Git-dirty
+reconciliation remain fallbacks for unresolved accesses.
 
 ### Configuration discovery
 
@@ -516,8 +513,8 @@ does not define deferred bucket meaning.
 Deferred batch and workspace checks conservatively attach a finding to every
 candidate in that invocation unless exact changed-file snapshots or a future
 diagnostic adapter provide narrower evidence. Tracking is best effort: dynamic
-commands, changes outside supplied workspaces, timestamp limitations, and
-Antigravity's missing PostToolUse arguments can create retained coverage gaps.
+commands, incomplete tool arguments, changes outside supplied workspaces, and
+timestamp limitations can create retained coverage gaps.
 The summary distinguishes uncovered, not-applicable, unresolved, truncated,
 manual, and operational outcomes rather than calling them clean.
 
@@ -582,7 +579,7 @@ Git-dirty reconciliation recover only best-effort candidates.
   - applies inspect-known, deny-unresolved, or deny-all-shell posture to bounded
     structured, patch, and shell access evidence.
 - `file-activity-agent-hook`:
-  - uses the aligned post-tool API for Claude Code and Codex,
+  - uses the aligned post-tool API for Claude, Codex, and Antigravity,
   - delegates structured writers, patches, and shell inference to the shared tool-access analyzer and never shells out to Git,
   - appends detailed observations to rotated NDJSON generations whose projection is a versioned per-session path set.
 - `post-tool-use-agent-hook`:
@@ -592,7 +589,7 @@ Git-dirty reconciliation recover only best-effort candidates.
   - classifies clean versus issues and changed versus unchanged from exit policies plus file snapshots,
   - reports missing tools and operational failures per `missingToolPolicy`,
   - writes remaining diagnostics to artifacts,
-  - lowers every result through an explicit Claude Code or Codex native output arm.
+  - lowers every result through an explicit Claude, Codex, or Antigravity native output arm.
 - `turn-completion-agent-hook`:
   - seals the current modified-file generations under an exclusive entity consumer lock,
   - dispatches Pkl-configured check/conditional-remedy/final-check workflows across the accumulated file set,

@@ -177,8 +177,7 @@ pub fn observe_pre_tool(input: &PreToolUseInput) -> ToolCallObservation<'_> {
     }
 }
 
-/// Adapt an aligned post-tool input. Antigravity's current post-tool contract
-/// intentionally yields a typed gap because it omits the originating call.
+/// Adapt an aligned post-tool input without flattening its native arm.
 pub fn observe_post_tool(input: &PostToolUseInput) -> ToolCallObservation<'_> {
     match input {
         PostToolUseInput::Claude(native) => ToolCallObservation::Call(ToolCallRef {
@@ -203,9 +202,17 @@ pub fn observe_post_tool(input: &PostToolUseInput) -> ToolCallObservation<'_> {
             tool_call_id: Some(&native.tool_use_id),
             shell_call: native.shell_tool_call(),
         }),
-        PostToolUseInput::Antigravity(_) => {
-            ToolCallObservation::gap(ToolAccessGapReason::MissingToolCall)
-        }
+        PostToolUseInput::Antigravity(native) => ToolCallObservation::Call(ToolCallRef {
+            event: EventId::builtin(HarnessId::ANTIGRAVITY, "PostToolUse"),
+            phase: ToolPhase::Post,
+            tool_name: &native.tool_call.name,
+            tool_input: JsonRef::Object(&native.tool_call.args),
+            cwd: native.workspace_paths.first().map(Utf8PathBuf::as_path),
+            workspace_roots: Cow::Borrowed(&native.workspace_paths),
+            response: None,
+            tool_call_id: None,
+            shell_call: native.shell_tool_call(),
+        }),
         _ => ToolCallObservation::gap(ToolAccessGapReason::UnknownInputArm),
     }
 }
