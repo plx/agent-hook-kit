@@ -1,12 +1,11 @@
 # Forbidden file guard
 
-`forbidden-file-guard` is one aligned executable with four native pre-tool
+`forbidden-file-guard` is one aligned executable with three native pre-tool
 modes:
 
 ```bash
 forbidden-file-guard --harness=claude
 forbidden-file-guard --harness=codex
-forbidden-file-guard --harness=gemini
 forbidden-file-guard --harness=antigravity
 ```
 

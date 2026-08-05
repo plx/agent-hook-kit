@@ -29,8 +29,8 @@ hook uses:
 hookkit-shell = { version = "0.1", features = ["codex"] }
 ```
 
-Available adapter features are `claude`, `codex`, `gemini`, and
-`antigravity`; `all-harnesses` enables all four. The optional `serde` feature
+Available adapter features are `claude`, `codex`, and `antigravity`;
+`all-harnesses` enables all three. The optional `serde` feature
 adds serialization derives to owned analysis, summary, and file-access values.
 Borrowed native tool-call JSON is never serialized implicitly.
 
@@ -156,7 +156,6 @@ Native adapters recognize the contract-backed names and fields only:
 | Harness event | Exact tool | Command location |
 | --- | --- | --- |
 | Claude/Codex tool events | `Bash` | `/command` |
-| Gemini `BeforeTool`/`AfterTool` | `run_shell_command` | `/command` |
 | Antigravity `PreToolUse` | `run_command` | `/CommandLine` |
 
 Antigravity's current `PostToolUse` input does not contain the originating tool
@@ -166,8 +165,7 @@ session-state work outside this crate.
 Use `ShellToolProfile` to describe an exact custom tool name and JSON Pointer;
 the bundled adapters do not guess aliases such as `shell` or `exec_command`.
 With the matching harness features enabled, the exact reusable values are
-`CLAUDE_BASH_PROFILE`, `CODEX_BASH_PROFILE`,
-`GEMINI_RUN_SHELL_COMMAND_PROFILE`, and
+`CLAUDE_BASH_PROFILE`, `CODEX_BASH_PROFILE`, and
 `ANTIGRAVITY_RUN_COMMAND_PROFILE`.
 
 ## Analysis boundary

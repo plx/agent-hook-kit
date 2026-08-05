@@ -48,12 +48,7 @@ pub struct ShellToolProfile {
 }
 
 impl ShellToolProfile {
-    #[cfg(any(
-        feature = "claude",
-        feature = "codex",
-        feature = "gemini",
-        feature = "antigravity"
-    ))]
+    #[cfg(any(feature = "claude", feature = "codex", feature = "antigravity"))]
     pub(crate) const fn builtin(
         tool_name: &'static str,
         command_pointer: &'static str,

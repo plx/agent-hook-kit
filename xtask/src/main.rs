@@ -1154,7 +1154,6 @@ fn uses_legacy_snapshot_semantics(harness: &str, snapshot: &str) -> bool {
         ("antigravity", "docs-2026-07-12-r1")
             | ("claude-code", "docs-2026-07-12-r1")
             | ("codex", "commit-9e552e9-r1")
-            | ("gemini-cli", "commit-f354eeb-r1")
     )
 }
 

@@ -15,7 +15,6 @@ tests/fixtures/<tool-id>/<example-name>/
   claude.stderr.txt            # optional: expected stderr (literal, normalized)
   claude.exit                  # optional: expected exit code (default 0)
   codex.json codex.stderr.txt codex.exit
-  gemini.json gemini.stderr.txt gemini.exit
 ```
 
 - `<tool-id>` matches the tool's `id` field in `crates/hookkit-pkl-config/src/builtins/tools/<tool>.pkl` (e.g. `ruff`, `cargo-fmt`).

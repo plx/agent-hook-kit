@@ -1,2 +1,0 @@
-vp lint: changed example.ts
-hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

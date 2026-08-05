@@ -144,8 +144,6 @@ pub enum BuiltinInput {
     Claude(hookkit_claude::protocol::AnyInput),
     /// Codex input.
     Codex(hookkit_codex::protocol::AnyInput),
-    /// Gemini CLI input.
-    Gemini(hookkit_gemini::protocol::AnyInput),
     /// Antigravity input.
     Antigravity(hookkit_antigravity::AnyInput),
 }
@@ -157,8 +155,6 @@ pub enum BuiltinOutput {
     Claude(hookkit_claude::protocol::AnyCommandOutput),
     /// Codex output.
     Codex(hookkit_codex::protocol::AnyCommandOutput),
-    /// Gemini CLI output.
-    Gemini(hookkit_gemini::protocol::AnyCommandOutput),
     /// Antigravity output.
     Antigravity(hookkit_antigravity::AnyCommandOutput),
 }
@@ -170,8 +166,6 @@ pub enum BuiltinCommandEnvironment {
     Claude(hookkit_claude::ClaudeCommandEnvironment),
     /// Codex environment.
     Codex(hookkit_codex::CodexCommandEnvironment),
-    /// Gemini CLI environment.
-    Gemini(hookkit_gemini::GeminiCommandEnvironment),
     /// Antigravity environment.
     Antigravity(hookkit_antigravity::AntigravityCommandEnvironment),
 }
@@ -218,21 +212,6 @@ where
                     let environment = BuiltinCommandEnvironment::Codex(environment.clone());
                     match handler(BuiltinInput::Codex(input), &environment, context)? {
                         BuiltinOutput::Codex(output) => Ok(output),
-                        output => Err(builtin_harness_mismatch(context, &output)),
-                    }
-                },
-            )
-        }
-        BuiltinHarness::GeminiCli => {
-            execute_harness_with_event_id::<hookkit_gemini::protocol::GeminiCli, _>(
-                bytes,
-                hint,
-                variables,
-                &DISABLED_DIAGNOSTICS,
-                |input, environment, context| {
-                    let environment = BuiltinCommandEnvironment::Gemini(environment.clone());
-                    match handler(BuiltinInput::Gemini(input), &environment, context)? {
-                        BuiltinOutput::Gemini(output) => Ok(output),
                         output => Err(builtin_harness_mismatch(context, &output)),
                     }
                 },
@@ -296,9 +275,6 @@ fn capture_builtin_command_environment(
         BuiltinHarness::Codex => crate::environment::capture_command_environment::<
             hookkit_codex::CodexCommandEnvironment,
         >(),
-        BuiltinHarness::GeminiCli => crate::environment::capture_command_environment::<
-            hookkit_gemini::GeminiCommandEnvironment,
-        >(),
         BuiltinHarness::Antigravity => crate::environment::capture_command_environment::<
             hookkit_antigravity::AntigravityCommandEnvironment,
         >(),
@@ -315,7 +291,6 @@ fn builtin_harness_mismatch(
     let event = match output {
         BuiltinOutput::Claude(output) => hookkit_claude::protocol::ClaudeCode::output_event(output),
         BuiltinOutput::Codex(output) => hookkit_codex::protocol::Codex::output_event(output),
-        BuiltinOutput::Gemini(output) => hookkit_gemini::protocol::GeminiCli::output_event(output),
         BuiltinOutput::Antigravity(output) => {
             hookkit_antigravity::Antigravity::output_event(output)
         }
@@ -469,9 +444,9 @@ mod tests {
             None,
             &EnvironmentVariables::new(),
             |_input, _environment, _context| {
-                Ok(BuiltinOutput::Gemini(
-                    hookkit_gemini::protocol::AnyCommandOutput::BeforeTool(
-                        hookkit_gemini::protocol::BeforeToolOutput::no_op(),
+                Ok(BuiltinOutput::Claude(
+                    hookkit_claude::protocol::AnyCommandOutput::SessionStart(
+                        hookkit_claude::protocol::SessionStartOutput::no_op(),
                     ),
                 ))
             },
@@ -482,7 +457,7 @@ mod tests {
             error,
             hookkit_core::HookkitError::EventHarnessMismatch { harness, event }
                 if harness == HarnessId::CODEX
-                    && event == EventId::builtin(HarnessId::GEMINI_CLI, "BeforeTool")
+                    && event == EventId::builtin(HarnessId::CLAUDE_CODE, "SessionStart")
         ));
     }
 

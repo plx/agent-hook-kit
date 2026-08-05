@@ -462,16 +462,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gemini-beforetool-policy"
-version = "0.1.0"
-dependencies = [
- "hookkit-core",
- "hookkit-gemini",
- "hookkit-runtime",
- "serde_json",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -567,7 +557,6 @@ dependencies = [
  "hookkit-claude",
  "hookkit-codex",
  "hookkit-core",
- "hookkit-gemini",
  "proptest",
  "serde",
  "serde_json",
@@ -582,7 +571,6 @@ dependencies = [
  "hookkit-claude",
  "hookkit-codex",
  "hookkit-core",
- "hookkit-gemini",
  "hookkit-runtime",
  "serde",
  "serde_json",
@@ -619,17 +607,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hookkit-gemini"
-version = "0.1.0"
-dependencies = [
- "camino",
- "hookkit-core",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hookkit-pkl-config"
 version = "0.1.0"
 dependencies = [
@@ -653,7 +630,6 @@ dependencies = [
  "hookkit-common",
  "hookkit-core",
  "hookkit-file-activity",
- "hookkit-gemini",
  "hookkit-session-state",
  "proptest",
  "serde",
@@ -682,7 +658,6 @@ dependencies = [
  "hookkit-claude",
  "hookkit-codex",
  "hookkit-core",
- "hookkit-gemini",
  "proptest",
  "serde",
  "serde_json",
@@ -714,7 +689,6 @@ dependencies = [
  "hookkit-common",
  "hookkit-core",
  "hookkit-file-activity",
- "hookkit-gemini",
  "hookkit-pkl-config",
  "hookkit-runtime",
  "hookkit-session-state",
@@ -1470,7 +1444,6 @@ dependencies = [
  "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
- "hookkit-gemini",
  "hookkit-runtime",
  "serde_json",
 ]

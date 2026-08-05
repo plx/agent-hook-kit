@@ -82,7 +82,7 @@ not append pending work or spawn configured tools. Direct observations bypass
 that suppression by design, even when bytes happen to match an old baseline.
 
 The shipped producer is `file-activity-agent-hook` from
-`hookkit-tool-runner`. Bind it to Claude/Codex PostToolUse or Gemini AfterTool
+`hookkit-tool-runner`. Bind it to Claude Code or Codex PostToolUse
 and give it the same `--state-dir` as `session-start-state-agent-hook` and
 `turn-completion-agent-hook`. The older `session-modified-file-tracker`
 example is only a compatibility wrapper around that library-owned observer.

@@ -2,7 +2,7 @@
 //!
 //! The harness auto-discovers `tests/fixtures/<tool>/<example>/` directories
 //! at test time and runs each against the real `post-tool-use-agent-hook`
-//! binary for each harness (claude, codex, gemini). This compatibility suite
+//! binary for each post-tool harness (Claude Code and Codex). This compatibility suite
 //! is ignored by default because it intentionally executes arbitrary tool
 //! versions from `PATH`. Run it explicitly with `--ignored --nocapture`.
 //!
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const HARNESSES: &[&str] = &["claude", "codex", "gemini"];
+const HARNESSES: &[&str] = &["claude", "codex"];
 const STABLE_SESSION: &str = "test-session";
 
 #[test]
@@ -497,7 +497,6 @@ fn synthesize_hook_event(harness: &str, project: &Path, entry_rel: &Path) -> Vec
     let (event, tool_response_key) = match harness {
         "claude" => ("PostToolUse", "tool_response"),
         "codex" => ("PostToolUse", "toolResult"),
-        "gemini" => ("AfterTool", "toolResponse"),
         _ => unreachable!(),
     };
     let rel_str = entry_rel.to_string_lossy().to_string();
@@ -573,16 +572,6 @@ fn configure_hook_environment(
                 .env("CLAUDE_CODE_SESSION_ID", session_id)
                 .env("CLAUDE_PROJECT_DIR", project_dir);
         }
-        "gemini" => {
-            let session_id = field(&["session_id", "sessionId"])?;
-            let project_dir = field(&["cwd"])?;
-            command
-                .env("GEMINI_PROJECT_DIR", project_dir)
-                .env("GEMINI_PLANS_DIR", format!("{project_dir}/.gemini/plans"))
-                .env("GEMINI_CWD", project_dir)
-                .env("GEMINI_SESSION_ID", session_id)
-                .env("CLAUDE_PROJECT_DIR", project_dir);
-        }
         "codex" | "antigravity" => {}
         _ => return Err(format!("unknown harness {harness}")),
     }
@@ -606,10 +595,6 @@ fn clear_modeled_hook_environment(command: &mut Command) {
         "CLAUDE_PLUGIN_DATA",
         "PLUGIN_ROOT",
         "PLUGIN_DATA",
-        "GEMINI_PROJECT_DIR",
-        "GEMINI_PLANS_DIR",
-        "GEMINI_CWD",
-        "GEMINI_SESSION_ID",
     ];
     for name in EXACT_NAMES {
         command.env_remove(name);

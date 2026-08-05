@@ -1,2 +1,0 @@
-cmake-format: changed example.cmake
-hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

@@ -472,7 +472,7 @@ pub struct FileActivityCli {
 }
 
 /// Parse a supported PostToolUse harness and optional shared state root.
-/// `--harness=claude|codex|gemini` remains a compatibility alias for the
+/// `--harness=claude|codex` remains a compatibility alias for the
 /// former example binary.
 #[allow(clippy::result_unit_err)]
 pub fn parse_file_activity_args() -> Result<FileActivityCli, ()> {
@@ -483,7 +483,6 @@ pub fn parse_file_activity_args() -> Result<FileActivityCli, ()> {
         match arg.as_str() {
             "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
-            "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
             "--harness" => {
                 let Some(value) = args.next() else {
                     eprintln!("{}", file_activity_usage());
@@ -524,7 +523,7 @@ pub fn parse_file_activity_args() -> Result<FileActivityCli, ()> {
     Ok(FileActivityCli { harness, state_dir })
 }
 
-/// Parse `--claude|--codex|--gemini [--config PATH]` from `std::env::args`.
+/// Parse `--claude|--codex [--config PATH]` from `std::env::args`.
 #[allow(clippy::result_unit_err)]
 pub fn parse_args() -> Result<Cli, ()> {
     let mut harness = None;
@@ -535,7 +534,6 @@ pub fn parse_args() -> Result<Cli, ()> {
         match arg.as_str() {
             "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
-            "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
             "--harness" => {
                 let Some(value) = args.next() else {
                     eprintln!("{}", usage());
@@ -593,7 +591,6 @@ pub fn parse_turn_completion_args() -> Result<TurnCompletionCli, ()> {
         match arg.as_str() {
             "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
-            "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
             "--antigravity" => harness = Some(set_harness(harness, HarnessId::ANTIGRAVITY)?),
             "--harness" => {
                 let Some(value) = args.next() else {
@@ -660,7 +657,6 @@ pub fn parse_session_start_args() -> Result<SessionStartCli, ()> {
         match arg.as_str() {
             "--claude" => harness = Some(set_harness(harness, HarnessId::CLAUDE_CODE)?),
             "--codex" => harness = Some(set_harness(harness, HarnessId::CODEX)?),
-            "--gemini" => harness = Some(set_harness(harness, HarnessId::GEMINI_CLI)?),
             "--harness" => {
                 let Some(value) = args.next() else {
                     eprintln!("{}", session_start_usage());
@@ -713,7 +709,6 @@ fn post_tool_harness(value: &str) -> Result<HarnessId, ()> {
     match value {
         "claude" | "claude-code" => Ok(HarnessId::CLAUDE_CODE),
         "codex" => Ok(HarnessId::CODEX),
-        "gemini" | "gemini-cli" => Ok(HarnessId::GEMINI_CLI),
         _ => Err(()),
     }
 }
@@ -727,25 +722,25 @@ fn turn_completion_harness(value: &str) -> Result<HarnessId, ()> {
 
 fn usage() -> String {
     format!(
-        "Usage: {BINARY_NAME} --claude|--codex|--gemini [--config PATH]\n       {BINARY_NAME} --harness=claude|codex|gemini [--config PATH]"
+        "Usage: {BINARY_NAME} --claude|--codex [--config PATH]\n       {BINARY_NAME} --harness=claude|codex [--config PATH]"
     )
 }
 
 fn file_activity_usage() -> String {
     format!(
-        "Usage: {FILE_ACTIVITY_BINARY_NAME} --claude|--codex|--gemini [--state-dir PATH]\n       {FILE_ACTIVITY_BINARY_NAME} --harness=claude|codex|gemini [--state-dir PATH]"
+        "Usage: {FILE_ACTIVITY_BINARY_NAME} --claude|--codex [--state-dir PATH]\n       {FILE_ACTIVITY_BINARY_NAME} --harness=claude|codex [--state-dir PATH]"
     )
 }
 
 fn session_start_usage() -> String {
     format!(
-        "Usage: {SESSION_START_BINARY_NAME} --claude|--codex|--gemini [--state-dir PATH]\n       {SESSION_START_BINARY_NAME} --harness=claude|codex|gemini [--state-dir PATH]"
+        "Usage: {SESSION_START_BINARY_NAME} --claude|--codex [--state-dir PATH]\n       {SESSION_START_BINARY_NAME} --harness=claude|codex [--state-dir PATH]"
     )
 }
 
 fn turn_completion_usage() -> String {
     format!(
-        "Usage: {TURN_COMPLETION_BINARY_NAME} --claude|--codex|--gemini|--antigravity [--config PATH] [--state-dir PATH]\n       {TURN_COMPLETION_BINARY_NAME} --harness=claude|codex|gemini|antigravity [--config PATH] [--state-dir PATH]"
+        "Usage: {TURN_COMPLETION_BINARY_NAME} --claude|--codex|--antigravity [--config PATH] [--state-dir PATH]\n       {TURN_COMPLETION_BINARY_NAME} --harness=claude|codex|antigravity [--config PATH] [--state-dir PATH]"
     )
 }
 
@@ -803,9 +798,6 @@ fn post_tool_no_op(harness: &HarnessId) -> hookkit_core::Result<PostToolUseOutpu
         "codex" => Ok(PostToolUseOutput::Codex(
             hookkit_codex::protocol::PostToolUseOutput::no_op(),
         )),
-        "gemini-cli" => Ok(PostToolUseOutput::Gemini(
-            hookkit_gemini::protocol::AfterToolOutput::no_op(),
-        )),
         _ => Err(invalid_data(format!(
             "file-activity observer does not support {harness}"
         ))),
@@ -846,14 +838,6 @@ pub fn run_session_start_observer(cli: SessionStartCli) -> std::process::ExitCod
                 Ok(hookkit_codex::catalog::SessionStartOutput::no_op())
             },
         ),
-        "gemini-cli" => {
-            hookkit_runtime::typed::run_typed::<hookkit_gemini::catalog::SessionStart, _>(
-                move |_, _, ctx| {
-                    ensure_session_metadata(ctx, state_dir.as_deref())?;
-                    Ok(hookkit_gemini::catalog::SessionStartOutput::no_op())
-                },
-            )
-        }
         _ => std::process::ExitCode::from(1),
     }
 }
@@ -2288,9 +2272,6 @@ fn lower_report(
             "codex" => Ok(PostToolUseOutput::Codex(
                 hookkit_codex::protocol::PostToolUseOutput::blocking_error(message),
             )),
-            "gemini-cli" => Ok(PostToolUseOutput::Gemini(
-                hookkit_gemini::protocol::AfterToolOutput::blocking_error(message),
-            )),
             _ => Err(invalid_data(format!(
                 "post-tool-use runner does not support {harness}"
             ))),
@@ -2337,17 +2318,6 @@ fn lower_report(
                 hookkit_codex::protocol::PostToolUseOutput::with_context(context)
             };
             Ok(PostToolUseOutput::Codex(match stderr {
-                Some(stderr) => native.with_protocol_stderr(stderr)?,
-                None => native,
-            }))
-        }
-        "gemini-cli" => {
-            let native = if context.is_empty() {
-                hookkit_gemini::protocol::AfterToolOutput::no_op()
-            } else {
-                hookkit_gemini::protocol::AfterToolOutput::with_context(context)
-            };
-            Ok(PostToolUseOutput::Gemini(match stderr {
                 Some(stderr) => native.with_protocol_stderr(stderr)?,
                 None => native,
             }))

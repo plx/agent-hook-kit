@@ -30,9 +30,8 @@ fn main() -> std::process::ExitCode {
     let harness = match std::env::args().nth(1).as_deref() {
         Some("--claude") => HarnessId::CLAUDE_CODE,
         Some("--codex") => HarnessId::CODEX,
-        Some("--gemini") => HarnessId::GEMINI_CLI,
         _ => {
-            eprintln!("Usage: shared-posttool-autofix --claude|--codex|--gemini");
+            eprintln!("Usage: shared-posttool-autofix --claude|--codex");
             return std::process::ExitCode::from(1);
         }
     };
@@ -51,7 +50,6 @@ fn handle_post_tool(
     let tool_name = match &post_tool {
         PostToolUseInput::Claude(input) => input.tool_name.as_str(),
         PostToolUseInput::Codex(input) => input.tool_name.as_str(),
-        PostToolUseInput::Gemini(input) => input.tool_name.as_str(),
         PostToolUseInput::Antigravity(_) => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -69,7 +67,7 @@ fn handle_post_tool(
     };
     let is_file_tool = matches!(
         tool_name,
-        "Write" | "Edit" | "Bash" | "run_shell_command" | "write_file" | "replace"
+        "Write" | "Edit" | "Bash" | "write_file" | "replace"
     );
 
     if !is_file_tool {
@@ -139,16 +137,6 @@ fn native_output(
                 hookkit_codex::protocol::PostToolUseOutput::with_context,
             );
             Ok(PostToolUseOutput::Codex(match stderr {
-                Some(stderr) => output.with_protocol_stderr(stderr)?,
-                None => output,
-            }))
-        }
-        "gemini-cli" => {
-            let output = context.map_or_else(
-                hookkit_gemini::protocol::AfterToolOutput::no_op,
-                hookkit_gemini::protocol::AfterToolOutput::with_context,
-            );
-            Ok(PostToolUseOutput::Gemini(match stderr {
                 Some(stderr) => output.with_protocol_stderr(stderr)?,
                 None => output,
             }))
@@ -292,7 +280,6 @@ fn test_outcome_override(input: &PostToolUseInput) -> Option<&str> {
     match input {
         PostToolUseInput::Claude(input) => input.tool_input.get("__hookkit_test_outcome"),
         PostToolUseInput::Codex(input) => input.tool_input.get("__hookkit_test_outcome"),
-        PostToolUseInput::Gemini(input) => input.tool_input.get("__hookkit_test_outcome"),
         PostToolUseInput::Antigravity(_) => None,
         _ => None,
     }

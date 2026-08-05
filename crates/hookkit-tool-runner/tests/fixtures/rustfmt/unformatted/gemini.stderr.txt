@@ -1,2 +1,0 @@
-rustfmt: changed example.rs
-hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr

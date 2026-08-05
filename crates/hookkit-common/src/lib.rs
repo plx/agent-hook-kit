@@ -2,7 +2,7 @@
 #![deny(missing_docs)]
 //!
 //! This crate provides common wrapper enums that align semantically
-//! equivalent events across Claude Code, Codex, Gemini CLI, and Antigravity while preserving
+//! equivalent events across Claude Code, Codex, and Antigravity while preserving
 //! lossless access to the underlying native types.
 
 pub mod aligned;

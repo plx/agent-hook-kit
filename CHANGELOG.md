@@ -2,14 +2,16 @@
 
 ## Unreleased — contract-first reboot
 
-- Added a frozen, source-provenance-aware contract catalog for 57 events across
-  Claude Code, Codex, Gemini CLI, and Antigravity.
+- Added a frozen, source-provenance-aware contract catalog for 46 events across
+  Claude Code, Codex, and Antigravity.
 - Added event-associated typed command APIs and exact byte/process emission.
-- Added harness-native command-environment types for all 57 catalog events,
+- Added harness-native command-environment types for all 46 catalog events,
   deterministic map-based parsing, selective process capture, redundant input
   validation, and explicit environment parameters on every command handler.
 - Added selected-harness resolution, optional hints, and a non-executing detector.
-- Added a distinct Antigravity crate and lossless four-harness PostToolUse arms.
+- Added a distinct Antigravity crate and lossless three-harness PostToolUse arms.
+- Removed Gemini CLI support, including its native crate, contracts, fixtures,
+  examples, runtime selection, and runner integrations.
 - Split hermetic required tests from opt-in real-tool and live-harness lanes.
 - Added generated Rust/catalog parity and support reporting.
 - Defined HookKit's runtime scope as command bindings; catalogued HTTP and other

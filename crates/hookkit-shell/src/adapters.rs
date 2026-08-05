@@ -3,8 +3,6 @@
 
 use hookkit_core::{EventId, HarnessId};
 
-#[cfg(feature = "gemini")]
-use crate::call::JsonRef;
 #[cfg(feature = "claude")]
 use crate::call::ShellToolCallError;
 use crate::call::{ShellToolCallExt, ShellToolCallMatch, ShellToolProfile, ToolPhase};
@@ -17,10 +15,6 @@ pub const CLAUDE_BASH_PROFILE: ShellToolProfile =
 /// Exact Codex `Bash` tool profile.
 pub const CODEX_BASH_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("Bash", "/command", None);
-#[cfg(feature = "gemini")]
-/// Exact Gemini CLI `run_shell_command` tool profile.
-pub const GEMINI_RUN_SHELL_COMMAND_PROFILE: ShellToolProfile =
-    ShellToolProfile::builtin("run_shell_command", "/command", None);
 #[cfg(feature = "antigravity")]
 /// Exact Antigravity `run_command` tool profile, including its optional cwd.
 pub const ANTIGRAVITY_RUN_COMMAND_PROFILE: ShellToolProfile =
@@ -99,34 +93,6 @@ impl ShellToolCallExt for hookkit_codex::protocol::PostToolUseInput {
     }
 }
 
-#[cfg(feature = "gemini")]
-impl ShellToolCallExt for hookkit_gemini::protocol::BeforeToolInput {
-    fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        GEMINI_RUN_SHELL_COMMAND_PROFILE.extract_from_object(
-            EventId::builtin(HarnessId::GEMINI_CLI, "BeforeTool"),
-            ToolPhase::Pre,
-            &self.tool_name,
-            &self.tool_input,
-            Some(self.cwd.as_path()),
-            None,
-        )
-    }
-}
-
-#[cfg(feature = "gemini")]
-impl ShellToolCallExt for hookkit_gemini::protocol::AfterToolInput {
-    fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        GEMINI_RUN_SHELL_COMMAND_PROFILE.extract_from_object(
-            EventId::builtin(HarnessId::GEMINI_CLI, "AfterTool"),
-            ToolPhase::Post,
-            &self.tool_name,
-            &self.tool_input,
-            Some(self.cwd.as_path()),
-            Some(JsonRef::Object(&self.tool_response)),
-        )
-    }
-}
-
 #[cfg(feature = "antigravity")]
 impl ShellToolCallExt for hookkit_antigravity::PreToolUseInput {
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
@@ -195,28 +161,6 @@ mod tests {
             input.shell_tool_call(),
             ShellToolCallMatch::NotShell
         ));
-    }
-
-    #[cfg(feature = "gemini")]
-    #[test]
-    fn extracts_gemini_after_tool_response() {
-        let input: hookkit_gemini::protocol::AfterToolInput =
-            serde_json::from_value(serde_json::json!({
-                "session_id": "session",
-                "transcript_path": "/tmp/transcript.jsonl",
-                "cwd": "/repo",
-                "hook_event_name": "AfterTool",
-                "timestamp": "2026-07-15T00:00:00Z",
-                "tool_name": "run_shell_command",
-                "tool_input": {"command": "pwd"},
-                "tool_response": {"output": "/repo"}
-            }))
-            .unwrap();
-
-        let ShellToolCallMatch::Matched(call) = input.shell_tool_call() else {
-            panic!("expected a shell call");
-        };
-        assert!(matches!(call.response, Some(JsonRef::Object(_))));
     }
 
     #[cfg(feature = "antigravity")]

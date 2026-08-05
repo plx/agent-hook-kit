@@ -292,10 +292,6 @@ fn bundled_profiles_are_public_and_custom_shell_aliases_are_explicit() {
     );
     assert_eq!(hookkit_shell::CODEX_BASH_PROFILE.tool_name(), "Bash");
     assert_eq!(
-        hookkit_shell::GEMINI_RUN_SHELL_COMMAND_PROFILE.tool_name(),
-        "run_shell_command"
-    );
-    assert_eq!(
         hookkit_shell::ANTIGRAVITY_RUN_COMMAND_PROFILE.cwd_pointer(),
         Some("/Cwd")
     );

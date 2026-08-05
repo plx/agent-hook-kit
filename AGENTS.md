@@ -1,6 +1,6 @@
 # agent-hook-kit
 
-Rust 2024 libraries and a Pkl-configured CLI for writing fast, maintainable smart hooks for Claude Code, Codex, Gemini CLI, and Antigravity.
+Rust 2024 libraries and a Pkl-configured CLI for writing fast, maintainable smart hooks for Claude Code, Codex, and Antigravity.
 
 ## Why
 
@@ -21,7 +21,7 @@ These wrappers are typically written in bash as a lowest-common-denominator, but
 
 - `crates/hookkit-core` — shared error and primitive types.
 - `crates/hookkit-runtime` — exact typed (`run_event`), selected-harness (`run_harness`/`dispatch_builtin_harness`), and aligned (`run_aligned_event`) stdin/stdout/exit-code plumbing.
-- `crates/hookkit-{claude,codex,gemini,antigravity}` — event-scoped native input/output contracts.
+- `crates/hookkit-{claude,codex,antigravity}` — event-scoped native input/output contracts.
 - `crates/hookkit-common` — lossless native-arm wrappers for genuinely aligned lifecycle events.
 - `crates/hookkit-shell` — opt-in native shell-tool extraction, bounded Bash syntax analysis, semantic file-access inference, and best-effort inspection summaries.
 - `crates/hookkit-file-activity` — provenance-bearing file activity evidence, pending windows, target resolution, and timestamp/VCS reconciliation.

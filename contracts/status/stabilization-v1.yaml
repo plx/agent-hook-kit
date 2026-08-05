@@ -19,10 +19,6 @@ defaults:
     binding: command
     level: catalog-only
     verification: source-reviewed
-  - harness: gemini-cli
-    binding: command
-    level: catalog-only
-    verification: source-reviewed
 targets:
   - contract: antigravity/docs-2026-07-12-r2/PreInvocation
     binding: command
@@ -61,18 +57,6 @@ targets:
     level: command-runtime-beta
     verification: source-reviewed
   - contract: codex/commit-9e552e9-r2/PostToolUse
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/BeforeToolSelection
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/BeforeTool
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/AfterTool
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
@@ -217,38 +201,6 @@ targets:
     level: command-runtime-beta
     verification: source-reviewed
   - contract: codex/commit-9e552e9-r2/UserPromptSubmit
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/AfterAgent
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/AfterModel
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/BeforeAgent
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/BeforeModel
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/Notification
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/PreCompress
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/SessionEnd
-    binding: command
-    level: command-runtime-beta
-    verification: source-reviewed
-  - contract: gemini-cli/commit-f354eeb-r2/SessionStart
     binding: command
     level: command-runtime-beta
     verification: source-reviewed

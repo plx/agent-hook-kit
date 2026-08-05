@@ -26,7 +26,7 @@ policy into the library.
 
    **Addressed:** `hookkit-common::PreToolUse` and
    `hookkit_common::PreToolUseInput` provide the aligned event and native arms
-   for all four harnesses.
+   for all three harnesses.
 
 3. **Path normalization in `hookkit-core`.** `normalize_path` is hand-written
    identically in this example, `hookkit-shell` (`normalize_utf8`), and

@@ -1,2 +1,0 @@
-just --fmt: changed example.just
-hookkit: lowering warning: Gemini PostToolUse intent `user_notice/diagnostics` redirected to stderr
