@@ -6,9 +6,11 @@ fn generated_runner_policy_evaluates_with_selected_tools() {
     let config_path = crate_root.join({{ quality_config_path | replace(crate_path ~ '/', '', 1) | tojson }});
     let loaded = hookkit_pkl_config::load_explicit(&config_path, crate_root)
         .expect("generated Pkl policy must evaluate with HookKit's embedded modules");
-    let expected = vec![{% for tool in quality_tools -%}{{ tool | tojson }}.to_owned(){% if not loop.last %}, {% endif %}{%- endfor %}];
 
-    assert_eq!(loaded.config.run, expected);
+    assert!(
+        !loaded.config.run.is_empty(),
+        "runner policy must select at least one tool",
+    );
     for tool in &loaded.config.run {
         assert!(
             loaded.config.tools.contains_key(tool),

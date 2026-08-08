@@ -32,12 +32,13 @@ templates/hook-project/tests/run.sh \
 
 Besides the render/compile matrix, the default run checks two crate-mode
 instances coexisting in one Cargo workspace, a versioned Copier update that
-preserves edits under `src/hooks/`, and important question-validation failures.
-It also renders, but deliberately does not compile, Git and crates.io dependency
-sources: every direct HookKit dependency must use one repository and full Git
-revision or one compatible crates.io version, without mixed source keys. The
-nonexistent-path check verifies that the questionnaire rejects a missing local
-HookKit checkout before rendering.
+preserves edits under `src/hooks/`, and deferred-quality policy edits that
+survive both recopy and a versioned update while remaining evaluable. It also
+compiles the Git-source project against the public compatibility revision. The
+unpublished crates.io source is render-only; every direct HookKit dependency
+must use one repository and full Git revision or one compatible crates.io
+version, without mixed source keys. The nonexistent-path check verifies that
+the questionnaire rejects a missing local HookKit checkout before rendering.
 The matrix derives native events and aligned-family intersections from the
 canonical catalogs while asserting the design's current 31/11/5 event counts
 and universal-three plus Claude/Codex-eight family split.

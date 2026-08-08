@@ -2390,6 +2390,6 @@ compatibility:
     rust_msrv: 1.85.0
     pkl_version: 0.31.1
     hookkit:
-      repository: https://github.com/prb/agent-hook-kit
-      git_revision: 5ae45c20404485fe4a83f1862f5d88be57a1f2b9
+      repository: https://github.com/plx/agent-hook-kit
+      git_revision: 3429c4b30ae765155dbcb314161f50a51171dc23
       crates_io_version: 0.1.0
