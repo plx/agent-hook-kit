@@ -13,6 +13,12 @@ bindings in the current iteration. Non-command bindings remain catalogued as
 upstream evidence but are explicit unsupported targets, not implementation
 backlog.
 
+Repository-boundary amendment (2026-08-08):
+[ADR 020](decisions/020-extract-quality-runner-to-velvet-glove.md) completes the
+Phase 7 extraction of the Pkl quality runner to
+[Velvet Glove](https://github.com/plx/velvet-glove). Historical runner references
+below describe the stabilization sequence, not the current repository layout.
+
 ## 1. Status, authority, and how to use this plan
 
 This document turns the July 2026 repository audit and the clarified product intent into an implementation plan that can be executed across multiple sessions and pull requests.

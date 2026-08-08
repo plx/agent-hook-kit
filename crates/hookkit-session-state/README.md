@@ -92,13 +92,10 @@ Claude and Codex do not expose such a key, so observations of the same cause
 within a 30-second window are coalesced to accommodate multiple independently
 installed start hooks.
 
-For the most precise start time, install the shipped no-op observer on the
-native `SessionStart` event:
-
-```text
-session-start-state-agent-hook --claude [--state-dir PATH]
-session-start-state-agent-hook --codex [--state-dir PATH]
-```
+For the most precise start time, bind a small observer that calls `ensure` to
+the native Claude or Codex `SessionStart` event. The complete implementation
+used by the deferred quality workflow lives in
+[Velvet Glove](https://github.com/plx/velvet-glove).
 
 Without that binding, the first later stateful hook still creates metadata, but
 its start value is explicitly marked `first_hook_observation`. Antigravity has
@@ -233,34 +230,15 @@ as event order.
 Directories are private (`0700` on Unix), replacements use temp-write, fsync,
 and rename, and the configured root itself may not be a symlink.
 
-## Batched formatter/linter mechanics
+## Coordinated downstream consumers
 
 `hookkit-file-activity` builds on these primitives with provenance-bearing
-evidence and gap events. The shipped `file-activity-agent-hook` appends those events
-to the windowed `agent-hook-kit.file-activity` entity. At turn completion,
-`turn-completion-agent-hook`:
-
-1. reconciles workspace mtimes through a captured cutoff and advances a
-   monotonic cursor only after discoveries are durable;
-2. obtains a `PendingFileActivity` entity view and expands its exact,
-   descendant, glob, and workspace targets;
-3. runs matching Pkl-configured read-only checks, one remedy for each initially
-   dirty workflow, and authoritative checks invalidated by observed writes;
-4. writes complete per-tool output and commits a run summary;
-5. appends idempotent retry evidence for manual, operationally incomplete, and
-   unresolved work into the active generation;
-6. records content-based handled baselines for discharged files; and
-7. acknowledges only the sealed source generations, then either emits a native
-   no-op or asks the harness to continue and points it at the committed run.
-
-The summary describes this planned disposition because it is committed before
-the state transition. A crash before disposition leaves the sealed source
-pending; a crash after retry append may duplicate an idempotent retry but cannot
-lose it. Files modified while linters run also land in the next generation and
-remain pending when the completed window is acknowledged.
-Normal clean, auto-fixed, and manual results are recorded per file with
-worst-wins aggregation across tools. Operational failures remain a separate
-bucket, and conservative batch findings retain their shared report provenance.
+evidence, gap events, generation sealing, and acknowledgement. A coordinated
+consumer can reconcile and seal a pending window, commit its own durable run
+artifacts, requeue incomplete evidence, and acknowledge only the generations it
+successfully handled. The complete deferred linting-and-formatting workflow
+using that pattern lives in
+[Velvet Glove](https://github.com/plx/velvet-glove).
 
 The older `ModifiedFiles`/`ModifiedFileEvent` projection remains a small
 session-state convenience for callers that only need an exact-path set. It does

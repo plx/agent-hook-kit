@@ -5,9 +5,6 @@ pub mod dispatch;
 {%- if harness_mode == "cross" %}
 pub mod harness;
 {%- endif %}
-{%- if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
-pub mod runners;
-{%- endif %}
 {%- if state_capabilities %}
 pub mod state;
 {%- endif %}

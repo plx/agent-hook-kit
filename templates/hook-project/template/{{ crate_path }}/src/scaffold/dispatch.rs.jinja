@@ -1,17 +1,13 @@
 {% from "templates/hook-project/template/_macros/rust.jinja" import aligned_base, variant -%}
 {% macro handler_state_dir() -%}
-{%- if starter == "deferred_quality" or "file_activity" in state_capabilities -%}
-Some(state_dir.as_path())
-{%- elif state_capabilities -%}
+{%- if state_capabilities -%}
 state_dir.as_deref()
 {%- else -%}
 None
 {%- endif -%}
 {%- endmacro -%}
 {% macro handler_state_dir_owned() -%}
-{%- if starter == "deferred_quality" or "file_activity" in state_capabilities -%}
-Some(state_dir)
-{%- elif state_capabilities -%}
+{%- if state_capabilities -%}
 state_dir
 {%- else -%}
 None
@@ -32,16 +28,7 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
 {%- if harness_mode == "cross" %}
     let harness = cli.harness.id();
 {%- endif %}
-{%- if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
-    let config_path = cli
-        .config
-        .unwrap_or_else(crate::scaffold::runners::default_config_path);
-{%- endif %}
-{%- if starter == "deferred_quality" or "file_activity" in state_capabilities %}
-    let state_dir = cli
-        .state_dir
-        .unwrap_or_else(crate::scaffold::runners::default_state_dir);
-{%- elif state_capabilities %}
+{%- if state_capabilities %}
     let state_dir = cli.state_dir;
 {%- endif %}
     match cli.command {
@@ -51,32 +38,13 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
         Command::{{ variant(stable_id) }} => {
             run_pre_tool(harness, {{ handler_state_dir_owned() }})
         },
-{%- elif starter == "immediate_quality" and stable_id == "post_tool" %}
-        Command::{{ variant(stable_id) }} => {
-            crate::scaffold::runners::run_immediate(harness, config_path)
-        }
-{%- elif "file_activity" in state_capabilities and stable_id == "post_tool" %}
-        Command::{{ variant(stable_id) }} => {
-            crate::scaffold::runners::run_file_activity(harness, state_dir)
-        }
-{%- elif "file_activity" in state_capabilities and stable_id == "turn_completion" %}
-        Command::{{ variant(stable_id) }} => crate::scaffold::runners::run_turn_completion(
-            harness,
-            config_path,
-            state_dir,
-        ),
 {%- elif starter == "session_bootstrap" and stable_id == "session_start" %}
         Command::{{ variant(stable_id) }} => hookkit_runtime::aligned::run_aligned_event::<
             hookkit_runtime::aligned::SessionStart,
             _,
         >(harness, move |input, environment, context| {
-{%- if "file_activity" in state_capabilities %}
-            crate::scaffold::state::ensure_session_state(context, Some(state_dir.as_path()))
-                .map_err(std::io::Error::other)?;
-{%- else %}
             crate::scaffold::state::ensure_session_state(context, state_dir.as_deref())
                 .map_err(std::io::Error::other)?;
-{%- endif %}
             let _ = environment;
             match crate::hooks::session_bootstrap::build_context(input.source()) {
                 Some(additional_context) => hookkit_common::SessionStartOutput::with_context(
@@ -100,16 +68,6 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
         }),
 {%- endif %}
 {%- endfor %}
-{%- if "file_activity" in state_capabilities %}
-        Command::SessionStartState => {
-{%- if "antigravity" in harnesses %}
-            if harness == hookkit_core::HarnessId::ANTIGRAVITY {
-                return std::process::ExitCode::from(2);
-            }
-{%- endif %}
-            crate::scaffold::runners::run_session_start(harness, state_dir)
-        }
-{%- endif %}
 {%- else %}
 {%- for stable_id in native_hooks %}
 {%- if stable_id == "pre_tool_use" and starter == "custom" %}
@@ -130,58 +88,10 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
 {%- endfor %}
 {%- elif stable_id == "pre_tool_use" %}
 {%- if starter == "scoped_context_once" %}
-{%- if "file_activity" in state_capabilities %}
-        Command::{{ variant(stable_id) }} => run_pre_tool(Some(state_dir)),
-{%- else %}
         Command::{{ variant(stable_id) }} => run_pre_tool(state_dir),
-{%- endif %}
 {%- else %}
         Command::{{ variant(stable_id) }} => run_pre_tool(),
 {%- endif %}
-{%- elif starter == "immediate_quality" and stable_id == "post_tool_use" %}
-        Command::{{ variant(stable_id) }} => crate::scaffold::runners::run_immediate(
-            {{ "hookkit_core::HarnessId::CLAUDE_CODE" if harness == "claude-code" else ("hookkit_core::HarnessId::CODEX" if harness == "codex" else "hookkit_core::HarnessId::ANTIGRAVITY") }},
-            config_path,
-        ),
-{%- elif "file_activity" in state_capabilities and stable_id == "post_tool_use" %}
-        Command::{{ variant(stable_id) }} => crate::scaffold::runners::run_file_activity(
-            {{ "hookkit_core::HarnessId::CLAUDE_CODE" if harness == "claude-code" else ("hookkit_core::HarnessId::CODEX" if harness == "codex" else "hookkit_core::HarnessId::ANTIGRAVITY") }},
-            state_dir,
-        ),
-{%- elif "file_activity" in state_capabilities and stable_id == "stop" %}
-        Command::{{ variant(stable_id) }} => crate::scaffold::runners::run_turn_completion(
-            {{ "hookkit_core::HarnessId::CLAUDE_CODE" if harness == "claude-code" else ("hookkit_core::HarnessId::CODEX" if harness == "codex" else "hookkit_core::HarnessId::ANTIGRAVITY") }},
-            config_path,
-            state_dir,
-        ),
-{%- elif "file_activity" in state_capabilities and stable_id == "session_start" and harness != "antigravity" %}
-        Command::{{ variant(stable_id) }} => hookkit_runtime::run_event::<
-            {{ "hookkit_claude::protocol::SessionStart" if harness == "claude-code" else "hookkit_codex::catalog::SessionStart" }},
-            _,
-        >(move |input, environment, context| {
-            crate::scaffold::state::ensure_session_state(context, Some(state_dir.as_path()))
-                .map_err(std::io::Error::other)?;
-            crate::hooks::native::session_start(
-                input,
-                environment,
-                context,
-                Some(state_dir.as_path()),
-            )
-        }),
-{%- elif "file_activity" in state_capabilities and stable_id == "pre_invocation" and harness == "antigravity" %}
-        Command::{{ variant(stable_id) }} => hookkit_runtime::run_event::<
-            hookkit_antigravity::PreInvocation,
-            _,
-        >(move |input, environment, context| {
-            crate::scaffold::state::ensure_session_state(context, Some(state_dir.as_path()))
-                .map_err(std::io::Error::other)?;
-            crate::hooks::native::pre_invocation(
-                input,
-                environment,
-                context,
-                Some(state_dir.as_path()),
-            )
-        }),
 {%- else %}
 {%- for event in event_catalog.events %}
 {%- if event.harness == harness and event.stable_id == stable_id %}

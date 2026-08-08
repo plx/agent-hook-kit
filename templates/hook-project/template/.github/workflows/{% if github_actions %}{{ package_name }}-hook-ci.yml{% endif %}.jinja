@@ -41,28 +41,6 @@ jobs:
           prefix-key: {{ (package_name ~ "-hook") | tojson }}
           workspaces: {{ (crate_path ~ " -> target") | tojson }}
 
-{% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
-      - name: Install Pkl {{ compatibility.pkl_version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$(uname -s)" in
-            Darwin) pkl_os=macos ;;
-            Linux) pkl_os=linux ;;
-            *) echo "unsupported Pkl runner OS" >&2; exit 1 ;;
-          esac
-          case "$(uname -m)" in
-            x86_64) pkl_arch=amd64 ;;
-            arm64|aarch64) pkl_arch=aarch64 ;;
-            *) echo "unsupported Pkl runner architecture" >&2; exit 1 ;;
-          esac
-          curl --fail --location --retry 3 \
-            --output "$RUNNER_TEMP/pkl" \
-            "https://github.com/apple/pkl/releases/download/{{ compatibility.pkl_version }}/pkl-${pkl_os}-${pkl_arch}"
-          chmod +x "$RUNNER_TEMP/pkl"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-
-{% endif %}
       - name: Check the MSRV
         run: >-
           cargo +{{ compatibility.rust_msrv }} check

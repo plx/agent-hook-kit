@@ -14,7 +14,6 @@ _skip_if_exists:
   - "{{ crate_path }}/src/hooks/aligned/*.rs"
   - "{{ crate_path }}/src/hooks/session_bootstrap.rs"
   - "{{ crate_path }}/src/hooks/state_types/*.rs"
-  - "{{ crate_path }}/config/**"
 _exclude:
   - _macros
 _message_after_copy: >-
@@ -44,5 +43,3 @@ _message_after_copy: >-
 !include templates/hook-project/questions/dependency.yml
 ---
 !include templates/hook-project/questions/ci.yml
----
-!include templates/hook-project/questions/runner.yml

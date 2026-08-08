@@ -17,8 +17,9 @@ policy into the library.
    **Addressed:** `hookkit-tool-access::ToolAccessAnalyzer` now owns structured
    field, patch, and shell access extraction for both pre- and post-tool calls.
 
-2. **An aligned `PreToolUse` event.** `session-modified-file-tracker` collapses
-   its harnesses into one handler via `run_aligned_event::<PostToolUse>`. There
+2. **An aligned `PreToolUse` event.** The file-activity observer now maintained
+   in [Velvet Glove](https://github.com/plx/velvet-glove) collapses its harnesses
+   into one handler via `run_aligned_event::<PostToolUse>`. There
    is no `PreToolUse` equivalent, and `AlignedEventSpec` is a **sealed** trait,
    so one cannot be added from an example. The three arms must stay, differing
    only in native-output construction. Antigravity would benefit *most* here —

@@ -20,6 +20,4 @@ serde_json = { workspace = true }
 camino = { workspace = true }
 
 [dev-dependencies]
-hookkit-file-activity = { workspace = true }
-hookkit-session-state = { workspace = true }
 proptest = { workspace = true }

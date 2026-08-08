@@ -11,15 +11,6 @@
       or (state_capabilities | sort) != (expected_state | sort) -%}
 {% set preset.customized = true -%}
 {% endif -%}
-{% if selected_archetype.runner
-      and (lowering_policy != selected_archetype.runner.default_lowering_policy
-           or quality_profile != selected_archetype.runner.default_quality_profile
-           or (quality_tools | sort) != (selected_archetype.runner.default_quality_tools | sort)
-           or quality_config_path != crate_path ~ "/config/" ~ package_name ~ ".pkl"
-           or (selected_archetype.runner.kind == "deferred"
-               and reconciliation_posture != selected_archetype.runner.default_reconciliation_posture)) -%}
-{% set preset.customized = true -%}
-{% endif -%}
 {% endif -%}
 template_version: {{ compatibility.template_version | string | tojson }}
 output_mode: {{ output_mode | tojson }}
@@ -54,9 +45,6 @@ effective_hooks:
 {% for hook in aligned_hooks %}
   - {{ hook | tojson }}
 {% endfor -%}
-{% if "file_activity" in state_capabilities %}
-  - "session_start_state"
-{% endif -%}
 {% else -%}
 {% for hook in native_hooks %}
   - {{ hook | tojson }}
@@ -98,11 +86,6 @@ fidelity:
       tool_result: {{ (selected_harness != "antigravity") | tojson }}
     post_tool_output_messages: {{ ("none" if selected_harness == "antigravity" else "separate-user-and-agent") | tojson }}
     turn_completion_output_messages: {{ ("single-reason" if selected_harness == "antigravity" else "separate-user-and-agent") | tojson }}
-{% if "file_activity" in state_capabilities %}
-    file_activity_lower_bound: {{ ("inferred-first-observation" if selected_harness == "antigravity" else "exact-session-start") | tojson }}
-{% else %}
-    file_activity_lower_bound: null
-{% endif -%}
 {% endfor -%}
 state_capabilities:
 {% for capability in state_capabilities %}
@@ -113,19 +96,6 @@ state:
   family: {{ package_name | tojson }}
   family_version: 1
   default_root: {{ ("$TMPDIR/agent-hook-kit/generated/" ~ package_name ~ "/") | tojson }}
-lowering_policy: {% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}{{ lowering_policy | tojson }}{% else %}null{% endif %}
-{% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
-runner:
-  config_path: {{ quality_config_path | tojson }}
-  profile: {{ quality_profile | tojson }}
-  tools:
-{% for tool in quality_tools %}
-    - {{ tool | tojson }}
-{% endfor -%}
-{% if starter == "deferred_quality" or "file_activity" in state_capabilities %}
-  reconciliation_posture: {{ reconciliation_posture | tojson }}
-{% endif -%}
-{% endif -%}
 dependency:
   source: {{ dependency_source | tojson }}
 {% if dependency_source == "git" %}

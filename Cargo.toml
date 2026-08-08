@@ -12,8 +12,6 @@ members = [
     "crates/hookkit-shell",
     "crates/hookkit-tool-access",
     "crates/hookkit-file-activity",
-    "crates/hookkit-pkl-config",
-    "crates/hookkit-tool-runner",
     "crates/hookkit-session-state",
     "examples/codex-bash-guard",
     "examples/claude-sessionstart-context",
@@ -21,7 +19,6 @@ members = [
     "examples/antigravity-pre-invocation",
     "examples/codex-claude-rules",
     "examples/forbidden-file-guard",
-    "examples/session-modified-file-tracker",
 ]
 
 [workspace.package]
@@ -39,7 +36,6 @@ camino = { version = "1", features = ["serde1"] }
 dirs = "6"
 # 0.4.19+ raised the crate's MSRV above HookKit's Rust 1.85 baseline.
 globset = "=0.4.18"
-minijinja = "2"
 toml = "0.8"
 walkdir = "2"
 base64 = "0.22"
@@ -63,6 +59,4 @@ hookkit-common = { version = "0.1.0", path = "crates/hookkit-common" }
 hookkit-shell = { version = "0.1.0", path = "crates/hookkit-shell" }
 hookkit-tool-access = { version = "0.1.0", path = "crates/hookkit-tool-access" }
 hookkit-file-activity = { version = "0.1.0", path = "crates/hookkit-file-activity" }
-hookkit-pkl-config = { version = "0.1.0", path = "crates/hookkit-pkl-config" }
-hookkit-tool-runner = { version = "0.1.0", path = "crates/hookkit-tool-runner" }
 hookkit-session-state = { version = "0.1.0", path = "crates/hookkit-session-state" }

@@ -40,39 +40,9 @@ archetypes:
     required_hooks: [session_start]
     required_state: [session_metadata]
 
-  - stable_id: immediate_quality
-    display_name: Immediate formatter/linter
-    order: 50
-    default_mode: cross
-    supported_modes: [cross]
-    supported_harnesses: [claude-code, codex, antigravity]
-    default_harnesses: [claude-code, codex, antigravity]
-    required_hooks: [post_tool]
-    runner:
-      kind: immediate
-      default_lowering_policy: best-effort-with-warnings
-      default_quality_profile: rust
-      default_quality_tools: [cargoFmt, cargoClippy]
-
-  - stable_id: deferred_quality
-    display_name: Deferred formatter/linter
-    order: 60
-    default_mode: cross
-    supported_modes: [cross]
-    supported_harnesses: [claude-code, codex, antigravity]
-    default_harnesses: [claude-code, codex, antigravity]
-    required_hooks: [post_tool, turn_completion]
-    required_state: [session_metadata, file_activity, run_artifacts]
-    runner:
-      kind: deferred
-      default_lowering_policy: best-effort-with-warnings
-      default_quality_profile: rust
-      default_quality_tools: [cargoFmt, cargoClippy]
-      default_reconciliation_posture: best-effort
-
   - stable_id: pre_tool_rewrite
     display_name: Claude/Codex pre-tool rewrite
-    order: 70
+    order: 50
     default_mode: cross
     supported_modes: [cross]
     supported_harnesses: [claude-code, codex]

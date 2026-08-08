@@ -22,10 +22,11 @@ if [[ "$installed_version" != "$CARGO_ABOUT_VERSION" ]]; then
     cargo install --locked "cargo-about@${CARGO_ABOUT_VERSION}"
 fi
 
-# Attribute dependencies linked into the distributed runner, not unpublished
-# workspace-only tools such as xtask and hookkit-conformance.
+# Attribute the complete third-party dependency closure used by the publishable
+# library crates, excluding workspace-only tools such as xtask and
+# hookkit-conformance.
 cargo about generate \
-    --manifest-path crates/hookkit-tool-runner/Cargo.toml \
+    --manifest-path crates/hookkit-file-activity/Cargo.toml \
     --locked \
     -c about.toml \
     -o THIRD_PARTY_LICENSES.md \

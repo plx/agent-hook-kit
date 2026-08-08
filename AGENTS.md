@@ -1,6 +1,6 @@
 # agent-hook-kit
 
-Rust 2024 libraries and a Pkl-configured CLI for writing fast, maintainable smart hooks for Claude Code, Codex, and Antigravity.
+Rust 2024 libraries for writing fast, maintainable smart hooks for Claude Code, Codex, and Antigravity.
 
 ## Why
 
@@ -26,9 +26,9 @@ These wrappers are typically written in bash as a lowest-common-denominator, but
 - `crates/hookkit-shell` — opt-in native shell-tool extraction, bounded Bash syntax analysis, semantic file-access inference, and best-effort inspection summaries.
 - `crates/hookkit-file-activity` — provenance-bearing file activity evidence, pending windows, target resolution, and timestamp/VCS reconciliation.
 - `crates/hookkit-session-state` — automatic typed session metadata plus concurrent, versioned claims, content-addressed record journals, NDJSON-backed aggregate entities, run bundles, scopes, observations, locks, and cleanup.
-- `crates/hookkit-pkl-config` — Pkl evaluation, embedded builtin tool catalog, multi-file config merge, and discovery for the post-tool-use runner.
-- `crates/hookkit-tool-runner` — ships the immediate `post-tool-use-agent-hook`, quiet `file-activity-agent-hook`, session-batched `turn-completion-agent-hook`, and precise `session-start-state-agent-hook` metadata observer.
 - `examples/` — runnable hook stubs paired with `fixtures/` JSON for each harness.
 - `planning/` — design notes; not shipped.
 
-`pkl` must be on `$PATH` at runtime for the post-tool-use runner; see `README.md` for prerequisites, build/test commands, and example invocations.
+The turnkey immediate/deferred quality runner built on these libraries lives in
+[Velvet Glove](https://github.com/plx/velvet-glove). See `README.md` for
+prerequisites, build/test commands, and example invocations.
