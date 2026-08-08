@@ -1,0 +1,48 @@
+---
+_min_copier_version: "9.17.1"
+_subdirectory: templates/hook-project/template
+_templates_suffix: .jinja
+_answers_file: >-
+  {%- if output_mode == "crate" -%}
+  .copier-answers.{{ package_name }}.yml
+  {%- else -%}
+  .copier-answers.yml
+  {%- endif -%}
+_skip_if_exists:
+  - "{{ crate_path }}/src/hooks/pre_tool/*.rs"
+  - "{{ crate_path }}/src/hooks/native/*.rs"
+  - "{{ crate_path }}/src/hooks/aligned/*.rs"
+  - "{{ crate_path }}/src/hooks/session_bootstrap.rs"
+  - "{{ crate_path }}/src/hooks/state_types/*.rs"
+  - "{{ crate_path }}/config/**"
+_exclude:
+  - _macros
+_message_after_copy: >-
+  Generated {{ project_name }}.
+  Review {{ crate_path }}/README.md for setup, validation, and hook registration.
+  {%- if output_mode == "crate" %}
+  Copier did not modify the host Cargo.toml; add {{ crate_path }} as a workspace
+  member when required.
+  {%- endif %}
+---
+!include templates/hook-project/questions/catalog.yml
+---
+!include templates/hook-project/questions/topology.yml
+---
+!include templates/hook-project/questions/identity.yml
+---
+!include templates/hook-project/questions/starter.yml
+---
+!include templates/hook-project/questions/harness.yml
+---
+!include templates/hook-project/questions/state.yml
+---
+!include templates/hook-project/questions/hooks.yml
+---
+!include templates/hook-project/questions/resolved.yml
+---
+!include templates/hook-project/questions/dependency.yml
+---
+!include templates/hook-project/questions/ci.yml
+---
+!include templates/hook-project/questions/runner.yml

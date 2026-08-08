@@ -50,6 +50,11 @@ change.
 - Versioned upstream protocol ledger and generated support matrix:
   - [`contracts/`](contracts/README.md)
   - [`contracts/status/support.md`](contracts/status/support.md)
+- Copier 9.17.1 project generator for complete workspaces or namespaced CLI
+  crates, with native and aligned hook selection, state capabilities,
+  archetypes, and optional package-specific GitHub Actions:
+  - [`copier.yml`](copier.yml)
+  - [`planning/copier-hook-project-template-design.md`](planning/copier-hook-project-template-design.md)
 - Runnable examples:
   - `examples/claude-sessionstart-context`
   - `examples/codex-bash-guard`
@@ -78,6 +83,7 @@ crates/
 examples/
 fixtures/
 planning/
+templates/hook-project/
 ```
 
 ## Prerequisites
@@ -87,6 +93,63 @@ planning/
   needed at runtime by the post-tool-use hook so it can evaluate embedded and
   user Pkl configs. Install with `brew install pkl` (macOS) or follow the
   upstream instructions for your platform.
+- [`uv`](https://docs.astral.sh/uv/) for the repository's pinned Copier 9.17.1
+  wrapper and template acceptance tests. Generated hook projects do not need
+  Copier or uv at runtime.
+
+## Generate A Hook Project
+
+From a local checkout, run the pinned Copier version and answer the interactive
+questions:
+
+```bash
+uvx --from copier==9.17.1 copier copy --vcs-ref :current: . ../my-hooks
+```
+
+Choose a full Rust project or a CLI crate for an existing repository, then
+choose single-harness native events or a supported cross-harness family set.
+The questionnaire can also add state facilities, a starter archetype, and a
+package-namespaced GitHub Actions workflow. Crate mode deliberately leaves the
+host `Cargo.toml` unchanged; add the generated crate as a workspace member
+manually when needed.
+
+The template has no tasks or migrations, so generation does not require
+`--trust`. Before using crate mode, confirm that its computed crate, answers,
+and workflow paths do not already exist. Generated per-event and per-archetype
+handler seams in the `src/hooks/` subdirectories are preserved across updates;
+their top-level export modules and scaffold wiring remain template-owned.
+Generated Pkl configuration is user-owned policy, so changing runner or
+configuration answers requires manually reconciling the existing config.
+
+After a template release is tagged, generate from its immutable public source:
+
+```bash
+uvx --from copier==9.17.1 copier copy \
+  --vcs-ref <release-tag> \
+  https://github.com/prb/agent-hook-kit.git ./my-hooks
+```
+
+Full-project updates use `copier update`. For a crate-mode instance, select its
+namespaced answers file explicitly:
+
+```bash
+uvx --from copier==9.17.1 copier update \
+  --answers-file .copier-answers.<package-name>.yml .
+uvx --from copier==9.17.1 copier check-update \
+  --answers-file .copier-answers.<package-name>.yml --quiet .
+uvx --from copier==9.17.1 copier recopy \
+  --answers-file .copier-answers.<package-name>.yml .
+```
+
+Use `update` for normal smart diffing. `recopy` deliberately regenerates the
+managed tree from recorded answers and is intended for explicit answer/shape
+changes; protected handler seams remain untouched. After the first successful
+generated-project check, commit the resulting `Cargo.lock` so its Git or
+crates.io dependency resolution is reproducible.
+
+The current preview defaults to one immutable HookKit Git revision. The default
+will switch to crates.io only after all 12 template-facing crates are published
+on one compatible version train.
 
 ## Build And Test
 
@@ -98,6 +161,19 @@ cargo run -p hookkit-conformance -- --check
 cargo xtask contracts check
 cargo xtask contracts report --check
 cargo xtask contracts verify-vendor
+cargo xtask template-catalog check
+templates/hook-project/tests/run.sh --validation render
+```
+
+The template acceptance wrapper stages the working-tree source outside Git,
+pins Copier 9.17.1, and derives its native/aligned matrix from the canonical
+catalogs. Its default lane compiles every matrix cell; the full release lane
+also runs generated-project formatting, Rust 1.85 and stable checks, Clippy,
+and tests:
+
+```bash
+templates/hook-project/tests/run.sh
+templates/hook-project/tests/run.sh --validation full
 ```
 
 The `hookkit-pkl-config` and `hookkit-tool-runner` integration tests skip
@@ -163,6 +239,22 @@ fn main() -> std::process::ExitCode {
 The convenience constructors return a concrete native enum arm. Callers can
 instead match `PreToolUseInput` and construct any native-only output capability
 available to that arm.
+
+The sealed aligned-runtime catalog is intentionally capability-based:
+
+<!-- markdownlint-disable MD013 -->
+
+| Supported harness set | Aligned marker families |
+| --- | --- |
+| Claude, Codex, Antigravity | `PreToolUse`, `PostToolUse`, `TurnCompletion` |
+| Claude and Codex | `PermissionRequest`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `UserPromptSubmit` |
+
+<!-- markdownlint-enable MD013 -->
+
+The Claude/Codex output helpers expose only the portable semantic floor. For
+example, aligned `PreCompact` is observer-only even though each native arm
+retains its harness-specific controls. A pair-only marker rejects Antigravity
+before invoking its handler.
 
 ## Quick Start: Aligned `PostToolUse`
 
@@ -482,6 +574,11 @@ run = new Listing<String> { "ruff"; "prettier" }
 | `settings.fileActivity.vcs` | `"disabled"` | Optional `"git-dirty"` fallback; broad because it cannot identify which dirty changes came from the agent. |
 | `settings.fileActivity.maxEntries` | `100000` | Bound scoped/workspace traversal; truncation is retained as a coverage gap. |
 | `settings.fileActivity.coverageGapPolicy` | `"best-effort"` | Process resolved files and warn while retaining gaps, or use `"strict"` to block until coverage is complete. |
+
+For immediate Antigravity `PostToolUse`, warning-mode losses are stored as
+collision-safe JSON records under the input's exact `artifactDirectoryPath`.
+The successful hook keeps stdout exactly `{}` and points to the record on
+stderr; a persistence failure fails the hook. Plain `best-effort` stays quiet.
 
 ### Deferred reporting templates
 

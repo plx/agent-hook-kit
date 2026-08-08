@@ -43,6 +43,10 @@ protocol over that mutable catalog, so additions do not require enum changes.
 The exact shell adapter remains current: `run_command` still places the command
 at `CommandLine` and the optional working directory at `Cwd`.
 
+The `PostToolUse` JSON response remains exactly `{}`. Successful command hooks
+may also write out-of-band diagnostics to process stderr; that exit-zero channel
+does not add a JSON output field or change the event's native response schema.
+
 The CLI 1.1.9 and 1.1.10 changelogs describe fixes to `PostToolUse` matcher
 dispatch, stop-hook continuation limits, and hook ordering so final
 `PostInvocation` and `Stop` hooks execute. Those are harness runtime fixes, not

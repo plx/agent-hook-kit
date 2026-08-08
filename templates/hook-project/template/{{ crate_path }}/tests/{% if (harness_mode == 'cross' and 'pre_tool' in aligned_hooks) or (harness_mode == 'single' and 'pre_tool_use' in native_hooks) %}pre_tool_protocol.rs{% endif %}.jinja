@@ -1,0 +1,123 @@
+use hookkit_core::EnvironmentVariables;
+
+{% if harness_mode == "cross" -%}
+{% for selected_harness in harnesses -%}
+{% set pre_tool_event = event_catalog.events | selectattr("harness", "equalto", selected_harness) | selectattr("stable_id", "equalto", "pre_tool_use") | first -%}
+#[test]
+#[rustfmt::skip]
+fn {{ selected_harness | replace('-', '_') }}_fixture_uses_native_pre_tool_output() {
+    {% if selected_harness == "claude-code" -%}
+    let variables = EnvironmentVariables::from_pairs([
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("CLAUDE_CODE_SESSION_ID", {{ pre_tool_event.fixture.value.session_id | string | tojson }}),
+        ("CLAUDE_PROJECT_DIR", {{ pre_tool_event.fixture.value.cwd | string | tojson }}),
+    ]);
+    {%- else -%}
+    let variables = EnvironmentVariables::new();
+    {%- endif %}
+    let emission = hookkit_runtime::aligned::execute_aligned_event::<
+        hookkit_runtime::aligned::PreToolUse,
+        _,
+    >(
+        {% if selected_harness == "claude-code" -%}
+        hookkit_core::HarnessId::CLAUDE_CODE,
+        {%- elif selected_harness == "codex" -%}
+        hookkit_core::HarnessId::CODEX,
+        {%- else -%}
+        hookkit_core::HarnessId::ANTIGRAVITY,
+        {%- endif %}
+        include_bytes!(concat!("../fixtures/", {{ selected_harness | tojson }}, "/pre_tool_use.json")),
+        &variables,
+        |_input, _environment, context| hookkit_common::PreToolUseOutput::allow(context.harness()),
+    )
+    .expect("fixture should satisfy its exact native contract");
+
+    assert_eq!(emission.exit_code(), 0);
+    assert!(emission.stderr().is_empty());
+}{% if not loop.last %}
+
+{% endif %}{% endfor -%}
+{% else -%}
+{% set pre_tool_event = event_catalog.events | selectattr("harness", "equalto", harness) | selectattr("stable_id", "equalto", "pre_tool_use") | first -%}
+#[test]
+#[rustfmt::skip]
+fn selected_native_fixture_uses_exact_pre_tool_contract() {
+    {% if harness == "claude-code" -%}
+    let variables = EnvironmentVariables::from_pairs([
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("CLAUDE_CODE_SESSION_ID", {{ pre_tool_event.fixture.value.session_id | string | tojson }}),
+        ("CLAUDE_PROJECT_DIR", {{ pre_tool_event.fixture.value.cwd | string | tojson }}),
+    ]);
+    {%- else -%}
+    let variables = EnvironmentVariables::new();
+    {%- endif %}
+    {% if harness == "claude-code" -%}
+    let emission = hookkit_runtime::execute_typed::<hookkit_claude::catalog::PreToolUse, _>(
+        include_bytes!("../fixtures/claude-code/pre_tool_use.json"),
+        &variables,
+        {% if starter == "custom" -%}
+        |input, environment, context| {
+            {{ package_name | replace('-', '_') }}::hooks::native::pre_tool_use(
+                input,
+                environment,
+                context,
+                None,
+            )
+        },
+        {%- else -%}
+        |_input, _environment, _context| {
+            Ok(hookkit_claude::catalog::PreToolUseOutput::no_op())
+        },
+        {%- endif %}
+    );
+    {%- elif harness == "codex" -%}
+    let emission = hookkit_runtime::execute_typed::<hookkit_codex::protocol::PreToolUse, _>(
+        include_bytes!("../fixtures/codex/pre_tool_use.json"),
+        &variables,
+        {% if starter == "custom" -%}
+        |input, environment, context| {
+            {{ package_name | replace('-', '_') }}::hooks::native::pre_tool_use(
+                input,
+                environment,
+                context,
+                None,
+            )
+        },
+        {%- else -%}
+        |_input, _environment, _context| {
+            Ok(hookkit_codex::protocol::PreToolUseOutput::no_op())
+        },
+        {%- endif %}
+    );
+    {%- else -%}
+    let emission = hookkit_runtime::execute_typed::<hookkit_antigravity::PreToolUse, _>(
+        include_bytes!("../fixtures/antigravity/pre_tool_use.json"),
+        &variables,
+        {% if starter == "custom" -%}
+        |input, environment, context| {
+            {{ package_name | replace('-', '_') }}::hooks::native::pre_tool_use(
+                input,
+                environment,
+                context,
+                None,
+            )
+        },
+        {%- else -%}
+        |_input, _environment, _context| {
+            Ok(hookkit_antigravity::PreToolUseOutput {
+                decision: hookkit_antigravity::ToolDecision::Allow,
+                reason: None,
+                permission_overrides: Vec::new(),
+            })
+        },
+        {%- endif %}
+    );
+    {%- endif %}
+
+    let emission = emission.expect("fixture should satisfy its exact native contract");
+    assert_eq!(emission.exit_code(), 0);
+    assert!(emission.stderr().is_empty());
+}
+{%- endif %}

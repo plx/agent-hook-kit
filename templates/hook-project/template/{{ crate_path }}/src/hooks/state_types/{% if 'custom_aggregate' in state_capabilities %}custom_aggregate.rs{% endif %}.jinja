@@ -1,0 +1,48 @@
+//! User-owned journal aggregate and event types.
+
+use hookkit_session_state::JournalEntity;
+use serde::{Deserialize, Serialize};
+
+/// Persisted schema version of the custom event and aggregate types.
+///
+/// Bump this before making an incompatible change to either protected type.
+pub const CUSTOM_AGGREGATE_ENTITY_VERSION: u32 = 1;
+
+/// Persistence semantics for the custom aggregate scaffold.
+pub const CUSTOM_AGGREGATE_MODE: hookkit_session_state::EntityMode =
+    hookkit_session_state::EntityMode::Monotonic;
+
+/// Example aggregate projected from [`CustomAggregateEvent`] values.
+///
+/// Replace these fields with the state your hook needs, then bump
+/// [`CUSTOM_AGGREGATE_ENTITY_VERSION`] before making an incompatible
+/// persisted-schema change.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomAggregate {
+    /// Number of events projected into this aggregate.
+    pub event_count: u64,
+    /// Most recently observed application-defined value.
+    pub last_value: Option<String>,
+}
+
+/// Example append-only event for [`CustomAggregate`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomAggregateEvent {
+    /// Application-defined value carried by this observation.
+    pub value: String,
+}
+
+impl JournalEntity for CustomAggregate {
+    type Event = CustomAggregateEvent;
+
+    fn empty() -> Self {
+        Self::default()
+    }
+
+    fn apply(&mut self, event: &Self::Event) {
+        self.event_count = self.event_count.saturating_add(1);
+        self.last_value = Some(event.value.clone());
+    }
+}

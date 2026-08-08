@@ -26,11 +26,14 @@ jobs:
           -p hookkit-core
           -p hookkit-claude
           -p hookkit-codex
-          -p hookkit-gemini
           -p hookkit-antigravity
-          -p hookkit-common
-          -p hookkit-runtime
+          -p hookkit-session-state
           -p hookkit-pkl-config
+          -p hookkit-common
+          -p hookkit-shell
+          -p hookkit-tool-access
+          -p hookkit-file-activity
+          -p hookkit-runtime
           -p hookkit-tool-runner
           --all-targets
 
@@ -53,7 +56,6 @@ jobs:
           cargo run --quiet -p hookkit-conformance
           cargo run --quiet -p xtask --bin generate-claude-contracts
           cargo run --quiet -p xtask --bin generate-codex-contracts
-          cargo run --quiet -p xtask --bin generate-gemini-contracts
           cargo xtask contracts check --snapshot current
           cargo xtask contracts report --check
           cargo xtask contracts verify-vendor
@@ -67,10 +69,36 @@ jobs:
         run: cargo test -p hookkit-tool-runner --lib hermetic_fake_executable_smoke
       - name: Verify publishable package archives
         run: |
-          for package in hookkit-core hookkit-claude hookkit-codex hookkit-gemini hookkit-antigravity hookkit-common hookkit-runtime; do
+          for package in hookkit-core hookkit-claude hookkit-codex hookkit-antigravity hookkit-session-state hookkit-pkl-config hookkit-common hookkit-shell hookkit-tool-access hookkit-file-activity hookkit-runtime hookkit-tool-runner; do
             cargo package -p "$package" --list >/dev/null
           done
           cargo package -p hookkit-core
+
+  template:
+    name: Copier catalog and generated-project matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.16"
+      - name: Validate template catalogs
+        run: cargo xtask template-catalog check
+      - name: Install Pkl 0.31.1
+        run: |
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/pkl" \
+            https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+          chmod +x "$RUNNER_TEMP/pkl"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Validate the full Copier matrix
+        run: templates/hook-project/tests/run.sh --validation full
 
   licenses:
     name: Third-party license attribution

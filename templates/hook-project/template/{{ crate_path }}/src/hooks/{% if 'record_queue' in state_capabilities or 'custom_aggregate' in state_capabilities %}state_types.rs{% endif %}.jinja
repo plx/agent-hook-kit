@@ -1,0 +1,16 @@
+//! Managed exports for user-owned state record and aggregate types.
+//!
+//! Customize the selected type files under `hooks/state_types/`; Copier can
+//! safely refresh this capability-dependent module during recopy and update.
+{% if 'record_queue' in state_capabilities -%}
+#[path = "state_types/record_queue.rs"]
+mod record_queue;
+pub use record_queue::{QueueRecord, RECORD_QUEUE_VERSION};
+{% endif -%}
+{% if 'custom_aggregate' in state_capabilities -%}
+#[path = "state_types/custom_aggregate.rs"]
+mod custom_aggregate;
+pub use custom_aggregate::{
+    CUSTOM_AGGREGATE_ENTITY_VERSION, CUSTOM_AGGREGATE_MODE, CustomAggregate, CustomAggregateEvent,
+};
+{% endif -%}

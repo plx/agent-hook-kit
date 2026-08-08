@@ -1,0 +1,101 @@
+{% from "templates/hook-project/template/_macros/rust.jinja" import variant -%}
+{% if harness_mode == "cross" -%}
+use super::harness::Harness;
+{% endif -%}
+use clap::{Parser, Subcommand};
+{% if starter in ["immediate_quality", "deferred_quality"] or state_capabilities -%}
+use std::path::PathBuf;
+{% endif -%}
+
+/// {{ project_name }} command-line interface.
+#[derive(Debug, Parser)]
+#[rustfmt::skip]
+#[command(
+    name = {{ binary_name | tojson }},
+    about = {{ description | tojson }}
+)]
+pub struct Cli {
+{%- if harness_mode == "cross" %}
+    /// Harness whose native contract should parse and emit this invocation.
+    #[arg(long, value_enum)]
+    pub harness: Harness,
+{%- endif %}
+{% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
+    /// Package-owned Pkl policy passed explicitly to the HookKit runner.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+{% endif %}
+{% if starter == "deferred_quality" or state_capabilities %}
+    /// Shared package-specific HookKit state root override.
+    #[arg(long, value_name = "PATH")]
+    pub state_dir: Option<PathBuf>,
+{% endif %}
+    /// Explicit hook event to execute.
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+impl Cli {
+    /// Parse arguments and reject cross-field combinations Clap cannot express
+    /// through derive attributes alone.
+    pub fn parse_validated() -> Self {
+        Self::parse()
+            .validate()
+            .unwrap_or_else(|error| error.exit())
+    }
+{% if harness_mode == "cross" and "file_activity" in state_capabilities and "antigravity" in harnesses %}
+    /// Validate command/harness compatibility for programmatic callers.
+    pub fn validate(self) -> Result<Self, clap::Error> {
+        if matches!(self.harness, Harness::Antigravity)
+            && matches!(&self.command, Command::SessionStartState)
+        {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::InvalidValue,
+                "session-start-state supports Claude Code and Codex only; Antigravity uses inferred first-observation bootstrap",
+            ));
+        }
+        Ok(self)
+    }
+{% else %}
+    /// Validate command/harness compatibility for programmatic callers.
+    pub fn validate(self) -> Result<Self, clap::Error> {
+        Ok(self)
+    }
+{% endif -%}
+}
+
+/// Selected hook commands. Names remain stable when more hooks are added.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+{%- if harness_mode == "cross" %}
+{%- for stable_id in aligned_hooks %}
+    /// Execute the {{ stable_id | replace('_', ' ') }} aligned family.
+    #[command(name = {{ stable_id | replace('_', '-') | tojson }})]
+    {{ variant(stable_id) }},
+{%- endfor %}
+{%- if starter == "deferred_quality" or "file_activity" in state_capabilities %}
+    /// Record an exact Claude Code or Codex session-start lower bound.
+    #[command(name = "session-start-state")]
+    SessionStartState,
+{%- endif %}
+{%- else %}
+{%- for stable_id in native_hooks %}
+{%- set selected_event = namespace(value=none) %}
+{%- for event in event_catalog.events %}
+{%- if event.harness == harness and event.stable_id == stable_id %}
+{%- set selected_event.value = event %}
+{%- endif %}
+{%- endfor %}
+{%- if selected_event.value.starter.strategy == "must_implement" %}
+    /// Scaffold-only exact {{ stable_id | replace('_', ' ') }} event.
+    ///
+    /// Its safe starter fails explicitly; implement the protected handler
+    /// before registering this command with the harness.
+{%- else %}
+    /// Execute the exact {{ stable_id | replace('_', ' ') }} native event.
+{%- endif %}
+    #[command(name = {{ stable_id | replace('_', '-') | tojson }})]
+    {{ variant(stable_id) }},
+{%- endfor %}
+{%- endif %}
+}

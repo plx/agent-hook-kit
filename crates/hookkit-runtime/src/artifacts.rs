@@ -3,6 +3,7 @@
 //! Utilities for creating scoped temp files, storing diagnostics,
 //! and retrieving artifacts by key across related hook passes.
 
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -97,6 +98,39 @@ impl ArtifactManager {
         Ok(path)
     }
 
+    /// Write JSON without replacing an existing artifact with the same key.
+    ///
+    /// The unsuffixed filename is attempted first. Collisions receive a
+    /// monotonically increasing numeric suffix, and the returned path is the
+    /// exact file that was created.
+    pub fn write_json_unique(
+        &self,
+        key: &ArtifactKey,
+        value: &serde_json::Value,
+    ) -> std::io::Result<PathBuf> {
+        let content = serde_json::to_vec_pretty(value)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        let stem = key.filename();
+        for suffix in 0_u64.. {
+            let filename = if suffix == 0 {
+                format!("{stem}.json")
+            } else {
+                format!("{stem}-{suffix}.json")
+            };
+            let path = self.base_dir.join(filename);
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut file) => {
+                    file.write_all(&content)?;
+                    file.sync_all()?;
+                    return Ok(path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("u64 artifact suffix space cannot be exhausted")
+    }
+
     /// Check if an artifact exists for the given key.
     pub fn exists(&self, key: &ArtifactKey, extension: &str) -> bool {
         self.artifact_path(key, extension).exists()
@@ -178,6 +212,36 @@ mod tests {
         assert!(path.exists());
 
         // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn artifact_manager_unique_json_never_replaces_an_existing_record() {
+        let dir = std::env::temp_dir().join(format!(
+            "hookkit-test-unique-json-artifacts-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mgr = ArtifactManager::new(&dir).unwrap();
+        let key = ArtifactKey::new("test-sess", "warning");
+
+        let first = mgr
+            .write_json_unique(&key, &serde_json::json!({"record": 1}))
+            .unwrap();
+        let second = mgr
+            .write_json_unique(&key, &serde_json::json!({"record": 2}))
+            .unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(first).unwrap()).unwrap(),
+            serde_json::json!({"record": 1})
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(second).unwrap()).unwrap(),
+            serde_json::json!({"record": 2})
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

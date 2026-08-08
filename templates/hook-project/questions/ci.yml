@@ -1,0 +1,4 @@
+github_actions:
+  type: bool
+  help: Generate a package-namespaced GitHub Actions workflow.
+  default: "{{ output_mode == 'project' }}"

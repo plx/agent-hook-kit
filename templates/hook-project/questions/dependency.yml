@@ -1,0 +1,41 @@
+dependency_source:
+  type: str
+  help: Use one consistent source for every generated HookKit dependency.
+  choices:
+    Exact Git revision (preview default): git
+    crates.io compatibility release (after publication): crates-io
+    Local HookKit checkout (nonportable): path
+  default: git
+
+hookkit_git_rev:
+  type: str
+  help: Full immutable agent-hook-kit commit used by every Git dependency.
+  when: "{{ dependency_source == 'git' }}"
+  default: "{{ compatibility.hookkit.git_revision }}"
+  validator: >-
+    {% if not (hookkit_git_rev | regex_search('^[0-9a-fA-F]{40}$')) %}
+    Enter a complete 40-character Git commit SHA, never a branch name.
+    {% endif %}
+
+hookkit_path:
+  type: str
+  help: Local agent-hook-kit repository root containing crates/hookkit-*.
+  when: "{{ dependency_source == 'path' }}"
+  default: "{{ _copier_conf.src_path }}"
+  validator: >-
+    {% set root = hookkit_path | trim | realpath %}
+    {% set missing = namespace(packages=[]) %}
+    {% for package in ["hookkit-core", "hookkit-claude", "hookkit-codex",
+                       "hookkit-antigravity", "hookkit-session-state",
+                       "hookkit-pkl-config", "hookkit-common", "hookkit-shell",
+                       "hookkit-tool-access", "hookkit-file-activity",
+                       "hookkit-runtime", "hookkit-tool-runner"] %}
+    {% if ((root ~ "/crates/" ~ package ~ "/Cargo.toml") | fileglob | length) == 0 %}
+    {% set missing.packages = missing.packages + [package] %}
+    {% endif %}
+    {% endfor %}
+    {% if not (hookkit_path | trim) %}
+    Enter the HookKit repository root containing the required crates/hookkit-* directories.
+    {% elif missing.packages %}
+    The HookKit path is missing package manifests for: {{ missing.packages | join(", ") }}.
+    {% endif %}

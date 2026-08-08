@@ -1,0 +1,66 @@
+//! Refreshed Claude session-start source regression.
+
+const FORK_SESSION_START: &[u8] = br#"{
+  "session_id": "fork-session",
+  "transcript_path": "/tmp/fork-session.jsonl",
+  "cwd": "/repo",
+  "hook_event_name": "SessionStart",
+  "source": "fork"
+}"#;
+
+fn claude_environment() -> hookkit_core::EnvironmentVariables {
+    hookkit_core::EnvironmentVariables::from_pairs([
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("CLAUDE_CODE_SESSION_ID", "fork-session"),
+        ("CLAUDE_PROJECT_DIR", "/repo"),
+        ("CLAUDE_ENV_FILE", "/tmp/generated-hook-environment"),
+    ])
+}
+
+#[test]
+fn claude_fork_is_a_typed_session_boundary() { {%- if harness_mode == "cross" %}
+    let emission = hookkit_runtime::aligned::execute_aligned_event::<
+        hookkit_runtime::aligned::SessionStart,
+        _,
+    >(
+        hookkit_core::HarnessId::CLAUDE_CODE,
+        FORK_SESSION_START,
+        &claude_environment(),
+        |input, _environment, context| {
+            assert_eq!(input.source(), Some("fork"));
+            assert_eq!(
+                context
+                    .session_boundary()
+                    .expect("Claude SessionStart has an exact boundary")
+                    .kind,
+                hookkit_core::SessionBoundaryKind::Fork,
+            );
+            hookkit_common::SessionStartOutput::no_op(context.harness())
+        },
+    )
+    .expect("Claude fork SessionStart should parse and emit");
+{%- else %}
+    let emission = hookkit_runtime::execute_typed::<hookkit_claude::protocol::SessionStart, _>(
+        FORK_SESSION_START,
+        &claude_environment(),
+        |input, _environment, context| {
+            assert!(matches!(
+                input.source,
+                hookkit_claude::protocol::SessionSource::Fork
+            ));
+            assert_eq!(
+                context
+                    .session_boundary()
+                    .expect("Claude SessionStart has an exact boundary")
+                    .kind,
+                hookkit_core::SessionBoundaryKind::Fork,
+            );
+            Ok(hookkit_claude::protocol::SessionStartOutput::no_op())
+        },
+    )
+    .expect("Claude fork SessionStart should parse and emit");
+{%- endif %}
+
+    assert_eq!(emission.exit_code(), 0);
+}

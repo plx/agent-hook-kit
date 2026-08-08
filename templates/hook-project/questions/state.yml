@@ -1,0 +1,37 @@
+state_capabilities:
+  type: str
+  help: Add coordinated, typed HookKit state facilities to the generated CLI.
+  choices:
+    Session metadata and state root: session_metadata
+    Atomic once-per-session claims: claim_once
+    Inspectable typed set: inspectable_set
+    Acknowledgeable record queue: record_queue
+    Committed run artifacts: run_artifacts
+    Custom aggregate journal: custom_aggregate
+    Probably-touched file activity suite: file_activity
+  multiselect: true
+  default: >-
+    {%- for archetype in archetype_catalog.archetypes -%}
+    {%- if archetype.stable_id == starter -%}{{ archetype.required_state }}{%- endif -%}
+    {%- endfor -%}
+  validator: >-
+    {% set selected = namespace(value=none, missing=[]) %}
+    {% for archetype in archetype_catalog.archetypes %}
+    {% if archetype.stable_id == starter %}{% set selected.value = archetype %}{% endif %}
+    {% endfor %}
+    {% for required in selected.value.required_state %}
+    {% if required not in state_capabilities %}{% set selected.missing = selected.missing + [required] %}{% endif %}
+    {% endfor %}
+    {% set metadata_dependent = "claim_once" in state_capabilities
+          or "inspectable_set" in state_capabilities
+          or "record_queue" in state_capabilities
+          or "run_artifacts" in state_capabilities
+          or "custom_aggregate" in state_capabilities %}
+    {% if selected.missing %}
+    {{ selected.value.display_name }} requires state capabilities: {{ selected.missing | join(", ") }}.
+    {% elif metadata_dependent and "session_metadata" not in state_capabilities %}
+    Claims, sets, queues, run artifacts, and custom aggregates require session_metadata.
+    {% elif selected.value.runner and selected.value.runner.kind == "immediate"
+          and "file_activity" in state_capabilities %}
+    Immediate quality and file activity both consume PostToolUse stdin; choose deferred quality or remove file_activity.
+    {% endif %}

@@ -324,8 +324,29 @@ pub struct PostToolUseInput {
 }
 
 /// Empty successful response from an Antigravity post-tool command hook.
-#[derive(Debug, Clone, Copy, Default, Serialize)]
-pub struct PostToolUseOutput {}
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PostToolUseOutput {
+    /// Optional exit-zero process diagnostics; never serialized into stdout.
+    #[serde(skip)]
+    protocol_stderr: Option<Vec<u8>>,
+}
+
+impl PostToolUseOutput {
+    /// Adds UTF-8 protocol stderr while preserving the required `{}` stdout.
+    ///
+    /// Antigravity does not define a structured `PostToolUse` message field,
+    /// but command hooks may write diagnostics to stderr and still succeed.
+    /// An already wrapped response is rejected.
+    pub fn with_protocol_stderr(mut self, stderr: impl Into<String>) -> hookkit_core::Result<Self> {
+        if self.protocol_stderr.is_some() {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "protocol stderr can only wrap a successful output once",
+            ));
+        }
+        self.protocol_stderr = Some(stderr.into().into_bytes());
+        Ok(self)
+    }
+}
 /// Native Antigravity `PostToolUse` command contract.
 pub enum PostToolUse {}
 impl EventSpec for PostToolUse {
@@ -343,7 +364,13 @@ impl EventSpec for PostToolUse {
         Ok(input)
     }
     fn emit(output: Self::CommandOutput) -> hookkit_core::Result<ProcessEmission> {
-        ProcessEmission::command_json(Self::CONTRACT, &output)
+        let stdout = serde_json::to_vec(&serde_json::json!({}))?;
+        Ok(ProcessEmission::command_unchecked(
+            Self::CONTRACT,
+            stdout,
+            output.protocol_stderr.unwrap_or_default(),
+            0,
+        ))
     }
     fn context(input: &Self::Input) -> NativeContext {
         NativeContext {
@@ -684,6 +711,26 @@ mod tests {
         let input = PostToolUse::parse(&present).unwrap();
         assert_eq!(input.tool_call.name, "run_command");
         assert_eq!(input.tool_call.args["CommandLine"], "cargo test");
+    }
+
+    #[test]
+    fn post_tool_use_protocol_stderr_preserves_exact_empty_object_stdout() {
+        let output = PostToolUseOutput::default()
+            .with_protocol_stderr("lowering details were recorded")
+            .unwrap();
+        let emission = PostToolUse::emit(output).unwrap();
+
+        assert_eq!(emission.stdout(), b"{}");
+        assert_eq!(emission.stderr(), b"lowering details were recorded");
+        assert_eq!(emission.exit_code(), 0);
+    }
+
+    #[test]
+    fn post_tool_use_protocol_stderr_can_only_be_added_once() {
+        let output = PostToolUseOutput::default()
+            .with_protocol_stderr("first")
+            .unwrap();
+        assert!(output.with_protocol_stderr("second").is_err());
     }
 
     #[test]

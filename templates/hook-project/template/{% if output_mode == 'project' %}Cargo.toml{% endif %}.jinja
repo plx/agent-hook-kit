@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [{{ crate_path | tojson }}]
+
+[workspace.package]
+edition = "2024"
+license = {{ license | tojson }}
+rust-version = {{ compatibility.rust_msrv | string | tojson }}

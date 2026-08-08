@@ -1,0 +1,38 @@
+//! User-owned scoped-context discovery policy.
+
+/// Context discovered from observable file-access evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedContext {
+    /// Stable atomic-claim key for this context fragment.
+    pub claim_key: String,
+    /// Agent-facing context injected on the first successful claim.
+    pub content: String,
+}
+
+/// Discover context worth injecting from one loss-aware access report.
+///
+/// The starter only demonstrates the seam. Replace this with project-specific
+/// path matching and content loading; keep the atomic claim in the adapter.
+pub fn discover(report: &hookkit_tool_access::ToolAccessReport) -> Option<ScopedContext> {
+    (!report.candidates.is_empty()).then(|| ScopedContext {
+        claim_key: String::from("first-observed-file-context"),
+        content: format!(
+            "Observed {} possible file access target(s); add project-specific context here.",
+            report.candidates.len()
+        ),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[rustfmt::skip]
+    fn no_observable_target_is_a_no_op() {
+        assert_eq!(
+            discover(&hookkit_tool_access::ToolAccessReport::default()),
+            None
+        );
+    }
+}

@@ -1,0 +1,8 @@
+starter:
+  type: str
+  help: Pick an archetype for editable defaults, or start from custom hooks.
+  choices: |
+    {% for archetype in archetype_catalog.archetypes %}
+    {{ archetype.display_name | tojson }}: {{ archetype.stable_id | tojson }}
+    {% endfor %}
+  default: custom

@@ -1,0 +1,26 @@
+//! Managed exports for the selected pre-tool policy archetype.
+//!
+//! Customize the active seam under `hooks/pre_tool/`; Copier can safely
+//! refresh this selection-dependent module during recopy and update.
+{% if starter == "pre_tool_rewrite" -%}
+#[path = "pre_tool/rewrite.rs"]
+mod rewrite;
+pub use rewrite::transform;
+{% elif starter == "scoped_context_once" -%}
+#[path = "pre_tool/scoped_context.rs"]
+mod scoped_context;
+pub use scoped_context::{ScopedContext, discover};
+{% else -%}
+#[path = "pre_tool/decision.rs"]
+mod decision;
+pub use decision::Decision;
+{% if starter == "policy_guard" -%}
+#[path = "pre_tool/policy_guard.rs"]
+mod policy_guard;
+pub use policy_guard::evaluate;
+{% else -%}
+#[path = "pre_tool/policy.rs"]
+mod policy;
+pub use policy::evaluate;
+{% endif -%}
+{% endif -%}

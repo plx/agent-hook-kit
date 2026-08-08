@@ -1,0 +1,35 @@
+//! Claude post-tool exit 2 is corrective feedback after an action, not a veto.
+
+#[test]
+fn claude_post_tool_exit_two_emits_feedback_only() {
+    let input = br#"{
+      "session_id": "feedback-session",
+      "transcript_path": "/tmp/feedback-session.jsonl",
+      "cwd": "/repo",
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Write",
+      "tool_input": {"file_path": "/repo/src/lib.rs"},
+      "tool_use_id": "tool-1",
+      "tool_response": {"ok": true}
+    }"#;
+    let variables = hookkit_core::EnvironmentVariables::from_pairs([
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("CLAUDE_CODE_SESSION_ID", "feedback-session"),
+        ("CLAUDE_PROJECT_DIR", "/repo"),
+    ]);
+    let emission = hookkit_runtime::execute_typed::<hookkit_claude::protocol::PostToolUse, _>(
+        input,
+        &variables,
+        |_input, _environment, _context| {
+            Ok(hookkit_claude::protocol::PostToolUseOutput::feedback_error(
+                "re-read the completed tool result",
+            ))
+        },
+    )
+    .expect("feedback output should satisfy the PostToolUse contract");
+
+    assert_eq!(emission.exit_code(), 2);
+    assert!(emission.stdout().is_empty());
+    assert_eq!(emission.stderr(), b"re-read the completed tool result");
+}

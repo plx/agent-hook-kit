@@ -1,0 +1,163 @@
+//! Copier-owned session-state construction and typed capability adapters.
+//!
+//! Keep the family and entity versions stable while their persisted schemas
+//! remain compatible. Bump the corresponding version before making an
+//! incompatible change.
+
+use hookkit_core::RuntimeContext;
+use hookkit_session_state::{FamilyId, Result, SessionState, StateFamily, StateRoot};
+use std::path::{Path, PathBuf};
+
+/// On-disk namespace for this generated hook family.
+pub const STATE_FAMILY: &str = {{ package_name | tojson }};
+
+/// Persisted schema version for this generated hook family.
+///
+/// Bump this before making an incompatible change to any family-wide state.
+pub const STATE_FAMILY_VERSION: u32 = 1;
+
+/// Stable package-specific directory beneath HookKit's generated-state root.
+pub const PACKAGE_STATE_DIRECTORY: &str = {{ package_name | tojson }};
+
+/// Resolve the common state root used by every generated subcommand.
+///
+/// A `--state-dir` value is passed as `override_dir`. Without one, state is
+/// isolated beneath `$TMPDIR/agent-hook-kit/generated/{{ package_name }}/`.
+pub fn resolve_state_root(override_dir: Option<&Path>) -> StateRoot {
+    let path = override_dir.map_or_else(default_state_directory, Path::to_path_buf);
+    StateRoot::new(path)
+}
+
+/// Ensure typed state and capture the exact metadata available to this event.
+pub fn ensure_session_state(
+    context: &RuntimeContext<'_>,
+    override_dir: Option<&Path>,
+) -> Result<SessionState> {
+    SessionState::ensure(context, resolve_state_root(override_dir))
+}
+
+/// Open this generated tool's independently versioned state family.
+pub fn state_family(state: &SessionState) -> Result<StateFamily> {
+    state.family(FamilyId::new(STATE_FAMILY, STATE_FAMILY_VERSION)?)
+}
+
+fn default_state_directory() -> PathBuf {
+    std::env::temp_dir()
+        .join("agent-hook-kit")
+        .join("generated")
+        .join(PACKAGE_STATE_DIRECTORY)
+}
+{% if 'file_activity' in state_capabilities %}
+/// Open the package-isolated pending file-activity and reconciliation journals.
+pub fn file_activity_store(
+    context: &RuntimeContext<'_>,
+    override_dir: Option<&Path>,
+) -> hookkit_file_activity::Result<hookkit_file_activity::FileActivityStore> {
+    hookkit_file_activity::FileActivityStore::ensure(context, resolve_state_root(override_dir))
+}
+{% endif -%}
+{% if 'session_metadata' in state_capabilities %}
+/// Read HookKit's typed metadata for an ensured session.
+pub fn session_metadata(state: &SessionState) -> Result<hookkit_session_state::SessionMetadata> {
+    state.metadata()
+}
+{% endif -%}
+{% if 'claim_once' in state_capabilities %}
+/// Stable name of the first-writer-wins claim set.
+pub const CLAIM_ONCE_SET: &str = "once";
+
+/// Atomically claim `key` once for this family and native session.
+pub fn claim_once(state: &SessionState, key: &str) -> Result<hookkit_session_state::ClaimResult> {
+    state_family(state)?.claims(CLAIM_ONCE_SET)?.try_claim(key)
+}
+{% endif -%}
+{% if 'inspectable_set' in state_capabilities %}
+/// Stable identity of the inspectable set entity.
+pub const INSPECTABLE_SET_ENTITY: &str = "observed-values";
+
+/// Persisted schema version of the inspectable set entity.
+///
+/// Bump this before changing the meaning or representation of stored values.
+pub const INSPECTABLE_SET_ENTITY_VERSION: u32 = 1;
+
+/// Open the session-wide, monotonic set of inspectable values.
+pub fn inspectable_set(state: &SessionState) -> Result<hookkit_session_state::SetJournal<String>> {
+    state_family(state)?.session_scope()?.set(
+        hookkit_session_state::EntityId::new(
+            INSPECTABLE_SET_ENTITY,
+            INSPECTABLE_SET_ENTITY_VERSION,
+        )?,
+        hookkit_session_state::EntityMode::Monotonic,
+    )
+}
+{% endif -%}
+{% if 'record_queue' in state_capabilities %}
+/// Schema version owned beside the protected queue record type.
+pub use crate::hooks::state_types::RECORD_QUEUE_VERSION;
+
+/// Stable identity prefix of the acknowledgeable record queue.
+pub const RECORD_QUEUE: &str = "records";
+
+/// Open the session-wide sparse record queue.
+///
+/// Call `append` to enqueue a typed JSON value, `snapshot` to inspect a
+/// point-in-time batch, and `acknowledge` on that batch after successful work.
+pub fn record_queue(state: &SessionState) -> Result<hookkit_session_state::RecordJournal> {
+    let name = format!("{RECORD_QUEUE}-v{RECORD_QUEUE_VERSION}");
+    state_family(state)?.record_journal(&name)
+}
+
+/// Append one typed, content-addressed record to the queue.
+pub fn enqueue_record(
+    state: &SessionState,
+    event_key: &str,
+    record: &crate::hooks::state_types::QueueRecord,
+) -> Result<hookkit_session_state::JournalEntryId> {
+    record_queue(state)?.append(event_key, record)
+}
+
+/// Capture the current typed queue batch for inspection and acknowledgement.
+pub fn snapshot_records(
+    state: &SessionState,
+) -> Result<hookkit_session_state::RecordJournalBatch<crate::hooks::state_types::QueueRecord>> {
+    record_queue(state)?.snapshot()
+}
+{% endif -%}
+{% if 'run_artifacts' in state_capabilities %}
+/// Stable identity prefix of committed run bundles.
+pub const RUN_ARTIFACTS: &str = "artifacts";
+
+/// Persisted schema version of run summaries and their referenced artifacts.
+///
+/// Bump this before changing the committed `summary.json` schema.
+pub const RUN_ARTIFACTS_VERSION: u32 = 1;
+
+/// Start one run bundle for relative artifacts and a committed summary.
+pub fn start_artifact_run(
+    state: &SessionState,
+    label: &str,
+) -> Result<hookkit_session_state::RunBundle> {
+    let label = format!("{RUN_ARTIFACTS}-v{RUN_ARTIFACTS_VERSION}-{label}");
+    state_family(state)?.start_run(&label)
+}
+{% endif -%}
+{% if 'custom_aggregate' in state_capabilities %}
+/// Schema version and persistence mode owned beside the protected aggregate.
+pub use crate::hooks::state_types::{CUSTOM_AGGREGATE_ENTITY_VERSION, CUSTOM_AGGREGATE_MODE};
+
+/// Stable identity of the custom typed aggregate entity.
+pub const CUSTOM_AGGREGATE_ENTITY: &str = "custom-aggregate";
+
+/// Open the advanced typed event/aggregate journal.
+pub fn custom_aggregate(
+    state: &SessionState,
+) -> Result<hookkit_session_state::EntityJournal<crate::hooks::state_types::CustomAggregate>> {
+    state_family(state)?.session_scope()?.entity(
+        hookkit_session_state::EntityId::new(
+            CUSTOM_AGGREGATE_ENTITY,
+            CUSTOM_AGGREGATE_ENTITY_VERSION,
+        )?,
+        CUSTOM_AGGREGATE_MODE,
+    )
+}
+{% endif -%}

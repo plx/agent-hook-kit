@@ -1,0 +1,64 @@
+harness_mode:
+  type: str
+  help: Target one native harness or a portable set of harnesses.
+  choices:
+    Cross-harness: cross
+    Single harness: single
+  default: >-
+    {%- for archetype in archetype_catalog.archetypes -%}
+    {%- if archetype.stable_id == starter -%}{{ archetype.default_mode }}{%- endif -%}
+    {%- endfor -%}
+  validator: >-
+    {% set selected = namespace(value=none) %}
+    {% for archetype in archetype_catalog.archetypes %}
+    {% if archetype.stable_id == starter %}{% set selected.value = archetype %}{% endif %}
+    {% endfor %}
+    {% if harness_mode not in selected.value.supported_modes %}
+    {{ selected.value.display_name }} does not support {{ harness_mode }} mode; choose Custom for a different shape.
+    {% endif %}
+
+harnesses:
+  type: str
+  help: Select at least two harnesses; available hooks are their capability intersection.
+  choices:
+    Claude Code: claude-code
+    Codex CLI: codex
+    Antigravity: antigravity
+  multiselect: true
+  when: "{{ harness_mode == 'cross' }}"
+  default: >-
+    {%- for archetype in archetype_catalog.archetypes -%}
+    {%- if archetype.stable_id == starter -%}{{ archetype.default_harnesses or [] }}{%- endif -%}
+    {%- endfor -%}
+  validator: >-
+    {% set selected = namespace(value=none) %}
+    {% for archetype in archetype_catalog.archetypes %}
+    {% if archetype.stable_id == starter %}{% set selected.value = archetype %}{% endif %}
+    {% endfor %}
+    {% set unsupported = harnesses | reject("in", selected.value.supported_harnesses) | list %}
+    {% if harnesses | length < 2 %}
+    Cross-harness mode requires at least two harnesses.
+    {% elif unsupported %}
+    {{ selected.value.display_name }} does not support: {{ unsupported | join(", ") }}.
+    {% endif %}
+
+harness:
+  type: str
+  help: Native harness whose exact event contracts the CLI will implement.
+  choices:
+    Claude Code: claude-code
+    Codex CLI: codex
+    Antigravity: antigravity
+  when: "{{ harness_mode == 'single' }}"
+  default: >-
+    {%- for archetype in archetype_catalog.archetypes -%}
+    {%- if archetype.stable_id == starter -%}{{ archetype.default_harness or "claude-code" }}{%- endif -%}
+    {%- endfor -%}
+  validator: >-
+    {% set selected = namespace(value=none) %}
+    {% for archetype in archetype_catalog.archetypes %}
+    {% if archetype.stable_id == starter %}{% set selected.value = archetype %}{% endif %}
+    {% endfor %}
+    {% if harness not in selected.value.supported_harnesses %}
+    {{ selected.value.display_name }} does not support {{ harness }}; choose a supported harness or Custom.
+    {% endif %}

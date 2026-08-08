@@ -1,0 +1,5 @@
+use {{ package_name | replace('-', '_') }}::scaffold::cli::Cli;
+
+fn main() -> std::process::ExitCode {
+    {{ package_name | replace('-', '_') }}::run(Cli::parse_validated())
+}

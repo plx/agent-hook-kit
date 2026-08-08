@@ -1,0 +1,53 @@
+//! Catalog-exhaustive exact-event fixture smoke tests.
+
+{% for event in event_catalog.events -%}
+{% if event.harness == harness and event.stable_id in native_hooks -%}
+#[test]
+#[rustfmt::skip]
+fn {{ event.harness | replace('-', '_') }}_{{ event.stable_id }}_uses_exact_contract() {
+{% if event.harness == "claude-code" -%}
+    let variables = hookkit_core::EnvironmentVariables::from_pairs([
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("CLAUDE_CODE_SESSION_ID", {{ event.fixture.value.session_id | string | tojson }}),
+        ("CLAUDE_PROJECT_DIR", {{ event.fixture.value.cwd | default('/repo', true) | string | tojson }}),
+{% if event.wire_event in ["SessionStart", "Setup", "CwdChanged", "FileChanged"] -%}
+        ("CLAUDE_ENV_FILE", "/tmp/generated-hook-environment"),
+{% endif -%}
+    ]);
+{%- else -%}
+    let variables = hookkit_core::EnvironmentVariables::new();
+{%- endif %}
+{% if event.stable_id == "pre_tool_use" and starter != "custom" -%}
+    let emission = hookkit_runtime::execute_typed::<{{ event.rust_event }}, _>(
+        include_bytes!(concat!("../fixtures/", {{ event.harness | tojson }}, "/", {{ event.stable_id | tojson }}, ".json")),
+        &variables,
+        |_input, _environment, _context| Ok({{ event.starter.expression }}),
+    );
+{%- else -%}
+    let emission = hookkit_runtime::execute_typed::<{{ event.rust_event }}, _>(
+        include_bytes!(concat!("../fixtures/", {{ event.harness | tojson }}, "/", {{ event.stable_id | tojson }}, ".json")),
+        &variables,
+        |input, environment, context| {
+            {{ package_name | replace('-', '_') }}::hooks::native::{{ event.stable_id }}(
+                input,
+                environment,
+                context,
+                None,
+            )
+        },
+    );
+{%- endif %}
+{% if event.starter.strategy == "must_implement" -%}
+    let error = emission.expect_err("unsafe sample values must fail explicitly");
+    assert!(error.to_string().contains("implement"));
+{%- else -%}
+    let emission = emission.expect("representative fixture must execute");
+    assert_eq!(emission.exit_code(), 0);
+{% if event.harness == "codex" and event.stable_id == "session_end" -%}
+    assert!(emission.stdout().is_empty(), "Codex ignores SessionEnd output");
+{% endif -%}
+{%- endif %}
+}
+{% endif -%}
+{% endfor -%}

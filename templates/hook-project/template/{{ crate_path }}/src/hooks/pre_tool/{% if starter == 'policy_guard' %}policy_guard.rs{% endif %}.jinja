@@ -1,0 +1,23 @@
+//! User-owned report-aware pre-tool policy.
+
+use super::Decision;
+
+/// Evaluate one pending tool call from loss-aware access evidence.
+pub fn evaluate(
+    _report: &hookkit_tool_access::ToolAccessReport,
+    _state_dir: Option<&std::path::Path>,
+) -> Decision {
+    Decision::Allow
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[rustfmt::skip]
+    fn starter_policy_allows() {
+        let report = hookkit_tool_access::ToolAccessReport::default();
+        assert_eq!(evaluate(&report, None), Decision::Allow);
+    }
+}

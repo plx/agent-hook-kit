@@ -1,0 +1,10 @@
+{% macro variant(stable_id) -%}
+{%- for part in stable_id.split('_') -%}{{ part | capitalize }}{%- endfor -%}
+{%- endmacro %}
+
+{% macro aligned_base(stable_id) -%}
+{%- if stable_id == "pre_tool" -%}PreToolUse
+{%- elif stable_id == "post_tool" -%}PostToolUse
+{%- else -%}{{ variant(stable_id) }}
+{%- endif -%}
+{%- endmacro %}

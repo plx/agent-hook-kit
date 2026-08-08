@@ -37,7 +37,8 @@ serde_json = "1"
 thiserror = "2"
 camino = { version = "1", features = ["serde1"] }
 dirs = "6"
-globset = "0.4"
+# 0.4.19+ raised the crate's MSRV above HookKit's Rust 1.85 baseline.
+globset = "=0.4.18"
 minijinja = "2"
 toml = "0.8"
 walkdir = "2"
