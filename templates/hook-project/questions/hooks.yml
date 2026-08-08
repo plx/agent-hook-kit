@@ -27,8 +27,6 @@ aligned_hooks:
     {%- if family.stable_id == required -%}{{ required | tojson }},{%- endif -%}
     {%- endfor -%}
     {%- endfor -%}
-    {%- if harness_mode == "cross" and "file_activity" in state_capabilities and "post_tool" not in defaults -%}"post_tool",{%- endif -%}
-    {%- if harness_mode == "cross" and "file_activity" in state_capabilities and "turn_completion" not in defaults -%}"turn_completion",{%- endif -%}
     ]
   validator: >-
     {% if harness_mode == 'cross' %}
@@ -41,28 +39,21 @@ aligned_hooks:
     {% endfor %}
     {% set managed_state = namespace(values=[]) %}
     {% if starter == "session_bootstrap" %}{% set managed_state.values = managed_state.values + ["session_metadata"] %}{% endif %}
-    {% if starter == "deferred_quality" %}{% set managed_state.values = managed_state.values + ["session_metadata", "file_activity", "run_artifacts"] %}{% endif %}
-    {% if "file_activity" in state_capabilities %}{% set managed_state.values = managed_state.values + ["session_metadata", "file_activity", "run_artifacts"] %}{% endif %}
     {% set custom_state = namespace(values=[]) %}
     {% for capability in state_capabilities %}
     {% if capability not in managed_state.values %}{% set custom_state.values = custom_state.values + [capability] %}{% endif %}
     {% endfor %}
     {% set custom_handler = namespace(available=false) %}
     {% for hook in aligned_hooks %}
-    {% set runner_owned = (starter == "immediate_quality" and hook == "post_tool")
-          or ("file_activity" in state_capabilities and hook in ["post_tool", "turn_completion"])
-          or (starter == "session_bootstrap" and hook == "session_start") %}
-    {% if not runner_owned %}{% set custom_handler.available = true %}{% endif %}
+    {% set managed_owned = starter == "session_bootstrap" and hook == "session_start" %}
+    {% if not managed_owned %}{% set custom_handler.available = true %}{% endif %}
     {% endfor %}
     {% if aligned_hooks | length == 0 %}
     Select at least one aligned hook family.
     {% elif selected.missing %}
     {{ selected.value.display_name }} requires aligned hooks: {{ selected.missing | join(", ") }}.
-    {% elif "file_activity" in state_capabilities
-          and ("post_tool" not in aligned_hooks or "turn_completion" not in aligned_hooks) %}
-    File activity requires post-tool and turn-completion families.
     {% elif custom_state.values and not custom_handler.available %}
-    Custom state capabilities {{ custom_state.values | join(", ") }} require at least one selected hook with a user-owned handler seam; add pre-tool, or another compatible non-runner family.
+    Custom state capabilities {{ custom_state.values | join(", ") }} require at least one selected hook with a user-owned handler seam; add pre-tool or another compatible family.
     {% endif %}
     {% endif %}
 
@@ -89,11 +80,6 @@ native_hooks:
     {%- if event.harness == harness and event.stable_id == required -%}{{ required | tojson }},{%- endif -%}
     {%- endfor -%}
     {%- endfor -%}
-    {%- if harness_mode == "single" and "file_activity" in state_capabilities and harness in ["claude-code", "codex"] -%}
-    {%- for required in ["session_start", "post_tool_use", "stop"] -%}{%- if required not in defaults -%}{{ required | tojson }},{%- endif -%}{%- endfor -%}
-    {%- elif harness_mode == "single" and "file_activity" in state_capabilities and harness == "antigravity" -%}
-    {%- for required in ["pre_invocation", "post_tool_use", "stop"] -%}{%- if required not in defaults -%}{{ required | tojson }},{%- endif -%}{%- endfor -%}
-    {%- endif -%}
     ]
   validator: >-
     {% if harness_mode == 'single' %}
@@ -106,31 +92,19 @@ native_hooks:
     {% endfor %}
     {% set managed_state = namespace(values=[]) %}
     {% if starter == "scoped_context_once" %}{% set managed_state.values = managed_state.values + ["session_metadata", "claim_once"] %}{% endif %}
-    {% if "file_activity" in state_capabilities %}{% set managed_state.values = managed_state.values + ["session_metadata", "file_activity", "run_artifacts"] %}{% endif %}
     {% set custom_state = namespace(values=[]) %}
     {% for capability in state_capabilities %}
     {% if capability not in managed_state.values %}{% set custom_state.values = custom_state.values + [capability] %}{% endif %}
     {% endfor %}
     {% set custom_handler = namespace(available=false) %}
     {% for hook in native_hooks %}
-    {% set runner_owned = ("file_activity" in state_capabilities and hook in ["post_tool_use", "stop"])
-          or (starter == "scoped_context_once" and hook == "pre_tool_use") %}
-    {% if not runner_owned %}{% set custom_handler.available = true %}{% endif %}
+    {% set managed_owned = starter == "scoped_context_once" and hook == "pre_tool_use" %}
+    {% if not managed_owned %}{% set custom_handler.available = true %}{% endif %}
     {% endfor %}
     {% if native_hooks | length == 0 %}
     Select at least one native command hook.
     {% elif selected.missing %}
     {{ selected.value.display_name }} requires native hooks: {{ selected.missing | join(", ") }}.
-    {% elif "file_activity" in state_capabilities and harness in ["claude-code", "codex"]
-          and ("session_start" not in native_hooks
-               or "post_tool_use" not in native_hooks
-               or "stop" not in native_hooks) %}
-    File activity requires SessionStart, PostToolUse, and Stop on this harness.
-    {% elif "file_activity" in state_capabilities and harness == "antigravity"
-          and ("pre_invocation" not in native_hooks
-               or "post_tool_use" not in native_hooks
-               or "stop" not in native_hooks) %}
-    Antigravity file activity requires PreInvocation, PostToolUse, and Stop.
     {% elif custom_state.values and not custom_handler.available %}
     Custom state capabilities {{ custom_state.values | join(", ") }} require at least one selected native hook with a user-owned handler seam.
     {% endif %}

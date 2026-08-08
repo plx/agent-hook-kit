@@ -48,21 +48,7 @@ Git dirty-state reconciliation is intentionally disabled by default because it
 cannot distinguish agent edits from changes that were already present. Enable
 it only when that broad fallback is appropriate for the calling application.
 
-The shipped turn-completion runner exposes its reconciliation choices in Pkl:
-
-```pkl
-settings {
-  fileActivity = new FileActivity {
-    filesystemMtime = true
-    vcs = "disabled" // or "git-dirty"
-    timestampToleranceMillis = 2000 // bootstrap scan only
-    maxEntries = 100000
-    coverageGapPolicy = "best-effort" // or "strict"
-  }
-}
-```
-
-Callers using the Rust API can supply the same controls through
+Callers using the Rust API can supply reconciliation controls through
 `ReconciliationOptions` and can independently resolve scoped targets with
 `ResolveOptions`. That resolver remains a compatibility wrapper with
 existing-files-only behavior; new pre-tool consumers can call
@@ -81,12 +67,11 @@ current fingerprint with the handled baseline. When the digest matches, it does
 not append pending work or spawn configured tools. Direct observations bypass
 that suppression by design, even when bytes happen to match an old baseline.
 
-The shipped producer is `file-activity-agent-hook` from
-`hookkit-tool-runner`. Bind it to Claude/Codex/Antigravity PostToolUse and give
-it the same `--state-dir` as `turn-completion-agent-hook`
-and, where supported, `session-start-state-agent-hook`. The older
-`session-modified-file-tracker` example is only a compatibility wrapper around
-that library-owned observer.
-Antigravity supplies the originating tool call and arguments, so structured and
-shell inference can produce direct evidence. Its missing precise session-start
-producer still makes mtime reconciliation a best-effort fallback.
+The complete producer/consumer suite that uses this library for deferred
+linting and formatting lives in
+[Velvet Glove](https://github.com/plx/velvet-glove). Library consumers can bind
+their own producer to each harness's PostToolUse event and share a state root
+with their turn-completion consumer. Antigravity supplies the originating tool
+call and arguments, so structured and shell inference can produce direct
+evidence. Its missing precise session-start event still makes mtime
+reconciliation a best-effort fallback.

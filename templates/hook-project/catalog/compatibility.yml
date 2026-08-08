@@ -2,7 +2,6 @@ format_version: 1
 template_version: 0.1.0-preview.1
 copier_version: 9.17.1
 rust_msrv: 1.85.0
-pkl_version: 0.31.1
 hookkit:
   repository: https://github.com/plx/agent-hook-kit
   git_revision: 83c49d46970602e8fb40a8afaeea521dfb7e9b61

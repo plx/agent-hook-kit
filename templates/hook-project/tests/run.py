@@ -37,7 +37,6 @@ ALL_STATE_CAPABILITIES = (
     "record_queue",
     "run_artifacts",
     "custom_aggregate",
-    "file_activity",
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -146,7 +145,6 @@ def cross_data(
         "harnesses": harnesses,
         "state_capabilities": list(state),
         "aligned_hooks": hooks,
-        "lowering_policy": "best-effort-with-warnings",
         "dependency_source": "path",
         "hookkit_path": str(REPO_ROOT),
         "github_actions": ci,
@@ -170,35 +168,10 @@ def single_data(
         "harness": harness,
         "state_capabilities": list(state),
         "native_hooks": hooks,
-        "lowering_policy": "best-effort-with-warnings",
         "dependency_source": "path",
         "hookkit_path": str(REPO_ROOT),
         "github_actions": ci,
     }
-
-
-def with_quality(data: dict[str, Any], *, deferred: bool = False) -> dict[str, Any]:
-    result = dict(data)
-    result.update(
-        quality_profile="rust",
-        quality_tools=["cargoFmt", "cargoClippy"],
-        quality_config_path=f"{result['crate_path']}/config/{result['package_name']}.pkl",
-    )
-    if deferred:
-        result["reconciliation_posture"] = "best-effort"
-    return result
-
-
-def with_quality_profile(
-    data: dict[str, Any], profile: str, tools: list[str]
-) -> dict[str, Any]:
-    result = dict(data)
-    result.update(
-        quality_profile=profile,
-        quality_tools=tools,
-        quality_config_path=f"{result['crate_path']}/config/{result['package_name']}.pkl",
-    )
-    return result
 
 
 def build_cases() -> list[Case]:
@@ -296,83 +269,6 @@ def build_cases() -> list[Case]:
                 ),
             ),
             Case(
-                "archetype_immediate_quality",
-                with_quality(
-                    cross_data(
-                        "archetype_immediate_quality",
-                        all_three,
-                        ["post_tool"],
-                        starter="immediate_quality",
-                    )
-                ),
-            ),
-            Case(
-                "runner_profile_python",
-                with_quality_profile(
-                    cross_data(
-                        "runner_profile_python",
-                        all_three,
-                        ["post_tool"],
-                        starter="immediate_quality",
-                    ),
-                    "python",
-                    ["ruffFormat", "ruff"],
-                ),
-            ),
-            Case(
-                "runner_profile_javascript_typescript",
-                with_quality_profile(
-                    cross_data(
-                        "runner_profile_javascript_typescript",
-                        all_three,
-                        ["post_tool"],
-                        starter="immediate_quality",
-                    ),
-                    "javascript-typescript",
-                    ["prettier", "eslint"],
-                ),
-            ),
-            Case(
-                "runner_profile_go",
-                with_quality_profile(
-                    cross_data(
-                        "runner_profile_go",
-                        all_three,
-                        ["post_tool"],
-                        starter="immediate_quality",
-                    ),
-                    "go",
-                    ["gofmt", "goVet"],
-                ),
-            ),
-            Case(
-                "runner_profile_custom",
-                with_quality_profile(
-                    cross_data(
-                        "runner_profile_custom",
-                        all_three,
-                        ["post_tool"],
-                        starter="immediate_quality",
-                    ),
-                    "custom",
-                    ["custom"],
-                ),
-            ),
-            Case(
-                "archetype_deferred_quality",
-                with_quality(
-                    cross_data(
-                        "archetype_deferred_quality",
-                        all_three,
-                        ["post_tool", "turn_completion"],
-                        starter="deferred_quality",
-                        state=("session_metadata", "file_activity", "run_artifacts"),
-                        ci=True,
-                    ),
-                    deferred=True,
-                ),
-            ),
-            Case(
                 "archetype_pre_tool_rewrite",
                 cross_data(
                     "archetype_pre_tool_rewrite",
@@ -407,6 +303,15 @@ def build_cases() -> list[Case]:
                     all_three,
                     ["pre_tool"],
                     state=("session_metadata", "inspectable_set"),
+                ),
+            ),
+            Case(
+                "state_cross_post_tool_and_turn_completion",
+                cross_data(
+                    "state_cross_post_tool_and_turn_completion",
+                    all_three,
+                    ["post_tool", "turn_completion"],
+                    state=("session_metadata", "run_artifacts"),
                 ),
             ),
             Case(
@@ -565,10 +470,7 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
         raise AcceptanceFailure(f"{case.name}: resolved harness manifest is inaccurate")
     if set(manifest["requested_hooks"]) != set(expected_hooks):
         raise AcceptanceFailure(f"{case.name}: requested hook manifest is inaccurate")
-    expected_effective_hooks = set(expected_hooks)
-    if data["harness_mode"] == "cross" and "file_activity" in data["state_capabilities"]:
-        expected_effective_hooks.add("session_start_state")
-    if set(manifest["effective_hooks"]) != expected_effective_hooks:
+    if set(manifest["effective_hooks"]) != set(expected_hooks):
         raise AcceptanceFailure(f"{case.name}: resolved hook manifest is inaccurate")
     if set(manifest["state_capabilities"]) != set(data["state_capabilities"]):
         raise AcceptanceFailure(f"{case.name}: resolved state manifest is inaccurate")
@@ -600,12 +502,6 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
         expected_hookkit_dependencies.add(f"hookkit-{native_package}")
     if data["state_capabilities"]:
         expected_hookkit_dependencies.add("hookkit-session-state")
-    if "file_activity" in data["state_capabilities"]:
-        expected_hookkit_dependencies.update(
-            {"hookkit-file-activity", "hookkit-tool-runner"}
-        )
-    if data["starter"] in {"immediate_quality", "deferred_quality"}:
-        expected_hookkit_dependencies.add("hookkit-tool-runner")
     if data["starter"] in {"policy_guard", "scoped_context_once"}:
         expected_hookkit_dependencies.add("hookkit-tool-access")
     if data["harness_mode"] == "single" and data["starter"] == "scoped_context_once":
@@ -693,30 +589,6 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
             )
     else:
         raise AcceptanceFailure(f"{case.name}: unknown dependency source {dependency_source!r}")
-
-    if "file_activity" in data["state_capabilities"]:
-        required_state_dependencies = {"hookkit-file-activity", "hookkit-session-state"}
-        missing_dependencies = required_state_dependencies - set(hookkit_dependencies)
-        if missing_dependencies:
-            raise AcceptanceFailure(
-                f"{case.name}: standalone file activity lacks direct dependencies: "
-                f"{', '.join(sorted(missing_dependencies))}"
-            )
-        runners = crate / "src" / "scaffold" / "runners.rs"
-        if not runners.is_file():
-            raise AcceptanceFailure(
-                f"{case.name}: standalone file activity did not generate runner adapters"
-            )
-        runner_manifest = manifest.get("runner")
-        if not isinstance(runner_manifest, dict) or not runner_manifest.get("config_path"):
-            raise AcceptanceFailure(
-                f"{case.name}: standalone file activity lacks resolved runner configuration"
-            )
-        config = destination / runner_manifest["config_path"]
-        if not config.is_file() or not config.read_text(encoding="utf-8").strip():
-            raise AcceptanceFailure(
-                f"{case.name}: standalone file activity did not generate its Pkl configuration"
-            )
 
     cli_source = (crate / "src" / "scaffold" / "cli.rs").read_text(encoding="utf-8")
     for hook in expected_hooks:
@@ -929,78 +801,6 @@ def cargo_check_generated(destination: Path, data: dict[str, Any], target: Path)
         cwd=destination,
         environment=environment,
     )
-
-
-def cargo_test_runner_config(
-    destination: Path, data: dict[str, Any], target: Path
-) -> None:
-    environment = os.environ.copy()
-    environment["CARGO_TARGET_DIR"] = str(target)
-    run_command(
-        [
-            "cargo",
-            "test",
-            "--manifest-path",
-            str(destination / data["crate_path"] / "Cargo.toml"),
-            "--test",
-            "runner_config",
-        ],
-        cwd=destination,
-        environment=environment,
-    )
-
-
-def deferred_quality_data(name: str) -> dict[str, Any]:
-    return with_quality(
-        cross_data(
-            name,
-            list(SUPPORTED_HARNESSES),
-            ["post_tool", "turn_completion"],
-            output_mode="crate",
-            starter="deferred_quality",
-            state=("session_metadata", "file_activity", "run_artifacts"),
-        ),
-        deferred=True,
-    )
-
-
-def customize_quality_config(destination: Path, data: dict[str, Any]) -> bytes:
-    config = destination / data["quality_config_path"]
-    text = config.read_text(encoding="utf-8")
-    replacements = (
-        (
-            '  ["cargoClippy"] = Builtins.cargoClippy\n',
-            '  ["cargoClippy"] = Builtins.cargoClippy\n'
-            '  ["ruff"] = Builtins.ruff\n',
-        ),
-        (
-            '  "cargoClippy"\n}',
-            '  "cargoClippy"\n  "ruff"\n}',
-        ),
-    )
-    for original, customized in replacements:
-        if text.count(original) != 1:
-            raise AcceptanceFailure(
-                "generated deferred-quality policy has an unexpected shape"
-            )
-        text = text.replace(original, customized, 1)
-    config.write_text(text, encoding="utf-8")
-    return text.encode()
-
-
-def assert_quality_config_ownership(
-    destination: Path,
-    data: dict[str, Any],
-    customized: bytes,
-    target: Path,
-) -> None:
-    config = destination / data["quality_config_path"]
-    if config.read_bytes() != customized:
-        raise AcceptanceFailure("Copier discarded a customized quality policy")
-    rejects = list(destination.rglob("*.rej"))
-    if rejects:
-        raise AcceptanceFailure(f"unexpected Copier conflict files: {rejects}")
-    cargo_test_runner_config(destination, data, target)
 
 
 def ownership_cases() -> list[tuple[str, dict[str, Any], dict[str, Any], Path, Path, str]]:
@@ -1429,118 +1229,6 @@ def run_update_ownership(staged_source: Path, root: Path) -> None:
     print(f"PASS update_ownership ({time.monotonic() - started:.1f}s)", flush=True)
 
 
-def run_quality_config_ownership(staged_source: Path, root: Path) -> None:
-    started = time.monotonic()
-    target = root / "cargo-target-quality-config-ownership"
-
-    recopy_data = deferred_quality_data("ownership_quality_recopy")
-    recopy_destination = root / "recopy-quality-config"
-    copy_case(staged_source, recopy_destination, recopy_data)
-    recopy_customized = customize_quality_config(recopy_destination, recopy_data)
-    copier.run_copy(
-        str(staged_source),
-        recopy_destination,
-        data=recopy_data,
-        defaults=True,
-        quiet=True,
-        overwrite=True,
-    )
-    assert_quality_config_ownership(
-        recopy_destination,
-        recopy_data,
-        recopy_customized,
-        target,
-    )
-
-    versioned_source = root / "versioned-quality-config-template"
-    shutil.copytree(staged_source, versioned_source)
-    git(versioned_source, "init", "--quiet")
-    git(versioned_source, "config", "user.name", "HookKit template tests")
-    git(
-        versioned_source,
-        "config",
-        "user.email",
-        "hookkit-template-tests@example.invalid",
-    )
-    git(versioned_source, "add", ".")
-    git(versioned_source, "commit", "--quiet", "-m", "template v1")
-    git(versioned_source, "tag", "v1.0.0")
-
-    update_data = deferred_quality_data("ownership_quality_update")
-    update_destination = root / "update-quality-config"
-    copier.run_copy(
-        str(versioned_source),
-        update_destination,
-        data=update_data,
-        defaults=True,
-        quiet=True,
-        vcs_ref="v1.0.0",
-    )
-    git(update_destination, "init", "--quiet")
-    git(update_destination, "config", "user.name", "HookKit template tests")
-    git(
-        update_destination,
-        "config",
-        "user.email",
-        "hookkit-template-tests@example.invalid",
-    )
-    git(update_destination, "add", ".")
-    git(update_destination, "commit", "--quiet", "-m", "generated from template v1")
-    update_customized = customize_quality_config(update_destination, update_data)
-    git(update_destination, "add", ".")
-    git(update_destination, "commit", "--quiet", "-m", "customize quality policy")
-
-    readme_template = (
-        versioned_source
-        / "templates"
-        / "hook-project"
-        / "template"
-        / "{{ crate_path }}"
-        / "README.md.jinja"
-    )
-    managed_marker = "\nManaged quality-config update marker: v1.1.0\n"
-    readme_template.write_text(
-        readme_template.read_text(encoding="utf-8") + managed_marker,
-        encoding="utf-8",
-    )
-    git(versioned_source, "add", ".")
-    git(versioned_source, "commit", "--quiet", "-m", "template v1.1")
-    git(versioned_source, "tag", "v1.1.0")
-
-    try:
-        copier.run_update(
-            update_destination,
-            data=update_data,
-            answers_file=answers_path(update_destination, update_data).name,
-            defaults=True,
-            quiet=True,
-            conflict="rej",
-            overwrite=True,
-        )
-    except Exception as error:
-        raise AcceptanceFailure(
-            f"Copier update failed for customized quality policy: {error}"
-        ) from error
-    crate = update_destination / update_data["crate_path"]
-    if managed_marker not in (crate / "README.md").read_text(encoding="utf-8"):
-        raise AcceptanceFailure("Copier did not update a managed quality-project file")
-    answers = load_yaml(answers_path(update_destination, update_data))
-    if answers.get("_commit") != "v1.1.0":
-        raise AcceptanceFailure(
-            "quality-project answers did not advance to template v1.1.0"
-        )
-    assert_quality_config_ownership(
-        update_destination,
-        update_data,
-        update_customized,
-        target,
-    )
-    print(
-        f"PASS quality_config_ownership ({time.monotonic() - started:.1f}s)",
-        flush=True,
-    )
-
-
 def assert_rejected(source: Path, root: Path, name: str, data: dict[str, Any]) -> None:
     destination = root / "negative" / name
     try:
@@ -1595,24 +1283,6 @@ def run_negative_cases(source: Path, root: Path) -> None:
     dependency_collision.update(package_name="hookkit-core", binary_name="hookkit-core")
     short_sha = cross_data("invalid_sha", list(SUPPORTED_HARNESSES), universal)
     short_sha.update(dependency_source="git", hookkit_git_rev="abc123")
-    strict_antigravity = with_quality(
-        cross_data(
-            "invalid_strict_antigravity",
-            list(SUPPORTED_HARNESSES),
-            ["post_tool"],
-            starter="immediate_quality",
-        )
-    )
-    strict_antigravity["lowering_policy"] = "strict"
-    runner_state_without_seam = with_quality(
-        cross_data(
-            "invalid_runner_state_without_seam",
-            list(SUPPORTED_HARNESSES),
-            ["post_tool"],
-            starter="immediate_quality",
-            state=("session_metadata",),
-        )
-    )
     for name, data in (
         ("one_harness_cross", one_harness),
         ("unavailable_aligned_family", invalid_family),
@@ -1622,8 +1292,6 @@ def run_negative_cases(source: Path, root: Path) -> None:
         ("reserved_package_name", reserved_package),
         ("dependency_name_collision", dependency_collision),
         ("incomplete_git_sha", short_sha),
-        ("strict_antigravity_output", strict_antigravity),
-        ("runner_state_without_custom_seam", runner_state_without_seam),
     ):
         assert_rejected(source, root, name, data)
 
@@ -1668,7 +1336,9 @@ def run_dependency_source_integrity(source: Path, root: Path) -> None:
     compatibility = load_yaml(CATALOG_ROOT / "compatibility.yml")["hookkit"]
     universal = available_families(SUPPORTED_HARNESSES, alignment_catalog())
 
-    git_data = deferred_quality_data("dependency_git")
+    git_data = cross_data(
+        "dependency_git", list(SUPPORTED_HARNESSES), universal
+    )
     git_data.pop("hookkit_path")
     git_data.update(
         dependency_source="git",
@@ -1780,7 +1450,6 @@ def main() -> int:
             run_recopy_ownership(source, root)
             run_shape_change_ownership(source, root)
             run_update_ownership(source, root)
-            run_quality_config_ownership(source, root)
         if run_special("negative"):
             run_negative_cases(source, root)
         if run_special("sources"):

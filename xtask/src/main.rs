@@ -642,19 +642,6 @@ struct Archetype {
     default_single_hooks: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     required_state: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    runner: Option<ArchetypeRunner>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ArchetypeRunner {
-    kind: String,
-    default_lowering_policy: String,
-    default_quality_profile: String,
-    default_quality_tools: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    default_reconciliation_posture: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -664,7 +651,6 @@ struct CompatibilityCatalog {
     template_version: String,
     copier_version: String,
     rust_msrv: String,
-    pkl_version: String,
     hookkit: HookkitCompatibility,
 }
 
@@ -1125,7 +1111,6 @@ fn validate_template_catalog(
         "record_queue",
         "run_artifacts",
         "custom_aggregate",
-        "file_activity",
     ]);
     let mut archetype_ids = BTreeSet::new();
     let mut archetype_orders = BTreeSet::new();
@@ -1279,33 +1264,6 @@ fn validate_template_catalog(
                 archetype.stable_id
             ));
         }
-        if let Some(runner) = &archetype.runner {
-            let valid_reconciliation = match runner.kind.as_str() {
-                "immediate" => runner.default_reconciliation_posture.is_none(),
-                "deferred" => matches!(
-                    runner.default_reconciliation_posture.as_deref(),
-                    Some("best-effort" | "strict")
-                ),
-                _ => false,
-            };
-            if !valid_reconciliation
-                || !matches!(
-                    runner.default_lowering_policy.as_str(),
-                    "strict" | "best-effort" | "best-effort-with-warnings"
-                )
-                || runner.default_quality_profile.trim().is_empty()
-                || runner.default_quality_tools.is_empty()
-                || runner
-                    .default_quality_tools
-                    .iter()
-                    .any(|tool| tool.trim().is_empty())
-            {
-                return Err(format!(
-                    "archetype {} has invalid runner defaults",
-                    archetype.stable_id
-                ));
-            }
-        }
     }
     if !archetype_ids.contains("custom") {
         return Err("archetype catalog must define the custom starter".to_string());
@@ -1314,7 +1272,6 @@ fn validate_template_catalog(
     if !valid_version(&compatibility.template_version, true)
         || !valid_version(&compatibility.copier_version, false)
         || !valid_version(&compatibility.rust_msrv, false)
-        || !valid_version(&compatibility.pkl_version, false)
         || !valid_version(&compatibility.hookkit.crates_io_version, false)
         || !compatibility.hookkit.repository.starts_with("https://")
         || compatibility.hookkit.git_revision.len() != 40

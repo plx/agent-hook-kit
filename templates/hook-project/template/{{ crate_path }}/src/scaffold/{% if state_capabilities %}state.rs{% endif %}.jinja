@@ -47,15 +47,6 @@ fn default_state_directory() -> PathBuf {
         .join("generated")
         .join(PACKAGE_STATE_DIRECTORY)
 }
-{% if 'file_activity' in state_capabilities %}
-/// Open the package-isolated pending file-activity and reconciliation journals.
-pub fn file_activity_store(
-    context: &RuntimeContext<'_>,
-    override_dir: Option<&Path>,
-) -> hookkit_file_activity::Result<hookkit_file_activity::FileActivityStore> {
-    hookkit_file_activity::FileActivityStore::ensure(context, resolve_state_root(override_dir))
-}
-{% endif -%}
 {% if 'session_metadata' in state_capabilities %}
 /// Read HookKit's typed metadata for an ensured session.
 pub fn session_metadata(state: &SessionState) -> Result<hookkit_session_state::SessionMetadata> {

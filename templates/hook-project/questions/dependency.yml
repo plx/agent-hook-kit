@@ -27,9 +27,9 @@ hookkit_path:
     {% set missing = namespace(packages=[]) %}
     {% for package in ["hookkit-core", "hookkit-claude", "hookkit-codex",
                        "hookkit-antigravity", "hookkit-session-state",
-                       "hookkit-pkl-config", "hookkit-common", "hookkit-shell",
+                       "hookkit-common", "hookkit-shell",
                        "hookkit-tool-access", "hookkit-file-activity",
-                       "hookkit-runtime", "hookkit-tool-runner"] %}
+                       "hookkit-runtime"] %}
     {% if ((root ~ "/crates/" ~ package ~ "/Cargo.toml") | fileglob | length) == 0 %}
     {% set missing.packages = missing.packages + [package] %}
     {% endif %}

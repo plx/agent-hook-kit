@@ -2314,61 +2314,9 @@ archetype_catalog:
       - session_start
       required_state:
       - session_metadata
-    - stable_id: immediate_quality
-      display_name: Immediate formatter/linter
-      order: 50
-      default_mode: cross
-      supported_modes:
-      - cross
-      supported_harnesses:
-      - claude-code
-      - codex
-      - antigravity
-      default_harnesses:
-      - claude-code
-      - codex
-      - antigravity
-      required_hooks:
-      - post_tool
-      runner:
-        kind: immediate
-        default_lowering_policy: best-effort-with-warnings
-        default_quality_profile: rust
-        default_quality_tools:
-        - cargoFmt
-        - cargoClippy
-    - stable_id: deferred_quality
-      display_name: Deferred formatter/linter
-      order: 60
-      default_mode: cross
-      supported_modes:
-      - cross
-      supported_harnesses:
-      - claude-code
-      - codex
-      - antigravity
-      default_harnesses:
-      - claude-code
-      - codex
-      - antigravity
-      required_hooks:
-      - post_tool
-      - turn_completion
-      required_state:
-      - session_metadata
-      - file_activity
-      - run_artifacts
-      runner:
-        kind: deferred
-        default_lowering_policy: best-effort-with-warnings
-        default_quality_profile: rust
-        default_quality_tools:
-        - cargoFmt
-        - cargoClippy
-        default_reconciliation_posture: best-effort
     - stable_id: pre_tool_rewrite
       display_name: Claude/Codex pre-tool rewrite
-      order: 70
+      order: 50
       default_mode: cross
       supported_modes:
       - cross
@@ -2388,7 +2336,6 @@ compatibility:
     template_version: 0.1.0-preview.1
     copier_version: 9.17.1
     rust_msrv: 1.85.0
-    pkl_version: 0.31.1
     hookkit:
       repository: https://github.com/plx/agent-hook-kit
       git_revision: 83c49d46970602e8fb40a8afaeea521dfb7e9b61

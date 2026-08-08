@@ -1,3 +1,0 @@
-hclfmt (terragrunt): changed example.hcl
-hookkit: lowering warning: Codex PostToolUse intent `user_notice/diagnostics` redirected to stderr
-hookkit: lowering warning: Codex PostToolUse intent `additionalContext` dropped

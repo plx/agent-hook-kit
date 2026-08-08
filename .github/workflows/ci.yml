@@ -14,7 +14,7 @@ env:
 
 jobs:
   msrv:
-    name: Rust 1.85 libraries and runner
+    name: Rust 1.85 libraries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,13 +28,11 @@ jobs:
           -p hookkit-codex
           -p hookkit-antigravity
           -p hookkit-session-state
-          -p hookkit-pkl-config
           -p hookkit-common
           -p hookkit-shell
           -p hookkit-tool-access
           -p hookkit-file-activity
           -p hookkit-runtime
-          -p hookkit-tool-runner
           --all-targets
 
   check:
@@ -64,12 +62,9 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Hermetic workspace tests
         run: cargo test --workspace
-      - name: Hermetic runner fake-tool smoke
-        if: runner.os != 'Windows'
-        run: cargo test -p hookkit-tool-runner --lib hermetic_fake_executable_smoke
       - name: Verify publishable package archives
         run: |
-          for package in hookkit-core hookkit-claude hookkit-codex hookkit-antigravity hookkit-session-state hookkit-pkl-config hookkit-common hookkit-shell hookkit-tool-access hookkit-file-activity hookkit-runtime hookkit-tool-runner; do
+          for package in hookkit-core hookkit-claude hookkit-codex hookkit-antigravity hookkit-session-state hookkit-common hookkit-shell hookkit-tool-access hookkit-file-activity hookkit-runtime; do
             cargo package -p "$package" --list >/dev/null
           done
           cargo package -p hookkit-core
@@ -90,13 +85,6 @@ jobs:
           version: "0.11.16"
       - name: Validate template catalogs
         run: cargo xtask template-catalog check
-      - name: Install Pkl 0.31.1
-        run: |
-          curl --fail --location --retry 3 \
-            --output "$RUNNER_TEMP/pkl" \
-            https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
-          chmod +x "$RUNNER_TEMP/pkl"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Validate the full Copier matrix
         run: templates/hook-project/tests/run.sh --validation full
 

@@ -72,7 +72,9 @@ Confirm that `hookkit-file-activity` delegates tool-call analysis to `hookkit-to
 - reconciliation behavior; and
 - persisted family compatibility.
 
-Update `session-modified-file-tracker` only where its public usage changes. Do not redesign session batching in this task.
+The former `session-modified-file-tracker` consumer now lives in
+[Velvet Glove](https://github.com/plx/velvet-glove). Do not redesign session
+batching as part of this historical migration task.
 
 ## Required regression scenarios
 

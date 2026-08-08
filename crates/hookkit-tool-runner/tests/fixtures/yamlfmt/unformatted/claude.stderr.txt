@@ -1,2 +1,0 @@
-yamlfmt: changed example.yaml
-hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

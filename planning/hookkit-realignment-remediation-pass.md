@@ -11,6 +11,11 @@
   skeptical multi-agent review with adversarial per-finding verification (65 agents; 2 findings
   refuted at the verify stage; 44 confirmed actionable findings, ~20 of them blockers).
 
+Historical note (2026-08-08): the Pkl catalog and quality runner discussed in
+this review were later extracted to
+[Velvet Glove](https://github.com/plx/velvet-glove) by
+[ADR 020](decisions/020-extract-quality-runner-to-velvet-glove.md).
+
 ---
 
 ## 0. Re-review resolution (2026-07-12, commit `5890c54`)

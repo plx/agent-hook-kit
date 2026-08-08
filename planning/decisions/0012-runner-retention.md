@@ -1,6 +1,6 @@
 # ADR 0012: Retain the runner through stabilization
 
-- Status: accepted
+- Status: superseded by [ADR 020](020-extract-quality-runner-to-velvet-glove.md)
 - Date: 2026-07-12
 - Phase: 0; extraction decision deadline is Phase 7
 

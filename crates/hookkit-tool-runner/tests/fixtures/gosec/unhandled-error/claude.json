@@ -1,1 +1,0 @@
-{"hookSpecificOutput":{"additionalContext":"gosec reports security issues; inspect diagnostics at <workspace>/.agent-hook-kit/gosec-agent-hook/test-session_gosec-tool-issues.txt.","hookEventName":"PostToolUse"}}

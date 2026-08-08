@@ -16,21 +16,13 @@ It never guesses the hook from input JSON.
 {% for stable_id in aligned_hooks -%}
 {{ binary_name }} \
   --harness <{% for selected_harness in harnesses %}{{ "claude" if selected_harness == "claude-code" else selected_harness }}{% if not loop.last %}|{% endif %}{% endfor %}> \
-{% if (starter == "immediate_quality" and stable_id == "post_tool") or ((starter == "deferred_quality" or "file_activity" in state_capabilities) and stable_id == "turn_completion") %}  --config <absolute-config-path> \
-{% endif %}{% if state_capabilities %}  --state-dir <state-directory> \
+{% if state_capabilities %}  --state-dir <state-directory> \
 {% endif %}  {{ stable_id | replace('_', '-') }}
 {% endfor -%}
-{% if "file_activity" in state_capabilities %}
-{{ binary_name }} \
-  --harness <selected-claude-or-codex> \
-  --state-dir <state-directory> \
-  session-start-state
-{% endif -%}
 {% else -%}
 {% for stable_id in native_hooks -%}
 {{ binary_name }} \
-{% if "file_activity" in state_capabilities and stable_id == "stop" %}  --config <absolute-config-path> \
-{% endif %}{% if state_capabilities %}  --state-dir <state-directory> \
+{% if state_capabilities %}  --state-dir <state-directory> \
 {% endif %}  {{ stable_id | replace('_', '-') }}
 {% endfor -%}
 {% endif -%}
@@ -49,17 +41,6 @@ It never guesses the hook from input JSON.
 Use only the harnesses recorded in `hookkit-template.manifest.yml`. Register
 the complete command line for the matching native hook event. The template
 does not edit live Claude Code, Codex, or Antigravity configuration.
-{% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
-The runner requires `pkl` {{ compatibility.pkl_version }}. The generated package
-owns this policy:
-
-`{{ quality_config_path }}`
-
-Hook processes do not necessarily start in this repository, so use an absolute
-policy path in live registration while retaining this package-owned file. The
-concrete tools and lowering policy are recorded in both the Pkl file and
-`hookkit-template.manifest.yml`.
-{% endif -%}
 {% if state_capabilities %}
 All selected state helpers share this package-specific default root:
 
@@ -76,10 +57,6 @@ any of the selected claims, sets, queues, artifacts, or aggregate helpers. The
 stable argument keeps handler edits compatible when state capabilities are
 added later.
 
-Library-owned runner commands have no editable event-handler seam. When a
-state capability needs custom application logic beyond the runner's coordinated
-metadata, file-activity, or artifact work, the questionnaire requires another
-selected event with a user-owned handler.
 {% endif %}
 ## Edit policy safely
 
@@ -89,10 +66,6 @@ Copier-owned wiring. Customize the per-event and per-archetype files in the
 those seams are preserved on recopy, including when selections change. Files
 left behind after deselection are harmless and become active again if that
 choice is reselected.
-
-Generated files under `config/` are also preserved because they are expected
-to become project policy. If you change runner archetype, quality-tool, or
-configuration answers later, reconcile the existing Pkl policy manually.
 
 Hook stdout, stderr, and exit status are protocol outputs: do not use
 `println!` or uncontrolled `eprintln!` in handlers. Return native decisions

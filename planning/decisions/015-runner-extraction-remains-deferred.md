@@ -1,6 +1,6 @@
 # ADR 015: Runner extraction remains deferred
 
-- Status: accepted
+- Status: superseded by [ADR 020](020-extract-quality-runner-to-velvet-glove.md)
 - Date: 2026-07-12
 - Phase: 7
 

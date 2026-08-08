@@ -22,14 +22,8 @@ serde_json = "1"
 {%- if state_capabilities %}
 hookkit-session-state = {{ hookkit_spec("hookkit-session-state") }}
 {%- endif %}
-{%- if "file_activity" in state_capabilities %}
-hookkit-file-activity = {{ hookkit_spec("hookkit-file-activity") }}
-{%- endif %}
 {%- if "record_queue" in state_capabilities or "custom_aggregate" in state_capabilities %}
 serde = { version = "1", features = ["derive"] }
-{%- endif %}
-{%- if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
-hookkit-tool-runner = {{ hookkit_spec("hookkit-tool-runner") }}
 {%- endif %}
 {%- if starter in ["policy_guard", "scoped_context_once"] %}
 hookkit-tool-access = {{ hookkit_spec("hookkit-tool-access") }}
@@ -49,11 +43,3 @@ hookkit-common = {{ hookkit_spec("hookkit-common") }}
 
 [lints.rust]
 unsafe_code = "forbid"
-{% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
-
-[dev-dependencies]
-hookkit-pkl-config = {{ hookkit_spec("hookkit-pkl-config") }}
-{%- if starter == "immediate_quality" and "antigravity" in harnesses and "custom" in quality_tools %}
-serde_json = "1"
-{%- endif %}
-{% endif -%}

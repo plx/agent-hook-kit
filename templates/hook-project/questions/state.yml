@@ -8,7 +8,6 @@ state_capabilities:
     Acknowledgeable record queue: record_queue
     Committed run artifacts: run_artifacts
     Custom aggregate journal: custom_aggregate
-    Probably-touched file activity suite: file_activity
   multiselect: true
   default: >-
     {%- for archetype in archetype_catalog.archetypes -%}
@@ -31,7 +30,4 @@ state_capabilities:
     {{ selected.value.display_name }} requires state capabilities: {{ selected.missing | join(", ") }}.
     {% elif metadata_dependent and "session_metadata" not in state_capabilities %}
     Claims, sets, queues, run artifacts, and custom aggregates require session_metadata.
-    {% elif selected.value.runner and selected.value.runner.kind == "immediate"
-          and "file_activity" in state_capabilities %}
-    Immediate quality and file activity both consume PostToolUse stdin; choose deferred quality or remove file_activity.
     {% endif %}

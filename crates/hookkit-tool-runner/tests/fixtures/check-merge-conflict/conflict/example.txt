@@ -1,7 +1,0 @@
-function greet() {
-<<<<<<< HEAD
-  return "hello, world";
-=======
-  return "hi, world";
->>>>>>> feature-branch
-}

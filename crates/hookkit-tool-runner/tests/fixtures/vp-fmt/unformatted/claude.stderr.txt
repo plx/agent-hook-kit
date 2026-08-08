@@ -1,2 +1,0 @@
-vp fmt: changed example.ts
-hookkit: lowering warning: Claude PostToolUse intent `user_notice/diagnostics` redirected to stderr

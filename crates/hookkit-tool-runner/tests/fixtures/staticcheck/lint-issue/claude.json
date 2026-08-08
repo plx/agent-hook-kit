@@ -1,1 +1,0 @@
-{"hookSpecificOutput":{"additionalContext":"staticcheck reports issues; inspect diagnostics at <workspace>/.agent-hook-kit/staticcheck-agent-hook/test-session_staticcheck-tool-issues.txt.","hookEventName":"PostToolUse"}}
