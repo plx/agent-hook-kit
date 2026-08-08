@@ -1,0 +1,26 @@
+//! User-owned pre-tool input rewrite policy.
+
+/// Return a complete replacement object for a Claude Code or Codex tool call.
+///
+/// The safe starter preserves the native object unchanged. Edit this pure
+/// function to make a deliberate transformation; returning `None` leaves the
+/// call untouched.
+pub fn transform(
+    input: Option<hookkit_common::ToolInputRef<'_>>,
+    _state_dir: Option<&std::path::Path>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    input.and_then(|value| value.as_object().cloned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[rustfmt::skip]
+    fn starter_rewrite_preserves_the_complete_object() {
+        let value = serde_json::json!({"path": "src/lib.rs", "line": 12});
+        let rewritten = transform(Some(hookkit_common::ToolInputRef::Value(&value)), None);
+        assert_eq!(rewritten, value.as_object().cloned());
+    }
+}

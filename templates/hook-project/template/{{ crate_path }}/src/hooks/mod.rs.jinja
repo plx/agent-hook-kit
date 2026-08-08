@@ -1,0 +1,17 @@
+//! User-owned hook policy seams.
+
+{% if harness_mode == "cross" -%}
+pub mod aligned;
+{% else -%}
+pub mod native;
+{% endif -%}
+{% if (harness_mode == "cross" and "pre_tool" in aligned_hooks) or
+      (harness_mode == "single" and "pre_tool_use" in native_hooks) -%}
+pub mod pre_tool;
+{% endif -%}
+{% if starter == "session_bootstrap" -%}
+pub mod session_bootstrap;
+{% endif -%}
+{% if "record_queue" in state_capabilities or "custom_aggregate" in state_capabilities -%}
+pub mod state_types;
+{% endif -%}

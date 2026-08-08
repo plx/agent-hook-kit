@@ -1,0 +1,9 @@
+{% macro hookkit_spec(package) -%}
+{%- if dependency_source == "git" -%}
+{ git = {{ compatibility.hookkit.repository | tojson }}, rev = {{ hookkit_git_rev | tojson }} }
+{%- elif dependency_source == "crates-io" -%}
+{ version = {{ compatibility.hookkit.crates_io_version | string | tojson }} }
+{%- else -%}
+{ path = {{ (((hookkit_path | string) | realpath).rstrip('/') ~ '/crates/' ~ package) | tojson }} }
+{%- endif -%}
+{%- endmacro %}

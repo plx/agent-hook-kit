@@ -1,0 +1,7 @@
+output_mode:
+  type: str
+  help: Generate a complete Rust workspace or add one CLI crate to a repository.
+  choices:
+    Full project: project
+    CLI crate for an existing repository: crate
+  default: project

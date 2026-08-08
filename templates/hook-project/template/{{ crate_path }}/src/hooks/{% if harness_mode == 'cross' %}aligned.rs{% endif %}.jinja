@@ -1,0 +1,11 @@
+//! Managed portable-handler exports for this harness set.
+//!
+//! Customize the handler files under `hooks/aligned/`; Copier can safely
+//! refresh this selection-dependent module during recopy and update.
+{% for stable_id in aligned_hooks -%}
+{% if stable_id != "pre_tool" -%}
+#[path = "aligned/{{ stable_id }}.rs"]
+mod {{ stable_id }}_handler;
+pub use {{ stable_id }}_handler::handle as {{ stable_id }};
+{% endif -%}
+{% endfor -%}

@@ -12,8 +12,11 @@ lowering layer participates.
 Antigravity `PostToolUse` includes the originating tool call, so the runner can
 derive call-scoped file candidates from its name and arguments. It still has no
 tool result or changed-file list, and its empty output object cannot carry user
-or agent messages. Strict lowering rejects those messages; both best-effort
-modes omit them because there is no native warning field.
+or agent messages. Strict lowering rejects those messages and best-effort omits
+them. Best-effort-with-warnings writes a versioned, collision-safe JSON loss
+record beneath the event's exact `artifactDirectoryPath`, then uses successful
+protocol stderr to point to that record while preserving exact `{}` stdout.
+Failure to persist the record fails the hook instead of silently dropping it.
 
 The runtime context supplies exact harness, snapshot, event, and contract identity
 plus only context fields declared by the native event. Operational diagnostics are

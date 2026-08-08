@@ -1,0 +1,59 @@
+{% from "templates/hook-project/template/_macros/rust.jinja" import aligned_base -%}
+//! Every selected aligned native arm is exercised from its exact fixture.
+
+{% for family in alignment_catalog.alignments -%}
+{% if family.stable_id in aligned_hooks -%}
+{% for event in event_catalog.events -%}
+{% if event.aligned_family == family.stable_id and event.harness in harnesses -%}
+#[test]
+#[rustfmt::skip]
+fn {{ event.harness | replace('-', '_') }}_{{ family.stable_id }}_uses_native_arm() {
+{% if event.harness == "claude-code" -%}
+    let variables = hookkit_core::EnvironmentVariables::from_pairs([
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("CLAUDE_CODE_SESSION_ID", {{ event.fixture.value.session_id | string | tojson }}),
+        ("CLAUDE_PROJECT_DIR", {{ event.fixture.value.cwd | default('/repo', true) | string | tojson }}),
+{% if event.wire_event in ["SessionStart", "Setup", "CwdChanged", "FileChanged"] -%}
+        ("CLAUDE_ENV_FILE", "/tmp/generated-hook-environment"),
+{% endif -%}
+    ]);
+{%- else -%}
+    let variables = hookkit_core::EnvironmentVariables::new();
+{%- endif %}
+    let emission = hookkit_runtime::aligned::execute_aligned_event::<
+        hookkit_runtime::aligned::{{ aligned_base(family.stable_id) }},
+        _,
+    >(
+{% if event.harness == "claude-code" -%}
+        hookkit_core::HarnessId::CLAUDE_CODE,
+{%- elif event.harness == "codex" -%}
+        hookkit_core::HarnessId::CODEX,
+{%- else -%}
+        hookkit_core::HarnessId::ANTIGRAVITY,
+{%- endif %}
+        include_bytes!(concat!("../fixtures/", {{ event.harness | tojson }}, "/", {{ event.stable_id | tojson }}, ".json")),
+        &variables,
+{% if family.stable_id == "pre_tool" -%}
+        |_input, _environment, context| hookkit_common::PreToolUseOutput::allow(context.harness()),
+{%- else -%}
+        |input, environment, context| {
+            {{ package_name | replace('-', '_') }}::hooks::aligned::{{ family.stable_id }}(
+                input,
+                environment,
+                context,
+                None,
+            )
+        },
+{%- endif %}
+    ).expect("aligned representative fixture must execute");
+
+    assert_eq!(emission.exit_code(), 0);
+{% if event.harness == "codex" and family.stable_id == "session_end" -%}
+    assert!(emission.stdout().is_empty(), "Codex ignores SessionEnd output");
+{% endif -%}
+}
+{% endif -%}
+{% endfor -%}
+{% endif -%}
+{% endfor -%}

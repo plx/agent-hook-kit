@@ -1,0 +1,80 @@
+format_version: 1
+archetypes:
+  - stable_id: custom
+    display_name: Custom hook suite
+    order: 10
+    default_mode: cross
+    supported_modes: [cross, single]
+    supported_harnesses: [claude-code, codex, antigravity]
+    default_harnesses: [claude-code, codex, antigravity]
+    default_harness: claude-code
+    default_cross_hooks: [pre_tool]
+    default_single_hooks: [pre_tool_use]
+
+  - stable_id: policy_guard
+    display_name: Cross-harness policy guard
+    order: 20
+    default_mode: cross
+    supported_modes: [cross]
+    supported_harnesses: [claude-code, codex, antigravity]
+    default_harnesses: [claude-code, codex, antigravity]
+    required_hooks: [pre_tool]
+
+  - stable_id: scoped_context_once
+    display_name: Scoped context once per session
+    order: 30
+    default_mode: single
+    supported_modes: [single]
+    supported_harnesses: [claude-code, codex]
+    default_harness: claude-code
+    required_hooks: [pre_tool_use]
+    required_state: [session_metadata, claim_once]
+
+  - stable_id: session_bootstrap
+    display_name: Session bootstrap context
+    order: 40
+    default_mode: cross
+    supported_modes: [cross]
+    supported_harnesses: [claude-code, codex]
+    default_harnesses: [claude-code, codex]
+    required_hooks: [session_start]
+    required_state: [session_metadata]
+
+  - stable_id: immediate_quality
+    display_name: Immediate formatter/linter
+    order: 50
+    default_mode: cross
+    supported_modes: [cross]
+    supported_harnesses: [claude-code, codex, antigravity]
+    default_harnesses: [claude-code, codex, antigravity]
+    required_hooks: [post_tool]
+    runner:
+      kind: immediate
+      default_lowering_policy: best-effort-with-warnings
+      default_quality_profile: rust
+      default_quality_tools: [cargoFmt, cargoClippy]
+
+  - stable_id: deferred_quality
+    display_name: Deferred formatter/linter
+    order: 60
+    default_mode: cross
+    supported_modes: [cross]
+    supported_harnesses: [claude-code, codex, antigravity]
+    default_harnesses: [claude-code, codex, antigravity]
+    required_hooks: [post_tool, turn_completion]
+    required_state: [session_metadata, file_activity, run_artifacts]
+    runner:
+      kind: deferred
+      default_lowering_policy: best-effort-with-warnings
+      default_quality_profile: rust
+      default_quality_tools: [cargoFmt, cargoClippy]
+      default_reconciliation_posture: best-effort
+
+  - stable_id: pre_tool_rewrite
+    display_name: Claude/Codex pre-tool rewrite
+    order: 70
+    default_mode: cross
+    supported_modes: [cross]
+    supported_harnesses: [claude-code, codex]
+    default_harnesses: [claude-code, codex]
+    required_hooks: [pre_tool]

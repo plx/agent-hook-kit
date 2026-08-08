@@ -1,0 +1,16 @@
+//! Managed exact-event handler exports for this native harness.
+//!
+//! Customize the handler files under `hooks/native/`; Copier can safely
+//! refresh this selection-dependent module during recopy and update.
+
+{% for event in event_catalog.events -%}
+{% if event.harness == harness and event.stable_id in native_hooks and
+      (event.stable_id != "pre_tool_use" or starter == "custom") -%}
+#[path = "native/{{ event.harness | replace('-', '_') }}_{{ event.stable_id }}.rs"]
+mod {{ event.harness | replace('-', '_') }}_{{ event.stable_id }}_handler;
+pub use {{ event.harness | replace('-', '_') }}_{{ event.stable_id }}_handler::handle as {{ event.stable_id }};
+{% endif -%}
+{% endfor -%}
+{% if starter != "custom" and "pre_tool_use" in native_hooks -%}
+// This archetype lowers `PreToolUse` through its dedicated managed adapter.
+{% endif -%}

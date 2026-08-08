@@ -7,10 +7,12 @@ aligned observer; new installations should bind the shipped binary:
 ```bash
 file-activity-agent-hook --claude
 file-activity-agent-hook --codex
+file-activity-agent-hook --antigravity
 ```
 
-The example keeps `--harness=claude|codex` and `--state-dir=PATH`
-compatible, while the shipped binary accepts those aliases as well.
+The example keeps `--harness=claude|codex|antigravity` and
+`--state-dir=PATH` compatible, while the shipped binary accepts those aliases
+as well.
 
 The hook uses `hookkit-file-activity` to classify known structured writer
 names, parse `apply_patch` headers, and run the bounded `hookkit-shell`
@@ -73,15 +75,15 @@ combined result for a complete audit log.
 
 ## API findings
 
-- The aligned `PostToolUse` API makes the Claude Code and Codex executable
-  genuinely shared while preserving native input and output arms.
-- Antigravity is not offered as a mode: its `PostToolUse` payload has no tool
-  call or arguments, while observing `PreToolUse` would require returning a
-  permission decision and would record attempts rather than completed calls.
+- The aligned `PostToolUse` API makes the Claude Code, Codex, and Antigravity
+  executable genuinely shared while preserving native input and output arms.
+- Antigravity is offered as a mode because its `PostToolUse` payload carries the
+  originating tool call and arguments. It does not carry a tool result, and its
+  missing precise session-start producer makes initial mtime reconciliation
+  best effort.
 - Aligned `TurnCompletion` maps Claude Code, Codex, and Antigravity `Stop`
-  without erasing their native contracts. Antigravity still
-  cannot contribute modified paths because its `PostToolUse` omits the tool
-  call.
+  without erasing their native contracts. All three can consume directly
+  observed modified paths.
 - The tracker and consumer coordinate only through the versioned
   `agent-hook-kit.file-activity` family; unrelated hook families remain
   isolated.

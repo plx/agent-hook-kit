@@ -1,0 +1,29 @@
+# Internal deterministic resolver output consumed by conditional template paths.
+effective_fixture_ids:
+  type: yaml
+  when: false
+  default: >-
+    [
+    {%- for event in event_catalog.events -%}
+    {%- set selected = namespace(value=false) -%}
+    {%- if harness_mode == "single"
+          and event.harness == harness
+          and event.stable_id in native_hooks -%}
+    {%- set selected.value = true -%}
+    {%- elif harness_mode == "cross"
+          and event.harness in harnesses
+          and event.aligned_family
+          and event.aligned_family in aligned_hooks -%}
+    {%- set selected.value = true -%}
+    {%- elif "file_activity" in state_capabilities
+          and harness_mode == "cross"
+          and event.harness in ["claude-code", "codex"]
+          and event.harness in harnesses
+          and event.stable_id == "session_start" -%}
+    {%- set selected.value = true -%}
+    {%- endif -%}
+    {%- if selected.value -%}
+    {{ (event.harness ~ ":" ~ event.stable_id) | tojson }},
+    {%- endif -%}
+    {%- endfor -%}
+    ]

@@ -1,0 +1,23 @@
+//! User-owned acknowledgeable queue record type.
+
+use serde::{Deserialize, Serialize};
+
+/// Persisted schema version of [`QueueRecord`].
+///
+/// Bump this before making an incompatible change to the record below. This
+/// constant is protected together with the schema it versions.
+pub const RECORD_QUEUE_VERSION: u32 = 1;
+
+/// Example application record stored in the acknowledgeable queue.
+///
+/// Replace these fields with the durable work item your hook needs, then bump
+/// [`RECORD_QUEUE_VERSION`] before making an incompatible persisted-schema
+/// change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueRecord {
+    /// Application-defined record category.
+    pub kind: String,
+    /// Application-defined record payload.
+    pub message: String,
+}

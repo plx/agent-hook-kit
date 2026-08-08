@@ -1,0 +1,91 @@
+name: {{ (project_name ~ " hook CI") | tojson }}
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: {% raw %}${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}{% endraw %}
+  cancel-in-progress: {% raw %}${{ github.event_name == 'pull_request' }}{% endraw %}
+
+jobs:
+  {{ package_name | replace('-', '_') }}_hook_checks:
+    name: {{ (package_name ~ " hook checks") | tojson }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+{% if output_mode == "project" %}
+          - macos-latest
+{% endif %}
+    runs-on: {% raw %}${{ matrix.os }}{% endraw %}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust {{ compatibility.rust_msrv }}
+        uses: dtolnay/rust-toolchain@{{ compatibility.rust_msrv }}
+
+      - name: Install stable Rust with lint components
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache {{ package_name }} build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: {{ (package_name ~ "-hook") | tojson }}
+          workspaces: {{ (crate_path ~ " -> target") | tojson }}
+
+{% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
+      - name: Install Pkl {{ compatibility.pkl_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)" in
+            Darwin) pkl_os=macos ;;
+            Linux) pkl_os=linux ;;
+            *) echo "unsupported Pkl runner OS" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            x86_64) pkl_arch=amd64 ;;
+            arm64|aarch64) pkl_arch=aarch64 ;;
+            *) echo "unsupported Pkl runner architecture" >&2; exit 1 ;;
+          esac
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/pkl" \
+            "https://github.com/apple/pkl/releases/download/{{ compatibility.pkl_version }}/pkl-${pkl_os}-${pkl_arch}"
+          chmod +x "$RUNNER_TEMP/pkl"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+{% endif %}
+      - name: Check the MSRV
+        run: >-
+          cargo +{{ compatibility.rust_msrv }} check
+          --manifest-path {{ crate_path }}/Cargo.toml
+          --all-targets
+
+      - name: Check formatting
+        run: >-
+          cargo fmt
+          --manifest-path {{ crate_path }}/Cargo.toml
+          --all
+          -- --check
+
+      - name: Run Clippy
+        run: >-
+          cargo clippy
+          --manifest-path {{ crate_path }}/Cargo.toml
+          --all-targets
+          --all-features
+          -- -D warnings
+
+      - name: Run tests
+        run: >-
+          cargo test
+          --manifest-path {{ crate_path }}/Cargo.toml
+          --all-targets

@@ -1,0 +1,11 @@
+//! {{ description }}.
+//!
+//! `scaffold` is maintained by Copier. Put domain policy in `hooks`.
+
+pub mod hooks;
+pub mod scaffold;
+
+/// Dispatch one parsed CLI invocation through its exact HookKit contract.
+pub fn run(cli: scaffold::cli::Cli) -> std::process::ExitCode {
+    scaffold::dispatch::run(cli)
+}

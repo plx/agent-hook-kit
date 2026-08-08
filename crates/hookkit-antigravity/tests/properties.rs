@@ -1,8 +1,8 @@
 //! Property tests for Antigravity's discriminator-free native contracts.
 
 use hookkit_antigravity::{
-    InjectStep, PreInvocation, PreInvocationOutput, PreToolUse, PreToolUseOutput, Stop, StopOutput,
-    ToolDecision,
+    InjectStep, PostToolUse, PostToolUseOutput, PreInvocation, PreInvocationOutput, PreToolUse,
+    PreToolUseOutput, Stop, StopOutput, ToolDecision,
 };
 use hookkit_core::EventSpec;
 use proptest::prelude::*;
@@ -48,6 +48,21 @@ proptest! {
                 prop_assert_eq!(actual, expected);
             }
         }
+    }
+
+    /// Property: successful process diagnostics are orthogonal to the exact
+    /// empty-object PostToolUse response.
+    #[test]
+    fn post_tool_protocol_stderr_preserves_exact_stdout(stderr in any::<String>()) {
+        let emission = PostToolUse::emit(
+            PostToolUseOutput::default()
+                .with_protocol_stderr(stderr.clone())
+                .unwrap()
+        ).unwrap();
+
+        prop_assert_eq!(emission.stdout(), b"{}");
+        prop_assert_eq!(emission.stderr(), stderr.as_bytes());
+        prop_assert_eq!(emission.exit_code(), 0);
     }
 
     /// Property: Stop's decision is the only required non-empty semantic

@@ -1,0 +1,25 @@
+//! Editable context assembled at an exact Claude Code or Codex session start.
+
+/// Build optional agent context from the portable session-start source.
+///
+/// Return `None` to remain silent. Native-only fields remain available in the
+/// lossless input arm handled by `hooks::aligned::session_start`.
+pub fn build_context(source: Option<&str>) -> Option<String> {
+    Some(format!(
+        "{{ project_name }} initialized for a {} session.",
+        source.unwrap_or("new")
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_records_the_portable_source() {
+        assert_eq!(
+            build_context(Some("fork")).as_deref(),
+            Some("{{ project_name }} initialized for a fork session.")
+        );
+    }
+}

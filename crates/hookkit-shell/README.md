@@ -124,8 +124,9 @@ Each `FileAccessCandidate` carries:
   that inferred it.
 
 The default analyzer understands file redirections and a deliberately bounded
-table of common readers, listings, searches, `sed` (including in-place mode), direct mutators, removals,
-copy/move/link commands, and indirect shell evaluation. Unknown commands,
+table of common readers, listings, searches, `sed` (including in-place mode),
+direct mutators, removals, copy/move/link commands, and indirect shell
+evaluation. Unknown commands,
 ambiguous option layouts, dynamic paths, indirect evaluation, partial parsing,
 and unavailable analysis are retained in `FileAccessReport::unresolved`
 instead of being silently treated as file-free.
@@ -156,11 +157,13 @@ Native adapters recognize the contract-backed names and fields only:
 | Harness event | Exact tool | Command location |
 | --- | --- | --- |
 | Claude/Codex tool events | `Bash` | `/command` |
-| Antigravity `PreToolUse` | `run_command` | `/CommandLine` |
+| Antigravity `PreToolUse` / `PostToolUse` | `run_command` | `/CommandLine` |
 
-Antigravity's current `PostToolUse` input does not contain the originating tool
-call, so no post-tool adapter is provided. Correlating it with prior events is
-session-state work outside this crate.
+Antigravity's current `PostToolUse` input carries the originating `toolCall`, so
+the same exact adapter is available in both tool phases. The optional `/Cwd`
+value overrides the first workspace path used as the fallback cwd. Its
+post-tool input does not carry a tool result, so extraction has no response
+value.
 
 Use `ShellToolProfile` to describe an exact custom tool name and JSON Pointer;
 the bundled adapters do not guess aliases such as `shell` or `exec_command`.

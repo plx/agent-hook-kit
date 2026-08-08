@@ -25,6 +25,19 @@ enum Command {
         #[command(subcommand)]
         command: ContractsCommand,
     },
+    /// Validate or synchronize the Copier event and alignment catalog.
+    TemplateCatalog {
+        #[command(subcommand)]
+        command: TemplateCatalogCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum TemplateCatalogCommand {
+    /// Validate registry coverage, alignment members, and generated question data.
+    Check,
+    /// Validate the canonical catalog and refresh its generated Copier question data.
+    Sync,
 }
 
 #[derive(Subcommand)]
@@ -488,6 +501,196 @@ struct ImplementationEvent {
     conformance_cases: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EventScaffoldCatalog {
+    format_version: u32,
+    events: Vec<EventScaffold>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EventScaffold {
+    contract: String,
+    harness: String,
+    snapshot: String,
+    wire_event: String,
+    stable_id: String,
+    display_name: String,
+    category: String,
+    order: u16,
+    rust_event: String,
+    rust_output: String,
+    selector: ScaffoldSelector,
+    starter: ScaffoldStarter,
+    fixture: ScaffoldFixture,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    aligned_family: Option<String>,
+    capabilities: ScaffoldCapabilities,
+    support: ScaffoldSupport,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScaffoldSelector {
+    rust_type: String,
+    variant: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScaffoldStarter {
+    strategy: String,
+    expression: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScaffoldFixture {
+    source: String,
+    case: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<String>,
+    /// Representative input materialized only in generated Copier data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScaffoldCapabilities {
+    input_rewrite: bool,
+    true_pre_action_block: bool,
+    post_action_feedback: bool,
+    output_ignored: bool,
+    output_advisory: bool,
+    tool_result: bool,
+    separate_user_agent_messages: bool,
+    session_boundary: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScaffoldSupport {
+    status: String,
+    note: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AlignmentCatalog {
+    format_version: u32,
+    alignments: Vec<AlignmentFamily>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AlignmentFamily {
+    stable_id: String,
+    display_name: String,
+    order: u16,
+    runtime_marker: String,
+    supported_harnesses: Vec<String>,
+    native_members: BTreeMap<String, String>,
+    portable_floor: PortableFloor,
+    capabilities: AlignmentCapabilities,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PortableFloor {
+    input: String,
+    output: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AlignmentCapabilities {
+    input_rewrite: bool,
+    true_pre_action_block: bool,
+    post_action_feedback: bool,
+    tool_result: bool,
+    separate_user_agent_messages: bool,
+    exact_session_boundary: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ArchetypeCatalog {
+    format_version: u32,
+    archetypes: Vec<Archetype>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Archetype {
+    stable_id: String,
+    display_name: String,
+    order: u16,
+    default_mode: String,
+    supported_modes: Vec<String>,
+    supported_harnesses: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    default_harnesses: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    required_hooks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    default_cross_hooks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    default_single_hooks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    required_state: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runner: Option<ArchetypeRunner>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ArchetypeRunner {
+    kind: String,
+    default_lowering_policy: String,
+    default_quality_profile: String,
+    default_quality_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_reconciliation_posture: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CompatibilityCatalog {
+    format_version: u32,
+    template_version: String,
+    copier_version: String,
+    rust_msrv: String,
+    pkl_version: String,
+    hookkit: HookkitCompatibility,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HookkitCompatibility {
+    repository: String,
+    git_revision: String,
+    crates_io_version: String,
+}
+
+#[derive(Serialize)]
+struct GeneratedQuestionCatalog<'a> {
+    event_catalog: HiddenCatalogQuestion<'a, EventScaffoldCatalog>,
+    alignment_catalog: HiddenCatalogQuestion<'a, AlignmentCatalog>,
+    archetype_catalog: HiddenCatalogQuestion<'a, ArchetypeCatalog>,
+    compatibility: HiddenCatalogQuestion<'a, CompatibilityCatalog>,
+}
+
+#[derive(Serialize)]
+struct HiddenCatalogQuestion<'a, T> {
+    r#type: &'static str,
+    when: bool,
+    default: &'a T,
+}
+
 struct LoadedContract {
     contract: Contract,
     dir: PathBuf,
@@ -558,6 +761,48 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        Command::TemplateCatalog {
+            command: TemplateCatalogCommand::Check,
+        } => {
+            let (events, alignments, archetypes, compatibility) = check_template_catalog(&root)?;
+            check_generated_question_catalog(
+                &root,
+                &events,
+                &alignments,
+                &archetypes,
+                &compatibility,
+            )?;
+            check_generated_fixture_templates(&root, &events)?;
+            check_generated_handler_templates(&root, &events, &alignments)?;
+            println!(
+                "validated {} event scaffolds, {} alignment families, and {} archetypes",
+                events.events.len(),
+                alignments.alignments.len(),
+                archetypes.archetypes.len()
+            );
+            Ok(())
+        }
+        Command::TemplateCatalog {
+            command: TemplateCatalogCommand::Sync,
+        } => {
+            let (events, alignments, archetypes, compatibility) = check_template_catalog(&root)?;
+            write_generated_question_catalog(
+                &root,
+                &events,
+                &alignments,
+                &archetypes,
+                &compatibility,
+            )?;
+            write_generated_fixture_templates(&root, &events)?;
+            write_generated_handler_templates(&root, &events, &alignments)?;
+            println!(
+                "synchronized {} event scaffolds, {} alignment families, and {} archetypes",
+                events.events.len(),
+                alignments.alignments.len(),
+                archetypes.archetypes.len()
+            );
+            Ok(())
+        }
     }
 }
 
@@ -567,6 +812,1010 @@ fn workspace_root() -> Result<PathBuf> {
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "xtask manifest has no parent".to_string())
+}
+
+fn check_template_catalog(
+    root: &Path,
+) -> Result<(
+    EventScaffoldCatalog,
+    AlignmentCatalog,
+    ArchetypeCatalog,
+    CompatibilityCatalog,
+)> {
+    let catalog_root = root.join("templates/hook-project/catalog");
+    let events_path = catalog_root.join("event-scaffolds.yml");
+    let alignments_path = catalog_root.join("alignment-families.yml");
+    let archetypes_path = catalog_root.join("archetypes.yml");
+    let compatibility_path = catalog_root.join("compatibility.yml");
+    let implementation_path = root.join("contracts/status/implementation/registry.json");
+
+    let mut events: EventScaffoldCatalog = read_yaml(&events_path)?;
+    let alignments: AlignmentCatalog = read_yaml(&alignments_path)?;
+    let archetypes: ArchetypeCatalog = read_yaml(&archetypes_path)?;
+    let compatibility: CompatibilityCatalog = read_yaml(&compatibility_path)?;
+    let implementation: ImplementationRegistry =
+        serde_json::from_value(read_json(&implementation_path)?)
+            .map_err(|error| format!("invalid implementation registry: {error}"))?;
+
+    validate_template_catalog(
+        root,
+        &events,
+        &alignments,
+        &archetypes,
+        &compatibility,
+        &implementation,
+    )?;
+    hydrate_template_fixture_values(root, &mut events)?;
+    Ok((events, alignments, archetypes, compatibility))
+}
+
+fn hydrate_template_fixture_values(root: &Path, events: &mut EventScaffoldCatalog) -> Result<()> {
+    for event in &mut events.events {
+        let fixtures: Fixtures = read_yaml(&root.join(&event.fixture.source))?;
+        let value = fixtures
+            .input
+            .positive
+            .into_iter()
+            .find(|case| case.id == event.fixture.case)
+            .map(|case| case.value)
+            .ok_or_else(|| {
+                format!(
+                    "event scaffold {} fixture source has no positive case {}",
+                    event.contract, event.fixture.case
+                )
+            })?;
+        event.fixture.value = Some(value);
+    }
+    Ok(())
+}
+
+fn validate_template_catalog(
+    root: &Path,
+    events: &EventScaffoldCatalog,
+    alignments: &AlignmentCatalog,
+    archetypes: &ArchetypeCatalog,
+    compatibility: &CompatibilityCatalog,
+    implementation: &ImplementationRegistry,
+) -> Result<()> {
+    require_version(events.format_version, "event scaffold catalog")?;
+    require_version(alignments.format_version, "alignment catalog")?;
+    require_version(archetypes.format_version, "archetype catalog")?;
+    require_version(
+        compatibility.format_version,
+        "template compatibility catalog",
+    )?;
+    require_version(
+        implementation.format_version,
+        "implementation registry used by template catalog",
+    )?;
+
+    let implemented: BTreeMap<_, _> = implementation
+        .events
+        .iter()
+        .filter(|event| event.bindings.iter().any(|binding| binding == "command"))
+        .map(|event| (event.contract.as_str(), event))
+        .collect();
+    let mut scaffold_by_contract = BTreeMap::new();
+    let mut order_keys = BTreeSet::new();
+    for event in &events.events {
+        if scaffold_by_contract
+            .insert(event.contract.as_str(), event)
+            .is_some()
+        {
+            return Err(format!(
+                "event scaffold catalog contains duplicate contract {}",
+                event.contract
+            ));
+        }
+        if !order_keys.insert((event.harness.as_str(), event.order)) {
+            return Err(format!(
+                "event scaffold catalog reuses order {} for harness {}",
+                event.order, event.harness
+            ));
+        }
+        let Some(registered) = implemented.get(event.contract.as_str()) else {
+            return Err(format!(
+                "event scaffold {} is stale or is not an implemented command contract",
+                event.contract
+            ));
+        };
+        if registered.harness != event.harness || registered.event != event.wire_event {
+            return Err(format!(
+                "event scaffold {} does not match implementation registry identity",
+                event.contract
+            ));
+        }
+        let expected_prefix = format!("{}/{}/", event.harness, event.snapshot);
+        if !event.contract.starts_with(&expected_prefix)
+            || event.contract.strip_prefix(&expected_prefix) != Some(event.wire_event.as_str())
+        {
+            return Err(format!(
+                "event scaffold {} has inconsistent harness, snapshot, or wire event",
+                event.contract
+            ));
+        }
+        if !registered.native_input || !registered.native_output {
+            return Err(format!(
+                "event scaffold {} requires native input and output implementations",
+                event.contract
+            ));
+        }
+        if !valid_stable_id(&event.stable_id)
+            || event.display_name.trim().is_empty()
+            || event.category.trim().is_empty()
+            || !valid_rust_path(&event.rust_event)
+            || !valid_rust_path(&event.rust_output)
+            || !valid_rust_path(&event.selector.rust_type)
+            || event.selector.variant != event.wire_event
+        {
+            return Err(format!(
+                "event scaffold {} has invalid presentation or Rust metadata",
+                event.contract
+            ));
+        }
+        if !matches!(
+            event.starter.strategy.as_str(),
+            "no_op" | "allow" | "example" | "must_implement"
+        ) || event.starter.expression.trim().is_empty()
+        {
+            return Err(format!(
+                "event scaffold {} has an invalid starter",
+                event.contract
+            ));
+        }
+        if !matches!(event.support.status.as_str(), "scaffolded" | "unsupported")
+            || event.support.note.trim().is_empty()
+            || !matches!(
+                event.capabilities.session_boundary.as_str(),
+                "none" | "exact" | "inferred"
+            )
+        {
+            return Err(format!(
+                "event scaffold {} has invalid support or capability metadata",
+                event.contract
+            ));
+        }
+        let fixture = root.join(&event.fixture.source);
+        if event.fixture.source.starts_with('/')
+            || event.fixture.source.split('/').any(|part| part == "..")
+            || !fixture.is_file()
+            || event.fixture.case.trim().is_empty()
+        {
+            return Err(format!(
+                "event scaffold {} references an invalid fixture",
+                event.contract
+            ));
+        }
+        let fixtures: Fixtures = read_yaml(&fixture)?;
+        if !fixtures
+            .input
+            .positive
+            .iter()
+            .any(|case| case.id == event.fixture.case)
+        {
+            return Err(format!(
+                "event scaffold {} fixture source has no positive case {}",
+                event.contract, event.fixture.case
+            ));
+        }
+        if event
+            .fixture
+            .environment
+            .as_deref()
+            .is_some_and(str::is_empty)
+        {
+            return Err(format!(
+                "event scaffold {} has an empty environment fixture ID",
+                event.contract
+            ));
+        }
+    }
+
+    let implemented_contracts: BTreeSet<_> = implemented.keys().copied().collect();
+    let scaffold_contracts: BTreeSet<_> = scaffold_by_contract.keys().copied().collect();
+    if scaffold_contracts != implemented_contracts {
+        let missing: Vec<_> = implemented_contracts
+            .difference(&scaffold_contracts)
+            .copied()
+            .collect();
+        let stale: Vec<_> = scaffold_contracts
+            .difference(&implemented_contracts)
+            .copied()
+            .collect();
+        return Err(format!(
+            "event scaffold coverage differs from implementation registry (missing: {}; stale: {})",
+            missing.join(", "),
+            stale.join(", ")
+        ));
+    }
+
+    let implemented_markers = implemented_alignment_markers();
+    let mut families = BTreeMap::new();
+    let mut marker_names = BTreeSet::new();
+    let mut alignment_orders = BTreeSet::new();
+    for family in &alignments.alignments {
+        if !valid_stable_id(&family.stable_id)
+            || family.display_name.trim().is_empty()
+            || family.portable_floor.input.trim().is_empty()
+            || family.portable_floor.output.trim().is_empty()
+        {
+            return Err(format!(
+                "alignment {} has invalid identity or portable-floor metadata",
+                family.stable_id
+            ));
+        }
+        if families.insert(family.stable_id.as_str(), family).is_some()
+            || !marker_names.insert(family.runtime_marker.as_str())
+            || !alignment_orders.insert(family.order)
+        {
+            return Err(format!(
+                "alignment {} duplicates an ID, marker, or display order",
+                family.stable_id
+            ));
+        }
+        if !implemented_markers.contains(family.runtime_marker.as_str()) {
+            return Err(format!(
+                "alignment {} references unimplemented runtime marker {}",
+                family.stable_id, family.runtime_marker
+            ));
+        }
+        let supported: BTreeSet<_> = family
+            .supported_harnesses
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let members: BTreeSet<_> = family.native_members.keys().map(String::as_str).collect();
+        if supported.len() != family.supported_harnesses.len()
+            || supported != members
+            || supported.is_empty()
+            || !supported
+                .iter()
+                .all(|harness| matches!(*harness, "claude-code" | "codex" | "antigravity"))
+        {
+            return Err(format!(
+                "alignment {} has inconsistent supported harnesses and native members",
+                family.stable_id
+            ));
+        }
+
+        let mut member_scaffolds = Vec::new();
+        for (harness, contract) in &family.native_members {
+            let Some(scaffold) = scaffold_by_contract.get(contract.as_str()).copied() else {
+                return Err(format!(
+                    "alignment {} references stale native member {}",
+                    family.stable_id, contract
+                ));
+            };
+            if scaffold.harness != *harness
+                || scaffold.aligned_family.as_deref() != Some(family.stable_id.as_str())
+            {
+                return Err(format!(
+                    "alignment {} member {} has inconsistent harness or reverse mapping",
+                    family.stable_id, contract
+                ));
+            }
+            member_scaffolds.push(scaffold);
+        }
+        validate_alignment_capability_floor(family, &member_scaffolds)?;
+    }
+
+    for event in &events.events {
+        let Some(family_id) = event.aligned_family.as_deref() else {
+            continue;
+        };
+        let Some(family) = families.get(family_id) else {
+            return Err(format!(
+                "event scaffold {} references unknown alignment {}",
+                event.contract, family_id
+            ));
+        };
+        if family.native_members.get(&event.harness) != Some(&event.contract) {
+            return Err(format!(
+                "event scaffold {} is not the registered {} member for its harness",
+                event.contract, family_id
+            ));
+        }
+    }
+
+    let known_harnesses = BTreeSet::from(["claude-code", "codex", "antigravity"]);
+    let known_state = BTreeSet::from([
+        "session_metadata",
+        "claim_once",
+        "inspectable_set",
+        "record_queue",
+        "run_artifacts",
+        "custom_aggregate",
+        "file_activity",
+    ]);
+    let mut archetype_ids = BTreeSet::new();
+    let mut archetype_orders = BTreeSet::new();
+    for archetype in &archetypes.archetypes {
+        let modes: BTreeSet<_> = archetype
+            .supported_modes
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let supported: BTreeSet<_> = archetype
+            .supported_harnesses
+            .iter()
+            .map(String::as_str)
+            .collect();
+        if !valid_stable_id(&archetype.stable_id)
+            || archetype.display_name.trim().is_empty()
+            || !archetype_ids.insert(archetype.stable_id.as_str())
+            || !archetype_orders.insert(archetype.order)
+            || modes.len() != archetype.supported_modes.len()
+            || modes.is_empty()
+            || !modes.iter().all(|mode| matches!(*mode, "cross" | "single"))
+            || !modes.contains(archetype.default_mode.as_str())
+            || supported.len() != archetype.supported_harnesses.len()
+            || supported.is_empty()
+            || !supported.is_subset(&known_harnesses)
+        {
+            return Err(format!(
+                "archetype {} has invalid identity, mode, harness, or order metadata",
+                archetype.stable_id
+            ));
+        }
+        if modes.contains("cross") {
+            let defaults: BTreeSet<_> = archetype
+                .default_harnesses
+                .iter()
+                .map(String::as_str)
+                .collect();
+            if defaults.len() != archetype.default_harnesses.len()
+                || defaults.len() < 2
+                || !defaults.is_subset(&supported)
+            {
+                return Err(format!(
+                    "archetype {} has invalid default cross-harness selection",
+                    archetype.stable_id
+                ));
+            }
+        } else if !archetype.default_harnesses.is_empty() {
+            return Err(format!(
+                "archetype {} declares cross defaults without cross support",
+                archetype.stable_id
+            ));
+        }
+        if modes.contains("single") {
+            if archetype
+                .default_harness
+                .as_deref()
+                .is_none_or(|harness| !supported.contains(harness))
+            {
+                return Err(format!(
+                    "archetype {} has invalid default single harness",
+                    archetype.stable_id
+                ));
+            }
+        } else if archetype.default_harness.is_some() {
+            return Err(format!(
+                "archetype {} declares a single default without single support",
+                archetype.stable_id
+            ));
+        }
+        let required_hooks: BTreeSet<_> = archetype
+            .required_hooks
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let required_state: BTreeSet<_> = archetype
+            .required_state
+            .iter()
+            .map(String::as_str)
+            .collect();
+        if required_hooks.len() != archetype.required_hooks.len()
+            || required_state.len() != archetype.required_state.len()
+            || !required_state.is_subset(&known_state)
+        {
+            return Err(format!(
+                "archetype {} has duplicate or unknown requirements",
+                archetype.stable_id
+            ));
+        }
+        let cross_hooks = if archetype.default_cross_hooks.is_empty() {
+            &archetype.required_hooks
+        } else {
+            &archetype.default_cross_hooks
+        };
+        let single_hooks = if archetype.default_single_hooks.is_empty() {
+            &archetype.required_hooks
+        } else {
+            &archetype.default_single_hooks
+        };
+        if !archetype
+            .required_hooks
+            .iter()
+            .all(|hook| cross_hooks.contains(hook) || single_hooks.contains(hook))
+        {
+            return Err(format!(
+                "archetype {} defaults omit a required hook",
+                archetype.stable_id
+            ));
+        }
+        if modes.contains("cross") {
+            for hook in cross_hooks {
+                let Some(family) = families.get(hook.as_str()) else {
+                    return Err(format!(
+                        "archetype {} requires unknown aligned hook {}",
+                        archetype.stable_id, hook
+                    ));
+                };
+                if !archetype
+                    .default_harnesses
+                    .iter()
+                    .all(|harness| family.supported_harnesses.contains(harness))
+                {
+                    return Err(format!(
+                        "archetype {} requires {} outside its default harness tier",
+                        archetype.stable_id, hook
+                    ));
+                }
+            }
+        } else if !archetype.default_cross_hooks.is_empty() {
+            return Err(format!(
+                "archetype {} declares cross hook defaults without cross support",
+                archetype.stable_id
+            ));
+        }
+        if modes.contains("single") {
+            for hook in single_hooks {
+                if !archetype.supported_harnesses.iter().all(|harness| {
+                    events
+                        .events
+                        .iter()
+                        .any(|event| event.harness == *harness && event.stable_id == *hook)
+                }) {
+                    return Err(format!(
+                        "archetype {} requires native hook {} absent from a supported harness",
+                        archetype.stable_id, hook
+                    ));
+                }
+            }
+        } else if !archetype.default_single_hooks.is_empty() {
+            return Err(format!(
+                "archetype {} declares single hook defaults without single support",
+                archetype.stable_id
+            ));
+        }
+        if let Some(runner) = &archetype.runner {
+            let valid_reconciliation = match runner.kind.as_str() {
+                "immediate" => runner.default_reconciliation_posture.is_none(),
+                "deferred" => matches!(
+                    runner.default_reconciliation_posture.as_deref(),
+                    Some("best-effort" | "strict")
+                ),
+                _ => false,
+            };
+            if !valid_reconciliation
+                || !matches!(
+                    runner.default_lowering_policy.as_str(),
+                    "strict" | "best-effort" | "best-effort-with-warnings"
+                )
+                || runner.default_quality_profile.trim().is_empty()
+                || runner.default_quality_tools.is_empty()
+                || runner
+                    .default_quality_tools
+                    .iter()
+                    .any(|tool| tool.trim().is_empty())
+            {
+                return Err(format!(
+                    "archetype {} has invalid runner defaults",
+                    archetype.stable_id
+                ));
+            }
+        }
+    }
+    if !archetype_ids.contains("custom") {
+        return Err("archetype catalog must define the custom starter".to_string());
+    }
+
+    if !valid_version(&compatibility.template_version, true)
+        || !valid_version(&compatibility.copier_version, false)
+        || !valid_version(&compatibility.rust_msrv, false)
+        || !valid_version(&compatibility.pkl_version, false)
+        || !valid_version(&compatibility.hookkit.crates_io_version, false)
+        || !compatibility.hookkit.repository.starts_with("https://")
+        || compatibility.hookkit.git_revision.len() != 40
+        || !compatibility
+            .hookkit
+            .git_revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(
+            "template compatibility catalog has invalid versions, repository, or Git revision"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_alignment_capability_floor(
+    family: &AlignmentFamily,
+    members: &[&EventScaffold],
+) -> Result<()> {
+    let all = |capability: fn(&ScaffoldCapabilities) -> bool| {
+        members
+            .iter()
+            .all(|member| capability(&member.capabilities))
+    };
+    let invalid = family.capabilities.input_rewrite && !all(|caps| caps.input_rewrite)
+        || family.capabilities.true_pre_action_block && !all(|caps| caps.true_pre_action_block)
+        || family.capabilities.post_action_feedback && !all(|caps| caps.post_action_feedback)
+        || family.capabilities.tool_result && !all(|caps| caps.tool_result)
+        || family.capabilities.separate_user_agent_messages
+            && !all(|caps| caps.separate_user_agent_messages)
+        || family.capabilities.exact_session_boundary
+            && !members
+                .iter()
+                .all(|member| member.capabilities.session_boundary == "exact");
+    if invalid {
+        return Err(format!(
+            "alignment {} advertises a capability absent from one or more native members",
+            family.stable_id
+        ));
+    }
+    Ok(())
+}
+
+fn implemented_alignment_markers() -> BTreeSet<&'static str> {
+    fn register<K: hookkit_runtime::aligned::AlignedEventSpec>(
+        markers: &mut BTreeSet<&'static str>,
+        path: &'static str,
+    ) {
+        let _ = std::marker::PhantomData::<K>;
+        markers.insert(path);
+    }
+
+    let mut markers = BTreeSet::new();
+    register::<hookkit_runtime::aligned::PreToolUse>(
+        &mut markers,
+        "hookkit_runtime::aligned::PreToolUse",
+    );
+    register::<hookkit_runtime::aligned::PostToolUse>(
+        &mut markers,
+        "hookkit_runtime::aligned::PostToolUse",
+    );
+    register::<hookkit_runtime::aligned::TurnCompletion>(
+        &mut markers,
+        "hookkit_runtime::aligned::TurnCompletion",
+    );
+    register::<hookkit_runtime::aligned::PermissionRequest>(
+        &mut markers,
+        "hookkit_runtime::aligned::PermissionRequest",
+    );
+    register::<hookkit_runtime::aligned::PreCompact>(
+        &mut markers,
+        "hookkit_runtime::aligned::PreCompact",
+    );
+    register::<hookkit_runtime::aligned::PostCompact>(
+        &mut markers,
+        "hookkit_runtime::aligned::PostCompact",
+    );
+    register::<hookkit_runtime::aligned::SessionStart>(
+        &mut markers,
+        "hookkit_runtime::aligned::SessionStart",
+    );
+    register::<hookkit_runtime::aligned::SessionEnd>(
+        &mut markers,
+        "hookkit_runtime::aligned::SessionEnd",
+    );
+    register::<hookkit_runtime::aligned::SubagentStart>(
+        &mut markers,
+        "hookkit_runtime::aligned::SubagentStart",
+    );
+    register::<hookkit_runtime::aligned::SubagentStop>(
+        &mut markers,
+        "hookkit_runtime::aligned::SubagentStop",
+    );
+    register::<hookkit_runtime::aligned::UserPromptSubmit>(
+        &mut markers,
+        "hookkit_runtime::aligned::UserPromptSubmit",
+    );
+    markers
+}
+
+fn valid_stable_id(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        && value.as_bytes()[0].is_ascii_lowercase()
+}
+
+fn valid_version(value: &str, allow_prerelease: bool) -> bool {
+    let (core, prerelease) = value
+        .split_once('-')
+        .map_or((value, None), |(core, tail)| (core, Some(tail)));
+    let components: Vec<_> = core.split('.').collect();
+    components.len() == 3
+        && components.iter().all(|component| {
+            !component.is_empty() && component.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        && match prerelease {
+            None => true,
+            Some(tail) => {
+                allow_prerelease
+                    && !tail.is_empty()
+                    && tail
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+            }
+        }
+}
+
+fn valid_rust_path(value: &str) -> bool {
+    let mut segments = value.split("::");
+    let valid_segment = |segment: &str| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            && (segment.as_bytes()[0].is_ascii_alphabetic() || segment.as_bytes()[0] == b'_')
+    };
+    segments.all(valid_segment)
+}
+
+fn render_generated_question_catalog(
+    events: &EventScaffoldCatalog,
+    alignments: &AlignmentCatalog,
+    archetypes: &ArchetypeCatalog,
+    compatibility: &CompatibilityCatalog,
+) -> Result<String> {
+    let generated = GeneratedQuestionCatalog {
+        event_catalog: HiddenCatalogQuestion {
+            r#type: "yaml",
+            when: false,
+            default: events,
+        },
+        alignment_catalog: HiddenCatalogQuestion {
+            r#type: "yaml",
+            when: false,
+            default: alignments,
+        },
+        archetype_catalog: HiddenCatalogQuestion {
+            r#type: "yaml",
+            when: false,
+            default: archetypes,
+        },
+        compatibility: HiddenCatalogQuestion {
+            r#type: "yaml",
+            when: false,
+            default: compatibility,
+        },
+    };
+    let yaml = serde_yaml_ng::to_string(&generated)
+        .map_err(|error| format!("cannot serialize generated template catalog: {error}"))?;
+    Ok(format!(
+        "# @generated by `cargo xtask template-catalog sync`; do not edit.\n{yaml}"
+    ))
+}
+
+fn generated_question_catalog_path(root: &Path) -> PathBuf {
+    root.join("templates/hook-project/questions/catalog.yml")
+}
+
+fn write_generated_question_catalog(
+    root: &Path,
+    events: &EventScaffoldCatalog,
+    alignments: &AlignmentCatalog,
+    archetypes: &ArchetypeCatalog,
+    compatibility: &CompatibilityCatalog,
+) -> Result<()> {
+    let path = generated_question_catalog_path(root);
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent", path.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
+    fs::write(
+        &path,
+        render_generated_question_catalog(events, alignments, archetypes, compatibility)?,
+    )
+    .map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn check_generated_question_catalog(
+    root: &Path,
+    events: &EventScaffoldCatalog,
+    alignments: &AlignmentCatalog,
+    archetypes: &ArchetypeCatalog,
+    compatibility: &CompatibilityCatalog,
+) -> Result<()> {
+    let path = generated_question_catalog_path(root);
+    let actual = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "{}: {error}; run cargo xtask template-catalog sync",
+            path.display()
+        )
+    })?;
+    let expected =
+        render_generated_question_catalog(events, alignments, archetypes, compatibility)?;
+    if actual != expected {
+        return Err(format!(
+            "{} is stale; run cargo xtask template-catalog sync",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn generated_fixture_template_root(root: &Path) -> PathBuf {
+    root.join("templates/hook-project/template/{{ crate_path }}/fixtures")
+}
+
+fn render_generated_fixture_templates(
+    events: &EventScaffoldCatalog,
+) -> Result<BTreeMap<PathBuf, String>> {
+    let mut rendered = BTreeMap::new();
+    for event in &events.events {
+        let condition = format!(
+            "'{}:{}' in effective_fixture_ids",
+            event.harness, event.stable_id
+        );
+        let filename = format!(
+            "{{% if {condition} %}}{}.json{{% endif %}}.jinja",
+            event.stable_id
+        );
+        let value = event.fixture.value.as_ref().ok_or_else(|| {
+            format!(
+                "generated fixture value was not hydrated for {}",
+                event.contract
+            )
+        })?;
+        let mut contents = serde_json::to_string_pretty(value)
+            .map_err(|error| format!("cannot serialize fixture {}: {error}", event.contract))?;
+        contents.push('\n');
+        rendered.insert(PathBuf::from(&event.harness).join(filename), contents);
+    }
+    Ok(rendered)
+}
+
+fn write_generated_fixture_templates(root: &Path, events: &EventScaffoldCatalog) -> Result<()> {
+    let fixture_root = generated_fixture_template_root(root);
+    if fixture_root.exists() {
+        fs::remove_dir_all(&fixture_root)
+            .map_err(|error| format!("{}: {error}", fixture_root.display()))?;
+    }
+    for (relative, contents) in render_generated_fixture_templates(events)? {
+        let path = fixture_root.join(relative);
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("{} has no parent", path.display()))?;
+        fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
+        fs::write(&path, contents).map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn check_generated_fixture_templates(root: &Path, events: &EventScaffoldCatalog) -> Result<()> {
+    let fixture_root = generated_fixture_template_root(root);
+    let expected = render_generated_fixture_templates(events)?;
+    let mut actual = BTreeMap::new();
+    if fixture_root.is_dir() {
+        for entry in walkdir::WalkDir::new(&fixture_root) {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "cannot enumerate generated fixture templates under {}: {error}",
+                    fixture_root.display()
+                )
+            })?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(&fixture_root)
+                .map_err(|error| error.to_string())?
+                .to_path_buf();
+            let contents = fs::read_to_string(entry.path())
+                .map_err(|error| format!("{}: {error}", entry.path().display()))?;
+            actual.insert(relative, contents);
+        }
+    }
+    if actual != expected {
+        return Err(format!(
+            "{} is stale; run cargo xtask template-catalog sync",
+            fixture_root.display()
+        ));
+    }
+    Ok(())
+}
+
+fn generated_handler_template_root(root: &Path) -> PathBuf {
+    root.join("templates/hook-project/template/{{ crate_path }}/src/hooks")
+}
+
+fn harness_module_prefix(harness: &str) -> String {
+    harness.replace('-', "_")
+}
+
+fn render_native_handler_template(event: &EventScaffold) -> String {
+    let expression = if event.starter.strategy == "must_implement" {
+        event
+            .starter
+            .expression
+            .strip_prefix("return ")
+            .unwrap_or(&event.starter.expression)
+            .to_owned()
+    } else {
+        format!("Ok({})", event.starter.expression)
+    };
+    format!(
+        concat!(
+            "//! @generated by `cargo xtask template-catalog sync`; customize after copying.\n",
+            "//! Native `{wire_event}` handler for `{contract}`.\n",
+            "\n",
+            "#[rustfmt::skip]\n",
+            "pub fn handle(\n",
+            "    _input: <{rust_event} as hookkit_core::EventSpec>::Input,\n",
+            "    _environment: &<{rust_event} as hookkit_core::EventSpec>::CommandEnvironment,\n",
+            "    _context: &hookkit_core::RuntimeContext<'_>,\n",
+            "    _state_dir: Option<&std::path::Path>,\n",
+            ") -> hookkit_core::Result<\n",
+            "    <{rust_event} as hookkit_core::EventSpec>::CommandOutput,\n",
+            "> {{\n",
+            "    {expression}\n",
+            "}}\n",
+        ),
+        wire_event = event.wire_event,
+        contract = event.contract,
+        rust_event = event.rust_event,
+        expression = expression,
+    )
+}
+
+fn render_aligned_handler_template(family: &AlignmentFamily) -> Result<String> {
+    let base = family.runtime_marker.rsplit("::").next().ok_or_else(|| {
+        format!(
+            "alignment {} has an invalid runtime marker",
+            family.stable_id
+        )
+    })?;
+    let body = match family.stable_id.as_str() {
+        "post_tool" => {
+            "    hookkit_common::PostToolUseOutput::no_op(context.harness())\n".to_owned()
+        }
+        "turn_completion" => {
+            "    hookkit_common::TurnCompletionOutput::allow(context.harness())\n".to_owned()
+        }
+        "permission_request" => {
+            "    hookkit_common::PermissionRequestOutput::allow(context.harness())\n".to_owned()
+        }
+        _ => format!("    hookkit_common::{base}Output::no_op(context.harness())\n"),
+    };
+    Ok(format!(
+        concat!(
+            "//! @generated by `cargo xtask template-catalog sync`; customize after copying.\n",
+            "//! Portable `{stable_id}` handler.\n",
+            "\n",
+            "#[rustfmt::skip]\n",
+            "pub fn handle(\n",
+            "    _input: hookkit_common::{base}Input,\n",
+            "    _environment: &hookkit_common::{base}CommandEnvironment,\n",
+            "    context: &hookkit_core::RuntimeContext<'_>,\n",
+            "    _state_dir: Option<&std::path::Path>,\n",
+            ") -> hookkit_core::Result<hookkit_common::{base}Output> {{\n",
+            "{body}",
+            "}}\n",
+        ),
+        stable_id = family.stable_id,
+        base = base,
+        body = body,
+    ))
+}
+
+fn render_generated_handler_templates(
+    events: &EventScaffoldCatalog,
+    alignments: &AlignmentCatalog,
+) -> Result<BTreeMap<PathBuf, String>> {
+    let mut rendered = BTreeMap::new();
+    for event in &events.events {
+        let condition = if event.stable_id == "pre_tool_use" {
+            format!(
+                "harness_mode == 'single' and starter == 'custom' and harness == '{}' and '{}' in native_hooks",
+                event.harness, event.stable_id
+            )
+        } else {
+            format!(
+                "harness_mode == 'single' and harness == '{}' and '{}' in native_hooks",
+                event.harness, event.stable_id
+            )
+        };
+        let filename = format!(
+            "{{% if {condition} %}}{}_{}.rs{{% endif %}}.jinja",
+            harness_module_prefix(&event.harness),
+            event.stable_id
+        );
+        rendered.insert(
+            PathBuf::from("native").join(filename),
+            render_native_handler_template(event),
+        );
+    }
+    for family in &alignments.alignments {
+        if family.stable_id == "pre_tool" {
+            continue;
+        }
+        let condition = format!(
+            "harness_mode == 'cross' and '{}' in aligned_hooks",
+            family.stable_id
+        );
+        let filename = format!(
+            "{{% if {condition} %}}{}.rs{{% endif %}}.jinja",
+            family.stable_id
+        );
+        rendered.insert(
+            PathBuf::from("aligned").join(filename),
+            render_aligned_handler_template(family)?,
+        );
+    }
+    Ok(rendered)
+}
+
+fn write_generated_handler_templates(
+    root: &Path,
+    events: &EventScaffoldCatalog,
+    alignments: &AlignmentCatalog,
+) -> Result<()> {
+    let handler_root = generated_handler_template_root(root);
+    for directory in ["native", "aligned"] {
+        let path = handler_root.join(directory);
+        if path.exists() {
+            fs::remove_dir_all(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        }
+    }
+    for (relative, contents) in render_generated_handler_templates(events, alignments)? {
+        let path = handler_root.join(relative);
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("{} has no parent", path.display()))?;
+        fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
+        fs::write(&path, contents).map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn check_generated_handler_templates(
+    root: &Path,
+    events: &EventScaffoldCatalog,
+    alignments: &AlignmentCatalog,
+) -> Result<()> {
+    let handler_root = generated_handler_template_root(root);
+    let expected = render_generated_handler_templates(events, alignments)?;
+    let mut actual = BTreeMap::new();
+    for directory in ["native", "aligned"] {
+        let path = handler_root.join(directory);
+        if !path.is_dir() {
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(&path) {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "cannot enumerate generated handler templates under {}: {error}",
+                    path.display()
+                )
+            })?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(&handler_root)
+                .map_err(|error| error.to_string())?
+                .to_path_buf();
+            let contents = fs::read_to_string(entry.path())
+                .map_err(|error| format!("{}: {error}", entry.path().display()))?;
+            actual.insert(relative, contents);
+        }
+    }
+    if actual != expected {
+        return Err(format!(
+            "generated handler templates under {} are stale; run cargo xtask template-catalog sync",
+            handler_root.display()
+        ));
+    }
+    Ok(())
 }
 
 fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
@@ -2863,5 +4112,187 @@ mod tests {
         )
         .expect_err("omitting an event must fail");
         assert!(error.contains("event coverage differs"));
+    }
+
+    fn current_template_catalog_parts() -> (
+        PathBuf,
+        EventScaffoldCatalog,
+        AlignmentCatalog,
+        ArchetypeCatalog,
+        CompatibilityCatalog,
+        ImplementationRegistry,
+    ) {
+        let root = workspace_root().expect("workspace root");
+        let catalog = root.join("templates/hook-project/catalog");
+        let events = read_yaml(&catalog.join("event-scaffolds.yml")).expect("event catalog");
+        let alignments =
+            read_yaml(&catalog.join("alignment-families.yml")).expect("alignment catalog");
+        let archetypes = read_yaml(&catalog.join("archetypes.yml")).expect("archetype catalog");
+        let compatibility =
+            read_yaml(&catalog.join("compatibility.yml")).expect("compatibility catalog");
+        let implementation = serde_json::from_value(
+            read_json(&root.join("contracts/status/implementation/registry.json"))
+                .expect("implementation registry"),
+        )
+        .expect("typed implementation registry");
+        (
+            root,
+            events,
+            alignments,
+            archetypes,
+            compatibility,
+            implementation,
+        )
+    }
+
+    #[test]
+    fn current_template_catalog_covers_all_implemented_command_events() {
+        let root = workspace_root().expect("workspace root");
+        let (events, alignments, archetypes, compatibility) =
+            check_template_catalog(&root).expect("current template catalog should be valid");
+        check_generated_question_catalog(&root, &events, &alignments, &archetypes, &compatibility)
+            .expect("generated Copier data should be current");
+        assert_eq!(events.events.len(), 47);
+        assert_eq!(alignments.alignments.len(), 11);
+    }
+
+    #[test]
+    fn template_catalog_rejects_missing_and_duplicate_scaffolds() {
+        let (root, events, alignments, archetypes, compatibility, implementation) =
+            current_template_catalog_parts();
+        let mut missing = events.clone();
+        missing.events.pop();
+        assert!(
+            validate_template_catalog(
+                &root,
+                &missing,
+                &alignments,
+                &archetypes,
+                &compatibility,
+                &implementation,
+            )
+            .expect_err("missing scaffold must fail")
+            .contains("coverage differs")
+        );
+
+        let mut duplicate = events.clone();
+        duplicate.events.push(events.events[0].clone());
+        assert!(
+            validate_template_catalog(
+                &root,
+                &duplicate,
+                &alignments,
+                &archetypes,
+                &compatibility,
+                &implementation,
+            )
+            .expect_err("duplicate scaffold must fail")
+            .contains("duplicate contract")
+        );
+    }
+
+    #[test]
+    fn template_catalog_rejects_stale_alignment_members_and_markers() {
+        let (root, events, alignments, archetypes, compatibility, implementation) =
+            current_template_catalog_parts();
+        let mut stale_member = alignments.clone();
+        stale_member.alignments[0]
+            .native_members
+            .insert("codex".into(), "codex/obsolete/PreToolUse".into());
+        assert!(
+            validate_template_catalog(
+                &root,
+                &events,
+                &stale_member,
+                &archetypes,
+                &compatibility,
+                &implementation,
+            )
+            .expect_err("stale member must fail")
+            .contains("stale native member")
+        );
+
+        let mut unknown_marker = alignments.clone();
+        unknown_marker.alignments[0].runtime_marker = "hookkit_runtime::aligned::Invented".into();
+        assert!(
+            validate_template_catalog(
+                &root,
+                &events,
+                &unknown_marker,
+                &archetypes,
+                &compatibility,
+                &implementation,
+            )
+            .expect_err("unknown marker must fail")
+            .contains("unimplemented runtime marker")
+        );
+    }
+
+    #[test]
+    fn template_catalog_rejects_invalid_archetypes_and_compatibility() {
+        let (root, events, alignments, archetypes, compatibility, implementation) =
+            current_template_catalog_parts();
+        let mut invalid_archetypes = archetypes.clone();
+        invalid_archetypes.archetypes[0]
+            .supported_harnesses
+            .push("invented".into());
+        assert!(
+            validate_template_catalog(
+                &root,
+                &events,
+                &alignments,
+                &invalid_archetypes,
+                &compatibility,
+                &implementation,
+            )
+            .expect_err("unknown archetype harness must fail")
+            .contains("invalid identity, mode, harness, or order")
+        );
+
+        let mut invalid_compatibility = compatibility.clone();
+        invalid_compatibility.hookkit.git_revision = "main".into();
+        assert!(
+            validate_template_catalog(
+                &root,
+                &events,
+                &alignments,
+                &archetypes,
+                &invalid_compatibility,
+                &implementation,
+            )
+            .expect_err("mutable compatibility revision must fail")
+            .contains("compatibility catalog")
+        );
+    }
+
+    #[test]
+    fn refreshed_event_regressions_are_explicit_in_the_scaffold_overlay() {
+        let (_, events, _, _, _, _) = current_template_catalog_parts();
+        let find = |contract: &str| {
+            events
+                .events
+                .iter()
+                .find(|event| event.contract == contract)
+                .expect("regression scaffold")
+        };
+
+        assert!(
+            find("claude-code/docs-2026-08-05-r1/DirectoryAdded")
+                .support
+                .note
+                .contains("source")
+        );
+        assert!(
+            find("claude-code/docs-2026-08-05-r1/SessionStart")
+                .support
+                .note
+                .contains("source=fork")
+        );
+        let codex_session_end = find("codex/commit-1e59dc5-r1/SessionEnd");
+        assert!(codex_session_end.capabilities.output_ignored);
+        assert!(codex_session_end.starter.expression.ends_with("::no_op()"));
+        let antigravity_post_tool = find("antigravity/docs-2026-08-04-r1/PostToolUse");
+        assert!(antigravity_post_tool.support.note.contains("typed"));
+        assert!(!antigravity_post_tool.capabilities.tool_result);
     }
 }

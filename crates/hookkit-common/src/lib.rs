@@ -9,9 +9,16 @@ pub mod aligned;
 pub mod message;
 
 pub use aligned::{
+    PermissionRequestCommandEnvironment, PermissionRequestInput, PermissionRequestOutput,
+    PostCompactCommandEnvironment, PostCompactInput, PostCompactOutput,
     PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput,
-    PreToolUseCommandEnvironment, PreToolUseInput, PreToolUseOutput, ToolInputRef,
+    PreCompactCommandEnvironment, PreCompactInput, PreCompactOutput, PreToolUseCommandEnvironment,
+    PreToolUseInput, PreToolUseOutput, SessionEndCommandEnvironment, SessionEndInput,
+    SessionEndOutput, SessionStartCommandEnvironment, SessionStartInput, SessionStartOutput,
+    SubagentStartCommandEnvironment, SubagentStartInput, SubagentStartOutput,
+    SubagentStopCommandEnvironment, SubagentStopInput, SubagentStopOutput, ToolInputRef,
     TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput,
+    UserPromptSubmitCommandEnvironment, UserPromptSubmitInput, UserPromptSubmitOutput,
 };
 pub use message::{
     AgentFeedback, DiagnosticArtifact, DiagnosticReport, FeedbackSeverity, MessageAudience,

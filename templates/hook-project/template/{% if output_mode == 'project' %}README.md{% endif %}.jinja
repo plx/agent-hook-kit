@@ -1,0 +1,19 @@
+# {{ project_name }}
+
+{{ description }}.
+
+The hook executable lives in [`{{ crate_path }}`]({{ crate_path }}) and uses
+explicit event subcommands. See the crate README for hook registration and
+the boundary between Copier-owned protocol adapters and editable policy.
+
+## Validate
+
+```sh
+cargo fmt --all -- --check
+cargo +{{ compatibility.rust_msrv }} check --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets
+```
+
+Copier generated this workspace without running tasks or changing external
+harness configuration.

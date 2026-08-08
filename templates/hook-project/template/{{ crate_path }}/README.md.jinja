@@ -1,0 +1,175 @@
+# {{ project_name }} CLI
+
+{{ description }}.
+
+`{{ binary_name }}` is a Rust 2024 hook executable generated from
+`agent-hook-kit`. It always takes an explicit event subcommand.
+{% if harness_mode == "cross" -%}
+Cross-harness commands also require an explicit `--harness` value.
+{% endif -%}
+It never guesses the hook from input JSON.
+
+## Commands
+
+```sh
+{% if harness_mode == "cross" -%}
+{% for stable_id in aligned_hooks -%}
+{{ binary_name }} \
+  --harness <{% for selected_harness in harnesses %}{{ "claude" if selected_harness == "claude-code" else selected_harness }}{% if not loop.last %}|{% endif %}{% endfor %}> \
+{% if (starter == "immediate_quality" and stable_id == "post_tool") or ((starter == "deferred_quality" or "file_activity" in state_capabilities) and stable_id == "turn_completion") %}  --config <absolute-config-path> \
+{% endif %}{% if state_capabilities %}  --state-dir <state-directory> \
+{% endif %}  {{ stable_id | replace('_', '-') }}
+{% endfor -%}
+{% if "file_activity" in state_capabilities %}
+{{ binary_name }} \
+  --harness <selected-claude-or-codex> \
+  --state-dir <state-directory> \
+  session-start-state
+{% endif -%}
+{% else -%}
+{% for stable_id in native_hooks -%}
+{{ binary_name }} \
+{% if "file_activity" in state_capabilities and stable_id == "stop" %}  --config <absolute-config-path> \
+{% endif %}{% if state_capabilities %}  --state-dir <state-directory> \
+{% endif %}  {{ stable_id | replace('_', '-') }}
+{% endfor -%}
+{% endif -%}
+```
+
+{% if harness_mode == "single" -%}
+{% for event in event_catalog.events -%}
+{% if event.harness == harness and event.stable_id in native_hooks and event.starter.strategy == "must_implement" -%}
+> `{{ event.stable_id | replace('_', '-') }}` is scaffold-only: its safe
+> starter fails explicitly instead of inventing a required native value.
+> Implement and test its protected handler before registering this command.
+
+{% endif -%}
+{% endfor -%}
+{% endif -%}
+Use only the harnesses recorded in `hookkit-template.manifest.yml`. Register
+the complete command line for the matching native hook event. The template
+does not edit live Claude Code, Codex, or Antigravity configuration.
+{% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
+The runner requires `pkl` {{ compatibility.pkl_version }}. The generated package
+owns this policy:
+
+`{{ quality_config_path }}`
+
+Hook processes do not necessarily start in this repository, so use an absolute
+policy path in live registration while retaining this package-owned file. The
+concrete tools and lowering policy are recorded in both the Pkl file and
+`hookkit-template.manifest.yml`.
+{% endif -%}
+{% if state_capabilities %}
+All selected state helpers share this package-specific default root:
+
+`$TMPDIR/agent-hook-kit/generated/{{ package_name }}/`
+
+Use `--state-dir` to override it. Every coordinated producer and consumer must
+receive the same override. Persisted family/entity versions are visible in
+`src/scaffold/state.rs`.
+
+Every generated event-handler seam receives the parsed state directory as its
+fourth argument, including stateless projects. A custom handler can open state
+with `scaffold::state::ensure_session_state(context, state_dir)` and then use
+any of the selected claims, sets, queues, artifacts, or aggregate helpers. The
+stable argument keeps handler edits compatible when state capabilities are
+added later.
+
+Library-owned runner commands have no editable event-handler seam. When a
+state capability needs custom application logic beyond the runner's coordinated
+metadata, file-activity, or artifact work, the questionnaire requires another
+selected event with a user-owned handler.
+{% endif %}
+## Edit policy safely
+
+Files under `src/scaffold/` and the top-level modules in `src/hooks/` are
+Copier-owned wiring. Customize the per-event and per-archetype files in the
+`src/hooks/aligned/`, `native/`, `pre_tool/`, and `state_types/` directories;
+those seams are preserved on recopy, including when selections change. Files
+left behind after deselection are harmless and become active again if that
+choice is reselected.
+
+Generated files under `config/` are also preserved because they are expected
+to become project policy. If you change runner archetype, quality-tool, or
+configuration answers later, reconcile the existing Pkl policy manually.
+
+Hook stdout, stderr, and exit status are protocol outputs: do not use
+`println!` or uncontrolled `eprintln!` in handlers. Return native decisions
+through the generated adapter instead.
+
+## Validate
+
+Run these commands from the generated repository root:
+
+```sh
+cargo fmt \
+  --manifest-path {{ crate_path }}/Cargo.toml \
+  --all -- --check
+cargo +{{ compatibility.rust_msrv }} check \
+  --manifest-path {{ crate_path }}/Cargo.toml \
+  --all-targets
+cargo clippy \
+  --manifest-path {{ crate_path }}/Cargo.toml \
+  --all-targets --all-features -- -D warnings
+cargo test \
+  --manifest-path {{ crate_path }}/Cargo.toml \
+  --all-targets
+```
+
+{% if output_mode == "crate" -%}
+Copier deliberately did not edit the host `Cargo.toml`. If Cargo reports that
+this crate believes it belongs to the surrounding workspace, add this member:
+
+```toml
+[workspace]
+members = [{{ crate_path | tojson }}]
+```
+
+This instance uses `.copier-answers.{{ package_name }}.yml`:
+
+```sh
+uvx --from copier=={{ compatibility.copier_version }} copier update \
+  --answers-file .copier-answers.{{ package_name }}.yml .
+uvx --from copier=={{ compatibility.copier_version }} copier check-update \
+  --answers-file .copier-answers.{{ package_name }}.yml \
+  --quiet .
+uvx --from copier=={{ compatibility.copier_version }} copier recopy \
+  --answers-file .copier-answers.{{ package_name }}.yml .
+```
+
+Before the first copy, verify that `{{ crate_path }}`{% if github_actions %} and
+`.github/workflows/{{ package_name }}-hook-ci.yml`{% endif %} are unowned. Do
+not use `--overwrite` against an existing repository. A collision means
+choosing a different package/path or answering no.
+{% else -%}
+Update this generated project with:
+
+```sh
+uvx --from copier=={{ compatibility.copier_version }} copier update .
+uvx --from copier=={{ compatibility.copier_version }} copier check-update --quiet .
+uvx --from copier=={{ compatibility.copier_version }} copier recopy .
+```
+{% endif %}
+Use `update` for normal smart diffing. `recopy` deliberately regenerates the
+managed tree from recorded answers and is intended for explicit answer/shape
+changes; protected handler seams remain untouched.
+
+After the first successful check, commit the repository's resulting
+`Cargo.lock` so the selected HookKit source and transitive dependencies remain
+reproducible. Generated CI may use `--locked` after that lockfile exists.
+
+Treat `package_name`, `crate_path`, and `binary_name` as instance identity.
+Changing them moves owned files, answers/workflow names, registration commands,
+or state namespaces; perform that as an explicit migration or a fresh copy,
+not as an ordinary interactive update.
+
+{% if dependency_source == "path" -%}
+This render uses nonportable local path dependencies. Choose an exact Git
+revision or compatible crates.io release before sharing it.
+{% elif dependency_source == "git" -%}
+All HookKit crates are pinned to commit `{{ hookkit_git_rev }}`.
+{% else -%}
+All HookKit crates use crates.io version
+`{{ compatibility.hookkit.crates_io_version }}`.
+{% endif -%}

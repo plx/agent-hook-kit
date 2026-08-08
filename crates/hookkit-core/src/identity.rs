@@ -164,10 +164,24 @@ impl fmt::Display for EventId {
 pub enum AlignedEventKind {
     /// A session or conversation was initialized.
     SessionStart,
+    /// A session or conversation is ending.
+    SessionEnd,
+    /// A harness is asking whether a pending operation may proceed.
+    PermissionRequest,
+    /// Conversation context is about to be compacted.
+    PreCompact,
+    /// Conversation context finished compacting.
+    PostCompact,
     /// A tool invocation is about to execute.
     PreToolUse,
     /// A tool invocation finished.
     PostToolUse,
+    /// A subagent was initialized.
+    SubagentStart,
+    /// A subagent is attempting to stop.
+    SubagentStop,
+    /// A user prompt is about to be submitted.
+    UserPromptSubmit,
     /// A turn is attempting to stop.
     Stop,
 }

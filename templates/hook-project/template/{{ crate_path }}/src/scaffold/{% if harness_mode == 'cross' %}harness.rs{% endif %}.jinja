@@ -1,0 +1,36 @@
+use clap::ValueEnum;
+use hookkit_core::HarnessId;
+
+/// Built-in harness selected explicitly at the CLI boundary.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Harness {
+{%- if "claude-code" in harnesses %}
+    /// Claude Code.
+    Claude,
+{%- endif %}
+{%- if "codex" in harnesses %}
+    /// Codex CLI.
+    Codex,
+{%- endif %}
+{%- if "antigravity" in harnesses %}
+    /// Antigravity.
+    Antigravity,
+{%- endif %}
+}
+
+impl Harness {
+    /// Convert the CLI choice into HookKit's stable harness identity.
+    pub const fn id(self) -> HarnessId {
+        match self {
+{%- if "claude-code" in harnesses %}
+            Self::Claude => HarnessId::CLAUDE_CODE,
+{%- endif %}
+{%- if "codex" in harnesses %}
+            Self::Codex => HarnessId::CODEX,
+{%- endif %}
+{%- if "antigravity" in harnesses %}
+            Self::Antigravity => HarnessId::ANTIGRAVITY,
+{%- endif %}
+        }
+    }
+}
