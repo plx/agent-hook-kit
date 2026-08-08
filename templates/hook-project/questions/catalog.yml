@@ -2391,5 +2391,5 @@ compatibility:
     pkl_version: 0.31.1
     hookkit:
       repository: https://github.com/plx/agent-hook-kit
-      git_revision: 3429c4b30ae765155dbcb314161f50a51171dc23
+      git_revision: 83c49d46970602e8fb40a8afaeea521dfb7e9b61
       crates_io_version: 0.1.0
