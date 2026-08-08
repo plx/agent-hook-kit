@@ -931,6 +931,78 @@ def cargo_check_generated(destination: Path, data: dict[str, Any], target: Path)
     )
 
 
+def cargo_test_runner_config(
+    destination: Path, data: dict[str, Any], target: Path
+) -> None:
+    environment = os.environ.copy()
+    environment["CARGO_TARGET_DIR"] = str(target)
+    run_command(
+        [
+            "cargo",
+            "test",
+            "--manifest-path",
+            str(destination / data["crate_path"] / "Cargo.toml"),
+            "--test",
+            "runner_config",
+        ],
+        cwd=destination,
+        environment=environment,
+    )
+
+
+def deferred_quality_data(name: str) -> dict[str, Any]:
+    return with_quality(
+        cross_data(
+            name,
+            list(SUPPORTED_HARNESSES),
+            ["post_tool", "turn_completion"],
+            output_mode="crate",
+            starter="deferred_quality",
+            state=("session_metadata", "file_activity", "run_artifacts"),
+        ),
+        deferred=True,
+    )
+
+
+def customize_quality_config(destination: Path, data: dict[str, Any]) -> bytes:
+    config = destination / data["quality_config_path"]
+    text = config.read_text(encoding="utf-8")
+    replacements = (
+        (
+            '  ["cargoClippy"] = Builtins.cargoClippy\n',
+            '  ["cargoClippy"] = Builtins.cargoClippy\n'
+            '  ["ruff"] = Builtins.ruff\n',
+        ),
+        (
+            '  "cargoClippy"\n}',
+            '  "cargoClippy"\n  "ruff"\n}',
+        ),
+    )
+    for original, customized in replacements:
+        if text.count(original) != 1:
+            raise AcceptanceFailure(
+                "generated deferred-quality policy has an unexpected shape"
+            )
+        text = text.replace(original, customized, 1)
+    config.write_text(text, encoding="utf-8")
+    return text.encode()
+
+
+def assert_quality_config_ownership(
+    destination: Path,
+    data: dict[str, Any],
+    customized: bytes,
+    target: Path,
+) -> None:
+    config = destination / data["quality_config_path"]
+    if config.read_bytes() != customized:
+        raise AcceptanceFailure("Copier discarded a customized quality policy")
+    rejects = list(destination.rglob("*.rej"))
+    if rejects:
+        raise AcceptanceFailure(f"unexpected Copier conflict files: {rejects}")
+    cargo_test_runner_config(destination, data, target)
+
+
 def ownership_cases() -> list[tuple[str, dict[str, Any], dict[str, Any], Path, Path, str]]:
     cross_initial = cross_data(
         "ownership_cross",
@@ -1357,6 +1429,118 @@ def run_update_ownership(staged_source: Path, root: Path) -> None:
     print(f"PASS update_ownership ({time.monotonic() - started:.1f}s)", flush=True)
 
 
+def run_quality_config_ownership(staged_source: Path, root: Path) -> None:
+    started = time.monotonic()
+    target = root / "cargo-target-quality-config-ownership"
+
+    recopy_data = deferred_quality_data("ownership_quality_recopy")
+    recopy_destination = root / "recopy-quality-config"
+    copy_case(staged_source, recopy_destination, recopy_data)
+    recopy_customized = customize_quality_config(recopy_destination, recopy_data)
+    copier.run_copy(
+        str(staged_source),
+        recopy_destination,
+        data=recopy_data,
+        defaults=True,
+        quiet=True,
+        overwrite=True,
+    )
+    assert_quality_config_ownership(
+        recopy_destination,
+        recopy_data,
+        recopy_customized,
+        target,
+    )
+
+    versioned_source = root / "versioned-quality-config-template"
+    shutil.copytree(staged_source, versioned_source)
+    git(versioned_source, "init", "--quiet")
+    git(versioned_source, "config", "user.name", "HookKit template tests")
+    git(
+        versioned_source,
+        "config",
+        "user.email",
+        "hookkit-template-tests@example.invalid",
+    )
+    git(versioned_source, "add", ".")
+    git(versioned_source, "commit", "--quiet", "-m", "template v1")
+    git(versioned_source, "tag", "v1.0.0")
+
+    update_data = deferred_quality_data("ownership_quality_update")
+    update_destination = root / "update-quality-config"
+    copier.run_copy(
+        str(versioned_source),
+        update_destination,
+        data=update_data,
+        defaults=True,
+        quiet=True,
+        vcs_ref="v1.0.0",
+    )
+    git(update_destination, "init", "--quiet")
+    git(update_destination, "config", "user.name", "HookKit template tests")
+    git(
+        update_destination,
+        "config",
+        "user.email",
+        "hookkit-template-tests@example.invalid",
+    )
+    git(update_destination, "add", ".")
+    git(update_destination, "commit", "--quiet", "-m", "generated from template v1")
+    update_customized = customize_quality_config(update_destination, update_data)
+    git(update_destination, "add", ".")
+    git(update_destination, "commit", "--quiet", "-m", "customize quality policy")
+
+    readme_template = (
+        versioned_source
+        / "templates"
+        / "hook-project"
+        / "template"
+        / "{{ crate_path }}"
+        / "README.md.jinja"
+    )
+    managed_marker = "\nManaged quality-config update marker: v1.1.0\n"
+    readme_template.write_text(
+        readme_template.read_text(encoding="utf-8") + managed_marker,
+        encoding="utf-8",
+    )
+    git(versioned_source, "add", ".")
+    git(versioned_source, "commit", "--quiet", "-m", "template v1.1")
+    git(versioned_source, "tag", "v1.1.0")
+
+    try:
+        copier.run_update(
+            update_destination,
+            data=update_data,
+            answers_file=answers_path(update_destination, update_data).name,
+            defaults=True,
+            quiet=True,
+            conflict="rej",
+            overwrite=True,
+        )
+    except Exception as error:
+        raise AcceptanceFailure(
+            f"Copier update failed for customized quality policy: {error}"
+        ) from error
+    crate = update_destination / update_data["crate_path"]
+    if managed_marker not in (crate / "README.md").read_text(encoding="utf-8"):
+        raise AcceptanceFailure("Copier did not update a managed quality-project file")
+    answers = load_yaml(answers_path(update_destination, update_data))
+    if answers.get("_commit") != "v1.1.0":
+        raise AcceptanceFailure(
+            "quality-project answers did not advance to template v1.1.0"
+        )
+    assert_quality_config_ownership(
+        update_destination,
+        update_data,
+        update_customized,
+        target,
+    )
+    print(
+        f"PASS quality_config_ownership ({time.monotonic() - started:.1f}s)",
+        flush=True,
+    )
+
+
 def assert_rejected(source: Path, root: Path, name: str, data: dict[str, Any]) -> None:
     destination = root / "negative" / name
     try:
@@ -1479,13 +1663,12 @@ def run_negative_cases(source: Path, root: Path) -> None:
 
 
 def run_dependency_source_integrity(source: Path, root: Path) -> None:
-    """Render nonlocal source modes without crossing their publication gates."""
+    """Compile the public Git source and render the gated crates.io source."""
     started = time.monotonic()
     compatibility = load_yaml(CATALOG_ROOT / "compatibility.yml")["hookkit"]
     universal = available_families(SUPPORTED_HARNESSES, alignment_catalog())
-    base = cross_data("dependency_git", list(SUPPORTED_HARNESSES), universal)
 
-    git_data = dict(base)
+    git_data = deferred_quality_data("dependency_git")
     git_data.pop("hookkit_path")
     git_data.update(
         dependency_source="git",
@@ -1495,6 +1678,11 @@ def run_dependency_source_integrity(source: Path, root: Path) -> None:
     git_destination = root / "dependency-sources" / "git"
     copy_case(source, git_destination, git_data)
     assert_render(git_case, git_destination, source)
+    cargo_check_generated(
+        git_destination,
+        git_data,
+        root / "cargo-target-public-git-source",
+    )
 
     crates_data = cross_data(
         "dependency_crates_io", list(SUPPORTED_HARNESSES), universal
@@ -1592,6 +1780,7 @@ def main() -> int:
             run_recopy_ownership(source, root)
             run_shape_change_ownership(source, root)
             run_update_ownership(source, root)
+            run_quality_config_ownership(source, root)
         if run_special("negative"):
             run_negative_cases(source, root)
         if run_special("sources"):

@@ -103,7 +103,7 @@ From a local checkout, run the pinned Copier version and answer the interactive
 questions:
 
 ```bash
-uvx --from copier==9.17.1 copier copy --vcs-ref :current: . ../my-hooks
+uvx --from copier==9.17.1 copier copy --vcs-ref HEAD . ../my-hooks
 ```
 
 Choose a full Rust project or a CLI crate for an existing repository, then
@@ -126,7 +126,7 @@ After a template release is tagged, generate from its immutable public source:
 ```bash
 uvx --from copier==9.17.1 copier copy \
   --vcs-ref <release-tag> \
-  https://github.com/prb/agent-hook-kit.git ./my-hooks
+  https://github.com/plx/agent-hook-kit.git ./my-hooks
 ```
 
 Full-project updates use `copier update`. For a crate-mode instance, select its

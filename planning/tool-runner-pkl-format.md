@@ -610,8 +610,8 @@ cargoClippy = new ToolSpec {
 This is the intended normal project shape.
 
 ```pkl
-amends "package://github.com/prb/agent-hook-kit/releases/download/v0.1.0/post-tool-use-agent-hook@0.1.0#/Config.pkl"
-import "package://github.com/prb/agent-hook-kit/releases/download/v0.1.0/post-tool-use-agent-hook@0.1.0#/Builtins.pkl"
+amends "package://github.com/plx/agent-hook-kit/releases/download/v0.1.0/post-tool-use-agent-hook@0.1.0#/Config.pkl"
+import "package://github.com/plx/agent-hook-kit/releases/download/v0.1.0/post-tool-use-agent-hook@0.1.0#/Builtins.pkl"
 
 settings {
   exclude = List("node_modules/**", "dist/**", "vendor/**")

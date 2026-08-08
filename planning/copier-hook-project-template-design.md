@@ -266,7 +266,7 @@ tag so the compatibility catalog can name the exact API it renders against:
 
 ```text
 copier copy --vcs-ref v0.1.0 \
-  https://github.com/prb/agent-hook-kit.git ./acme-hooks
+  https://github.com/plx/agent-hook-kit.git ./acme-hooks
 ```
 
 For crate mode, run the same source with the existing repository root as the
@@ -793,11 +793,11 @@ Default every HookKit crate to the same repository and exact Git revision:
 
 ```toml
 hookkit-core = {
-  git = "https://github.com/prb/agent-hook-kit",
+  git = "https://github.com/plx/agent-hook-kit",
   rev = "<full-sha>",
 }
 hookkit-runtime = {
-  git = "https://github.com/prb/agent-hook-kit",
+  git = "https://github.com/plx/agent-hook-kit",
   rev = "<same-full-sha>",
 }
 ```
