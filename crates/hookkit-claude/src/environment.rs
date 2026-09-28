@@ -11,7 +11,12 @@ use hookkit_core::{
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Native events for which Claude exposes a required `CLAUDE_ENV_FILE` path.
+/// Native events for which Claude exposes a `CLAUDE_ENV_FILE` path.
+///
+/// The variable is captured, and rejected if explicitly set to an empty
+/// string, but is not required to be present: current public documentation
+/// for these events does not describe it, so a real Claude Code version that
+/// omits it must still run the hook rather than fail outright.
 pub const ENVIRONMENT_FILE_EVENTS: &[&str] =
     &["SessionStart", "Setup", "CwdChanged", "FileChanged"];
 
@@ -119,7 +124,8 @@ pub struct ClaudeCommandEnvironment {
     /// Native session identity from `CLAUDE_CODE_SESSION_ID`.
     pub session_id: SessionId,
     /// Writable environment file exposed only for
-    /// [`ENVIRONMENT_FILE_EVENTS`].
+    /// [`ENVIRONMENT_FILE_EVENTS`]. `None` both off that event list and when
+    /// the running Claude Code version simply did not set it.
     pub environment_file: Option<Utf8PathBuf>,
     /// Local, remote-control, or cloud execution context.
     pub execution_location: ClaudeExecutionLocation,
@@ -205,11 +211,14 @@ impl CommandEnvironmentSpec for ClaudeCommandEnvironment {
         let project_dir = Utf8PathBuf::from(required(event, variables, "CLAUDE_PROJECT_DIR")?);
 
         let environment_file = if ENVIRONMENT_FILE_EVENTS.contains(&event.name()) {
-            Some(Utf8PathBuf::from(required(
-                event,
-                variables,
-                "CLAUDE_ENV_FILE",
-            )?))
+            match variables.get("CLAUDE_ENV_FILE") {
+                Some(value) if !value.is_empty() => Some(Utf8PathBuf::from(value)),
+                Some(_) => return Err(invalid(event, "CLAUDE_ENV_FILE must not be empty")),
+                // Not documented as always present for this event even in
+                // current Claude Code docs, so a version or configuration
+                // that omits it must still run the hook.
+                None => None,
+            }
         } else {
             None
         };
@@ -263,29 +272,30 @@ impl CommandEnvironmentSpec for ClaudeCommandEnvironment {
             options.insert(key.to_owned(), value.to_owned());
         }
 
+        // Only a complete, non-empty CLAUDE_PLUGIN_ROOT + CLAUDE_PLUGIN_DATA pair
+        // identifies a genuine plugin hook. A lone value (with or without stray
+        // CLAUDE_PLUGIN_OPTION_* entries) is treated as ambient state inherited
+        // from an unrelated parent process — for example, a Claude Code session
+        // that recursively invokes another one — rather than a hard failure,
+        // mirroring how hookkit-codex already treats a partial Claude-compatible
+        // alias set as ambient noise instead of an error.
         let root = variables.get("CLAUDE_PLUGIN_ROOT");
         let data = variables.get("CLAUDE_PLUGIN_DATA");
         let plugin = match (root, data) {
-            (None, None) if options.is_empty() => None,
-            (Some(root), Some(data)) if !root.is_empty() && !data.is_empty() => {
+            (Some(root), Some(data)) => {
+                if root.is_empty() || data.is_empty() {
+                    return Err(invalid(
+                        event,
+                        "CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA must be non-empty when both are present",
+                    ));
+                }
                 Some(ClaudePluginEnvironment {
                     root: root.into(),
                     data: data.into(),
                     options: ClaudePluginOptions(options),
                 })
             }
-            (None, None) => {
-                return Err(invalid(
-                    event,
-                    "plugin options require CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA",
-                ));
-            }
-            _ => {
-                return Err(invalid(
-                    event,
-                    "CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA must be non-empty and appear together",
-                ));
-            }
+            _ => None,
         };
 
         let effort = variables
@@ -452,10 +462,12 @@ mod tests {
         }
 
         for name in ENVIRONMENT_FILE_EVENTS {
-            assert!(matches!(
-                ClaudeCommandEnvironment::from_map(&event(name), &baseline()),
-                Err(HookkitError::InvalidHookEnvironment { .. })
-            ));
+            // A version or configuration that never sets CLAUDE_ENV_FILE for
+            // these events must still run the hook, just without a path.
+            let environment =
+                ClaudeCommandEnvironment::from_map(&event(name), &baseline()).unwrap();
+            assert_eq!(environment.environment_file, None);
+
             let mut empty = baseline();
             empty.insert("CLAUDE_ENV_FILE", "");
             assert!(ClaudeCommandEnvironment::from_map(&event(name), &empty).is_err());
@@ -558,14 +570,32 @@ mod tests {
         mixed_remote_modes.insert("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_bridge");
         assert!(ClaudeCommandEnvironment::from_map(&event("Stop"), &mixed_remote_modes).is_err());
 
+        // A lone plugin variable (or a stray option with neither) is ambient
+        // noise from an unrelated parent process, not a hard failure — see
+        // the rationale comment on the plugin-detection match above.
         let mut partial_plugin = baseline();
         partial_plugin.insert("CLAUDE_PLUGIN_ROOT", "/plugins/demo");
-        assert!(ClaudeCommandEnvironment::from_map(&event("Stop"), &partial_plugin).is_err());
+        assert_eq!(
+            ClaudeCommandEnvironment::from_map(&event("Stop"), &partial_plugin)
+                .unwrap()
+                .plugin,
+            None
+        );
 
         let mut option_without_plugin = baseline();
         option_without_plugin.insert("CLAUDE_PLUGIN_OPTION_TOKEN", "secret");
+        assert_eq!(
+            ClaudeCommandEnvironment::from_map(&event("Stop"), &option_without_plugin)
+                .unwrap()
+                .plugin,
+            None
+        );
+
+        let mut both_present_but_empty = baseline();
+        both_present_but_empty.insert("CLAUDE_PLUGIN_ROOT", "");
+        both_present_but_empty.insert("CLAUDE_PLUGIN_DATA", "/data/demo");
         assert!(
-            ClaudeCommandEnvironment::from_map(&event("Stop"), &option_without_plugin).is_err()
+            ClaudeCommandEnvironment::from_map(&event("Stop"), &both_present_but_empty).is_err()
         );
     }
 }

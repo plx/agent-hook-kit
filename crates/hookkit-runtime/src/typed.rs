@@ -96,17 +96,17 @@ where
     ) -> hookkit_core::Result<E::CommandOutput>,
 {
     let mut bytes = Vec::new();
-    if std::io::stdin().read_to_end(&mut bytes).is_err() {
-        return std::process::ExitCode::from(1);
+    if let Err(error) = std::io::stdin().read_to_end(&mut bytes) {
+        return crate::report::report_io_failure(E::EVENT, error);
     }
     let variables = match crate::environment::capture_command_environment::<E::CommandEnvironment>()
     {
         Ok(variables) => variables,
-        Err(_) => return std::process::ExitCode::from(1),
+        Err(error) => return crate::report::report_failure(E::EVENT, &error),
     };
     match execute_typed_with_diagnostics::<E, _>(bytes, &variables, diagnostics, handler) {
         Ok(emission) => write_emission(&emission),
-        Err(_) => std::process::ExitCode::from(1),
+        Err(error) => crate::report::report_failure(E::EVENT, &error),
     }
 }
 
