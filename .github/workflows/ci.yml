@@ -98,6 +98,10 @@ jobs:
           chmod +x "$RUNNER_TEMP/pkl"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Validate the full Copier matrix
+        # Generated projects have no lockfile; resolve dependencies that honor
+        # their declared rust-version so upstream MSRV bumps don't break CI.
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
         run: templates/hook-project/tests/run.sh --validation full
 
   licenses:
