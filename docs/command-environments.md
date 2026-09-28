@@ -56,12 +56,15 @@ For every Claude Code row, the required baseline is `CLAUDECODE=1`,
   as `CLAUDE_CODE_REMOTE=true` together with `CLAUDE_CODE_REMOTE_SESSION_ID`;
 - plugin state as the non-empty pair `CLAUDE_PLUGIN_ROOT` and
   `CLAUDE_PLUGIN_DATA`, plus zero or more `CLAUDE_PLUGIN_OPTION_<KEY>` values.
+  A lone half of that pair (or a stray option with neither) is treated as
+  ambient state from an unrelated parent process, not a plugin hook, and is
+  silently ignored rather than rejected.
 
 <!-- markdownlint-disable MD013 -->
 
 | Harness and Rust type | Events | Event-specific typed environment |
 | --- | --- | --- |
-| Claude Code — `ClaudeCommandEnvironment` | `SessionStart`, `Setup`, `CwdChanged`, `FileChanged` | Claude baseline and conditionals above; `CLAUDE_ENV_FILE` is required and non-empty on these four events. |
+| Claude Code — `ClaudeCommandEnvironment` | `SessionStart`, `Setup`, `CwdChanged`, `FileChanged` | Claude baseline and conditionals above; `CLAUDE_ENV_FILE` is captured and must be non-empty when present on these four events, but is not required — current public documentation does not describe it, so a version or configuration that omits it still runs the hook with `environment_file: None`. |
 | Claude Code — `ClaudeCommandEnvironment` | `InstructionsLoaded`, `UserPromptSubmit`, `UserPromptExpansion`, `MessageDisplay`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `PermissionDenied`, `Notification`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `Stop`, `StopFailure`, `TeammateIdle`, `ConfigChange`, `DirectoryAdded`, `WorktreeCreate`, `WorktreeRemove`, `PreCompact`, `PostCompact`, `SessionEnd`, `Elicitation`, `ElicitationResult` | Claude baseline and conditionals above. `CLAUDE_ENV_FILE` is ignored for these events. |
 | Codex — `CodexCommandEnvironment` | `SessionStart`, `SessionEnd`, `SubagentStart`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `UserPromptSubmit`, `SubagentStop`, `Stop` | Ordinary hooks have no modeled Codex variable. Plugin hooks provide `PLUGIN_ROOT`, `PLUGIN_DATA`, `CLAUDE_PLUGIN_ROOT`, and `CLAUDE_PLUGIN_DATA` together; the Claude-compatible aliases must equal the canonical paths. |
 | Antigravity — `AntigravityCommandEnvironment` | `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop` | No environment variable is defined by the official hook contract. Invocation state remains in stdin JSON. |
