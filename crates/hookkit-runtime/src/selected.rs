@@ -123,17 +123,17 @@ where
     ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
     let mut bytes = Vec::new();
-    if std::io::stdin().read_to_end(&mut bytes).is_err() {
-        return std::process::ExitCode::from(1);
+    if let Err(error) = std::io::stdin().read_to_end(&mut bytes) {
+        return crate::report::report_io_failure(H::ID, error);
     }
     let variables = match crate::environment::capture_command_environment::<H::CommandEnvironment>()
     {
         Ok(variables) => variables,
-        Err(_) => return std::process::ExitCode::from(1),
+        Err(error) => return crate::report::report_failure(H::ID, &error),
     };
     match execute_harness::<H, _>(bytes, hint, &variables, handler) {
         Ok(emission) => crate::typed::write_emission(&emission),
-        Err(_) => std::process::ExitCode::from(1),
+        Err(error) => crate::report::report_failure(H::ID, &error),
     }
 }
 
@@ -252,16 +252,16 @@ where
     ) -> hookkit_core::Result<BuiltinOutput>,
 {
     let mut bytes = Vec::new();
-    if std::io::stdin().read_to_end(&mut bytes).is_err() {
-        return std::process::ExitCode::from(1);
+    if let Err(error) = std::io::stdin().read_to_end(&mut bytes) {
+        return crate::report::report_io_failure(harness.id(), error);
     }
     let variables = match capture_builtin_command_environment(&harness) {
         Ok(variables) => variables,
-        Err(_) => return std::process::ExitCode::from(1),
+        Err(error) => return crate::report::report_failure(harness.id(), &error),
     };
     match execute_builtin_harness(harness, bytes, hint, &variables, handler) {
         Ok(emission) => crate::typed::write_emission(&emission),
-        Err(_) => std::process::ExitCode::from(1),
+        Err(error) => crate::report::report_failure(harness.id(), &error),
     }
 }
 

@@ -23,6 +23,11 @@
   `DirectoryAdded`, forked session starts, current optional fields and output
   controls, deferred pre-tool decisions, dynamic watch paths, and relative
   worktree paths.
+- Fixed `run_aligned_event`, `run_typed`/`run_event_with_diagnostics`,
+  `run_harness`, and `dispatch_builtin_harness` so a failed stdin read, a bad
+  hook environment, or a handler/parse error now write a concise one-line
+  diagnostic (program, hook identity, full cause chain) to stderr before
+  `exit 1`, instead of leaving both stdout and stderr byte-for-byte empty.
 
 This is an intentional pre-1.0 protocol API reboot. Event-scoped output types are
 the supported surface.

@@ -5,6 +5,8 @@ pub mod aligned;
 pub mod artifacts;
 /// Capture of declared command-hook process environment variables.
 pub mod environment;
+/// Stderr diagnostics shared by the stdin/stdout runtime adapters.
+mod report;
 /// Event identification, best-effort detection, and executable resolution.
 pub mod resolution;
 /// Compile-time and runtime selected-harness execution.

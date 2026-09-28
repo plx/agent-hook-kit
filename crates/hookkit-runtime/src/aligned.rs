@@ -81,6 +81,11 @@ pub trait AlignedEventSpec: sealed::Sealed {
     /// Lossless cross-harness output wrapper for the event family.
     type Output;
 
+    /// Human-readable event family name, used only for diagnostics (for example,
+    /// naming the hook a stderr failure report was for before the payload has
+    /// been parsed enough to know its exact native event).
+    const FAMILY: &'static str;
+
     /// Parses, validates, handles, and emits one aligned event for `harness`.
     ///
     /// The implementation selects an exact native contract from the explicit
@@ -104,6 +109,7 @@ impl AlignedEventSpec for PreToolUse {
     type Input = PreToolUseInput;
     type CommandEnvironment = PreToolUseCommandEnvironment;
     type Output = PreToolUseOutput;
+    const FAMILY: &'static str = "PreToolUse";
 
     fn execute<F>(
         harness: HarnessId,
@@ -126,6 +132,7 @@ impl AlignedEventSpec for PostToolUse {
     type Input = PostToolUseInput;
     type CommandEnvironment = PostToolUseCommandEnvironment;
     type Output = PostToolUseOutput;
+    const FAMILY: &'static str = "PostToolUse";
 
     fn execute<F>(
         harness: HarnessId,
@@ -148,6 +155,7 @@ impl AlignedEventSpec for TurnCompletion {
     type Input = TurnCompletionInput;
     type CommandEnvironment = TurnCompletionCommandEnvironment;
     type Output = TurnCompletionOutput;
+    const FAMILY: &'static str = "TurnCompletion";
 
     fn execute<F>(
         harness: HarnessId,
@@ -185,6 +193,7 @@ macro_rules! claude_codex_runtime_alignment {
             type Input = $input;
             type CommandEnvironment = $environment;
             type Output = $output;
+            const FAMILY: &'static str = $family;
 
             fn execute<F>(
                 harness: HarnessId,
@@ -472,17 +481,18 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<K::Output>,
 {
+    let hook = format!("{harness}/{}", K::FAMILY);
     let mut bytes = Vec::new();
-    if std::io::stdin().read_to_end(&mut bytes).is_err() {
-        return std::process::ExitCode::from(1);
+    if let Err(error) = std::io::stdin().read_to_end(&mut bytes) {
+        return crate::report::report_io_failure(&hook, error);
     }
     let variables = match capture_aligned_command_environment(&harness) {
         Ok(variables) => variables,
-        Err(_) => return std::process::ExitCode::from(1),
+        Err(error) => return crate::report::report_failure(&hook, &error),
     };
     match execute_aligned_event::<K, _>(harness, bytes, &variables, handler) {
         Ok(emission) => crate::typed::write_emission(&emission),
-        Err(_) => std::process::ExitCode::from(1),
+        Err(error) => crate::report::report_failure(&hook, &error),
     }
 }
 

@@ -862,6 +862,80 @@ fn aligned_pre_tool_run_path_reads_stdin_and_writes_native_stdout() {
     ));
 }
 
+#[test]
+fn aligned_post_tool_claude_stdin_helper() {
+    if std::env::var_os("HOOKKIT_ALIGNED_POST_TOOL_CLAUDE_STDIN_HELPER").is_none() {
+        return;
+    }
+
+    let code =
+        hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PostToolUse, _>(
+            hookkit_core::HarnessId::CLAUDE_CODE,
+            |_, _, _| unreachable!("an environment/payload session id mismatch must fail first"),
+        );
+    std::process::exit(if code == std::process::ExitCode::SUCCESS {
+        0
+    } else {
+        1
+    });
+}
+
+/// Regression test for the bug this branch fixes: a mismatch between the
+/// ambient `CLAUDE_CODE_SESSION_ID` and the payload's `session_id` (a case
+/// real subagent/resume invocations can legitimately hit) used to exit 1
+/// with zero bytes on stderr. It must now report a concise diagnostic naming
+/// the program, the hook, and the underlying error.
+#[test]
+fn aligned_run_path_reports_an_environment_payload_mismatch_on_stderr() {
+    let fixture = fixture_bytes("claude", "post_tool_use.json");
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "aligned_post_tool_claude_stdin_helper",
+            "--nocapture",
+        ])
+        .env("HOOKKIT_ALIGNED_POST_TOOL_CLAUDE_STDIN_HELPER", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    clear_modeled_hook_environment(&mut command);
+    command
+        .env("CLAUDECODE", "1")
+        .env("CLAUDE_CODE_CHILD_SESSION", "1")
+        .env("CLAUDE_CODE_SESSION_ID", "a-different-session-id")
+        .env("CLAUDE_PROJECT_DIR", "/home/user/project");
+
+    let output = command
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(&fixture)?;
+            child.wait_with_output()
+        })
+        .expect("aligned post-tool stdin helper should run");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("hookSpecificOutput"),
+        "stdout must stay protocol-safe (no emission on failure), got {stdout:?}"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with("hookkit: "),
+        "stderr should carry a one-block diagnostic, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("claude-code/PostToolUse"),
+        "diagnostic should name the hook it was invoked for, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("CLAUDE_CODE_SESSION_ID does not match input session_id"),
+        "diagnostic should carry the underlying error's message, got {stderr:?}"
+    );
+}
+
 // --- codex-bash-guard ---
 
 #[test]
@@ -915,8 +989,24 @@ fn codex_bash_guard_rejects_non_pretool() {
         !output.status.success(),
         "typed hook must reject a wrong event"
     );
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert!(output.stdout.is_empty(), "stdout must stay protocol-safe");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with("hookkit: "),
+        "stderr should carry a one-block diagnostic, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("codex-bash-guard"),
+        "diagnostic should name the running program, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("codex/PreToolUse"),
+        "diagnostic should name the hook it was invoked for, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("expected hook_event_name=PreToolUse"),
+        "diagnostic should carry the underlying error's full message, got {stderr:?}"
+    );
 }
 
 // --- antigravity-pre-invocation ---
@@ -961,8 +1051,20 @@ fn claude_context_rejects_non_session_start() {
         !output.status.success(),
         "typed hook must reject a wrong event"
     );
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert!(output.stdout.is_empty(), "stdout must stay protocol-safe");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with("hookkit: "),
+        "stderr should carry a one-block diagnostic, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("claude-sessionstart-context"),
+        "diagnostic should name the running program, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("claude-code/SessionStart"),
+        "diagnostic should name the hook it was invoked for, got {stderr:?}"
+    );
 }
 
 // --- shared-posttool-autofix ---
@@ -3263,10 +3365,15 @@ run = new Listing<String> { "rff" }
     );
 
     assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    assert!(output.stdout.is_empty(), "stdout must stay protocol-safe");
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.stderr.is_empty(),
-        "runtime diagnostics are disabled unless a sink is configured"
+        stderr.starts_with("hookkit: "),
+        "stderr should carry a one-block diagnostic, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("run references unknown tool `rff`"),
+        "diagnostic should carry the underlying error's message, got {stderr:?}"
     );
 }
 
@@ -3339,10 +3446,18 @@ run = new Listing { "ruff" }
         !output.status.success(),
         "hard-failure should fail the hook"
     );
-    assert!(output.stdout.is_empty());
+    assert!(output.stdout.is_empty(), "stdout must stay protocol-safe");
+    // The runtime's out-of-band diagnostics sink stays disabled (no separate
+    // sink was configured); this stderr diagnostic is the runtime adapter's
+    // own failure report, not that mechanism.
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.stderr.is_empty(),
-        "operational failures use the runtime diagnostics sink"
+        stderr.starts_with("hookkit: "),
+        "stderr should carry a one-block diagnostic, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("tool unavailable with missingToolPolicy=hard-failure"),
+        "diagnostic should carry the underlying error's message, got {stderr:?}"
     );
 }
 
