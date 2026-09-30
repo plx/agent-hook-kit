@@ -143,11 +143,16 @@ impl ShellToolCallExt for hookkit_antigravity::PreToolUseInput {
 #[cfg(feature = "antigravity")]
 impl ShellToolCallExt for hookkit_antigravity::PostToolUseInput {
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
+        // Payloads without `toolCall` (the IDE reference shape) cannot say
+        // whether a shell command ran.
+        let Some(tool_call) = &self.tool_call else {
+            return ShellToolCallMatch::UnsupportedEvent;
+        };
         ANTIGRAVITY_RUN_COMMAND_PROFILE.extract_from_object(
             EventId::builtin(HarnessId::ANTIGRAVITY, "PostToolUse"),
             ToolPhase::Post,
-            &self.tool_call.name,
-            &self.tool_call.args,
+            &tool_call.name,
+            &tool_call.args,
             self.workspace_paths
                 .first()
                 .map(hookkit_core::Utf8PathBuf::as_path),

@@ -296,11 +296,14 @@ impl ObservableToolCall for hookkit_antigravity::PreToolUseInput {
 
 impl ObservableToolCall for hookkit_antigravity::PostToolUseInput {
     fn observe_tool_call(&self) -> ToolCallObservation<'_> {
+        let Some(tool_call) = &self.tool_call else {
+            return ToolCallObservation::gap(ToolAccessGapReason::MissingToolCall);
+        };
         ToolCallObservation::Call(ToolCallRef {
             event: EventId::builtin(HarnessId::ANTIGRAVITY, "PostToolUse"),
             phase: ToolPhase::Post,
-            tool_name: &self.tool_call.name,
-            tool_input: JsonRef::Object(&self.tool_call.args),
+            tool_name: &tool_call.name,
+            tool_input: JsonRef::Object(&tool_call.args),
             cwd: self.workspace_paths.first().map(Utf8PathBuf::as_path),
             cwd_base: PathBase::SessionCwd,
             workspace_roots: Cow::Borrowed(&self.workspace_paths),

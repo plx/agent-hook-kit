@@ -406,10 +406,9 @@ impl TurnCompletionOutput {
         match harness.as_str() {
             "claude-code" => Ok(Self::Claude(hookkit_claude::catalog::StopOutput::no_op())),
             "codex" => Ok(Self::Codex(hookkit_codex::catalog::StopOutput::no_op())),
-            "antigravity" => Ok(Self::Antigravity(hookkit_antigravity::StopOutput {
-                decision: String::from("stop"),
-                reason: None,
-            })),
+            "antigravity" => Ok(Self::Antigravity(
+                hookkit_antigravity::StopOutput::allow_stop(),
+            )),
             _ => Err(HookkitError::UnrecognizedEvent {
                 harness: harness.clone(),
                 message: "no aligned turn-completion adapter is registered".into(),
