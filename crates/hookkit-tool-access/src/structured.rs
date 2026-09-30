@@ -12,9 +12,14 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 /// Access semantics come from whole words in the tool name (split on
 /// punctuation and camelCase boundaries), so `remove_file` is a delete and
-/// `download_file` a write. Source/destination-style keys are consulted only
-/// for tools whose name implies a move or copy, so fields such as a calendar
-/// event's `from`/`to` are never mistaken for paths.
+/// `download_file` a write; a run-together word such as `writefile`,
+/// `readtextfile`, or `fileremove` counts when it joins a known verb and a
+/// file-system noun. Source/destination-style keys are consulted for tools
+/// whose name implies a move or copy. Tools that write also consult the
+/// destination-style keys (such as `destination` or `output_path`), and tools
+/// that read the source-style keys (such as `source`), except the generic
+/// `from` and `to`, so fields such as a calendar event's `from`/`to` are
+/// never mistaken for paths.
 #[derive(Debug, Clone)]
 pub struct StructuredFieldAnalyzer {
     path_keys: BTreeSet<String>,
@@ -40,11 +45,18 @@ impl Default for StructuredFieldAnalyzer {
             .collect(),
             move_path_keys: [
                 "source",
+                "src",
                 "destination",
+                "dest",
                 "old_path",
                 "oldPath",
                 "new_path",
                 "newPath",
+                "output",
+                "output_path",
+                "outputPath",
+                "target_path",
+                "targetPath",
                 "from",
                 "to",
             ]
@@ -69,7 +81,8 @@ impl StructuredFieldAnalyzer {
     }
 
     /// Add a source/destination key-name heuristic used at any object depth,
-    /// but only for tools whose name implies a move or copy.
+    /// but only for tools whose name implies a move or copy, or that read or
+    /// write when the key names a source or destination role respectively.
     pub fn with_move_path_key(mut self, key: impl Into<String>) -> Self {
         self.move_path_keys.insert(key.into());
         self
@@ -96,7 +109,7 @@ impl StructuredFieldAnalyzer {
     }
 
     /// Returns the source/destination key names consulted for move- and
-    /// copy-like tools only.
+    /// copy-like tools, and by role for tools that read or write.
     pub fn move_path_keys(&self) -> &BTreeSet<String> {
         &self.move_path_keys
     }
@@ -110,7 +123,7 @@ impl StructuredFieldAnalyzer {
         let semantics = structured_semantics(call.tool_name);
         let visitor = Visitor {
             analyzer: self,
-            move_keys: semantics.uses_move_keys(),
+            move_keys: semantics.move_keys(),
         };
         let mut fields = Vec::new();
         match call.tool_input {
@@ -165,7 +178,7 @@ impl StructuredFieldAnalyzer {
 
 struct Visitor<'a> {
     analyzer: &'a StructuredFieldAnalyzer,
-    move_keys: bool,
+    move_keys: MoveKeys,
 }
 
 impl Visitor<'_> {
@@ -226,7 +239,7 @@ impl Visitor<'_> {
                 report,
             );
         } else if self.analyzer.path_keys.contains(key)
-            || (self.move_keys && self.analyzer.move_path_keys.contains(key))
+            || (self.analyzer.move_path_keys.contains(key) && self.move_keys.consults(key))
         {
             collect_recognized_value(
                 value,
@@ -390,59 +403,152 @@ enum StructuredSemantics {
 }
 
 impl StructuredSemantics {
-    fn uses_move_keys(self) -> bool {
-        matches!(self, Self::Move | Self::Copy)
+    /// Which source/destination keys the tool consults: all of them for a
+    /// move or copy, the destination-style ones for a write, and the
+    /// source-style ones for a read.
+    fn move_keys(self) -> MoveKeys {
+        match self {
+            Self::Move | Self::Copy => MoveKeys::All,
+            Self::Intent(AccessIntent::Modify | AccessIntent::ReadModify) => {
+                MoveKeys::Role(KeyRole::Destination)
+            }
+            Self::Intent(AccessIntent::Read) => MoveKeys::Role(KeyRole::Source),
+            _ => MoveKeys::None,
+        }
     }
 
     fn intent(self, key: Option<&str>) -> AccessIntent {
-        let role = key.map(normalize_key);
+        let role = key.and_then(key_role).map(|(role, _)| role);
         match self {
             Self::Intent(intent) => intent,
-            Self::Move => match role.as_deref() {
-                Some("source" | "oldpath" | "from") => AccessIntent::MoveSource,
-                Some("destination" | "newpath" | "to") => AccessIntent::MoveDestination,
-                _ => AccessIntent::Unclassified,
+            Self::Move => match role {
+                Some(KeyRole::Source) => AccessIntent::MoveSource,
+                Some(KeyRole::Destination) => AccessIntent::MoveDestination,
+                None => AccessIntent::Unclassified,
             },
-            Self::Copy => match role.as_deref() {
-                Some("source" | "oldpath" | "from") => AccessIntent::Read,
-                Some("destination" | "newpath" | "to") => AccessIntent::Modify,
-                _ => AccessIntent::Unclassified,
+            Self::Copy => match role {
+                Some(KeyRole::Source) => AccessIntent::Read,
+                Some(KeyRole::Destination) => AccessIntent::Modify,
+                None => AccessIntent::Unclassified,
             },
             Self::Unknown => AccessIntent::Unclassified,
         }
     }
 }
 
+/// Source/destination keys a tool consults.
+#[derive(Debug, Clone, Copy)]
+enum MoveKeys {
+    None,
+    /// Every configured key.
+    All,
+    /// Configured keys that name this role, except the generic `from`/`to`.
+    Role(KeyRole),
+}
+
+impl MoveKeys {
+    fn consults(self, key: &str) -> bool {
+        match self {
+            Self::None => false,
+            Self::All => true,
+            Self::Role(role) => key_role(key) == Some((role, false)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyRole {
+    Source,
+    Destination,
+}
+
+/// The role a source/destination key names, and whether the key is the
+/// generic `from` or `to`, which non-file tools also use (for example a
+/// calendar event's time range).
+fn key_role(key: &str) -> Option<(KeyRole, bool)> {
+    match normalize_key(key).as_str() {
+        "from" => Some((KeyRole::Source, true)),
+        "to" => Some((KeyRole::Destination, true)),
+        "source" | "src" | "oldpath" => Some((KeyRole::Source, false)),
+        "destination" | "dest" | "newpath" | "output" | "outputpath" | "targetpath" => {
+            Some((KeyRole::Destination, false))
+        }
+        _ => None,
+    }
+}
+
+/// Name verbs by effect, most specific first.
+const MOVE_VERBS: &[&str] = &["move", "rename", "mv"];
+const COPY_VERBS: &[&str] = &["copy", "cp", "duplicate"];
+const DELETE_VERBS: &[&str] = &["delete", "remove", "rm", "rmdir", "unlink", "trash"];
+const READ_MODIFY_VERBS: &[&str] = &[
+    "edit", "update", "replace", "patch", "modify", "append", "insert",
+];
+const MODIFY_VERBS: &[&str] = &[
+    "write",
+    "save",
+    "create",
+    "download",
+    "export",
+    "put",
+    "mkdir",
+    "touch",
+    "overwrite",
+];
+const ENUMERATE_VERBS: &[&str] = &["list", "ls", "glob", "search", "find", "tree"];
+const READ_VERBS: &[&str] = &["read", "open", "load", "view", "cat", "grep", "upload"];
+
+/// File-system nouns that a run-together name word such as `writefile` or
+/// `fileread` joins with a verb.
+const FILE_NOUNS: &[&str] = &[
+    "file",
+    "files",
+    "dir",
+    "dirs",
+    "directory",
+    "directories",
+    "folder",
+    "folders",
+    "path",
+    "paths",
+];
+
 /// Classifies a tool by whole words in its name. More specific effects are
 /// checked first, so `remove_file` is a delete and `download_file` a write.
+/// A run-together lowercase word counts as a verb when it joins the verb and
+/// a file-system noun in either order (`writefile`, `fileremove`), or a verb
+/// of four or more letters and a phrase ending in a noun (`readtextfile`), so
+/// `readme` and `catalogfile` stay unclassified and `fileremove` is a delete
+/// rather than a move.
 fn structured_semantics(tool_name: &str) -> StructuredSemantics {
     let words = name_words(tool_name);
-    let has = |needles: &[&str]| words.iter().any(|word| needles.contains(&word.as_str()));
-    if has(&["move", "rename", "mv"]) {
+    let is_noun = |text: &str| FILE_NOUNS.contains(&text);
+    let has = |verbs: &[&str]| {
+        words.iter().any(|word| {
+            verbs.iter().any(|verb| {
+                word == verb
+                    || word.strip_prefix(verb).is_some_and(|rest| {
+                        is_noun(rest)
+                            || (verb.len() >= 4
+                                && FILE_NOUNS.iter().any(|noun| rest.ends_with(noun)))
+                    })
+                    || word.strip_suffix(verb).is_some_and(is_noun)
+            })
+        })
+    };
+    if has(MOVE_VERBS) {
         StructuredSemantics::Move
-    } else if has(&["copy", "cp", "duplicate"]) {
+    } else if has(COPY_VERBS) {
         StructuredSemantics::Copy
-    } else if has(&["delete", "remove", "rm", "rmdir", "unlink", "trash"]) {
+    } else if has(DELETE_VERBS) {
         StructuredSemantics::Intent(AccessIntent::Delete)
-    } else if has(&[
-        "edit", "update", "replace", "patch", "modify", "append", "insert",
-    ]) {
+    } else if has(READ_MODIFY_VERBS) {
         StructuredSemantics::Intent(AccessIntent::ReadModify)
-    } else if has(&[
-        "write",
-        "save",
-        "create",
-        "download",
-        "export",
-        "put",
-        "mkdir",
-        "touch",
-        "overwrite",
-    ]) {
+    } else if has(MODIFY_VERBS) {
         StructuredSemantics::Intent(AccessIntent::Modify)
-    } else if has(&["list", "ls", "glob", "search", "find", "tree"]) {
+    } else if has(ENUMERATE_VERBS) {
         StructuredSemantics::Intent(AccessIntent::Enumerate)
-    } else if has(&["read", "open", "load", "view", "cat", "grep", "upload"]) {
+    } else if has(READ_VERBS) {
         StructuredSemantics::Intent(AccessIntent::Read)
     } else {
         StructuredSemantics::Unknown
@@ -575,6 +681,13 @@ mod tests {
         assert_eq!(intent("mcp__dl__download_file"), Some(AccessIntent::Modify));
         assert_eq!(intent("mcp__fs__read_file"), Some(AccessIntent::Read));
         assert_eq!(intent("credit_card_lookup"), None);
+        // Run-together words join a verb and a file-system noun.
+        assert_eq!(intent("mcp__fs__writefile"), Some(AccessIntent::Modify));
+        assert_eq!(intent("mcp__fs__readtextfile"), Some(AccessIntent::Read));
+        assert_eq!(intent("mcp__fs__fileremove"), Some(AccessIntent::Delete));
+        assert_eq!(intent("mcp__fs__listdir"), Some(AccessIntent::Enumerate));
+        assert_eq!(intent("mcp__docs__readme"), None);
+        assert_eq!(intent("mcp__shop__catalogfile"), None);
         assert!(matches!(
             structured_semantics("mcp__fs__move_file"),
             StructuredSemantics::Move
@@ -583,5 +696,27 @@ mod tests {
             structured_semantics("copy_file"),
             StructuredSemantics::Copy
         ));
+        assert!(matches!(
+            structured_semantics("mcp__fs__renamefile"),
+            StructuredSemantics::Move
+        ));
+    }
+
+    #[test]
+    fn role_keys_are_consulted_by_effect() {
+        let consults = |name, key| structured_semantics(name).move_keys().consults(key);
+        // Moves and copies consult every key, including `from`/`to`.
+        assert!(consults("move_file", "to"));
+        assert!(consults("copy_file", "from"));
+        // Writes consult destinations, reads sources, neither the generic keys.
+        assert!(consults("download_file", "destination"));
+        assert!(consults("export_chart", "outputPath"));
+        assert!(!consults("download_file", "source"));
+        assert!(!consults("create_event", "to"));
+        assert!(consults("read_file", "src"));
+        assert!(!consults("read_file", "dest"));
+        assert!(!consults("read_file", "from"));
+        assert!(!consults("remove_file", "destination"));
+        assert!(!consults("credit_card_lookup", "source"));
     }
 }

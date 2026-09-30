@@ -264,6 +264,25 @@ pub enum AccessProvenance {
         /// One-based line number in the patch body.
         line: usize,
     },
+    /// A path recovered from a patch passed as a shell `apply_patch`
+    /// command's argument, which the standalone `apply_patch` executable
+    /// reads instead of standard input.
+    ShellPatchArgument {
+        /// Zero-based command index in the Bash analysis.
+        command_index: usize,
+        /// Span of the containing `apply_patch` command.
+        command_span: SourceSpan,
+        /// Span of the argument word that carries the patch.
+        argument_span: SourceSpan,
+        /// Patch role assigned to the path.
+        operation: PatchOperation,
+        /// Patch header marker that introduced the path (e.g. `*** Update File`,
+        /// `*** Add File`, `---`, or `+++`); the path itself lives in the
+        /// candidate's [`AccessTarget`], not in this field.
+        header: String,
+        /// One-based line number in the patch argument.
+        line: usize,
+    },
     /// Evidence emitted by an application-defined analyzer.
     Custom {
         /// Stable analyzer identifier.
@@ -280,7 +299,7 @@ impl AccessProvenance {
             Self::StructuredField { .. } => AccessSource::Structured,
             Self::Patch { .. } => AccessSource::Patch,
             Self::Shell { .. } => AccessSource::Shell,
-            Self::ShellPatch { .. } => AccessSource::Shell,
+            Self::ShellPatch { .. } | Self::ShellPatchArgument { .. } => AccessSource::Shell,
             Self::Custom { .. } => AccessSource::Custom,
         }
     }
@@ -319,6 +338,16 @@ impl fmt::Display for AccessProvenance {
             } => write!(
                 formatter,
                 "shell patch {operation} at bytes {}..{}, patch line {line}",
+                command_span.start_byte, command_span.end_byte
+            ),
+            Self::ShellPatchArgument {
+                command_span,
+                operation,
+                line,
+                ..
+            } => write!(
+                formatter,
+                "shell patch argument {operation} at bytes {}..{}, patch line {line}",
                 command_span.start_byte, command_span.end_byte
             ),
             Self::Custom { analyzer, detail } => {
@@ -384,7 +413,8 @@ pub enum ToolAccessGapReason {
         /// Location of the raw path: an RFC 6901 JSON Pointer for structured
         /// input or a patch payload field (e.g. `/command`, `/patch`), or the
         /// literal sentinel `"<shell-heredoc>"` for a path recovered from a
-        /// shell `apply_patch` here-document; `None` when no location is known.
+        /// shell `apply_patch` here-document or `"<shell-argument>"` for one
+        /// recovered from its patch argument; `None` when no location is known.
         pointer: Option<String>,
     },
     /// A configured structured path value is neither a string nor string array.
@@ -435,12 +465,17 @@ pub enum ToolAccessGapReason {
         /// Constructs that make the body dynamic.
         reasons: Vec<hookkit_shell::DynamicReason>,
     },
-    /// An `apply_patch` command has no observable here-document body.
+    /// A shell `apply_patch` command's patch text is not observable: no
+    /// here-document supplies its standard input (it reads a file, a pipe, a
+    /// here-string, or nothing), or its argument is dynamic or not the only
+    /// one.
     MissingShellPatchHereDocument {
         /// Span of the containing shell command.
         command_span: SourceSpan,
     },
-    /// A directory-changing command precedes the shell patch.
+    /// A directory change may take effect before the shell patch (or a
+    /// wrapper option such as `env -C` may run it elsewhere), and the
+    /// directory it applies in cannot be determined.
     ShellPatchWorkingDirectoryMayHaveChanged {
         /// Span of the containing `apply_patch` command.
         command_span: SourceSpan,
@@ -549,7 +584,7 @@ impl fmt::Display for ToolAccessGap {
             ),
             ToolAccessGapReason::MissingShellPatchHereDocument { command_span } => write!(
                 formatter,
-                "shell apply_patch at bytes {}..{} has no observable here-document body",
+                "shell apply_patch at bytes {}..{} has no observable patch text",
                 command_span.start_byte, command_span.end_byte
             ),
             ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged { command_span } => {

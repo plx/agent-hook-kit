@@ -51,8 +51,8 @@ key a path for unrelated MCP tools:
 | Claude Code | `Write` | `/file_path` | modify, exact |
 | Claude Code | `Edit`, `MultiEdit` | `/file_path` | read-modify, exact |
 | Claude Code | `NotebookEdit` | `/notebook_path` | read-modify, exact |
-| Claude Code | `Grep` | `/path` (default cwd), `/glob` | read, root and descendants (or the `glob` below the root) |
-| Claude Code | `Glob` | `/path` (default cwd), `/pattern` | enumerate, glob |
+| Claude Code | `Grep` | `/path` (default cwd), `/glob` | read, root and descendants (or each `glob` filter below the root) |
+| Claude Code | `Glob` | `/path` (default cwd), `/pattern` | enumerate, glob below the root |
 | Codex | `apply_patch` | `/command` (patch text) | per patch header |
 | Codex | `view_image` | `/path` | read, exact |
 | Antigravity | `view_file` | `/AbsolutePath` | read, exact |
@@ -65,19 +65,36 @@ key a path for unrelated MCP tools:
 
 A repository-wide `Grep` therefore materializes every descendant of the
 working directory; a secret-file policy denies it unless the search is narrowed
-with `path` or `glob`. Tools documented not to touch files (for example Claude
-`WebFetch`, `WebSearch`, `TodoWrite`, `Agent`, `AskUserQuestion`, and
-`ExitPlanMode`; Codex `update_plan`, `spawn_agent`, and `web_search`;
-Antigravity `search_web`, `read_url_content`, `manage_task`, and `schedule`)
-yield an empty, complete report. `with_builtin_tools(false)` restores
-heuristic-only analysis.
+with `path` or `glob`. Claude splits a `Grep` `glob` into several ripgrep
+filters (on whitespace, then on commas outside a `{...}` group), so
+`*.md,.env` records both `**/*.md` and `**/.env`; a negated filter falls back
+to the whole root. Claude passes a `Glob` pattern to `rg --files --glob`, so a
+pattern without `/` matches at any depth below the root, an absolute pattern
+is searched from its literal directory, and a pattern that repeats the end of
+the search directory (`web/src/*.ts` below `web`) is also recorded anchored
+below it, as Claude rewrites it when the repeated directories do not exist.
+
+Tools documented not to touch files (for example Claude `WebFetch`,
+`WebSearch`, `TodoWrite`, `Agent`, `AskUserQuestion`, and `ExitPlanMode`;
+Codex `update_plan`, `spawn_agent`, and `web_search`; Antigravity
+`search_web`, `read_url_content`, and `schedule`, and `manage_task` with the
+`list`, `status`, or `kill` action) yield an empty, complete report. Tools that
+may reach files their arguments do not name, such as Codex `write_stdin` and
+`read_mcp_resource` (whose URI may be `file://`) or Antigravity `manage_task`
+`send_input`, record a gap.
+`with_builtin_tools(false)` restores heuristic-only analysis.
 
 Other tools use `StructuredFieldAnalyzer`, which classifies a tool by whole
-words in its name (`remove_file` deletes, `download_file` writes) and consults
-source/destination keys (`source`, `destination`, `from`, `to`, ...) only for
-move- or copy-like tools. A structured path beginning with `~` is left
-unresolved with an `UnexpandedHomePath` gap because home expansion is up to the
-tool.
+words in its name (`remove_file` deletes, `download_file` writes, and a
+run-together word joining a verb and a file-system noun, such as `writefile`,
+counts too). Move- and copy-like tools consult every source/destination key
+(`source`, `destination`, `from`, `to`, ...); tools that write also consult the
+destination-style keys (`destination`, `dest`, `output`, `output_path`,
+`target_path`, ...) and tools that read the source-style ones (`source`,
+`src`, `old_path`), but never the generic `from` and `to`, which calendar and
+similar tools use for other values. A structured path beginning with `~` is
+left unresolved with an `UnexpandedHomePath` gap because home expansion is up
+to the tool.
 
 ## Patches and working directories
 
@@ -92,18 +109,36 @@ added lines that begin with `-- ` or `++ ` are content, not headers.
 `ToolAccessAnalyzer::with_shell_profile` and `with_shell_profiles` opt exact
 custom shell shapes into the same analysis without speculative aliases. The
 contract-backed profile constants from `hookkit-shell` avoid repeating native
-field pointers. Literal, statically delimited shell `apply_patch` (or
-`applypatch`) heredocs are fed through the shared patch parser and retain both
-shell source spans and patch-operation provenance. In an unquoted heredoc whose
-hunks contain `$`, header paths free of shell syntax are still recovered, since
-Codex applies the body verbatim; dynamic header paths, partial Bash analysis,
-and cwd uncertainty remain typed gaps. A here-document on an enclosing
-statement also feeds the command, as in `(cd dir && apply_patch) <<'EOF'` and
-`{ apply_patch; } <<'EOF'`. The Codex-intercepted `cd <dir> && apply_patch`
-form (including a `cd a && cd b && ...` chain) resolves paths against the
-working directory joined with each literal `cd` operand; a non-literal operand
-leaves them unresolved, `Heuristic`, and paired with a
-`ShellPatchWorkingDirectoryMayHaveChanged` gap.
+field pointers. Shell `apply_patch` (or `applypatch`) commands, including ones
+run through a wrapper such as `command`, `env`, `nohup`, `sudo`, or `timeout`,
+are fed through the shared patch parser and retain both shell source spans and
+patch-operation provenance. The patch text is what the standalone
+`apply_patch` executable reads: its single argument when it has one
+(`ShellPatchArgument` provenance), and otherwise its final standard-input
+redirection, or that of an enclosing statement as in
+`(cd dir && apply_patch) <<'EOF'` and `{ apply_patch; } <<'EOF'`. Only a
+here-document there is analyzed; a later `< file`, `<>`, or `<&-`, a pipe, a
+here-document on another descriptor, or a dynamic or extra argument records a
+`MissingShellPatchHereDocument` gap instead of trusting a decoy.
+
+Codex applies a script that is exactly `apply_patch <<EOF` or
+`cd <dir> && apply_patch <<EOF` itself, from the raw here-document body, so in
+that form header paths free of shell syntax are exact even when an unquoted
+body's hunks contain `$`. Any other script (anything before or after it, and
+every Claude or Antigravity command) runs in Bash, which expands an unquoted
+body before `apply_patch` reads it and can inject file headers that no literal
+line shows: literal headers are still recovered, but a
+`DynamicShellPatchHereDocument` gap is always recorded. Dynamic header paths,
+partial Bash analysis, and cwd uncertainty remain typed gaps too.
+
+A `cd <dir> && apply_patch` chain (including `cd a && cd b && ...`) that
+begins its list resolves paths against the working directory joined with each
+literal `cd` operand. A non-literal operand, or a script that mentions
+`CDPATH` or `cdable_vars` and runs in Bash, leaves them unresolved and
+`Heuristic`; any other directory change that may take effect first (a wrapped
+`builtin cd`, a negated `! cd dir`, a `cd` skipped by `||`, one in a loop or
+function body, or a wrapper option such as `env -C`) leaves them unresolved.
+Both record a `ShellPatchWorkingDirectoryMayHaveChanged` gap.
 
 Relative paths carry the basis they were resolved against. `InvocationCwd`
 means the tool's own working directory, including a Codex `workdir` or an

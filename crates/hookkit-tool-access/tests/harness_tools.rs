@@ -243,7 +243,9 @@ fn shell_patch_alias_and_dynamic_hunks_recover_literal_headers() {
             && path_of(candidate).1 == Some(Utf8Path::new("/repo/added.txt"))
     }));
 
-    // Only the hunk is dynamic; Codex applies the body verbatim.
+    // Only the hunk is dynamic, and Codex intercepts this whole-script form
+    // and applies the body verbatim (Bash would expand it first; see
+    // `dynamic_shell_patch_bodies_are_exact_only_when_codex_intercepts_them`).
     let dynamic = analyze(&codex_pre(
         "Bash",
         serde_json::json!({
@@ -433,15 +435,97 @@ fn claude_builtin_file_tools_have_exact_roles_and_search_scopes() {
             serde_json::json!({"pattern": "KEY", "glob": "!*.md"}),
             vec![("/repo", AccessIntent::Read, AccessScope::ExactOrDescendants)],
         ),
+        // Claude splits `glob` on whitespace, then on commas outside a brace
+        // group, into separate ripgrep `--glob` filters.
+        (
+            "Grep",
+            serde_json::json!({"pattern": "API_KEY", "glob": "*.md,.env", "output_mode": "content"}),
+            vec![
+                ("/repo", AccessIntent::Read, AccessScope::Exact),
+                ("/repo/**/*.md", AccessIntent::Read, AccessScope::Glob),
+                ("/repo/**/.env", AccessIntent::Read, AccessScope::Glob),
+            ],
+        ),
+        (
+            "Grep",
+            serde_json::json!({"pattern": "API_KEY", "glob": " *.md  .env "}),
+            vec![
+                ("/repo", AccessIntent::Read, AccessScope::Exact),
+                ("/repo/**/*.md", AccessIntent::Read, AccessScope::Glob),
+                ("/repo/**/.env", AccessIntent::Read, AccessScope::Glob),
+            ],
+        ),
+        (
+            "Grep",
+            serde_json::json!({"pattern": "KEY", "glob": "*.{ts,tsx} src/*.rs,,"}),
+            vec![
+                ("/repo", AccessIntent::Read, AccessScope::Exact),
+                ("/repo/**/*.{ts,tsx}", AccessIntent::Read, AccessScope::Glob),
+                ("/repo/src/*.rs", AccessIntent::Read, AccessScope::Glob),
+            ],
+        ),
+        // Any negated filter falls back to the whole search root.
+        (
+            "Grep",
+            serde_json::json!({"pattern": "KEY", "glob": "*.md,!README.md"}),
+            vec![("/repo", AccessIntent::Read, AccessScope::ExactOrDescendants)],
+        ),
         (
             "Glob",
             serde_json::json!({"pattern": "**/.env"}),
             vec![("/repo/**/.env", AccessIntent::Enumerate, AccessScope::Glob)],
         ),
+        // `rg --files --glob` matches a pattern without `/` at any depth.
         (
             "Glob",
             serde_json::json!({"pattern": "*.ts", "path": "/repo/web"}),
-            vec![("/repo/web/*.ts", AccessIntent::Enumerate, AccessScope::Glob)],
+            vec![(
+                "/repo/web/**/*.ts",
+                AccessIntent::Enumerate,
+                AccessScope::Glob,
+            )],
+        ),
+        (
+            "Glob",
+            serde_json::json!({"pattern": "src/*.ts", "path": "/repo/web"}),
+            vec![(
+                "/repo/web/src/*.ts",
+                AccessIntent::Enumerate,
+                AccessScope::Glob,
+            )],
+        ),
+        // Claude searches an absolute pattern from its literal directory.
+        (
+            "Glob",
+            serde_json::json!({"pattern": "/repo/config/*.env"}),
+            vec![(
+                "/repo/config/**/*.env",
+                AccessIntent::Enumerate,
+                AccessScope::Glob,
+            )],
+        ),
+        (
+            "Glob",
+            serde_json::json!({"pattern": "/repo/.env"}),
+            vec![("/repo/**/.env", AccessIntent::Enumerate, AccessScope::Glob)],
+        ),
+        // A pattern repeating the end of the search directory may instead be
+        // anchored below it, depending on which directories exist.
+        (
+            "Glob",
+            serde_json::json!({"pattern": "web/src/*.ts", "path": "/repo/web"}),
+            vec![
+                (
+                    "/repo/web/web/src/*.ts",
+                    AccessIntent::Enumerate,
+                    AccessScope::Glob,
+                ),
+                (
+                    "/repo/web/src/*.ts",
+                    AccessIntent::Enumerate,
+                    AccessScope::Glob,
+                ),
+            ],
         ),
     ];
     for (tool, input, expected) in cases {
@@ -499,7 +583,7 @@ fn file_free_builtins_yield_empty_complete_reports() {
             "{tool}"
         );
     }
-    for tool in ["search_web", "read_url_content", "manage_task", "schedule"] {
+    for tool in ["search_web", "read_url_content", "schedule"] {
         let report = analyze(&antigravity_pre(
             tool,
             serde_json::json!({"Url": "https://x"}),
@@ -509,12 +593,50 @@ fn file_free_builtins_yield_empty_complete_reports() {
             "{tool}"
         );
     }
+    for action in ["list", "status", "kill"] {
+        let report = analyze(&antigravity_pre(
+            "manage_task",
+            serde_json::json!({"Action": action, "TaskId": "task"}),
+        ));
+        assert!(
+            report.candidates.is_empty() && report.is_complete(),
+            "{action}: {report:#?}"
+        );
+    }
 
     // Disabling the built-in contracts restores heuristic-only analysis.
     let heuristic = ToolAccessAnalyzer::default()
         .with_builtin_tools(false)
         .analyze_pre_tool(&claude_pre("TodoWrite", serde_json::json!({"todos": []})));
     assert!(!heuristic.is_complete());
+}
+
+#[test]
+fn builtins_that_may_reach_unnamed_files_are_gaps() {
+    // `send_input` feeds a running `run_command` task, like Codex
+    // `write_stdin`, and an MCP resource URI may name any file the server
+    // can read.
+    let unknown = |report: &ToolAccessReport| {
+        report.candidates.is_empty()
+            && report.gaps.iter().any(|gap| {
+                matches!(
+                    gap.reason,
+                    ToolAccessGapReason::UnknownStructuredTool { .. }
+                )
+            })
+    };
+    for args in [
+        serde_json::json!({"Action": "send_input", "TaskId": "task", "Input": "rm -rf src\n"}),
+        serde_json::json!({"TaskId": "task"}),
+    ] {
+        let report = analyze(&antigravity_pre("manage_task", args));
+        assert!(unknown(&report), "{report:#?}");
+    }
+    let resource = analyze(&codex_pre(
+        "read_mcp_resource",
+        serde_json::json!({"server": "files", "uri": "file:///repo/.env"}),
+    ));
+    assert!(unknown(&resource), "{resource:#?}");
 }
 
 #[test]
@@ -592,6 +714,74 @@ fn mcp_heuristics_use_whole_words_and_move_keys_only_for_moves() {
         downloaded.candidates[0].certainty,
         AccessCertainty::Heuristic
     );
+}
+
+#[test]
+fn mcp_heuristics_consult_role_keys_and_run_together_verbs() {
+    // Tools that write consult destination-style keys, and tools that read
+    // consult source-style keys, but never the generic `from`/`to`.
+    for (tool, input, expected) in [
+        (
+            "mcp__http__download_file",
+            serde_json::json!({"url": "https://example.com/x", "destination": "/repo/.env"}),
+            vec![("/repo/.env", AccessIntent::Modify, AccessScope::Exact)],
+        ),
+        (
+            "mcp__chart__export_chart",
+            serde_json::json!({"output_path": "/repo/chart.png", "to": "2026-01-02"}),
+            vec![("/repo/chart.png", AccessIntent::Modify, AccessScope::Exact)],
+        ),
+        (
+            "mcp__doc__update_document",
+            serde_json::json!({"targetPath": "/repo/doc.md", "source": "/repo/other.md"}),
+            vec![("/repo/doc.md", AccessIntent::ReadModify, AccessScope::Exact)],
+        ),
+        (
+            "mcp__fs__read_file",
+            serde_json::json!({"source": "/repo/.env", "from": "2026-01-01"}),
+            vec![("/repo/.env", AccessIntent::Read, AccessScope::Exact)],
+        ),
+        (
+            "mcp__fs__move_file",
+            serde_json::json!({"src": "/repo/a", "dest": "/repo/b"}),
+            vec![
+                ("/repo/b", AccessIntent::MoveDestination, AccessScope::Exact),
+                ("/repo/a", AccessIntent::MoveSource, AccessScope::Exact),
+            ],
+        ),
+        // A run-together word joining a verb and a file-system noun.
+        (
+            "mcp__fs__writefile",
+            serde_json::json!({"path": "/repo/a.txt"}),
+            vec![("/repo/a.txt", AccessIntent::Modify, AccessScope::Exact)],
+        ),
+        (
+            "mcp__fs__readtextfile",
+            serde_json::json!({"path": "/repo/a.txt"}),
+            vec![("/repo/a.txt", AccessIntent::Read, AccessScope::Exact)],
+        ),
+        (
+            "mcp__fs__fileremove",
+            serde_json::json!({"path": "/repo/a.txt"}),
+            vec![("/repo/a.txt", AccessIntent::Delete, AccessScope::Exact)],
+        ),
+    ] {
+        let report = analyze(&claude_pre(tool, input));
+        assert_targets(&report, &expected);
+    }
+
+    // Read and write tools leave the generic keys alone.
+    let scheduled = analyze(&claude_pre(
+        "mcp__cal__create_event",
+        serde_json::json!({"from": "2026-01-01", "to": "2026-01-02"}),
+    ));
+    assert!(scheduled.candidates.is_empty(), "{scheduled:#?}");
+    // A word that merely begins with a verb is not one.
+    let readme = analyze(&claude_pre(
+        "mcp__docs__readme",
+        serde_json::json!({"path": "/repo/README.md"}),
+    ));
+    assert_eq!(readme.candidates[0].intent, AccessIntent::Unclassified);
 }
 
 #[test]

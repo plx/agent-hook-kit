@@ -776,9 +776,18 @@ fn activity_report(
     metadata: &ObservationMetadata,
 ) -> ActivityReport {
     let mut events = Vec::new();
+    let mut session_relative: Option<(AccessSource, Vec<&str>)> = None;
     for candidate in access.may_modify() {
         match activity_evidence(candidate, metadata) {
-            Some(evidence) => events.push(FileActivityEvent::Evidence(evidence)),
+            Some(evidence) => {
+                if let Some(raw) = session_relative_path(candidate) {
+                    session_relative
+                        .get_or_insert_with(|| (candidate.provenance.source(), Vec::new()))
+                        .1
+                        .push(raw);
+                }
+                events.push(FileActivityEvent::Evidence(evidence));
+            }
             None => events.push(FileActivityEvent::Gap(metadata.gap(
                 activity_source(candidate.provenance.source()),
                 format!(
@@ -788,10 +797,38 @@ fn activity_report(
             ))),
         }
     }
+    if let Some((source, raws)) = session_relative {
+        events.push(FileActivityEvent::Gap(metadata.gap(
+            activity_source(source),
+            format!(
+                "relative paths {} were resolved against the session directory; the tool call's \
+                 own working directory is not observable, so they may name other files",
+                raws.iter()
+                    .map(|raw| format!("`{raw}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )));
+    }
     events.extend(access.gaps.into_iter().map(|gap| {
         FileActivityEvent::Gap(metadata.gap(activity_source(gap.source), gap.to_string()))
     }));
     ActivityReport { events }
+}
+
+/// The raw path of a candidate resolved against the hook's session directory
+/// because the tool's own working directory was not observable, as for a
+/// relative path in a Codex `Bash` command, which may have run in an
+/// unreported `workdir`.
+fn session_relative_path(candidate: &AccessCandidate) -> Option<&str> {
+    match &candidate.target {
+        AccessTarget::Path { expression, .. }
+            if expression.base == PathBase::SessionCwd && expression.resolved.is_some() =>
+        {
+            Some(expression.raw.as_str())
+        }
+        _ => None,
+    }
 }
 
 fn activity_evidence(
@@ -819,18 +856,29 @@ fn activity_evidence(
         AccessIntent::Modify | AccessIntent::ReadModify => FileActivityEffect::CreateOrModify,
         _ => FileActivityEffect::MaybeWrite,
     };
+    let session_relative = session_relative_path(candidate).is_some();
+    // A session-relative path is only a guess at the file the tool changed.
     let certainty = match candidate.certainty {
+        _ if session_relative => ActivityCertainty::Heuristic,
         AccessCertainty::Direct => ActivityCertainty::Direct,
         AccessCertainty::Conditional => ActivityCertainty::Conditional,
         AccessCertainty::Heuristic => ActivityCertainty::Heuristic,
         _ => ActivityCertainty::Heuristic,
+    };
+    let detail = if session_relative {
+        format!(
+            "{}; resolved against the session directory",
+            candidate.provenance
+        )
+    } else {
+        candidate.provenance.to_string()
     };
     Some(metadata.evidence(
         target,
         effect,
         activity_source(candidate.provenance.source()),
         certainty,
-        Some(candidate.provenance.to_string()),
+        Some(detail),
     ))
 }
 
@@ -2141,6 +2189,66 @@ mod tests {
         let report = analyze_activity(&input);
         assert_eq!(report.evidence().count(), 0, "{report:?}");
         assert!(report.gaps().next().is_some(), "{report:?}");
+    }
+
+    #[test]
+    fn session_relative_writes_are_heuristic_with_a_gap() {
+        // Codex's `Bash` hook payload omits the `workdir` the command may have
+        // run in, so a relative write is only a guess at the file it changed.
+        let report = analyze_activity(&codex_post_tool(
+            "Bash",
+            serde_json::json!({"command": "echo x > out.txt; echo y > /repo/abs.txt"}),
+        ));
+        let evidence = report.evidence().collect::<Vec<_>>();
+        let relative = evidence
+            .iter()
+            .find(|item| {
+                item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/out.txt"))
+            })
+            .unwrap_or_else(|| panic!("{report:?}"));
+        assert_eq!(relative.certainty, ActivityCertainty::Heuristic);
+        assert!(
+            relative
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.ends_with("resolved against the session directory")),
+            "{relative:?}"
+        );
+        // An absolute path does not depend on the working directory.
+        assert!(evidence.iter().any(|item| {
+            item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/abs.txt"))
+                && item.certainty == ActivityCertainty::Direct
+        }));
+        let gaps = report.gaps().collect::<Vec<_>>();
+        assert_eq!(gaps.len(), 1, "{report:?}");
+        assert!(gaps[0].detail.contains("`out.txt`"), "{report:?}");
+        assert_eq!(gaps[0].source, FileActivitySource::ShellInference);
+
+        // Claude reports the command's own directory.
+        let claude = activity_report(
+            ToolAccessAnalyzer::default().analyze_post_tool(&PostToolUseInput::Claude(
+                serde_json::from_value(serde_json::json!({
+                    "session_id": "session",
+                    "transcript_path": "/tmp/transcript.jsonl",
+                    "cwd": "/repo",
+                    "hook_event_name": "PostToolUse",
+                    "permission_mode": "default",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "echo x > out.txt"},
+                    "tool_response": {"stdout": "", "stderr": ""},
+                    "tool_use_id": "toolu_1"
+                }))
+                .unwrap(),
+            )),
+            &observation_metadata(),
+        );
+        assert!(claude.gaps().next().is_none(), "{claude:?}");
+        assert!(
+            claude
+                .evidence()
+                .all(|item| item.certainty == ActivityCertainty::Direct),
+            "{claude:?}"
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::{
     AccessCertainty, AccessIntent, AccessScope, AccessSource, PathBase, StructuredFieldMatch,
     ToolAccessGapReason, ToolAccessReport, ToolCallRef,
 };
-use hookkit_core::HarnessId;
+use hookkit_core::{HarnessId, Utf8Path, Utf8PathBuf, resolve_utf8_path};
 use serde_json::Value;
 
 /// Claude Code built-ins that do not read or write workspace files. Subagent
@@ -52,7 +52,6 @@ const CODEX_FILE_FREE: &[&str] = &[
     "multi_agent_v1send_input",
     "multi_agent_v1wait_agent",
     "new_context",
-    "read_mcp_resource",
     "request_permissions",
     "request_user_input",
     "request_user_input_async",
@@ -75,7 +74,6 @@ const ANTIGRAVITY_FILE_FREE: &[&str] = &[
     "invoke_subagent",
     "list_permissions",
     "manage_subagents",
-    "manage_task",
     "read_url_content",
     "schedule",
     "search_web",
@@ -106,17 +104,18 @@ fn analyze_claude(call: &ToolCallRef<'_>, name: &str, report: &mut ToolAccessRep
         "NotebookEdit" => required_path(call, report, "/notebook_path", AccessIntent::ReadModify),
         "LS" => required_path(call, report, "/path", AccessIntent::Enumerate),
         // Grep searches `path` (a file or directory, default cwd), optionally
-        // narrowed by a ripgrep `glob` filter.
+        // narrowed by ripgrep `glob` filters.
         "Grep" => search(
             call,
             report,
             Search {
                 root: Root::DefaultCwd("/path"),
-                filters: Filters::One("/glob"),
+                filters: Filters::ClaudeGlobList("/glob"),
                 intent: AccessIntent::Read,
             },
         ),
-        // Glob lists paths under `path` (default cwd) matching `pattern`.
+        // Glob lists paths under `path` (default cwd) matching `pattern`,
+        // which Claude passes to `rg --files --glob`.
         "Glob" => glob(call, report, "/path", "/pattern"),
         _ => CLAUDE_FILE_FREE.contains(&name),
     }
@@ -137,6 +136,9 @@ fn analyze_codex(call: &ToolCallRef<'_>, name: &str, report: &mut ToolAccessRepo
             }
             required_path(call, report, "/path", AccessIntent::Read)
         }
+        // An MCP server may map a resource URI (such as
+        // `file:///repo/.env`) to any file it can read.
+        "read_mcp_resource" => unknown_semantics(call, report),
         _ => CODEX_FILE_FREE.contains(&name),
     }
 }
@@ -195,8 +197,27 @@ fn analyze_antigravity(call: &ToolCallRef<'_>, name: &str, report: &mut ToolAcce
             }
             true
         }
+        // Listing, inspecting, and killing background tasks touches no files,
+        // but `send_input` feeds a running `run_command` task, whose file
+        // access is not observable, like Codex `write_stdin`.
+        "manage_task" => match call.tool_input.get("Action").and_then(Value::as_str) {
+            Some("list" | "status" | "kill") => true,
+            _ => unknown_semantics(call, report),
+        },
         _ => ANTIGRAVITY_FILE_FREE.contains(&name),
     }
+}
+
+/// Records that a recognized built-in may access files that its arguments do
+/// not reveal.
+fn unknown_semantics(call: &ToolCallRef<'_>, report: &mut ToolAccessReport) -> bool {
+    report.push_gap(
+        AccessSource::Structured,
+        ToolAccessGapReason::UnknownStructuredTool {
+            tool_name: call.tool_name.to_owned(),
+        },
+    );
+    true
 }
 
 fn environment_id<'a>(call: &ToolCallRef<'a>) -> Option<&'a str> {
@@ -271,6 +292,9 @@ enum Filters {
     One(&'static str),
     /// An optional array of glob strings.
     Many(&'static str),
+    /// One optional string that Claude Code splits into several ripgrep
+    /// `--glob` filters (see [`claude_glob_filters`]).
+    ClaudeGlobList(&'static str),
 }
 
 struct Search {
@@ -361,6 +385,16 @@ fn search(call: &ToolCallRef<'_>, report: &mut ToolAccessReport, search: Search)
                 .collect(),
             Some(_) => None,
         },
+        Filters::ClaudeGlobList(pointer) => match call.tool_input.pointer(pointer) {
+            None | Some(Value::Null) => Some(Vec::new()),
+            Some(Value::String(globs)) => Some(
+                claude_glob_filters(globs)
+                    .into_iter()
+                    .map(|glob| (pointer.to_owned(), glob))
+                    .collect(),
+            ),
+            Some(_) => None,
+        },
     };
     let filters = filters.filter(|filters| {
         filters
@@ -398,7 +432,31 @@ fn search(call: &ToolCallRef<'_>, report: &mut ToolAccessReport, search: Search)
     true
 }
 
+/// Splits Claude Code's Grep `glob` argument the way Claude does before
+/// passing each piece to ripgrep as a `--glob` filter: on whitespace, then
+/// each piece without a `{...}` group on commas, so `*.md,.env` and
+/// `*.md .env` are two filters while `*.{ts,tsx}` stays one.
+fn claude_glob_filters(globs: &str) -> Vec<&str> {
+    let mut filters = Vec::new();
+    for token in globs.split_whitespace() {
+        if token.contains('{') && token.contains('}') {
+            filters.push(token);
+        } else {
+            filters.extend(token.split(',').filter(|glob| !glob.is_empty()));
+        }
+    }
+    filters
+}
+
 /// Records Claude `Glob`: paths under `path` (default cwd) matching `pattern`.
+///
+/// Claude passes the pattern to `rg --files --glob`, so a glob without `/`
+/// matches basenames at any depth. An absolute pattern is first split, as
+/// Claude does, into the directory before its first glob metacharacter (or
+/// its parent directory, without one) and the glob below it, so
+/// `/repo/.env` also finds every `.env` under `/repo`. A relative pattern
+/// that repeats the end of the search directory may also be anchored below
+/// it (see [`claude_repeated_prefix`]), so both readings are recorded.
 fn glob(
     call: &ToolCallRef<'_>,
     report: &mut ToolAccessReport,
@@ -411,23 +469,40 @@ fn glob(
     match call.tool_input.pointer(pattern_pointer) {
         Some(Value::String(pattern)) if !pattern.trim().is_empty() => {
             let pattern = pattern.trim();
-            let raw = if pattern.starts_with('/') || root.raw == "." {
-                pattern.to_owned()
+            let mut raws = Vec::with_capacity(2);
+            if pattern.starts_with('/') {
+                let (base, relative) = split_absolute_glob(pattern);
+                raws.push(if relative.is_empty() {
+                    pattern.to_owned()
+                } else {
+                    descendant_glob(base, relative)
+                });
             } else {
-                format!("{}/{pattern}", root.raw.trim_end_matches('/'))
-            };
-            push_path_candidate(
-                call,
-                report,
-                PathField {
-                    raw: &raw,
-                    pointer: pattern_pointer,
-                    scope: AccessScope::Glob,
-                    intent: AccessIntent::Enumerate,
-                    certainty: AccessCertainty::Direct,
-                    matched_by: StructuredFieldMatch::BuiltinTool,
-                },
-            );
+                raws.push(descendant_glob(root.raw, pattern));
+                let search_directory = match call.cwd {
+                    Some(cwd) => Some(resolve_utf8_path(cwd, root.raw)),
+                    None => Some(Utf8PathBuf::from(root.raw)).filter(|root| root.is_absolute()),
+                };
+                if let Some(anchored) = search_directory
+                    .and_then(|directory| claude_repeated_prefix(pattern, &directory))
+                {
+                    raws.push(descendant_glob(root.raw, &anchored));
+                }
+            }
+            for raw in raws {
+                push_path_candidate(
+                    call,
+                    report,
+                    PathField {
+                        raw: &raw,
+                        pointer: pattern_pointer,
+                        scope: AccessScope::Glob,
+                        intent: AccessIntent::Enumerate,
+                        certainty: AccessCertainty::Direct,
+                        matched_by: StructuredFieldMatch::BuiltinTool,
+                    },
+                );
+            }
         }
         Some(Value::String(_)) | None | Some(Value::Null) => report.push_gap(
             AccessSource::Structured,
@@ -466,6 +541,42 @@ fn root_candidate(
     );
 }
 
+/// Splits an absolute Claude `Glob` pattern into the directory Claude
+/// searches and the glob it passes to ripgrep: at the last `/` before the
+/// first glob metacharacter, or at the last `/` when there is none.
+fn split_absolute_glob(pattern: &str) -> (&str, &str) {
+    let literal = pattern
+        .find(['*', '?', '[', '{'])
+        .map_or(pattern, |index| &pattern[..index]);
+    let slash = literal.rfind('/').unwrap_or_default();
+    let base = if slash == 0 { "/" } else { &pattern[..slash] };
+    (base, &pattern[slash + 1..])
+}
+
+/// Claude Code rewrites a relative `Glob` pattern whose leading literal
+/// directories repeat the end of the search directory, such as `web/src/*.ts`
+/// below `/repo/web`, to the anchored `/src/*.ts` unless the repeated
+/// directories (`/repo/web/web/src`) exist. Returns the anchored pattern, as
+/// the filesystem decides which reading applies.
+fn claude_repeated_prefix(pattern: &str, search_directory: &Utf8Path) -> Option<String> {
+    let segments = pattern.split('/').collect::<Vec<_>>();
+    let literal = segments[..segments.len() - 1]
+        .iter()
+        .take_while(|segment| {
+            !segment.is_empty() && !segment.contains(['*', '?', '[', ']', '{', '}', '!'])
+        })
+        .count();
+    let directory = search_directory
+        .as_str()
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    (1..=literal).rev().find_map(|repeated| {
+        let tail = directory.get(directory.len().checked_sub(repeated)?..)?;
+        (tail == &segments[..repeated]).then(|| format!("/{}", segments[repeated..].join("/")))
+    })
+}
+
 /// Joins a filter glob below a search root.
 fn descendant_glob(root: &str, glob: &str) -> String {
     let relative = match glob.strip_prefix('/') {
@@ -482,7 +593,45 @@ fn descendant_glob(root: &str, glob: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::descendant_glob;
+    use super::{
+        claude_glob_filters, claude_repeated_prefix, descendant_glob, split_absolute_glob,
+    };
+    use hookkit_core::Utf8Path;
+
+    #[test]
+    fn claude_grep_globs_split_like_claude_code() {
+        assert_eq!(claude_glob_filters("*.md,.env"), ["*.md", ".env"]);
+        assert_eq!(claude_glob_filters("\t*.md \n.env "), ["*.md", ".env"]);
+        assert_eq!(
+            claude_glob_filters("*.{ts,tsx},x ,a,,b"),
+            ["*.{ts,tsx},x", "a", "b"]
+        );
+        assert!(claude_glob_filters(" , ").is_empty());
+    }
+
+    #[test]
+    fn claude_glob_patterns_split_and_anchor_like_claude_code() {
+        assert_eq!(split_absolute_glob("/repo/src/*.rs"), ("/repo/src", "*.rs"));
+        assert_eq!(
+            split_absolute_glob("/repo/src/**/x?.rs"),
+            ("/repo/src", "**/x?.rs")
+        );
+        assert_eq!(split_absolute_glob("/repo/.env"), ("/repo", ".env"));
+        assert_eq!(split_absolute_glob("/*.rs"), ("/", "*.rs"));
+
+        let web = Utf8Path::new("/repo/web");
+        assert_eq!(
+            claude_repeated_prefix("web/src/*.ts", web).as_deref(),
+            Some("/src/*.ts")
+        );
+        assert_eq!(
+            claude_repeated_prefix("repo/web/*.ts", web).as_deref(),
+            Some("/*.ts")
+        );
+        assert_eq!(claude_repeated_prefix("src/*.ts", web), None);
+        assert_eq!(claude_repeated_prefix("web", web), None);
+        assert_eq!(claude_repeated_prefix("*/web/*.ts", web), None);
+    }
 
     #[test]
     fn filters_become_descendant_globs() {

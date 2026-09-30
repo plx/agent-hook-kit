@@ -288,11 +288,16 @@ impl ToolAccessAnalyzer {
             }
         }
         if let Some(analysis) = analysis.analysis() {
+            // Codex applies some `apply_patch` scripts of its `Bash` tool
+            // itself instead of running them.
+            let codex_intercepts = shell_call.harness == hookkit_core::HarnessId::CODEX
+                && shell_call.tool_name == hookkit_shell::CODEX_BASH_PROFILE.tool_name();
             patch::analyze_shell_patches(
                 analysis,
                 shell_call.command,
                 shell_call.effective_cwd(),
                 relative_base,
+                codex_intercepts,
                 &mut report,
             );
         }

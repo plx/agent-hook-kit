@@ -38,6 +38,22 @@ fn codex_shell(command: &str, cwd: &str) -> PreToolUseInput {
     )
 }
 
+fn claude_shell(command: &str, cwd: &str) -> PreToolUseInput {
+    PreToolUseInput::Claude(
+        serde_json::from_value(serde_json::json!({
+            "session_id": "session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": cwd,
+            "hook_event_name": "PreToolUse",
+            "permission_mode": "default",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_use_id": "toolu_1"
+        }))
+        .unwrap(),
+    )
+}
+
 struct TempDirectory(Utf8PathBuf);
 
 impl TempDirectory {
@@ -466,7 +482,12 @@ fn shell_patch_targets(
     report
         .candidates
         .iter()
-        .filter(|candidate| matches!(candidate.provenance, AccessProvenance::ShellPatch { .. }))
+        .filter(|candidate| {
+            matches!(
+                candidate.provenance,
+                AccessProvenance::ShellPatch { .. } | AccessProvenance::ShellPatchArgument { .. }
+            )
+        })
         .map(|candidate| match &candidate.target {
             AccessTarget::Path { expression, .. } => (
                 expression.resolved.as_deref().map(Utf8Path::as_str),
@@ -637,6 +658,430 @@ fn uncertain_shell_patch_directories_and_inputs_stay_uncertain() {
         );
         assert!(
             has_gap(&report, missing_heredoc_gap),
+            "{command}: {report:#?}"
+        );
+    }
+}
+
+fn dynamic_heredoc_gap(reason: &ToolAccessGapReason) -> bool {
+    matches!(
+        reason,
+        ToolAccessGapReason::DynamicShellPatchHereDocument { .. }
+    )
+}
+
+fn analyze(input: &PreToolUseInput) -> hookkit_tool_access::ToolAccessReport {
+    ToolAccessAnalyzer::default().analyze_pre_tool(input)
+}
+
+/// Resolved path and intent of every shell-patch candidate.
+fn shell_patch_paths(
+    report: &hookkit_tool_access::ToolAccessReport,
+) -> Vec<(Option<&str>, AccessIntent)> {
+    report
+        .candidates
+        .iter()
+        .filter(|candidate| {
+            matches!(
+                candidate.provenance,
+                AccessProvenance::ShellPatch { .. } | AccessProvenance::ShellPatchArgument { .. }
+            )
+        })
+        .map(|candidate| match &candidate.target {
+            AccessTarget::Path { expression, .. } => (
+                expression.resolved.as_deref().map(Utf8Path::as_str),
+                candidate.intent,
+            ),
+            other => panic!("unexpected target {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn wrapped_shell_patches_are_analyzed_like_bare_ones() {
+    const PATCH: &str =
+        "<<'EOF'\n*** Begin Patch\n*** Update File: .env\n@@\n-A=1\n+A=2\n*** End Patch\nEOF\n";
+    // Bash runs the `apply_patch` executable behind each wrapper, which reads
+    // the here-document; Codex intercepts only the bare forms.
+    for prefix in [
+        "command ",
+        "exec ",
+        "env ",
+        "env FOO=1 ",
+        "nohup ",
+        "nice -n 5 ",
+        "time ",
+        "sudo ",
+        "sudo -u root ",
+        "builtin ",
+        "timeout 5 ",
+        "stdbuf -o0 ",
+        "/usr/bin/env ",
+        "sudo env PATH=/opt/apply_patch nice ",
+    ] {
+        let command = format!("{prefix}apply_patch {PATCH}");
+        for input in [
+            claude_shell(&command, "/repo"),
+            codex_shell(&command, "/repo"),
+        ] {
+            let report = analyze(&input);
+            assert_eq!(
+                shell_patch_paths(&report),
+                vec![(Some("/repo/.env"), AccessIntent::ReadModify)],
+                "{command}: {report:#?}"
+            );
+            assert!(
+                !has_gap(&report, missing_heredoc_gap),
+                "{command}: {report:#?}"
+            );
+        }
+    }
+
+    // `command -v` only looks the command up.
+    let lookup = analyze(&claude_shell("command -v apply_patch", "/repo"));
+    assert!(
+        lookup.candidates.is_empty() && lookup.is_complete(),
+        "{lookup:#?}"
+    );
+
+    // `env -C` runs the wrapped patch in another directory.
+    let elsewhere = analyze(&claude_shell(
+        &format!("env -C secrets apply_patch {PATCH}"),
+        "/repo",
+    ));
+    assert_eq!(
+        shell_patch_targets(&elsewhere),
+        vec![(
+            None,
+            PathBase::UnknownAfterDirectoryChange,
+            AccessCertainty::Direct
+        )],
+        "{elsewhere:#?}"
+    );
+    assert!(has_gap(&elsewhere, directory_change_gap), "{elsewhere:#?}");
+}
+
+#[test]
+fn dynamic_shell_patch_bodies_are_exact_only_when_codex_intercepts_them() {
+    const BODY: &str =
+        "*** Begin Patch\n*** Update File: .env\n@@\n-TOKEN=$OLD\n+TOKEN=new\n*** End Patch";
+    let bare = format!("apply_patch <<EOF\n{BODY}\nEOF\n");
+
+    // Codex applies these whole-script forms itself, without expansion.
+    for (command, resolved) in [
+        (bare.clone(), "/repo/.env"),
+        (
+            format!("cd sub && apply_patch <<EOF\n{BODY}\nEOF\n"),
+            "/repo/sub/.env",
+        ),
+    ] {
+        let report = analyze(&codex_shell(&command, "/repo"));
+        assert_eq!(
+            shell_patch_paths(&report),
+            vec![(Some(resolved), AccessIntent::ReadModify)],
+            "{command}: {report:#?}"
+        );
+        assert!(report.is_complete(), "{command}: {report:#?}");
+    }
+
+    // Any other script runs in Bash, which expands the body first: literal
+    // headers are recovered, but the expansion stays a gap.
+    for input in [
+        claude_shell(&bare, "/repo"),
+        codex_shell(&format!("{bare}echo done\n"), "/repo"),
+        codex_shell(&format!("# edit\n{bare}"), "/repo"),
+        codex_shell(
+            &format!("apply_patch <<EOF && echo done\n{BODY}\nEOF\n"),
+            "/repo",
+        ),
+        codex_shell(&format!("(apply_patch) <<EOF\n{BODY}\nEOF\n"), "/repo"),
+    ] {
+        let report = analyze(&input);
+        assert_eq!(
+            shell_patch_paths(&report),
+            vec![(Some("/repo/.env"), AccessIntent::ReadModify)],
+            "{input:?}: {report:#?}"
+        );
+        assert!(
+            has_gap(&report, dynamic_heredoc_gap),
+            "{input:?}: {report:#?}"
+        );
+    }
+
+    // An expansion can inject headers that no literal line shows.
+    let injected = analyze(&codex_shell(
+        "apply_patch <<EOF\n*** Begin Patch\n*** Add File: a.txt\n+$(printf '\\n*** Delete File: important.rs')\n*** End Patch\nEOF\necho done\n",
+        "/repo",
+    ));
+    assert_eq!(
+        shell_patch_paths(&injected),
+        vec![(Some("/repo/a.txt"), AccessIntent::Modify)],
+        "{injected:#?}"
+    );
+    assert!(has_gap(&injected, dynamic_heredoc_gap), "{injected:#?}");
+
+    // `<<-` strips leading tabs before `apply_patch` reads the body, so a
+    // tab-indented header inside an update hunk is a header.
+    let stripped = analyze(&claude_shell(
+        "apply_patch <<-EOF\n\t*** Begin Patch\n\t*** Update File: a.rs\n\t@@\n\t-$OLD\n\t+new\n\t*** Delete File: important.rs\n\t*** End Patch\n\tEOF\necho done\n",
+        "/repo",
+    ));
+    assert_eq!(
+        shell_patch_paths(&stripped),
+        vec![
+            (Some("/repo/a.rs"), AccessIntent::ReadModify),
+            (Some("/repo/important.rs"), AccessIntent::Delete),
+        ],
+        "{stripped:#?}"
+    );
+    assert!(has_gap(&stripped, dynamic_heredoc_gap), "{stripped:#?}");
+}
+
+#[test]
+fn only_the_final_standard_input_supplies_a_shell_patch() {
+    const DECOY: &str = "*** Begin Patch\n*** Add File: decoy.txt\n+x\n*** End Patch\nEOF\n";
+    // The patch comes from a file or pipe, or the here-document is on
+    // another descriptor.
+    for command in [
+        format!("apply_patch <<'EOF' < evil.patch\n{DECOY}"),
+        format!("cat evil.patch | apply_patch 3<<'EOF'\n{DECOY}"),
+        format!("apply_patch 3<<'EOF' < evil.patch\n{DECOY}"),
+        format!("apply_patch 3<<'EOF'\n{DECOY}"),
+    ] {
+        for input in [
+            claude_shell(&command, "/repo"),
+            codex_shell(&command, "/repo"),
+        ] {
+            let report = analyze(&input);
+            assert!(
+                shell_patch_targets(&report).is_empty(),
+                "{command}: {report:#?}"
+            );
+            assert!(
+                has_gap(&report, missing_heredoc_gap),
+                "{command}: {report:#?}"
+            );
+        }
+    }
+
+    // A read-write `<>`, a closed standard input, or an inner statement's
+    // input redirection also replaces the here-document.
+    for command in [
+        format!("apply_patch <<'EOF' <> evil.patch\n{DECOY}"),
+        format!("apply_patch <<'EOF' <&-\n{DECOY}"),
+        format!("{{ (apply_patch) < evil.patch; }} <<'EOF'\n{DECOY}"),
+        format!("{{ apply_patch; }} <<'EOF' <> evil.patch\n{DECOY}"),
+    ] {
+        let report = analyze(&claude_shell(&command, "/repo"));
+        assert!(
+            shell_patch_targets(&report).is_empty(),
+            "{command}: {report:#?}"
+        );
+        assert!(
+            has_gap(&report, missing_heredoc_gap),
+            "{command}: {report:#?}"
+        );
+    }
+
+    // The last standard-input redirection wins, and a here-document
+    // replaces piped input.
+    for command in [
+        format!("apply_patch < evil.patch <<'EOF'\n{DECOY}"),
+        format!("apply_patch <> evil.patch <<'EOF'\n{DECOY}"),
+        format!("cat evil.patch | apply_patch <<'EOF'\n{DECOY}"),
+    ] {
+        let report = analyze(&claude_shell(&command, "/repo"));
+        assert_eq!(
+            shell_patch_paths(&report),
+            vec![(Some("/repo/decoy.txt"), AccessIntent::Modify)],
+            "{command}: {report:#?}"
+        );
+        assert!(
+            !has_gap(&report, missing_heredoc_gap),
+            "{command}: {report:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_patch_argument_takes_precedence_over_standard_input() {
+    const PATCH: &str = "'*** Begin Patch\n*** Delete File: important.rs\n*** End Patch'";
+    const DECOY: &str =
+        "<<'EOF'\n*** Begin Patch\n*** Add File: decoy.txt\n+x\n*** End Patch\nEOF\n";
+    // The standalone `apply_patch` executable reads its argument and never
+    // reads standard input.
+    for command in [
+        format!("apply_patch {PATCH} {DECOY}"),
+        format!("{{ apply_patch {PATCH}; }} {DECOY}"),
+        format!("command apply_patch {PATCH} {DECOY}"),
+    ] {
+        for input in [
+            claude_shell(&command, "/repo"),
+            codex_shell(&command, "/repo"),
+        ] {
+            let report = analyze(&input);
+            assert_eq!(
+                shell_patch_paths(&report),
+                vec![(Some("/repo/important.rs"), AccessIntent::Delete)],
+                "{command}: {report:#?}"
+            );
+            assert!(
+                matches!(
+                    report.candidates[0].provenance,
+                    AccessProvenance::ShellPatchArgument { line: 2, .. }
+                ),
+                "{command}: {report:#?}"
+            );
+            assert!(report.is_complete(), "{command}: {report:#?}");
+        }
+    }
+
+    // A dynamic or extra argument hides the patch.
+    for command in [
+        format!("apply_patch \"$(cat evil.patch)\" {DECOY}"),
+        format!("apply_patch a b {DECOY}"),
+    ] {
+        let report = analyze(&claude_shell(&command, "/repo"));
+        assert!(
+            shell_patch_targets(&report).is_empty(),
+            "{command}: {report:#?}"
+        );
+        assert!(
+            has_gap(&report, missing_heredoc_gap),
+            "{command}: {report:#?}"
+        );
+    }
+
+    // Codex applies the here-document of its intercepted `cd` form even when
+    // `apply_patch` has arguments; Bash runs the executable, which reads them.
+    let command = format!("cd sub && apply_patch ignored {DECOY}");
+    let intercepted = analyze(&codex_shell(&command, "/repo"));
+    assert_eq!(
+        shell_patch_paths(&intercepted),
+        vec![(Some("/repo/sub/decoy.txt"), AccessIntent::Modify)],
+        "{intercepted:#?}"
+    );
+    let executed = analyze(&claude_shell(&command, "/repo"));
+    assert!(shell_patch_paths(&executed).is_empty(), "{executed:#?}");
+    assert!(
+        has_gap(&executed, |reason| matches!(
+            reason,
+            ToolAccessGapReason::MalformedPatch { .. }
+        )),
+        "{executed:#?}"
+    );
+}
+
+#[test]
+fn shell_patch_directory_changes_bash_may_skip_or_redirect_stay_uncertain() {
+    const PATCH: &str =
+        "<<'EOF'\n*** Begin Patch\n*** Update File: key.pem\n@@\n-a\n+b\n*** End Patch\nEOF\n";
+    // Wrapped, negated, skipped, piped, repeated, or deferred directory
+    // changes leave the directory unknown.
+    for command in [
+        format!("builtin cd secrets && apply_patch {PATCH}"),
+        format!("command cd secrets && apply_patch {PATCH}"),
+        format!("! cd nonexistent && apply_patch {PATCH}"),
+        format!("true || cd secrets && apply_patch {PATCH}"),
+        format!("printf x | cd secrets && apply_patch {PATCH}"),
+        format!("for i in 1 2; do cd secrets && apply_patch {PATCH}done\n"),
+        format!("for i in 1 2; do apply_patch {PATCH}cd secrets; done\n"),
+        format!("f() {{ apply_patch {PATCH}}}; cd secrets; f\n"),
+    ] {
+        for input in [
+            claude_shell(&command, "/repo"),
+            codex_shell(&command, "/repo"),
+        ] {
+            let report = analyze(&input);
+            assert_eq!(
+                shell_patch_targets(&report),
+                vec![(
+                    None,
+                    PathBase::UnknownAfterDirectoryChange,
+                    AccessCertainty::Direct
+                )],
+                "{command}: {report:#?}"
+            );
+            assert!(
+                has_gap(&report, directory_change_gap),
+                "{command}: {report:#?}"
+            );
+        }
+    }
+
+    // `CDPATH` or `cdable_vars` set in the script can send `cd` elsewhere.
+    for command in [
+        format!("export CDPATH=/repo/private; cd config && apply_patch {PATCH}"),
+        format!("CDPATH=/repo/private cd config && apply_patch {PATCH}"),
+        format!("export CD\"PATH\"=/repo/private; cd config && apply_patch {PATCH}"),
+        format!("shopt -s cdable_vars; config=/repo/private; cd config && apply_patch {PATCH}"),
+    ] {
+        let report = analyze(&claude_shell(&command, "/repo"));
+        assert_eq!(
+            shell_patch_targets(&report),
+            vec![(
+                None,
+                PathBase::UnknownAfterDirectoryChange,
+                AccessCertainty::Heuristic
+            )],
+            "{command}: {report:#?}"
+        );
+        assert!(
+            has_gap(&report, directory_change_gap),
+            "{command}: {report:#?}"
+        );
+    }
+
+    // Codex joins the operand of its intercepted form itself, so a body
+    // that merely mentions `CDPATH` does not matter there; Bash may still
+    // consult it.
+    let mention = "cd sub && apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: notes.md\n+Set CDPATH with care.\n*** End Patch\nEOF\n";
+    let intercepted = analyze(&codex_shell(mention, "/repo"));
+    assert_eq!(
+        shell_patch_targets(&intercepted),
+        vec![(
+            Some("/repo/sub/notes.md"),
+            PathBase::SessionCwd,
+            AccessCertainty::Direct
+        )],
+        "{intercepted:#?}"
+    );
+    let executed = analyze(&claude_shell(mention, "/repo"));
+    assert_eq!(
+        shell_patch_targets(&executed),
+        vec![(
+            None,
+            PathBase::UnknownAfterDirectoryChange,
+            AccessCertainty::Heuristic
+        )],
+        "{executed:#?}"
+    );
+
+    // A chain its list always runs, or a later directory change, still
+    // resolves.
+    for (command, resolved) in [
+        (
+            format!("true && cd a && apply_patch {PATCH}"),
+            "/repo/a/key.pem",
+        ),
+        (
+            format!("if cd a && apply_patch {PATCH}then :; fi\n"),
+            "/repo/a/key.pem",
+        ),
+        (format!("apply_patch {PATCH}cd secrets\n"), "/repo/key.pem"),
+    ] {
+        let report = analyze(&claude_shell(&command, "/repo"));
+        assert_eq!(
+            shell_patch_targets(&report),
+            vec![(
+                Some(resolved),
+                PathBase::InvocationCwd,
+                AccessCertainty::Direct
+            )],
+            "{command}: {report:#?}"
+        );
+        assert!(
+            !has_gap(&report, directory_change_gap),
             "{command}: {report:#?}"
         );
     }

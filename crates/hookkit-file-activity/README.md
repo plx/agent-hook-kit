@@ -148,3 +148,12 @@ documented not to touch files, such as `TodoWrite`, `WebFetch`, `update_plan`,
 or `search_web`, produce no evidence and no coverage gap. Antigravity's missing
 precise session-start producer still makes mtime reconciliation a best-effort
 fallback.
+
+A relative path whose tool working directory was not observable is resolved
+against the hook's session directory (`PathBase::SessionCwd` in
+`hookkit-tool-access`). Codex `Bash` payloads omit the `workdir` argument that
+can run the command elsewhere, so `echo x > out.txt` may have written
+`packages/api/out.txt` rather than `out.txt`. Such evidence is kept but
+downgraded to `Heuristic` certainty, and each tool call records one coverage
+gap naming those paths, so a missed file is recovered only by the mtime
+fallback.

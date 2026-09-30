@@ -6,9 +6,11 @@ use crate::{
 };
 use hookkit_core::{HarnessId, Utf8Path, Utf8PathBuf, normalize_utf8_path};
 use hookkit_shell::{
-    BashAnalysis, CommandOccurrence, ExecutionContext, Redirection, RedirectionKind,
-    RedirectionOperator, SourceSpan,
+    BashAnalysis, CommandOccurrence, ConstructKind, ExecutionContext, Redirection, RedirectionKind,
+    RedirectionOperator, ShellWord, SourceSpan,
 };
+use std::borrow::Cow;
+use std::ops::Range;
 
 const BEGIN_PATCH: &str = "*** Begin Patch";
 const END_PATCH: &str = "*** End Patch";
@@ -20,6 +22,19 @@ const MOVE_TO: &str = "*** Move to: ";
 
 /// Command names Codex intercepts and applies as patches.
 const SHELL_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
+
+/// Commands that change the shell's working directory.
+const DIRECTORY_COMMANDS: [&str; 3] = ["cd", "pushd", "popd"];
+
+/// Commands that run another command with the caller's standard input,
+/// matching the wrappers `hookkit-shell` file-access inference unwraps.
+const COMMAND_WRAPPERS: [&str; 11] = [
+    "builtin", "command", "doas", "env", "exec", "nice", "nohup", "stdbuf", "sudo", "time",
+    "timeout",
+];
+
+/// Location reported for a relative path recovered from a patch argument.
+const SHELL_ARGUMENT_POINTER: &str = "<shell-argument>";
 
 #[derive(Debug, Clone, Copy)]
 struct PatchContext<'a> {
@@ -37,7 +52,9 @@ impl PatchContext<'_> {
     fn source(&self) -> AccessSource {
         match self.evidence {
             PatchEvidence::Structured => AccessSource::Patch,
-            PatchEvidence::Shell { .. } => AccessSource::Shell,
+            PatchEvidence::Shell { .. } | PatchEvidence::ShellArgument { .. } => {
+                AccessSource::Shell
+            }
         }
     }
 }
@@ -50,6 +67,11 @@ enum PatchEvidence<'a> {
         command_span: SourceSpan,
         heredoc_span: SourceSpan,
         delimiter: &'a str,
+    },
+    ShellArgument {
+        command_index: usize,
+        command_span: SourceSpan,
+        argument_span: SourceSpan,
     },
 }
 
@@ -76,68 +98,62 @@ pub(crate) fn analyze_patch(call: &ToolCallRef<'_>, report: &mut ToolAccessRepor
     );
 }
 
-/// Analyzes every `apply_patch`/`applypatch` here-document in `source`.
+/// Analyzes every shell `apply_patch`/`applypatch` command in `source`,
+/// including one run through a wrapper such as `command`, `env`, `nohup`,
+/// `sudo`, or `timeout`.
 ///
-/// Codex applies an intercepted here-document body verbatim, and in an
-/// unquoted here-document only `$`, `` ` ``, and `\` are special, so header
-/// paths free of those characters are recovered even when other lines of
-/// the body are dynamic.
+/// The patch text is the command's single argument, which the standalone
+/// `apply_patch` executable reads instead of standard input. Without an
+/// argument it is the command's last standard-input redirection or, when the
+/// command has none and does not read a pipe, the last one of the innermost
+/// enclosing statement that redirects standard input, as in
+/// `(cd dir && apply_patch) <<'EOF'` or `{ apply_patch; } <<'EOF'`. Only a
+/// here-document there is analyzed; anything else (a file, a pipe, a
+/// here-string, a closed input, or a dynamic or extra argument) records
+/// [`ToolAccessGapReason::MissingShellPatchHereDocument`]. A statement's
+/// here-document is only [`AccessCertainty::Heuristic`] evidence when another
+/// command of the statement (other than `cd`) runs first and may consume the
+/// input.
 ///
-/// The body is the command's own here-document or, when the command has no
-/// standard-input redirection of its own and does not read a pipe, one
-/// attached to the innermost enclosing statement that redirects standard
-/// input, as in `(cd dir && apply_patch) <<'EOF'` or
-/// `{ apply_patch; } <<'EOF'`. A statement's here-document is only
-/// [`AccessCertainty::Heuristic`] evidence when another command of the
-/// statement (other than `cd`) runs first and may consume the input.
+/// With `codex_intercepts`, a script that is exactly one of the forms Codex
+/// intercepts (see [`codex_intercepted`]) is applied by Codex from the raw
+/// here-document body, so header paths free of `$`, `` ` ``, and `\` are
+/// exact even when other lines of an unquoted body are dynamic. Otherwise the
+/// shell expands a dynamic body before `apply_patch` reads it, and an
+/// expansion can add file headers, so literal headers are still recovered but
+/// [`ToolAccessGapReason::DynamicShellPatchHereDocument`] is always recorded.
 ///
-/// Paths resolve against `cwd` unless a directory change precedes the
-/// command. The Codex-intercepted `cd <dir> && apply_patch` form, including
-/// a chain of `cd` commands joined by `&&` inside a subshell or not,
-/// resolves against `cwd` joined with each literal `cd` operand. A
-/// non-literal operand leaves the paths unresolved and
-/// [`AccessCertainty::Heuristic`], and any other directory change leaves
-/// them unresolved; both also record
-/// [`ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged`].
+/// Paths resolve against `cwd` unless a directory change may take effect
+/// first (see [`patch_directory`]).
 pub(crate) fn analyze_shell_patches(
     analysis: &BashAnalysis,
     source: &str,
     cwd: Option<&Utf8Path>,
     base: PathBase,
+    codex_intercepts: bool,
     report: &mut ToolAccessReport,
 ) {
-    let directory_changes = analysis
-        .commands
-        .iter()
-        .enumerate()
-        .filter(|(_, command)| matches!(literal_name(command), Some("cd" | "pushd" | "popd")))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
+    let directory_changes = directory_changes(analysis);
 
     for (command_index, command) in analysis.commands.iter().enumerate() {
-        let Some(name) = literal_name(command) else {
+        let Some(offset) = wrapped_command_index(command, &SHELL_PATCH_COMMANDS) else {
             continue;
         };
-        if !is_shell_patch_command(name) {
-            continue;
-        }
-        let Some(input) = patch_input(analysis, command_index) else {
-            report.push_gap(
-                AccessSource::Shell,
-                ToolAccessGapReason::MissingShellPatchHereDocument {
-                    command_span: command.span,
-                },
-            );
-            continue;
+        let intercepted = codex_intercepts && codex_intercepted(analysis, source, command_index);
+        let directory = if offset > 0 && wrapper_changes_directory(&command.arguments[..offset - 1])
+        {
+            PatchDirectory::Unknown
+        } else {
+            patch_directory(
+                analysis,
+                source,
+                command_index,
+                &directory_changes,
+                intercepted,
+                cwd,
+                base,
+            )
         };
-        let directory = patch_directory(
-            analysis,
-            source,
-            command_index,
-            &directory_changes,
-            cwd,
-            base,
-        );
         let (patch_cwd, patch_base, certainty) = match &directory {
             PatchDirectory::Unchanged => (cwd, base, AccessCertainty::Direct),
             PatchDirectory::Changed { cwd, base } => {
@@ -154,78 +170,116 @@ pub(crate) fn analyze_shell_patches(
                 AccessCertainty::Direct,
             ),
         };
-        let certainty = if input.shared {
+        let cwd_may_have_changed =
+            matches!(directory, PatchDirectory::Dynamic | PatchDirectory::Unknown);
+        let missing_gap = || ToolAccessGapReason::MissingShellPatchHereDocument {
+            command_span: command.span,
+        };
+        let directory_gap = || ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged {
+            command_span: command.span,
+        };
+
+        let (redirection, shared) =
+            match patch_input(analysis, source, command_index, offset, intercepted) {
+                PatchInput::HereDocument {
+                    redirection,
+                    shared,
+                } => (redirection, shared),
+                PatchInput::Argument { argument, patch } => {
+                    if cwd_may_have_changed {
+                        report.push_gap(AccessSource::Shell, directory_gap());
+                    }
+                    parse_patch(
+                        patch,
+                        SHELL_ARGUMENT_POINTER,
+                        PatchContext {
+                            cwd: patch_cwd,
+                            base: patch_base,
+                            evidence: PatchEvidence::ShellArgument {
+                                command_index,
+                                command_span: command.span,
+                                argument_span: argument.span,
+                            },
+                            dynamic_body: false,
+                            certainty,
+                        },
+                        report,
+                    );
+                    continue;
+                }
+                PatchInput::Missing => {
+                    report.push_gap(AccessSource::Shell, missing_gap());
+                    continue;
+                }
+            };
+        let Some(heredoc) = &redirection.here_document else {
+            report.push_gap(AccessSource::Shell, missing_gap());
+            continue;
+        };
+        let certainty = if shared {
             AccessCertainty::Heuristic
         } else {
             certainty
         };
-        let cwd_may_have_changed =
-            matches!(directory, PatchDirectory::Dynamic | PatchDirectory::Unknown);
-        for redirection in input.heredocs {
-            let Some(heredoc) = &redirection.here_document else {
-                report.push_gap(
-                    AccessSource::Shell,
-                    ToolAccessGapReason::MissingShellPatchHereDocument {
-                        command_span: command.span,
-                    },
-                );
-                continue;
-            };
-            let delimiter = heredoc
+        let delimiter = heredoc
+            .delimiter
+            .literal
+            .as_deref()
+            .unwrap_or(heredoc.delimiter.raw.as_str());
+        let dynamic_gap = || ToolAccessGapReason::DynamicShellPatchHereDocument {
+            command_span: command.span,
+            delimiter: delimiter.to_owned(),
+            reasons: heredoc.dynamic_reasons.clone(),
+        };
+        let (payload, dynamic_body) = match heredoc.literal_body.as_deref() {
+            Some(payload) => (Cow::Borrowed(payload), false),
+            None => match heredoc
                 .delimiter
                 .literal
-                .as_deref()
-                .unwrap_or(heredoc.delimiter.raw.as_str());
-            let dynamic_gap = || ToolAccessGapReason::DynamicShellPatchHereDocument {
-                command_span: command.span,
-                delimiter: delimiter.to_owned(),
-                reasons: heredoc.dynamic_reasons.clone(),
-            };
-            let (payload, dynamic_body) = match heredoc.literal_body.as_deref() {
-                Some(payload) => (payload, false),
-                None => match heredoc
-                    .delimiter
-                    .literal
-                    .as_ref()
-                    .and(heredoc.body_span)
-                    .and_then(|span| source.get(span.start_byte..span.end_byte))
-                    .filter(|body| !has_line_continuation(body))
+                .as_ref()
+                .and(heredoc.body_span)
+                .and_then(|span| source.get(span.start_byte..span.end_byte))
+                .filter(|body| !has_line_continuation(body))
+            {
+                // Codex applies the raw body; a shell strips `<<-` tabs.
+                Some(body)
+                    if !intercepted
+                        && redirection.operator
+                            == Some(RedirectionOperator::HereDocumentStripTabs) =>
                 {
-                    Some(body) => (body, true),
-                    None => {
-                        report.push_gap(AccessSource::Shell, dynamic_gap());
-                        continue;
-                    }
+                    (Cow::Owned(strip_leading_tabs(body)), true)
+                }
+                Some(body) => (Cow::Borrowed(body), true),
+                None => {
+                    report.push_gap(AccessSource::Shell, dynamic_gap());
+                    continue;
+                }
+            },
+        };
+        if cwd_may_have_changed {
+            report.push_gap(AccessSource::Shell, directory_gap());
+        }
+        let parsed = parse_patch(
+            &payload,
+            "<shell-heredoc>",
+            PatchContext {
+                cwd: patch_cwd,
+                base: patch_base,
+                evidence: PatchEvidence::Shell {
+                    command_index,
+                    command_span: command.span,
+                    heredoc_span: heredoc.body_span.unwrap_or(redirection.span),
+                    delimiter,
                 },
-            };
-            if cwd_may_have_changed {
-                report.push_gap(
-                    AccessSource::Shell,
-                    ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged {
-                        command_span: command.span,
-                    },
-                );
-            }
-            let parsed = parse_patch(
-                payload,
-                "<shell-heredoc>",
-                PatchContext {
-                    cwd: patch_cwd,
-                    base: patch_base,
-                    evidence: PatchEvidence::Shell {
-                        command_index,
-                        command_span: command.span,
-                        heredoc_span: heredoc.body_span.unwrap_or(redirection.span),
-                        delimiter,
-                    },
-                    dynamic_body,
-                    certainty,
-                },
-                report,
-            );
-            if parsed.dynamic_headers {
-                report.push_gap(AccessSource::Shell, dynamic_gap());
-            }
+                dynamic_body,
+                certainty,
+            },
+            report,
+        );
+        // Outside Codex's interception the shell expands the body, and an
+        // expansion may produce headers that no literal line shows.
+        if parsed.dynamic_headers || (dynamic_body && !intercepted) {
+            report.push_gap(AccessSource::Shell, dynamic_gap());
         }
     }
 }
@@ -237,63 +291,272 @@ fn literal_name(command: &CommandOccurrence) -> Option<&str> {
         .and_then(|name| name.literal.as_deref())
 }
 
-/// Here-documents that may supply a shell patch command's standard input.
-struct PatchInput<'a> {
-    heredocs: Vec<&'a Redirection>,
-    /// The here-documents belong to an enclosing statement in which another
-    /// command runs first and may consume the input.
-    shared: bool,
+fn basename(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
 }
 
-/// Finds the here-documents feeding `command_index`: its own, or, when it
-/// has no standard-input redirection and does not read a pipe, those of the
-/// innermost enclosing statement that redirects standard input.
-fn patch_input(analysis: &BashAnalysis, command_index: usize) -> Option<PatchInput<'_>> {
+/// Returns the argv index of the command that `command` runs when its
+/// basename is one of `names`: `0` for the command itself, or the index of
+/// the command run by a wrapper chain such as `sudo env FOO=1 apply_patch`.
+///
+/// Wrapper options are not parsed. After a wrapper, the first literal word
+/// whose basename is in `names` is taken as the wrapped command, so an option
+/// value that happens to equal a name over-reports rather than hiding the
+/// command. `command -v` and `command -V` run nothing.
+fn wrapped_command_index(command: &CommandOccurrence, names: &[&str]) -> Option<usize> {
+    let name = command.name.as_ref()?;
+    let mut wrapper: Option<&str> = None;
+    for (index, word) in std::iter::once(name).chain(&command.arguments).enumerate() {
+        let Some(value) = word.literal.as_deref() else {
+            // A dynamic command name is `hookkit-shell`'s gap; a dynamic
+            // wrapper argument may be an option.
+            wrapper?;
+            continue;
+        };
+        if wrapper.is_some() && value.contains('=') {
+            // An environment assignment such as `PATH=/opt/apply_patch`.
+            continue;
+        }
+        let name = basename(value);
+        if names.contains(&name) {
+            return Some(index);
+        }
+        match wrapper {
+            None if COMMAND_WRAPPERS.contains(&name) => wrapper = Some(name),
+            None => return None,
+            Some("command")
+                if value.starts_with('-')
+                    && !value.starts_with("--")
+                    && value.contains(['v', 'V']) =>
+            {
+                return None;
+            }
+            Some(_) if !value.starts_with('-') && COMMAND_WRAPPERS.contains(&name) => {
+                wrapper = Some(name);
+            }
+            Some(_) => {}
+        }
+    }
+    None
+}
+
+/// Whether a wrapper option may run the wrapped command in another directory,
+/// such as `env -C dir` or `sudo --chdir=dir`.
+fn wrapper_changes_directory(words: &[ShellWord]) -> bool {
+    words.iter().any(|word| {
+        word.literal.as_deref().is_some_and(|value| {
+            value.starts_with("--chdir")
+                || (value.starts_with('-')
+                    && !value.starts_with("--")
+                    && value.contains(['C', 'D']))
+        })
+    })
+}
+
+/// Where a shell patch command reads its patch text.
+enum PatchInput<'a> {
+    /// A here-document supplies standard input.
+    HereDocument {
+        redirection: &'a Redirection,
+        /// The here-document belongs to an enclosing statement in which
+        /// another command runs first and may consume the input.
+        shared: bool,
+    },
+    /// The command's single literal argument is the patch.
+    Argument {
+        argument: &'a ShellWord,
+        patch: &'a str,
+    },
+    /// The patch text is not observable.
+    Missing,
+}
+
+/// Finds the patch text of the patch command at argv index `offset` of
+/// `command_index`.
+///
+/// The standalone `apply_patch` executable reads its single argument when it
+/// has one, so arguments take precedence over standard input, except in a
+/// Codex-intercepted script, where Codex reads the here-document. Standard
+/// input is the command's last standard-input redirection or, when it has
+/// none and does not read a pipe, the last one of the innermost enclosing
+/// statement that redirects standard input.
+fn patch_input<'a>(
+    analysis: &'a BashAnalysis,
+    source: &str,
+    command_index: usize,
+    offset: usize,
+    intercepted: bool,
+) -> PatchInput<'a> {
     let command = &analysis.commands[command_index];
-    let own = here_documents(&command.redirections);
-    if !own.is_empty() {
-        return Some(PatchInput {
-            heredocs: own,
-            shared: false,
-        });
+    let arguments = &command.arguments[offset..];
+    if !intercepted && !arguments.is_empty() {
+        return match arguments {
+            [argument] => match argument.literal.as_deref() {
+                Some(patch) => PatchInput::Argument { argument, patch },
+                None => PatchInput::Missing,
+            },
+            // The executable refuses extra arguments.
+            _ => PatchInput::Missing,
+        };
     }
-    if command.redirections.iter().any(redirects_standard_input)
-        || command.context.contains(&ExecutionContext::PipelineInput)
-    {
-        return None;
+    if let Some(input) = last_standard_input(source, &command.redirections) {
+        return here_document_input(input, false);
     }
-    let statement = analysis
+    if command.context.contains(&ExecutionContext::PipelineInput) {
+        return PatchInput::Missing;
+    }
+    // Nested statements may enclose the same commands, as in
+    // `{ (apply_patch) < evil.patch; } <<'EOF'`, so the innermost one is the
+    // one with the narrowest body.
+    let Some((statement, input)) = analysis
         .statement_redirections
         .iter()
         .filter(|statement| statement.commands.contains(&command_index))
-        .filter(|statement| statement.redirections.iter().any(redirects_standard_input))
-        .min_by_key(|statement| statement.commands.len())?;
-    let heredocs = here_documents(&statement.redirections);
-    if heredocs.is_empty() {
-        return None;
-    }
+        .filter_map(|statement| {
+            last_standard_input(source, &statement.redirections).map(|input| (statement, input))
+        })
+        .min_by_key(|(statement, _)| {
+            statement
+                .body_span
+                .end_byte
+                .saturating_sub(statement.body_span.start_byte)
+        })
+    else {
+        return PatchInput::Missing;
+    };
     let shared = (statement.commands.start..command_index)
         .any(|index| literal_name(&analysis.commands[index]) != Some("cd"));
-    Some(PatchInput { heredocs, shared })
+    here_document_input(input, shared)
 }
 
-fn here_documents(redirections: &[Redirection]) -> Vec<&Redirection> {
+fn here_document_input(redirection: &Redirection, shared: bool) -> PatchInput<'_> {
+    if redirection.kind == RedirectionKind::HereDocument {
+        PatchInput::HereDocument {
+            redirection,
+            shared,
+        }
+    } else {
+        PatchInput::Missing
+    }
+}
+
+/// The redirection that finally supplies standard input: the last one in
+/// source order that replaces descriptor 0.
+fn last_standard_input<'a>(
+    source: &str,
+    redirections: &'a [Redirection],
+) -> Option<&'a Redirection> {
     redirections
         .iter()
-        .filter(|redirection| redirection.kind == RedirectionKind::HereDocument)
-        .collect()
+        .filter(|redirection| redirects_standard_input(source, redirection))
+        .max_by_key(|redirection| redirection.span.start_byte)
 }
 
-/// Whether a redirection replaces standard input (descriptor 0).
-fn redirects_standard_input(redirection: &Redirection) -> bool {
-    let reads_input = matches!(
-        redirection.kind,
-        RedirectionKind::HereDocument | RedirectionKind::HereString
-    ) || matches!(
-        redirection.operator,
-        Some(RedirectionOperator::Input | RedirectionOperator::DuplicateInput)
-    );
-    reads_input && matches!(redirection.descriptor.as_deref(), None | Some("0"))
+/// Whether a redirection may replace standard input (descriptor 0): any
+/// redirection of descriptor `0`, or an input, input-duplicating,
+/// input-closing, or unrecognized one without a descriptor.
+///
+/// The Bash grammar parses a read-write `<>` next to a here-document as an
+/// output `>`, although it opens the file as standard input, so an output
+/// operator written directly after `<` counts too.
+fn redirects_standard_input(source: &str, redirection: &Redirection) -> bool {
+    match redirection.descriptor.as_deref() {
+        Some(descriptor) => descriptor == "0",
+        None => {
+            matches!(
+                redirection.kind,
+                RedirectionKind::HereDocument | RedirectionKind::HereString
+            ) || matches!(
+                redirection.operator,
+                None | Some(
+                    RedirectionOperator::Input
+                        | RedirectionOperator::DuplicateInput
+                        | RedirectionOperator::CloseInput
+                )
+            ) || (redirection.operator == Some(RedirectionOperator::Output)
+                && source
+                    .get(..redirection.span.start_byte)
+                    .is_some_and(|before| before.ends_with('<')))
+        }
+    }
+}
+
+/// Whether `source` is exactly one of the scripts Codex intercepts and
+/// applies itself instead of running (`codex-rs/apply-patch/src/invocation.rs`):
+/// `apply_patch <<DELIM` without arguments, or `cd <dir> && apply_patch
+/// <<DELIM` (whose `apply_patch` may have arguments, which Codex ignores), as
+/// the only statement, with the here-document as the only redirection.
+/// Anything before or after it, including a comment, makes the shell run the
+/// script.
+fn codex_intercepted(analysis: &BashAnalysis, source: &str, command_index: usize) -> bool {
+    let command = &analysis.commands[command_index];
+    let plain_name = |command: &CommandOccurrence, names: &[&str]| {
+        command
+            .name
+            .as_ref()
+            .is_some_and(|name| names.contains(&name.raw.as_str()))
+    };
+    if !plain_name(command, &SHELL_PATCH_COMMANDS)
+        || analysis.commands.len() != command_index + 1
+        || !analysis.statement_redirections.is_empty()
+    {
+        return false;
+    }
+    let [redirection] = command.redirections.as_slice() else {
+        return false;
+    };
+    let Some((heredoc, delimiter, body)) = redirection
+        .here_document
+        .as_ref()
+        .filter(|_| redirection.descriptor.is_none())
+        .and_then(|heredoc| {
+            Some((
+                heredoc,
+                heredoc.delimiter.literal.as_deref()?,
+                heredoc.body_span?,
+            ))
+        })
+    else {
+        return false;
+    };
+    let first = match command_index {
+        0 if command.arguments.is_empty() && command.context.is_empty() => command,
+        1 => {
+            let cd = &analysis.commands[0];
+            let simple_operand = match cd.arguments.as_slice() {
+                [operand] => operand.literal.as_deref().is_some_and(|literal| {
+                    operand.raw == literal
+                        || operand.raw == format!("'{literal}'")
+                        || operand.raw == format!("\"{literal}\"")
+                }),
+                _ => false,
+            };
+            let and_list = [ExecutionContext::AndOrList];
+            if !plain_name(cd, &["cd"])
+                || !simple_operand
+                || !cd.redirections.is_empty()
+                || cd.context != and_list
+                || command.context != and_list
+                || !joined_by_and(source, cd, command)
+            {
+                return false;
+            }
+            cd
+        }
+        _ => return false,
+    };
+    let heredoc_start = source
+        .get(command.span.end_byte..body.start_byte)
+        .map(str::trim)
+        .and_then(|start| start.strip_prefix("<<"))
+        .map(|start| start.strip_prefix('-').unwrap_or(start).trim_start());
+    source
+        .get(..first.span.start_byte)
+        .is_some_and(|before| before.trim().is_empty())
+        && heredoc_start == Some(heredoc.delimiter.raw.as_str())
+        && source
+            .get(body.end_byte..)
+            .is_some_and(|after| after.trim() == delimiter)
 }
 
 /// Working directory of a shell patch command relative to the invocation.
@@ -307,28 +570,121 @@ enum PatchDirectory {
         cwd: Option<Utf8PathBuf>,
         base: PathBase,
     },
-    /// A `cd` chain with a non-literal operand precedes the command.
+    /// A `cd` chain with a non-literal operand, or one that `CDPATH` or
+    /// `cdable_vars` may redirect, precedes the command.
     Dynamic,
-    /// Some other directory change precedes the command.
+    /// Some other directory change may precede the command.
     Unknown,
 }
 
+/// A command that may change the shell's working directory.
+struct DirectoryChange {
+    index: usize,
+    /// Byte offset from which the change may affect later commands: the
+    /// command's own start, or the start of the outermost loop or function
+    /// body enclosing it, whose later iterations and calls run after it.
+    from: usize,
+    /// The change is inside a loop or function body.
+    deferred: bool,
+}
+
+/// Finds every `cd`, `pushd`, and `popd`, including ones run through a
+/// wrapper such as `builtin cd` or `command cd`.
+fn directory_changes(analysis: &BashAnalysis) -> Vec<DirectoryChange> {
+    let mut deferred_ranges = analysis
+        .constructs
+        .iter()
+        .filter(|construct| {
+            matches!(
+                construct.kind,
+                ConstructKind::Loop | ConstructKind::FunctionDefinition
+            )
+        })
+        .map(|construct| construct.span.start_byte..construct.span.end_byte)
+        .collect::<Vec<_>>();
+    deferred_ranges.sort_by_key(|range| (range.start, std::cmp::Reverse(range.end)));
+    let mut outermost: Vec<Range<usize>> = Vec::with_capacity(deferred_ranges.len());
+    for range in deferred_ranges {
+        if outermost
+            .last()
+            .is_none_or(|outer| range.start >= outer.end)
+        {
+            outermost.push(range);
+        }
+    }
+
+    analysis
+        .commands
+        .iter()
+        .enumerate()
+        .filter(|(_, command)| wrapped_command_index(command, &DIRECTORY_COMMANDS).is_some())
+        .map(|(index, command)| {
+            let start = command.span.start_byte;
+            let deferred = command.context.iter().any(|context| {
+                matches!(
+                    context,
+                    ExecutionContext::Loop | ExecutionContext::FunctionDefinition
+                )
+            });
+            let from = if deferred {
+                outermost
+                    .iter()
+                    .find(|range| range.contains(&start))
+                    .map_or(start, |range| range.start)
+            } else {
+                start
+            };
+            DirectoryChange {
+                index,
+                from,
+                deferred,
+            }
+        })
+        .collect()
+}
+
+/// Resolves the working directory of the patch command at `command_index`.
+///
+/// The Codex-intercepted `cd <dir> && apply_patch` form, including a chain of
+/// plain `cd` commands joined by `&&` inside a subshell or not, resolves
+/// against `cwd` joined with each literal `cd` operand. The chain must begin
+/// its list, so a negated `! cd dir` or `true || cd dir` (after which the
+/// patch may run in the original directory) is not one. A non-literal
+/// operand makes the directory [`PatchDirectory::Dynamic`], and so does any
+/// mention of `CDPATH` or `cdable_vars` in a script that Bash runs rather
+/// than Codex intercepting it (Codex joins the operand itself); a `CDPATH`
+/// inherited from the environment is not modeled. Any other directory change that may
+/// take effect first, including a wrapped `builtin cd`, one inside a loop or
+/// function body, and any directory change at all when the patch command
+/// itself is in a function body, makes it [`PatchDirectory::Unknown`].
 fn patch_directory(
     analysis: &BashAnalysis,
     source: &str,
     command_index: usize,
-    directory_changes: &[usize],
+    directory_changes: &[DirectoryChange],
+    intercepted: bool,
     cwd: Option<&Utf8Path>,
     base: PathBase,
 ) -> PatchDirectory {
-    let start = analysis.commands[command_index].span.start_byte;
+    let command = &analysis.commands[command_index];
+    if command
+        .context
+        .contains(&ExecutionContext::FunctionDefinition)
+        && !directory_changes.is_empty()
+    {
+        // The function may be called after any directory change.
+        return PatchDirectory::Unknown;
+    }
+    let start = command.span.start_byte;
     let earlier = directory_changes
         .iter()
-        .copied()
-        .filter(|index| analysis.commands[*index].span.start_byte < start)
+        .filter(|change| change.from < start)
         .collect::<Vec<_>>();
     if earlier.is_empty() {
         return PatchDirectory::Unchanged;
+    }
+    if earlier.iter().any(|change| change.deferred) {
+        return PatchDirectory::Unknown;
     }
     // Walk back through the `cd <dir> &&` links immediately preceding the
     // command; every earlier directory change must be one of them.
@@ -344,8 +700,14 @@ fn patch_directory(
         chain.push(previous);
         next = previous;
     }
-    if chain.is_empty() || earlier.iter().any(|index| !chain.contains(index)) {
+    if chain.is_empty()
+        || earlier.iter().any(|change| !chain.contains(&change.index))
+        || !begins_list(source, analysis.commands[next].span.start_byte)
+    {
         return PatchDirectory::Unknown;
+    }
+    if !intercepted && may_redirect_cd(source) {
+        return PatchDirectory::Dynamic;
     }
     let mut directory = cwd.map(Utf8Path::to_path_buf);
     let mut base = base;
@@ -377,9 +739,55 @@ fn joined_by_and(source: &str, previous: &CommandOccurrence, next: &CommandOccur
         .is_some_and(|between| between.replace("\\\n", " ").trim() == "&&")
 }
 
+/// Whether the command starting at byte `start` runs whenever the rest of its
+/// `&&` chain does: it starts a statement, follows an opening delimiter or
+/// keyword, or follows `&&`. After `!`, `|`, or `||` it may be negated, run
+/// in a pipeline subshell, or skipped.
+fn begins_list(source: &str, start: usize) -> bool {
+    let mut before = source.get(..start).unwrap_or_default();
+    loop {
+        let trimmed = before.trim_end_matches([' ', '\t']);
+        match trimmed.strip_suffix("\\\n") {
+            Some(joined) => before = joined,
+            None => {
+                before = trimmed;
+                break;
+            }
+        }
+    }
+    if before.is_empty() || before.ends_with("&&") {
+        return true;
+    }
+    if before.ends_with(['|', '!']) || before.ends_with("|&") {
+        return false;
+    }
+    if before.ends_with(['\n', ';', '&', '(', '{', '`', ')']) {
+        return true;
+    }
+    let keyword = before
+        .rsplit(|character: char| character.is_ascii_whitespace() || character == ';')
+        .next()
+        .unwrap_or_default();
+    matches!(
+        keyword,
+        "if" | "then" | "else" | "elif" | "do" | "while" | "until"
+    )
+}
+
+/// Whether the script may set `CDPATH`, which makes `cd` search other
+/// directories first, or enable `cdable_vars`, which makes an operand that
+/// names no directory a variable holding one. Quotes and backslashes are
+/// ignored, so `export CD"PATH"=...` also counts.
+fn may_redirect_cd(source: &str) -> bool {
+    let unquoted = source
+        .chars()
+        .filter(|character| !matches!(character, '"' | '\'' | '\\'))
+        .collect::<String>();
+    unquoted.contains("CDPATH") || unquoted.contains("cdable_vars")
+}
+
 /// The single literal directory operand of `cd`, excluding options, `cd -`,
-/// and a bare `cd` (which enters `$HOME`). `CDPATH` is not modeled: Codex
-/// resolves an intercepted `cd` operand against the turn directory itself.
+/// and a bare `cd` (which enters `$HOME`).
 fn literal_cd_operand(command: &CommandOccurrence) -> Option<&str> {
     let mut arguments = command.arguments.iter();
     let mut operand = arguments.next()?;
@@ -395,9 +803,11 @@ fn literal_cd_operand(command: &CommandOccurrence) -> Option<&str> {
         .filter(|operand| !operand.is_empty() && !operand.starts_with('-'))
 }
 
-fn is_shell_patch_command(name: &str) -> bool {
-    let basename = name.rsplit('/').next().unwrap_or(name);
-    SHELL_PATCH_COMMANDS.contains(&basename)
+/// Removes the leading tabs a `<<-` here-document strips from every line.
+fn strip_leading_tabs(body: &str) -> String {
+    body.split_inclusive('\n')
+        .map(|line| line.trim_start_matches('\t'))
+        .collect()
 }
 
 /// Whether a line ends in an unescaped backslash, which an unquoted
@@ -828,6 +1238,18 @@ impl<'a> Parser<'a, '_> {
                     command_span,
                     heredoc_span,
                     delimiter: delimiter.to_owned(),
+                    operation,
+                    header: header.header.to_owned(),
+                    line: header.line,
+                },
+                PatchEvidence::ShellArgument {
+                    command_index,
+                    command_span,
+                    argument_span,
+                } => AccessProvenance::ShellPatchArgument {
+                    command_index,
+                    command_span,
+                    argument_span,
                     operation,
                     header: header.header.to_owned(),
                     line: header.line,
