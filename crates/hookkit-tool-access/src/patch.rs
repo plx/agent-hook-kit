@@ -453,12 +453,14 @@ fn last_standard_input<'a>(
 }
 
 /// Whether a redirection may replace standard input (descriptor 0): any
-/// redirection of descriptor `0`, or an input, input-duplicating,
-/// input-closing, or unrecognized one without a descriptor.
+/// redirection of descriptor `0`, or an input, read-write, input-duplicating,
+/// input-closing, or unrecognized one without a descriptor. Bash opens a
+/// read-write `<>` without a descriptor on descriptor 0.
 ///
-/// The Bash grammar parses a read-write `<>` next to a here-document as an
-/// output `>`, although it opens the file as standard input, so an output
-/// operator written directly after `<` counts too.
+/// When `0<>` follows a here-document, the Bash grammar loses the `0<` and
+/// reports an output `>` without a descriptor, although Bash opens the file
+/// as standard input, so an output operator written directly after `<`
+/// counts too.
 fn redirects_standard_input(source: &str, redirection: &Redirection) -> bool {
     match redirection.descriptor.as_deref() {
         Some(descriptor) => descriptor == "0",
@@ -470,6 +472,7 @@ fn redirects_standard_input(source: &str, redirection: &Redirection) -> bool {
                 redirection.operator,
                 None | Some(
                     RedirectionOperator::Input
+                        | RedirectionOperator::ReadWrite
                         | RedirectionOperator::DuplicateInput
                         | RedirectionOperator::CloseInput
                 )

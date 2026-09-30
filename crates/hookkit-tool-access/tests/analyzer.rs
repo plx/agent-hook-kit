@@ -864,10 +864,14 @@ fn only_the_final_standard_input_supplies_a_shell_patch() {
         }
     }
 
-    // A read-write `<>`, a closed standard input, or an inner statement's
-    // input redirection also replaces the here-document.
+    // A read-write `<>` (whose default descriptor is 0), a closed standard
+    // input, or an inner statement's input redirection also replaces the
+    // here-document. hookkit-shell reports `<>` as `ReadWrite`; after a
+    // here-document the grammar reduces `0<>` to an output `>`.
     for command in [
         format!("apply_patch <<'EOF' <> evil.patch\n{DECOY}"),
+        format!("apply_patch <<'EOF' 0<> evil.patch\n{DECOY}"),
+        format!("apply_patch <<'EOF' 0< evil.patch\n{DECOY}"),
         format!("apply_patch <<'EOF' <&-\n{DECOY}"),
         format!("{{ (apply_patch) < evil.patch; }} <<'EOF'\n{DECOY}"),
         format!("{{ apply_patch; }} <<'EOF' <> evil.patch\n{DECOY}"),
@@ -888,6 +892,8 @@ fn only_the_final_standard_input_supplies_a_shell_patch() {
     for command in [
         format!("apply_patch < evil.patch <<'EOF'\n{DECOY}"),
         format!("apply_patch <> evil.patch <<'EOF'\n{DECOY}"),
+        format!("apply_patch 0<> evil.patch <<'EOF'\n{DECOY}"),
+        format!("apply_patch <<'EOF' 3<> evil.patch\n{DECOY}"),
         format!("cat evil.patch | apply_patch <<'EOF'\n{DECOY}"),
     ] {
         let report = analyze(&claude_shell(&command, "/repo"));
