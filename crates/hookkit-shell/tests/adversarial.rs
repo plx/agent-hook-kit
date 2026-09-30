@@ -432,6 +432,275 @@ const CASES: &[Case] = &[
         finding: "shell-pager-interactive-escape",
         command: "less README.md",
         expect: &[Gap],
+    }, // A pattern option makes the first positional a search path.
+    Case {
+        finding: "shell-final-01",
+        command: "grep .env -e ''",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-01",
+        command: "grep -n .env -e ''",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-01",
+        command: "grep .env --regexp=",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-01",
+        command: "grep .env -f pats",
+        expect: &[Covers(".env", Read), Covers("pats", Read)],
+    },
+    Case {
+        finding: "shell-final-01",
+        command: "true | rg .env -e ''",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-01",
+        command: "rg .env -e '' < /dev/null",
+        expect: &[Covers(".env", Read)],
+    },
+    // Substitutions the grammar leaves inside parameter-expansion operands.
+    Case {
+        finding: "shell-final-02",
+        command: "echo ${x:-`cat .env`}",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-02",
+        command: "echo \"${x:-`cat .env`}\"",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-02",
+        command: ": ${y:=`cat .env`}",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-02",
+        command: "echo ${x#$(cat .env)}",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-02",
+        command: "echo ${x%`cat .env`}",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-02",
+        command: "echo ${x/a/`cat .env`}",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-02",
+        command: "[[ -n ${x:-`cat .env`} ]]",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-02",
+        command: "cat <<EOF\n${x:-`cat .env`}\nEOF\n",
+        expect: &[Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-final-02",
+        command: "echo ${x#$((cat .env) )}",
+        expect: &[Gap],
+    },
+    // Bash drops unquoted empty brace alternatives; zsh keeps them.
+    Case {
+        finding: "shell-final-03",
+        command: "sed {,} 'r .env' x",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-03",
+        command: "sed -n {,} '1w .env' x",
+        expect: &[Gap],
+    },
+    // Builtins and arithmetic contexts that evaluate quoted text again.
+    Case {
+        finding: "shell-final-04",
+        command: "declare 'd[$(cat .env)]=1'",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "declare -a 'b=($(cat .env))'",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "unset 'a[$(cat .env)]'",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "x='a[$(cat .env)]'; (( x ))",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "x='a[$(cat .env)]'; echo $((x))",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "x='a[$(cat .env)]'; [[ $x -eq 0 ]]",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "x='a[$(cat .env)]'; echo ${a[x]}",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "d='$'; x=\"a[${d}(cat .env)]\"; (( x ))",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "for x in 'a[$(cat .env)]'; do (( x )); done",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "printf -v 'a[$(cat .env)]' x",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "[[ -v 'a[$(cat .env)]' ]]",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-final-04",
+        command: "export $(cat .env)",
+        expect: &[Gap],
+    },
+    // zsh clobber targets of statements and bare redirections.
+    Case {
+        finding: "shell-final-05",
+        command: "{ echo x; } >! .env",
+        expect: &[Covers(".env", Modify), Gap],
+    },
+    Case {
+        finding: "shell-final-05",
+        command: "(echo x) >! .env",
+        expect: &[Covers(".env", Modify), Gap],
+    },
+    Case {
+        finding: "shell-final-05",
+        command: ">! .env",
+        expect: &[Covers(".env", Modify), Gap],
+    },
+    // `<>` opens its target for reading and writing.
+    Case {
+        finding: "shell-final-06",
+        command: "cat <>.env",
+        expect: &[Covers(".env", Read), Covers(".env", Modify)],
+    },
+    Case {
+        finding: "shell-final-06",
+        command: "cat <> .env",
+        expect: &[Covers(".env", Read), Covers(".env", Modify)],
+    },
+    // `~+` is the working directory; `~-` is unknown.
+    Case {
+        finding: "shell-final-07",
+        command: "cat ~+/.env",
+        expect: &[Covers(".env", Read), Gap],
+    },
+    Case {
+        finding: "shell-final-07",
+        command: "rm ~+/.env",
+        expect: &[Covers(".env", Delete), Gap],
+    },
+    Case {
+        finding: "shell-final-07",
+        command: "cat ~-/.env",
+        expect: &[Gap],
+    },
+    // A line continuation between `$` and `(` in expanded text.
+    Case {
+        finding: "shell-missed-01",
+        command: "echo \"$\\\n(cat .env)\"",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-missed-01",
+        command: "x=\"$\\\n(cat .env)\"",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-missed-01",
+        command: "cat <<EOF\n$\\\n(cat .env)\nEOF\n",
+        expect: &[Gap],
+    },
+    // Here-document bodies the shell ends before the grammar does.
+    Case {
+        finding: "shell-missed-02",
+        command: "cat <<EOF\nE\\\nOF\ncat .env\nEOF\n",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-missed-02",
+        command: "cat <<EOF\nEO\\\nF\nrm -rf secrets\nEOF\n",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-missed-02",
+        command: "cat <<EOF\n\\\nEOF\ncat .env\nEOF\n",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-missed-02",
+        command: "cat <<EOF && true\n\\\nEOF\ncat .env\nEOF\n",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-missed-02",
+        command: "cat <<'EOF'\n\\\nEOF\ncat .env\nEOF\n",
+        expect: &[Gap],
+    },
+    Case {
+        finding: "shell-missed-02",
+        command: "cat <<EOF\n${x:-\nEOF\ncat .env\n}\nEOF\n",
+        expect: &[Gap],
+    },
+    // Option tables of simple file commands, in GNU and BSD order.
+    Case {
+        finding: "shell-missed-03",
+        command: "cat -n credentials",
+        expect: &[Covers("credentials", Read)],
+    },
+    Case {
+        finding: "shell-missed-03",
+        command: "cat -n secrets/id_rsa",
+        expect: &[Covers("secrets/id_rsa", Read)],
+    },
+    Case {
+        finding: "shell-missed-03",
+        command: "touch -r .env x",
+        expect: &[Covers(".env", Read), Covers("x", Modify)],
+    },
+    Case {
+        finding: "shell-missed-03",
+        command: "truncate -s 0 key",
+        expect: &[Covers("key", Modify)],
+    },
+    Case {
+        finding: "shell-missed-03",
+        command: "touch x -r .env",
+        expect: &[Covers(".env", Modify), Covers(".env", Read)],
+    },
+    Case {
+        finding: "shell-missed-03",
+        command: "touch x -d .env",
+        expect: &[Covers(".env", Modify)],
     },
 ];
 
@@ -715,6 +984,30 @@ mod differential {
         "cat 0<.env",
         "env cat .env",
         "a || rm 2>/dev/null .env",
+        "grep .env -e ''",
+        "grep -n .env -e ''",
+        "grep .env --regexp=",
+        "echo ${x:-`cat .env`}",
+        "echo \"${x:-`cat .env`}\"",
+        "[[ -n ${x:-`cat .env`} ]] && echo ${x:-`cat .env`}",
+        "cat <<EOF\n${x:-`cat .env`}\nEOF\n",
+        "sed {,} 'r .env' x",
+        "sed -n {,} '1w .env' x",
+        "declare 'd[$(rm .env)]=1'",
+        "x='a[$(rm .env)]'; (( x ))",
+        "x='a[$(rm .env)]'; echo $((x))",
+        "for x in 'a[$(rm .env)]'; do (( x )); done",
+        "d='$'; x=\"a[${d}(rm .env)]\"; (( x ))",
+        "cat <>.env",
+        "cat ~+/.env",
+        "rm ~+/.env",
+        "echo \"$\\\n(cat .env)\"",
+        "cat <<EOF\n$\\\n(cat .env)\nEOF\n",
+        "cat <<EOF\nE\\\nOF\ncat .env\nEOF\n",
+        "cat <<EOF\n\\\nEOF\ncat .env\nEOF\n",
+        "cat <<'EOF'\n\\\nEOF\ncat .env\nEOF\n",
+        "cat <<EOF\n${x:-\nEOF\ncat .env\n}\nEOF\n",
+        "truncate -s 0 x",
     ];
 
     const SENTINELS: &[(&str, &str)] = &[

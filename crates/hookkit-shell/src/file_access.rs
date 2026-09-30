@@ -55,6 +55,14 @@ impl<'a> FileInferenceContext<'a> {
 
     /// Creates a context from a matched shell call: its
     /// [`effective_cwd`](ShellToolCallRef::effective_cwd) and dialect.
+    ///
+    /// The context does not carry [`ShellToolCallRef::cwd_origin`]. When it
+    /// is [`ShellCwdOrigin::UnverifiedFallback`](crate::ShellCwdOrigin::UnverifiedFallback)
+    /// (Codex `Bash`, whose payload omits the `workdir` that can move the
+    /// command), relative operands still resolve against that directory with
+    /// [`PathBase::InvocationCwd`] and no unresolved gap, although the command
+    /// may run elsewhere. Callers must check the origin themselves before
+    /// treating such resolved paths as the files the command touches.
     pub fn for_call(call: &'a ShellToolCallRef<'_>) -> Self {
         Self::new(call.effective_cwd()).with_dialect(call.dialect)
     }
@@ -644,11 +652,9 @@ impl FileAccessSink<'_, '_> {
                 self.emit_path(pattern, access, scope, origin, certainty);
                 return;
             }
-            // `~` depends on `$HOME` at run time: keep the candidate so
-            // home-anchored policies can match it, and keep the gap.
-            if is_home_pattern(pattern) {
-                self.emit_home_path(pattern, access, scope, origin, certainty);
-            }
+            // `~` depends on `$HOME` and `~+` on `$PWD` at run time: keep the
+            // candidate so path policies can match it, and keep the gap.
+            self.emit_tilde_path(pattern, access, scope, origin, certainty);
         }
         self.unresolved(
             Some(word.raw.clone()),
@@ -668,10 +674,28 @@ impl FileAccessSink<'_, '_> {
         origin: FileAccessOrigin,
         certainty: FileAccessCertainty,
     ) {
-        if is_home_pattern(raw) {
-            self.emit_home_path(raw, access, scope, origin, certainty);
+        if is_home_pattern(raw) || working_directory_relative(raw).is_some() {
+            self.emit_tilde_path(raw, access, scope, origin, certainty);
         } else {
             self.emit_path(raw, access, scope, origin, certainty);
+        }
+    }
+
+    /// Emits a `~` path relative to the home directory or a `~+` path
+    /// relative to the working directory (`$PWD`). Other tilde prefixes, such
+    /// as `~-` (`$OLDPWD`) or `~user`, emit nothing.
+    fn emit_tilde_path(
+        &mut self,
+        pattern: &str,
+        access: FileAccessKind,
+        scope: FileTargetScope,
+        origin: FileAccessOrigin,
+        certainty: FileAccessCertainty,
+    ) {
+        if is_home_pattern(pattern) {
+            self.emit_home_path(pattern, access, scope, origin, certainty);
+        } else if let Some(rest) = working_directory_relative(pattern) {
+            self.emit_relative_path(pattern, rest, access, scope, origin, certainty);
         }
     }
 
@@ -711,7 +735,21 @@ impl FileAccessSink<'_, '_> {
         origin: FileAccessOrigin,
         certainty: FileAccessCertainty,
     ) {
-        let path = Utf8Path::new(raw);
+        self.emit_relative_path(raw, raw, access, scope, origin, certainty);
+    }
+
+    /// Emits `raw`, which names `path` resolved against the working
+    /// directory unless it is absolute.
+    fn emit_relative_path(
+        &mut self,
+        raw: &str,
+        path: &str,
+        access: FileAccessKind,
+        scope: FileTargetScope,
+        origin: FileAccessOrigin,
+        certainty: FileAccessCertainty,
+    ) {
+        let path = Utf8Path::new(path);
         let (base, resolved) = if path.is_absolute() {
             (PathBase::Absolute, Some(normalize_utf8_path(path)))
         } else if self.cwd_may_have_changed {
@@ -795,6 +833,18 @@ impl FileAccessSink<'_, '_> {
 
 fn is_home_pattern(pattern: &str) -> bool {
     pattern == "~" || pattern.starts_with("~/")
+}
+
+/// The path after a `~+` prefix, which expands to `$PWD`, relative to the
+/// working directory. `~+//etc` is `$PWD//etc`, not `/etc`.
+fn working_directory_relative(pattern: &str) -> Option<&str> {
+    let rest = pattern
+        .strip_prefix("~+/")
+        .or_else(|| (pattern == "~+").then_some(""))?;
+    Some(match rest.trim_start_matches('/') {
+        "" => ".",
+        rest => rest,
+    })
 }
 
 /// File-access inference engine. Custom rules registered later take precedence
@@ -1164,7 +1214,11 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                     command,
                     output,
                     1,
-                    Options::none(),
+                    match builtin_command_name(command.name()) {
+                        "cat" => CAT_OPTIONS,
+                        "bat" => BAT_OPTIONS,
+                        _ => NL_OPTIONS,
+                    },
                     FileAccessKind::Read,
                     FileTargetScope::Exact,
                 );
@@ -1200,6 +1254,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                         booleans: &["-q", "--quiet", "-v", "--verbose"],
                         short_booleans: "qv",
                         numeric_short: true,
+                        path_values: &[],
                     },
                     FileAccessKind::Read,
                     FileTargetScope::Exact,
@@ -1223,6 +1278,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                         ],
                         short_booleans: "aAlhRFrt1",
                         numeric_short: false,
+                        path_values: &[],
                     },
                     FileAccessKind::Enumerate,
                     FileTargetScope::ExactOrDescendants,
@@ -1240,7 +1296,11 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                     command,
                     output,
                     1,
-                    Options::none(),
+                    if builtin_command_name(command.name()) == "tree" {
+                        TREE_OPTIONS
+                    } else {
+                        DU_OPTIONS
+                    },
                     FileAccessKind::Enumerate,
                     FileTargetScope::ExactOrDescendants,
                 );
@@ -1265,7 +1325,11 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                     command,
                     output,
                     1,
-                    Options::none(),
+                    match builtin_command_name(command.name()) {
+                        "touch" => TOUCH_OPTIONS,
+                        "truncate" => TRUNCATE_OPTIONS,
+                        _ => MKDIR_OPTIONS,
+                    },
                     FileAccessKind::Modify,
                     FileTargetScope::Exact,
                 );
@@ -1284,6 +1348,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                         booleans: &["-f", "--force", "-r", "-R", "--recursive", "-d", "--dir"],
                         short_booleans: "frRd",
                         numeric_short: false,
+                        path_values: &[],
                     },
                     FileAccessKind::Delete,
                     if recursive {
@@ -1304,6 +1369,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                         booleans: &["-a", "--append", "-i", "--ignore-interrupts"],
                         short_booleans: "ai",
                         numeric_short: false,
+                        path_values: &[],
                     },
                     FileAccessKind::Modify,
                     FileTargetScope::Exact,
@@ -1751,12 +1817,21 @@ fn is_path_like(value: &str) -> bool {
             .is_some_and(|component| component.contains('.'))
 }
 
+/// Option grammar of a simple file command.
 #[derive(Debug, Clone, Copy)]
 struct Options {
+    /// Options with a separate (`-n 5`) or attached (`-n5`, `--lines=5`)
+    /// value.
     values: &'static [&'static str],
+    /// Options without a value.
     booleans: &'static [&'static str],
+    /// Short options without a value, which may be bundled (`-la`).
     short_booleans: &'static str,
+    /// Numeric short options such as `head -5`.
     numeric_short: bool,
+    /// Value options whose value names a file the command reads
+    /// (`touch -r FILE`, `--reference=FILE`).
+    path_values: &'static [&'static str],
 }
 
 impl Options {
@@ -1766,10 +1841,196 @@ impl Options {
             booleans: &[],
             short_booleans: "",
             numeric_short: false,
+            path_values: &[],
         }
     }
 }
 
+// Option tables of the GNU and BSD (macOS) forms of simple file commands.
+// Options that write or read other files (`tree -o`, `tree --fromfile`,
+// `tree -R`, `tree --gitignore`) and options whose value is optional stay
+// unrecognized, which leaves the command unresolved.
+
+const CAT_OPTIONS: Options = Options {
+    booleans: &[
+        "--show-all",
+        "--number-nonblank",
+        "--show-ends",
+        "--number",
+        "--squeeze-blank",
+        "--show-tabs",
+        "--show-nonprinting",
+    ],
+    short_booleans: "AbeEnstTuvl",
+    ..Options::none()
+};
+
+const BAT_OPTIONS: Options = Options {
+    values: &[
+        "-l",
+        "--language",
+        "-H",
+        "--highlight-line",
+        "-r",
+        "--line-range",
+        "-m",
+        "--map-syntax",
+        "--style",
+        "--theme",
+        "--paging",
+        "--color",
+        "--decorations",
+        "--italic-text",
+        "--tabs",
+        "--wrap",
+        "--terminal-width",
+        "--file-name",
+        "--diff-context",
+        "--ignored-suffix",
+    ],
+    booleans: &[
+        "--show-all",
+        "--plain",
+        "--number",
+        "--unbuffered",
+        "--diff",
+        "--force-colorization",
+        "--no-paging",
+    ],
+    short_booleans: "ApnudfP",
+    ..Options::none()
+};
+
+const NL_OPTIONS: Options = Options {
+    values: &[
+        "-b",
+        "--body-numbering",
+        "-d",
+        "--section-delimiter",
+        "-f",
+        "--footer-numbering",
+        "-h",
+        "--header-numbering",
+        "-i",
+        "--line-increment",
+        "-l",
+        "--join-blank-lines",
+        "-n",
+        "--number-format",
+        "-s",
+        "--number-separator",
+        "-v",
+        "--starting-line-number",
+        "-w",
+        "--number-width",
+    ],
+    booleans: &["--no-renumber"],
+    short_booleans: "p",
+    ..Options::none()
+};
+
+const TREE_OPTIONS: Options = Options {
+    values: &[
+        "-L",
+        "-P",
+        "-I",
+        "-H",
+        "-T",
+        "--timefmt",
+        "--sort",
+        "--charset",
+        "--filelimit",
+    ],
+    booleans: &[
+        "--noreport",
+        "--dirsfirst",
+        "--filesfirst",
+        "--prune",
+        "--ignore-case",
+        "--matchdirs",
+        "--metafirst",
+        "--si",
+        "--du",
+        "--inodes",
+        "--device",
+        "--nolinks",
+    ],
+    short_booleans: "adlfxiASnCQNqpugshDFvtcUrJX",
+    ..Options::none()
+};
+
+const DU_OPTIONS: Options = Options {
+    values: &[
+        "-d",
+        "--max-depth",
+        "-B",
+        "--block-size",
+        "-t",
+        "--threshold",
+        "-I",
+        "--exclude",
+    ],
+    booleans: &[
+        "--all",
+        "--total",
+        "--human-readable",
+        "--summarize",
+        "--dereference",
+        "--dereference-args",
+        "--one-file-system",
+        "--apparent-size",
+        "--bytes",
+        "--count-links",
+        "--null",
+        "--si",
+        "--inodes",
+    ],
+    short_booleans: "acshHkLmPxbl0AD",
+    path_values: &["-X", "--exclude-from", "--files0-from"],
+    ..Options::none()
+};
+
+const TOUCH_OPTIONS: Options = Options {
+    values: &["-d", "--date", "-t", "-A", "--time"],
+    booleans: &["--no-create", "--no-dereference"],
+    short_booleans: "acfhm",
+    path_values: &["-r", "--reference"],
+    ..Options::none()
+};
+
+const TRUNCATE_OPTIONS: Options = Options {
+    values: &["-s", "--size"],
+    booleans: &["--no-create", "--io-blocks"],
+    short_booleans: "co",
+    path_values: &["-r", "--reference"],
+    ..Options::none()
+};
+
+const MKDIR_OPTIONS: Options = Options {
+    values: &["-m", "--mode"],
+    booleans: &["--parents", "--verbose"],
+    short_booleans: "pvZ",
+    ..Options::none()
+};
+
+/// Operands of a simple command and the files its options name.
+#[derive(Debug, Default)]
+struct ParsedOperands {
+    /// Operand indexes, reading options anywhere before `--` as GNU tools
+    /// do.
+    operands: Vec<usize>,
+    /// Files named by [`Options::path_values`]: the argv index of the file
+    /// word, or of the option word together with its attached file name.
+    option_files: Vec<(usize, Option<String>)>,
+    /// Words after the first operand that GNU tools read as options or option
+    /// values but BSD tools, which stop reading options at the first operand
+    /// (`touch x -r ref` on macOS touches `-r` and `ref`), read as operands.
+    trailing_operands: Vec<usize>,
+}
+
+/// Emits the operands of a simple file command with `access` and `scope`,
+/// and files named by path-valued options as reads. Returns the number of
+/// operands under GNU option parsing.
 fn emit_operands(
     command: CommandFileContext<'_>,
     output: &mut FileAccessSink<'_, '_>,
@@ -1778,22 +2039,49 @@ fn emit_operands(
     access: FileAccessKind,
     scope: FileTargetScope,
 ) -> Option<usize> {
-    let indexes = operand_indexes(command, output, start, options)?;
-    for index in &indexes {
+    let parsed = parse_operands(command, output, start, options)?;
+    for index in parsed.operands.iter().chain(&parsed.trailing_operands) {
         output.emit_argument(*index, access, scope);
     }
-    Some(indexes.len())
+    for (index, attached) in &parsed.option_files {
+        match attached {
+            Some(file) => output.emit_argument_literal(
+                *index,
+                file,
+                FileAccessKind::Read,
+                FileTargetScope::Exact,
+                FileAccessCertainty::Direct,
+            ),
+            None => output.emit_argument(*index, FileAccessKind::Read, FileTargetScope::Exact),
+        }
+    }
+    Some(parsed.operands.len())
 }
 
+/// Operand indexes under GNU option parsing, for commands whose operand
+/// roles depend on their position.
 fn operand_indexes(
     command: CommandFileContext<'_>,
     output: &mut FileAccessSink<'_, '_>,
     start: usize,
     options: Options,
 ) -> Option<Vec<usize>> {
-    let mut indexes = Vec::new();
+    parse_operands(command, output, start, options).map(|parsed| parsed.operands)
+}
+
+/// Parses options like `getopt_long`, recording an unresolved gap and
+/// returning `None` for an unrecognized or dynamic option.
+fn parse_operands(
+    command: CommandFileContext<'_>,
+    output: &mut FileAccessSink<'_, '_>,
+    start: usize,
+    options: Options,
+) -> Option<ParsedOperands> {
+    let mut parsed = ParsedOperands::default();
     let mut index = start;
     let mut operands_only = false;
+    let mut first_operand = None;
+    let mut option_after_operand = false;
     while index < command.argv_len() {
         let Some(word) = command.word(index) else {
             break;
@@ -1806,40 +2094,27 @@ fn operand_indexes(
         }
         if !operands_only && literal.is_some_and(|value| value.starts_with('-') && value != "-") {
             let value = literal.expect("checked as Some above");
-            if options.values.contains(&value) {
-                if index + 1 >= command.argv_len() {
-                    output.unresolved(
-                        Some(value.to_owned()),
-                        UnresolvedFileAccessReason::AmbiguousArguments {
-                            detail: format!("option {value} is missing its value"),
-                        },
-                    );
-                    return None;
-                }
-                index += 2;
-                continue;
+            option_after_operand |= first_operand.is_some();
+            let Some(consumed) = parse_option(index, value, options, &mut parsed) else {
+                output.unresolved(
+                    Some(value.to_owned()),
+                    UnresolvedFileAccessReason::AmbiguousArguments {
+                        detail: format!("unrecognized option {value} for {}", command.name()),
+                    },
+                );
+                return None;
+            };
+            if index + consumed > command.argv_len() {
+                output.unresolved(
+                    Some(value.to_owned()),
+                    UnresolvedFileAccessReason::AmbiguousArguments {
+                        detail: format!("option {value} is missing its value"),
+                    },
+                );
+                return None;
             }
-            let short_bundle = value.starts_with('-')
-                && !value.starts_with("--")
-                && value.len() > 1
-                && value[1..]
-                    .chars()
-                    .all(|character| options.short_booleans.contains(character));
-            let numeric_short = options.numeric_short
-                && value[1..]
-                    .chars()
-                    .all(|character| character.is_ascii_digit());
-            if options.booleans.contains(&value) || short_bundle || numeric_short {
-                index += 1;
-                continue;
-            }
-            output.unresolved(
-                Some(value.to_owned()),
-                UnresolvedFileAccessReason::AmbiguousArguments {
-                    detail: format!("unrecognized option {value} for {}", command.name()),
-                },
-            );
-            return None;
+            index += consumed;
+            continue;
         }
         if !operands_only && literal.is_none() && word.raw.starts_with('-') {
             output.unresolved(
@@ -1850,12 +2125,87 @@ fn operand_indexes(
             );
             return None;
         }
+        first_operand.get_or_insert(index);
         if literal != Some("-") {
-            indexes.push(index);
+            parsed.operands.push(index);
         }
         index += 1;
     }
-    Some(indexes)
+    if option_after_operand {
+        let first = first_operand.expect("an operand preceded the option");
+        parsed.trailing_operands = (first + 1..command.argv_len())
+            .filter(|index| {
+                !parsed.operands.contains(index) && command.literal(*index) != Some("-")
+            })
+            .collect();
+    }
+    Some(parsed)
+}
+
+/// Parses one option word at `index`, recording any file it names. Returns
+/// the number of words it consumes, or `None` when it is not recognized.
+fn parse_option(
+    index: usize,
+    value: &str,
+    options: Options,
+    parsed: &mut ParsedOperands,
+) -> Option<usize> {
+    if value.starts_with("--") {
+        let (name, attached) = match value.split_once('=') {
+            Some((name, attached)) => (name, Some(attached)),
+            None => (value, None),
+        };
+        let path = options.path_values.contains(&name);
+        if !path && !options.values.contains(&name) {
+            return (attached.is_none() && options.booleans.contains(&value)).then_some(1);
+        }
+        return Some(match attached {
+            Some(file) => {
+                if path && !file.is_empty() {
+                    parsed.option_files.push((index, Some(file.to_owned())));
+                }
+                1
+            }
+            None => {
+                if path {
+                    parsed.option_files.push((index + 1, None));
+                }
+                2
+            }
+        });
+    }
+    if options.booleans.contains(&value)
+        || (options.numeric_short
+            && value[1..]
+                .chars()
+                .all(|character| character.is_ascii_digit()))
+    {
+        return Some(1);
+    }
+    // A short-option cluster: booleans, then at most one value option whose
+    // value is the rest of the word or the next word.
+    for (offset, character) in value[1..].char_indices() {
+        if options.short_booleans.contains(character) {
+            continue;
+        }
+        let flag = format!("-{character}");
+        let path = options.path_values.contains(&flag.as_str());
+        if !path && !options.values.contains(&flag.as_str()) {
+            return None;
+        }
+        let rest = &value[1 + offset + character.len_utf8()..];
+        if rest.is_empty() {
+            if path {
+                parsed.option_files.push((index + 1, None));
+            }
+            return Some(2);
+        }
+        if path {
+            parsed.option_files.push((index, Some(rest.to_owned())));
+        }
+        return Some(1);
+    }
+    Some(1)
 }
 
 /// Whether the command's standard input is a pipe or an input redirection.
@@ -1866,6 +2216,7 @@ fn stdin_is_redirected(command: &CommandOccurrence) -> bool {
                 redirection.operator,
                 Some(
                     RedirectionOperator::Input
+                        | RedirectionOperator::ReadWrite
                         | RedirectionOperator::DuplicateInput
                         | RedirectionOperator::HereDocument
                         | RedirectionOperator::HereDocumentStripTabs
@@ -1878,14 +2229,18 @@ fn stdin_is_redirected(command: &CommandOccurrence) -> bool {
         })
 }
 
+/// Models `grep`, `egrep`, `fgrep`, and `rg`. GNU grep, BSD grep, and
+/// ripgrep permute options, so a `-e`/`--regexp`/`-f`/`--file` anywhere
+/// before `--` supplies the pattern and every positional operand, including
+/// the first, is a path; otherwise the first positional operand is the query.
 fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_>) {
     let ripgrep = builtin_command_name(command.name()) == "rg";
     let mut index = 1;
-    let mut query_seen = false;
+    let mut pattern_option = false;
     let mut operands_only = false;
     let mut recursive = false;
     let mut ambiguous = false;
-    let mut paths = Vec::new();
+    let mut positionals = Vec::new();
     while index < command.argv_len() {
         let Some(word) = command.word(index) else {
             break;
@@ -1893,7 +2248,9 @@ fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_,
         let Some(literal) = word.literal.as_deref() else {
             // Before `--`, an expansion may be an option such as `-f FILE`;
             // an unquoted query expansion may split into a query and paths.
-            if (!operands_only || !query_seen) && !ambiguous {
+            // After `--`, no option can supply the pattern any more.
+            let may_be_query = !pattern_option && positionals.is_empty();
+            if (!operands_only || may_be_query) && !ambiguous {
                 ambiguous = true;
                 output.unresolved(
                     Some(word.raw.clone()),
@@ -1905,11 +2262,7 @@ fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_,
                     },
                 );
             }
-            if query_seen {
-                paths.push(index);
-            } else {
-                query_seen = true;
-            }
+            positionals.push(index);
             index += 1;
             continue;
         };
@@ -1929,12 +2282,12 @@ fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_,
                     );
                     return;
                 }
-                query_seen = true;
+                pattern_option = true;
                 index += 2;
                 continue;
             }
             if literal.starts_with("--regexp=") {
-                query_seen = true;
+                pattern_option = true;
                 index += 1;
                 continue;
             }
@@ -1949,7 +2302,7 @@ fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_,
                     return;
                 }
                 output.emit_argument(index + 1, FileAccessKind::Read, FileTargetScope::Exact);
-                query_seen = true;
+                pattern_option = true;
                 index += 2;
                 continue;
             }
@@ -1981,14 +2334,21 @@ fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_,
                 return;
             }
         }
-        if !query_seen {
-            query_seen = true;
-        } else if literal != "-" {
-            paths.push(index);
-        }
+        positionals.push(index);
         index += 1;
     }
-    if !query_seen {
+    let operands = if pattern_option {
+        &positionals[..]
+    } else {
+        positionals.get(1..).unwrap_or_default()
+    };
+    // `-` names standard input.
+    let paths = operands
+        .iter()
+        .copied()
+        .filter(|path| command.literal(*path) != Some("-"))
+        .collect::<Vec<_>>();
+    if !pattern_option && positionals.is_empty() {
         output.unresolved(
             Some(command.command().raw.clone()),
             UnresolvedFileAccessReason::AmbiguousArguments {
@@ -2560,6 +2920,7 @@ fn infer_source_destination(
             ],
             short_booleans: "frRap",
             numeric_short: false,
+            path_values: &[],
         },
     ) else {
         return;
@@ -2632,6 +2993,7 @@ fn infer_link(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '
             booleans: &["-s", "--symbolic", "-f", "--force"],
             short_booleans: "sf",
             numeric_short: false,
+            path_values: &[],
         },
     ) else {
         return;
@@ -2676,6 +3038,7 @@ fn infer_redirections(redirections: &[Redirection], output: &mut FileAccessSink<
     for (redirection_index, redirection) in redirections.iter().enumerate() {
         let access = match redirection.operator {
             Some(RedirectionOperator::Input) => Some(FileAccessKind::Read),
+            Some(RedirectionOperator::ReadWrite) => Some(FileAccessKind::ReadModify),
             Some(
                 RedirectionOperator::Output
                 | RedirectionOperator::Append
@@ -2730,7 +3093,7 @@ fn infer_redirections(redirections: &[Redirection], output: &mut FileAccessSink<
             FileAccessCertainty::Direct,
             None,
         );
-        if dialect_sensitive && access == FileAccessKind::Modify && target.raw.starts_with('!') {
+        if dialect_sensitive && access.may_modify() && target.raw.starts_with('!') {
             // zsh reads `>!`/`>>!` as noclobber-overriding output to the next
             // word, which Bash treats as a command argument.
             output.unresolved(
@@ -2749,14 +3112,30 @@ fn emit_zsh_clobber_target(
     output: &mut FileAccessSink<'_, '_>,
 ) {
     if target.raw == "!" {
-        // Arguments are in source order; the word the grammar attached after
-        // `!` lies inside the redirection's span.
-        let arguments = &output.command.command.arguments;
+        // On a statement, the grammar keeps the word after `!` as a trailing
+        // word. On a simple command it is an argument inside the
+        // redirection's span (arguments are in source order), and with no
+        // command at all (`>! file`) the grammar reads it as the command name.
+        let command = output.command.command;
+        let arguments = &command.arguments;
         let index = arguments.partition_point(|word| word.span.start_byte < target.span.end_byte);
-        if let Some(word) = arguments
-            .get(index)
-            .filter(|word| word.span.end_byte <= redirection.span.end_byte)
-        {
+        let next = redirection
+            .trailing_words
+            .first()
+            .or_else(|| {
+                arguments
+                    .get(index)
+                    .filter(|word| word.span.end_byte <= redirection.span.end_byte)
+            })
+            .or_else(|| {
+                command.name.as_ref().filter(|name| {
+                    name.span.start_byte >= target.span.end_byte
+                        && arguments
+                            .first()
+                            .is_none_or(|first| first.span.start_byte > name.span.start_byte)
+                })
+            });
+        if let Some(word) = next {
             output.emit_word(
                 word,
                 FileAccessKind::Modify,
@@ -3675,5 +4054,240 @@ mod tests {
             });
             prop_assert!(deleted);
         }
+    }
+
+    #[test]
+    fn search_pattern_options_make_every_positional_a_path() {
+        use FileAccessKind::Read;
+        use FileTargetScope::{Exact, ExactOrDescendants};
+        for source in [
+            "grep .env -e ''",
+            "grep -n .env -e ''",
+            "grep .env --regexp=",
+            "egrep .env -e x",
+            "true | rg .env -e ''",
+            "rg .env -e '' < /dev/null",
+        ] {
+            let report = infer(source);
+            assert!(
+                summary(&report).contains(&(".env", Read, ExactOrDescendants)),
+                "{source}: {report:#?}"
+            );
+            assert!(report.is_fully_resolved(), "{source}: {report:#?}");
+        }
+        assert_eq!(
+            summary(&infer("grep .env -f pats")),
+            [("pats", Read, Exact), (".env", Read, ExactOrDescendants)]
+        );
+        // After `--`, `-e` is a path and the first positional the query.
+        assert_eq!(
+            summary(&infer("grep foo -- -e .env")),
+            [
+                ("-e", Read, ExactOrDescendants),
+                (".env", Read, ExactOrDescendants)
+            ]
+        );
+        assert_eq!(
+            summary(&infer("grep -e foo -- .env")),
+            [(".env", Read, ExactOrDescendants)]
+        );
+    }
+
+    #[test]
+    fn zsh_clobber_targets_of_statements_and_bare_redirections_are_candidates() {
+        for source in [
+            "{ echo x; } >! .env",
+            "(echo x) >! .env",
+            "if true; then echo x; fi >! .env",
+            "{ echo x; } >>! .env",
+            ">! .env",
+        ] {
+            let report = infer(source);
+            assert!(
+                report.candidates.iter().any(|candidate| {
+                    path(candidate).0.raw == ".env"
+                        && candidate.access == FileAccessKind::Modify
+                        && candidate.certainty == FileAccessCertainty::Heuristic
+                }),
+                "{source}: {report:#?}"
+            );
+            assert!(has_gap(&report, |reason| matches!(
+                reason,
+                UnresolvedFileAccessReason::UnsupportedRedirection
+            )));
+        }
+    }
+
+    #[test]
+    fn read_write_redirections_read_and_modify() {
+        for source in [
+            "cat <>.env",
+            "cat <> .env",
+            "cat 0<>.env",
+            "{ cat; } <>.env",
+        ] {
+            let report = infer(source);
+            assert!(
+                summary(&report).contains(&(
+                    ".env",
+                    FileAccessKind::ReadModify,
+                    FileTargetScope::Exact
+                )),
+                "{source}: {report:#?}"
+            );
+        }
+        // Standard input opened read-write is not the working tree.
+        let report = infer("rg foo <>input.txt");
+        assert!(
+            !report
+                .candidates
+                .iter()
+                .any(|candidate| path(candidate).0.raw == "."),
+            "{report:#?}"
+        );
+    }
+
+    #[test]
+    fn working_directory_tilde_operands_resolve_against_the_cwd() {
+        let report = infer("cat ~+/.env");
+        let (expression, scope) = path(&report.candidates[0]);
+        assert_eq!(expression.raw, "~+/.env");
+        assert_eq!(expression.base, PathBase::InvocationCwd);
+        assert_eq!(
+            expression.resolved.as_deref(),
+            Some(Utf8Path::new("/repo/work/.env"))
+        );
+        assert_eq!(scope, FileTargetScope::Exact);
+        assert!(has_gap(&report, |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::DynamicPath { reasons, .. }
+                if reasons.contains(&DynamicReason::TildeExpansion)
+        )));
+
+        for (source, resolved) in [
+            ("ls ~+", "/repo/work"),
+            ("cat ~+//etc/x", "/repo/work/etc/x"),
+            ("rm ~+/../.env", "/repo/.env"),
+        ] {
+            let report = infer(source);
+            assert_eq!(
+                path(&report.candidates[0]).0.resolved.as_deref(),
+                Some(Utf8Path::new(resolved)),
+                "{source}"
+            );
+        }
+
+        let changed = infer("cd sub && cat ~+/.env");
+        assert_eq!(
+            path(&changed.candidates[0]).0.base,
+            PathBase::UnknownAfterDirectoryChange
+        );
+        // `~-` is `$OLDPWD`, which is unknown.
+        let previous = infer("cat ~-/.env");
+        assert!(previous.candidates.is_empty());
+        assert!(!previous.is_fully_resolved());
+    }
+
+    #[test]
+    fn simple_file_commands_parse_their_options() {
+        use FileAccessKind::{Enumerate, Modify, Read};
+        use FileTargetScope::{Exact, ExactOrDescendants};
+        for (source, expected) in [
+            ("cat -n credentials", &[("credentials", Read, Exact)][..]),
+            ("cat -vET -- -n", &[("-n", Read, Exact)][..]),
+            ("nl -ba -nrz -w3 file", &[("file", Read, Exact)][..]),
+            (
+                "bat -p --style=plain -l rs file",
+                &[("file", Read, Exact)][..],
+            ),
+            ("head -n5 file", &[("file", Read, Exact)][..]),
+            ("head --lines=5 file", &[("file", Read, Exact)][..]),
+            (
+                "touch -r ref f",
+                &[("f", Modify, Exact), ("ref", Read, Exact)][..],
+            ),
+            (
+                "touch -c --reference=ref f",
+                &[("f", Modify, Exact), ("ref", Read, Exact)][..],
+            ),
+            (
+                "truncate -rref f",
+                &[("f", Modify, Exact), ("ref", Read, Exact)][..],
+            ),
+            ("truncate -s 0 key", &[("key", Modify, Exact)][..]),
+            ("mkdir -p -m 755 a/b", &[("a/b", Modify, Exact)][..]),
+            ("mkdir -m755 -pv a", &[("a", Modify, Exact)][..]),
+            (
+                "tree -L 2 -a src",
+                &[("src", Enumerate, ExactOrDescendants)][..],
+            ),
+            (
+                "du -sh -X pats dir",
+                &[
+                    ("dir", Enumerate, ExactOrDescendants),
+                    ("pats", Read, Exact),
+                ][..],
+            ),
+        ] {
+            let report = infer(source);
+            assert!(report.is_fully_resolved(), "{source}: {report:#?}");
+            assert_eq!(summary(&report), expected, "{source}");
+        }
+
+        // Unknown options, options that write or read other files, and
+        // abbreviated long options stay unresolved.
+        for source in [
+            "cat -z file",
+            "tree -o out src",
+            "tree --fromfile list",
+            "touch --ref=ref f",
+            "mkdir -m",
+            "du --exclude-from",
+        ] {
+            let report = infer(source);
+            assert!(
+                has_gap(&report, |reason| matches!(
+                    reason,
+                    UnresolvedFileAccessReason::AmbiguousArguments { .. }
+                )),
+                "{source}: {report:#?}"
+            );
+            assert!(report.candidates.is_empty(), "{source}: {report:#?}");
+        }
+    }
+
+    #[test]
+    fn options_after_an_operand_are_also_read_as_bsd_operands() {
+        use FileAccessKind::{Delete, Modify, Read};
+        use FileTargetScope::{Exact, ExactOrDescendants};
+        // macOS touch stops reading options at `x`: it touches `-r` and
+        // `.env`, while GNU touch copies the times of `.env` onto `x`.
+        assert_eq!(
+            summary(&infer("touch x -r .env")),
+            [
+                ("x", Modify, Exact),
+                ("-r", Modify, Exact),
+                (".env", Modify, Exact),
+                (".env", Read, Exact),
+            ]
+        );
+        assert_eq!(
+            summary(&infer("touch x -d .env")),
+            [
+                ("x", Modify, Exact),
+                ("-d", Modify, Exact),
+                (".env", Modify, Exact),
+            ]
+        );
+        assert_eq!(
+            summary(&infer("rm x -rf .env")),
+            [
+                ("x", Delete, ExactOrDescendants),
+                (".env", Delete, ExactOrDescendants),
+                ("-rf", Delete, ExactOrDescendants),
+            ]
+        );
+        // Options before the operands read the same on both.
+        assert_eq!(summary(&infer("cat -n x")), [("x", Read, Exact)]);
     }
 }

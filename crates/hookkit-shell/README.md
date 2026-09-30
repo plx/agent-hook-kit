@@ -105,11 +105,33 @@ follows Bash:
   descriptors are not arguments;
 - comma and sequence brace expansion (`.e{n,}v`, `{1..3}`) is expanded
   statically into separate argv words sharing the source word's span, or the
-  word is marked `DynamicReason::BraceExpansion` when it cannot be;
-- backtick substitutions in an unquoted here-document body are re-parsed and
-  their commands reported; one that cannot be re-parsed exactly makes the
-  outcome `Partial` with `IncompleteReason::UnparsedCommandSubstitution`, and
-  backslash escapes Bash would process leave `literal_body` unset.
+  word is marked `DynamicReason::BraceExpansion` when it cannot be, including
+  when an unquoted alternative is empty (`{,}`), which Bash drops and zsh
+  keeps;
+- `<>` read-write redirections, which the grammar recovers only as an error,
+  are reported with `RedirectionOperator::ReadWrite`, and words after a
+  statement redirection's target (`(cmd) >! file`) are kept as
+  `Redirection::trailing_words`;
+- substitutions the grammar leaves as text are re-parsed and their commands
+  reported: backticks in an unquoted here-document body, and backticks or
+  `$(...)` in parameter-expansion operands (`` ${x:-`cmd`} ``, `${x#$(cmd)}`).
+  One that cannot be re-parsed exactly, a `$` that a line continuation
+  separates from its `(` inside double quotes or a here-document, or a
+  backtick substitution with escaped nested substitutions makes the outcome
+  `Partial` with `IncompleteReason::UnparsedCommandSubstitution`, and
+  backslash escapes Bash would process leave `literal_body` unset;
+- a here-document body the shell ends before the grammar does (a line
+  continuation joining lines into the delimiter, an expansion spanning the
+  delimiter line, or a body line that is only a line continuation) makes the
+  outcome `Partial` with `IncompleteReason::HereDocumentBoundary`;
+- text the shell evaluates again as code makes the outcome `Partial` with
+  `IncompleteReason::ReevaluatedText`: quoted subscripts or compound values
+  passed to `declare`, `local`, `export`, `readonly`, `typeset`, or `unset`,
+  arguments to those builtins expanded at run time (`export $(cat .env)`),
+  and `name[$(cmd)]`-shaped values assigned to variables or loop variables or
+  named by `printf -v` or `-v`/`-R` tests, which arithmetic evaluation or the
+  builtin expands. A value produced entirely at run time and then evaluated
+  arithmetically is not detected.
 
 Glob and `~` words carry `ShellWord::pattern`, their quote-removed text with
 quoted glob metacharacters bracket-escaped, instead of a literal value.
@@ -150,9 +172,10 @@ Each `FileAccessCandidate` carries:
 - a `FileTargetScope` distinguishing an exact path, descendants, an ambiguous
   exact-or-descendants operand, and an unexpanded glob;
 - the raw path expression, an optional lexically resolved path, and its
-  basis: absolute, the invocation cwd, unknown after a directory change, or
-  the home directory for `~` paths (resolved only when
-  `FileInferenceContext::with_home` supplies it);
+  basis: absolute, the invocation cwd (also for `~+` paths), unknown after a
+  directory change, or the home directory for `~` paths (resolved only when
+  `FileInferenceContext::with_home` supplies it); `~` and `~+` operands also
+  keep their tilde-expansion gap, and `~-` has only the gap;
 - its argument, command or statement redirection, working-directory-default,
   or rule origin;
 - `Direct`, `Conditional`, or `Heuristic` certainty and the rule identifier
@@ -168,8 +191,14 @@ indirect evaluation:
   unresolved;
 - `grep` without a path reads stdin unless it is recursive, and `rg` searches
   the working directory only when stdin is neither piped nor redirected; a
-  dynamic search word that could be an option or split into several words is
-  unresolved;
+  `-e`/`--regexp`/`-f` option anywhere before `--` supplies the pattern, so
+  every positional is then a path; a dynamic search word that could be an
+  option or split into several words is unresolved;
+- readers, listings, and mutators such as `cat`, `nl`, `bat`, `tree`, `du`,
+  `touch`, `truncate`, and `mkdir` have small option tables: files named by
+  options (`touch -r FILE`, `du -X FILE`) are reads, other options leave the
+  command unresolved, and when an option follows an operand the later words
+  are also reported as operands, as BSD tools such as macOS `touch` read them;
 - `mv` sources, and every copy/move/link destination, cover a directory's
   descendants, and a destination also yields heuristic
   `destination/basename(source)` candidates;
@@ -237,7 +266,10 @@ relative value is joined onto an absolute fallback and exposed only through
 environment cwd, but its hook payload carries only `command`, so the hook
 `cwd` is only the default and the adapter reports
 `ShellCwdOrigin::UnverifiedFallback`: relative paths resolved against it are
-best effort.
+best effort. `FileInferenceContext::for_call` does not carry the origin, so
+file-access candidates for such a call still report `PathBase::InvocationCwd`
+with no unresolved gap; check `cwd_origin` before trusting their resolved
+paths.
 
 Codex `exec_command` sessions with `tty: true` accept later input through
 `write_stdin`, which emits no `PreToolUse` hook. An interactive program started
@@ -269,8 +301,9 @@ shell: Claude Code and Codex use zsh when it is the user's shell (the macOS
 default), and Codex uses PowerShell on Windows. The native payloads do not
 identify the shell, so the bundled adapters report `ShellDialect::Unknown`.
 Pass it to `FileInferenceContext::with_dialect`: unless the dialect is
-`Bash`, zsh-only forms whose effect differs (`>! file`, `>>!file`) are
-reported as unresolved alongside heuristic zsh-target candidates, and
+`Bash`, zsh-only forms whose effect differs (`>! file`, `>>!file`, also on
+statements and without a command) are reported as unresolved alongside
+heuristic zsh-target candidates, and
 `PowerShell` marks the whole analysis unresolved. `n>&word` with a filename
 is treated as a write, as zsh performs it. A caller should not silently feed
 the analyzer PowerShell, `cmd.exe`, or fish input.

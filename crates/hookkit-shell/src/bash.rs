@@ -477,6 +477,13 @@ pub struct Redirection {
     pub descriptor: Option<String>,
     /// Redirection target word, when the syntax has one.
     pub target: Option<ShellWord>,
+    /// Words written after the target of a statement redirection
+    /// (`(cmd) >! file`), in source order.
+    ///
+    /// Bash rejects such words, but zsh reads `>! word` and `>>! word` as
+    /// noclobber-overriding output to `word`. Always empty for a simple
+    /// command's redirections, whose later words are command arguments.
+    pub trailing_words: Vec<ShellWord>,
     /// Source-backed delimiter and body facts for a here-document.
     pub here_document: Option<HereDocument>,
 }
@@ -521,6 +528,9 @@ pub enum RedirectionKind {
 pub enum RedirectionOperator {
     /// Input from a file (`<`).
     Input,
+    /// Opening a file for reading and writing (`<>`), which the grammar
+    /// recovers only as an error.
+    ReadWrite,
     /// Truncating output to a file (`>`).
     Output,
     /// Appending output to a file (`>>`).
@@ -652,10 +662,37 @@ pub enum IncompleteReason {
         max_depth: usize,
     },
     /// A command substitution that the grammar leaves unparsed, such as a
-    /// backtick substitution in an unquoted here-document body, could not be
-    /// re-parsed exactly (for example because it contains backslash escapes or
-    /// is unterminated), so the commands it runs are unknown.
+    /// backtick substitution in an unquoted here-document body or in a
+    /// parameter-expansion operand (`` ${x:-`cmd`} ``), could not be re-parsed
+    /// exactly, so the commands it runs are unknown. This covers
+    /// substitutions containing backslash escapes that the shell removes
+    /// before parsing (`` `echo \`cmd\`` ``), unterminated substitutions, and
+    /// a `$(` that a backslash-newline line continuation splits inside
+    /// double quotes, a here-document body, or an expansion operand.
     UnparsedCommandSubstitution,
+    /// The shell ends a here-document body at a different line than the
+    /// grammar, so lines the grammar reads as body text may run as commands.
+    /// This happens when a backslash-newline line continuation joins an
+    /// unquoted body's lines into the delimiter, when an expansion in an
+    /// unquoted body spans the delimiter line, or when a body line that is
+    /// only a line continuation makes the grammar read later lines as part of
+    /// the command.
+    HereDocumentBoundary,
+    /// Text that the shell evaluates again as code may run command
+    /// substitutions the analysis cannot see: a quoted array subscript or
+    /// compound assignment passed to `declare`, `local`, `export`,
+    /// `readonly`, `typeset`, or `unset` (`declare 'a[$(cmd)]=1'`), an
+    /// argument of those builtins expanded at run time (`export $(cat .env)`),
+    /// or a subscript payload (`'a[$(cmd)]'`) that is assigned to a variable
+    /// or loop variable, used as an array subscript, compared arithmetically,
+    /// named by `printf -v`, or tested with `-v`/`-R`, which the shell expands
+    /// when it evaluates the subscript. A payload assembled from static text
+    /// and expansions (`"a[${d}(cmd)]"`) counts as well.
+    ///
+    /// Arithmetic evaluation of a variable whose value comes entirely from
+    /// outside the command text (the environment, a file, or command output)
+    /// is not detected.
+    ReevaluatedText,
 }
 
 /// Reason no Bash analysis facts could be produced.
@@ -857,12 +894,78 @@ impl<'source, 'tree> Walker<'source, 'tree> {
         match node.kind() {
             "command" => {
                 let command = self.analyze_command(node, contexts);
+                if names_reevaluated_variable(&command) {
+                    self.mark_incomplete(IncompleteReason::ReevaluatedText);
+                }
                 self.analysis.commands.push(command);
             }
             "redirected_statement" => self.prepare_redirected_statement(node, contexts),
             "function_definition" => self.prepare_function_redirects(node),
-            "command_substitution" => self.analyze_bare_substitution(node, contexts),
+            "command_substitution" => {
+                if has_escaped_backtick_content(node, self.source) {
+                    // The shell removes these backslashes and parses the
+                    // remaining text again, which the grammar never sees.
+                    self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
+                }
+                self.analyze_bare_substitution(node, contexts);
+            }
             "heredoc_body" => self.analyze_heredoc_substitutions(node, contexts, depth),
+            "expansion" => self.analyze_expansion_operands(node, contexts, depth),
+            "string" | "translated_string" => self.analyze_string_content(node, contexts, depth),
+            "declaration_command" | "unset_command" => {
+                if declaration_reevaluates_text(node, self.source) {
+                    self.mark_incomplete(IncompleteReason::ReevaluatedText);
+                }
+            }
+            "variable_assignment" => {
+                if node
+                    .child_by_field_name("value")
+                    .is_some_and(|value| has_subscript_payload(&value_shape(value, self.source)))
+                {
+                    self.mark_incomplete(IncompleteReason::ReevaluatedText);
+                }
+            }
+            "for_statement" => {
+                // Each item is assigned to the loop variable.
+                let mut cursor = node.walk();
+                if node
+                    .children_by_field_name("value", &mut cursor)
+                    .any(|value| has_subscript_payload(&value_shape(value, self.source)))
+                {
+                    self.mark_incomplete(IncompleteReason::ReevaluatedText);
+                }
+            }
+            "unary_expression" if tests_variable_name(node, self.source) => {
+                let mut cursor = node.walk();
+                if node
+                    .named_children(&mut cursor)
+                    .any(|operand| has_subscript_payload(&static_text(operand, self.source)))
+                {
+                    self.mark_incomplete(IncompleteReason::ReevaluatedText);
+                }
+            }
+            "subscript" => {
+                if node
+                    .child_by_field_name("index")
+                    .is_some_and(|index| has_substitution_syntax(&static_text(index, self.source)))
+                {
+                    self.mark_incomplete(IncompleteReason::ReevaluatedText);
+                }
+            }
+            "binary_expression" if is_arithmetic_comparison(node, self.source) => {
+                let mut cursor = node.walk();
+                if node
+                    .named_children(&mut cursor)
+                    .any(|operand| has_subscript_payload(&static_text(operand, self.source)))
+                {
+                    self.mark_incomplete(IncompleteReason::ReevaluatedText);
+                }
+            }
+            "arithmetic_expansion" | "compound_statement" | "c_style_for_statement"
+                if arithmetic_text_has_substitution(node, self.source) =>
+            {
+                self.mark_incomplete(IncompleteReason::ReevaluatedText);
+            }
             _ => {}
         }
 
@@ -1135,7 +1238,8 @@ impl<'source, 'tree> Walker<'source, 'tree> {
     }
 
     /// Re-parses backtick substitutions in an unquoted here-document body,
-    /// which the grammar leaves as plain text although Bash executes them.
+    /// which the grammar leaves as plain text although Bash executes them,
+    /// and checks that the shell ends the body where the grammar does.
     fn analyze_heredoc_substitutions(
         &mut self,
         body: Node<'tree>,
@@ -1151,52 +1255,172 @@ impl<'source, 'tree> Walker<'source, 'tree> {
         let Some(start) = heredoc_start(redirect) else {
             return;
         };
-        if heredoc_delimiter_quoted(node_text(start, self.source)) {
+        if heredoc_body_starts_late(redirect, start, body.start_byte(), self.source) {
+            self.mark_incomplete(IncompleteReason::HereDocumentBoundary);
+        }
+        let delimiter = node_text(start, self.source);
+        if heredoc_delimiter_quoted(delimiter) {
             return;
         }
-        let mut points = PointCursor::new(body);
-        for region in backtick_regions(body, self.source) {
-            let Some(close) = region.close else {
-                self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
-                continue;
+        let strip_tabs = redirection_operator(redirect, self.source)
+            == Some(RedirectionOperator::HereDocumentStripTabs);
+        if heredoc_body_ends_early(node_text(body, self.source), delimiter, strip_tabs) {
+            self.mark_incomplete(IncompleteReason::HereDocumentBoundary);
+        }
+        let parsed = parsed_heredoc_children(body);
+        self.analyze_text_substitutions(body, body.byte_range(), &parsed, false, contexts, depth);
+    }
+
+    /// Double-quoted text is expanded, but a `$` that a line continuation
+    /// separates from its `(` is plain text to the grammar.
+    fn analyze_string_content(
+        &mut self,
+        node: Node<'tree>,
+        contexts: &[ExecutionContext],
+        depth: usize,
+    ) {
+        // The grammar keeps such a `$` as an anonymous token before the
+        // `string_content`, so the whole string is scanned, skipping the
+        // parts it did parse.
+        let mut cursor = node.walk();
+        let parsed = node
+            .named_children(&mut cursor)
+            .filter(|child| child.kind() != "string_content")
+            .map(|child| child.byte_range())
+            .collect::<Vec<_>>();
+        self.analyze_text_substitutions(node, node.byte_range(), &parsed, false, contexts, depth);
+    }
+
+    /// Re-parses command substitutions in parameter-expansion operands
+    /// (`` ${x:-`cmd`} ``, `${x#$(cmd)}`) that the grammar leaves as plain words.
+    fn analyze_expansion_operands(
+        &mut self,
+        node: Node<'tree>,
+        contexts: &[ExecutionContext],
+        depth: usize,
+    ) {
+        let double_quoted = expansion_is_double_quoted(node);
+        let mut operands = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "concatenation" {
+                let mut inner = child.walk();
+                operands.extend(child.named_children(&mut inner));
+            } else {
+                operands.push(child);
+            }
+        }
+        for operand in operands {
+            let scan = match operand.kind() {
+                "word" | "regex" => true,
+                // Inside double quotes a `'` is an ordinary character.
+                "raw_string" | "ansi_c_string" => double_quoted,
+                _ => false,
             };
+            if scan {
+                self.analyze_text_substitutions(
+                    operand,
+                    operand.byte_range(),
+                    &[],
+                    !double_quoted,
+                    contexts,
+                    depth,
+                );
+            }
+        }
+    }
+
+    /// Finds substitution syntax in `range`, text that the grammar left
+    /// unparsed although the shell expands it, and re-parses each
+    /// substitution. `anchor` is a node starting at or before `range` that
+    /// positions the embedded parses, and `parsed` lists sorted subranges the
+    /// grammar already parsed.
+    fn analyze_text_substitutions(
+        &mut self,
+        anchor: Node<'tree>,
+        range: Range<usize>,
+        parsed: &[Range<usize>],
+        single_quotes: bool,
+        contexts: &[ExecutionContext],
+        depth: usize,
+    ) {
+        let found = scan_text_substitutions(self.source, range.clone(), parsed, single_quotes);
+        if found.is_empty() {
+            return;
+        }
+        let mut points = PointCursor::new(anchor);
+        let mut resume = range.start;
+        for substitution in found {
             if self.halted {
                 return;
             }
-            let content = region.open + 1..close;
-            let open_point = points.advance(self.source, region.open);
-            let content_start = points.advance(self.source, content.start);
-            let content_end = points.advance(self.source, content.end);
-            let close_point = points.advance(self.source, close + 1);
-            self.analysis.constructs.push(ConstructOccurrence {
-                kind: ConstructKind::CommandSubstitution,
-                span: SourceSpan {
-                    start_byte: region.open,
-                    end_byte: close + 1,
-                    start: source_position(open_point),
-                    end: source_position(close_point),
-                },
-                raw: self.source[region.open..close + 1].to_owned(),
-            });
-            let text = &self.source[content.clone()];
-            if text.contains('\\') {
-                // Bash removes backslashes inside backticks before parsing, so
-                // the verbatim text is not what runs.
-                self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
-                continue;
+            match substitution {
+                TextSubstitution::ContinuedDollar => {
+                    self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
+                }
+                TextSubstitution::Backtick { open, .. } if open < resume => {}
+                TextSubstitution::Backtick { close: None, .. } => {
+                    self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
+                }
+                TextSubstitution::Backtick {
+                    open,
+                    close: Some(close),
+                } => {
+                    let open_point = points.advance(self.source, open);
+                    let content_start = points.advance(self.source, open + 1);
+                    let content_end = points.advance(self.source, close);
+                    let close_point = points.advance(self.source, close + 1);
+                    resume = close + 1;
+                    self.analysis.constructs.push(ConstructOccurrence {
+                        kind: ConstructKind::CommandSubstitution,
+                        span: SourceSpan {
+                            start_byte: open,
+                            end_byte: close + 1,
+                            start: source_position(open_point),
+                            end: source_position(close_point),
+                        },
+                        raw: self.source[open..close + 1].to_owned(),
+                    });
+                    let text = &self.source[open + 1..close];
+                    if text.contains('\\') {
+                        // The shell removes backslashes inside backticks
+                        // before parsing, so the verbatim text is not what
+                        // runs.
+                        self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
+                        continue;
+                    }
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    let mut context = contexts.to_vec();
+                    context.push(ExecutionContext::CommandSubstitution);
+                    let included = tree_sitter::Range {
+                        start_byte: open + 1,
+                        end_byte: close,
+                        start_point: content_start,
+                        end_point: content_end,
+                    };
+                    self.walk_embedded(included, &mut context, depth + 1);
+                }
+                TextSubstitution::Dollar { open } if open < resume => {}
+                TextSubstitution::Dollar { open } => {
+                    let open_point = points.advance(self.source, open);
+                    let included = tree_sitter::Range {
+                        start_byte: open,
+                        end_byte: range.end,
+                        start_point: open_point,
+                        end_point: points.clone().advance(self.source, range.end),
+                    };
+                    let mut context = contexts.to_vec();
+                    match self.walk_embedded_substitution(included, &mut context, depth + 1) {
+                        Some(end) => resume = end,
+                        None => {
+                            self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
+                            return;
+                        }
+                    }
+                }
             }
-            if text.trim().is_empty() {
-                continue;
-            }
-            let mut context = contexts.to_vec();
-            context.push(ExecutionContext::CommandSubstitution);
-            let included = tree_sitter::Range {
-                start_byte: content.start,
-                end_byte: content.end,
-                start_point: content_start,
-                end_point: content_end,
-            };
-            self.walk_embedded(included, &mut context, depth + 1);
         }
     }
 
@@ -1208,35 +1432,7 @@ impl<'source, 'tree> Walker<'source, 'tree> {
         contexts: &mut Vec<ExecutionContext>,
         depth: usize,
     ) {
-        if self.halted {
-            return;
-        }
-        if depth > self.limits.max_depth {
-            self.mark_incomplete(IncompleteReason::DepthLimit {
-                max_depth: self.limits.max_depth,
-            });
-            return;
-        }
-        // Each embedded parse costs at least one node of the budget, and the
-        // shared wall-clock budget bounds the parses themselves.
-        if self.visited_nodes >= self.limits.max_nodes {
-            self.mark_incomplete(IncompleteReason::NodeLimit {
-                max_nodes: self.limits.max_nodes,
-            });
-            self.halted = true;
-            return;
-        }
-        if self.started.elapsed() >= self.limits.max_parse_time {
-            self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
-            return;
-        }
-        let Ok(tree) = parse_bash(
-            self.source,
-            Some(included),
-            self.limits.max_parse_time,
-            self.started,
-        ) else {
-            self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
+        let Some(tree) = self.parse_embedded(included, depth) else {
             return;
         };
         let root = tree.root_node();
@@ -1246,6 +1442,76 @@ impl<'source, 'tree> Walker<'source, 'tree> {
         if root.has_error() {
             embedded.mark_incomplete(IncompleteReason::SyntaxErrors);
         }
+        self.merge_embedded(embedded);
+    }
+
+    /// Parses `included`, which starts with a `$(` command substitution or a
+    /// `$((` arithmetic expansion, and traverses only that expansion. Returns
+    /// the byte offset just past it, or `None` when it does not parse cleanly
+    /// or a limit stops the parse.
+    fn walk_embedded_substitution(
+        &mut self,
+        included: tree_sitter::Range,
+        contexts: &mut Vec<ExecutionContext>,
+        depth: usize,
+    ) -> Option<usize> {
+        let open = included.start_byte;
+        let tree = self.parse_embedded(included, depth)?;
+        let mut node = tree.root_node().descendant_for_byte_range(open, open + 2)?;
+        while !matches!(node.kind(), "command_substitution" | "arithmetic_expansion")
+            || node.start_byte() != open
+        {
+            node = node.parent()?;
+        }
+        if node.has_error() {
+            return None;
+        }
+        let mut embedded = Walker::new(self.source, self.limits, self.started);
+        embedded.visited_nodes = self.visited_nodes;
+        embedded.visit(node, contexts, depth);
+        self.merge_embedded(embedded);
+        Some(node.end_byte())
+    }
+
+    /// Applies the traversal limits to an embedded parse and parses
+    /// `included`, recording why no tree is available.
+    fn parse_embedded(&mut self, included: tree_sitter::Range, depth: usize) -> Option<Tree> {
+        if self.halted {
+            return None;
+        }
+        if depth > self.limits.max_depth {
+            self.mark_incomplete(IncompleteReason::DepthLimit {
+                max_depth: self.limits.max_depth,
+            });
+            return None;
+        }
+        // Each embedded parse costs at least one node of the budget, and the
+        // shared wall-clock budget bounds the parses themselves.
+        if self.visited_nodes >= self.limits.max_nodes {
+            self.mark_incomplete(IncompleteReason::NodeLimit {
+                max_nodes: self.limits.max_nodes,
+            });
+            self.halted = true;
+            return None;
+        }
+        if self.started.elapsed() >= self.limits.max_parse_time {
+            self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
+            return None;
+        }
+        let Ok(tree) = parse_bash(
+            self.source,
+            Some(included),
+            self.limits.max_parse_time,
+            self.started,
+        ) else {
+            self.mark_incomplete(IncompleteReason::UnparsedCommandSubstitution);
+            return None;
+        };
+        Some(tree)
+    }
+
+    /// Merges the facts of an embedded traversal into this analysis.
+    fn merge_embedded(&mut self, embedded: Walker<'source, '_>) {
         let visited_nodes = embedded.visited_nodes;
         let halted = embedded.halted;
         let (analysis, incomplete) = embedded.finish();
@@ -1308,10 +1574,11 @@ fn build_command<'tree>(
             return true;
         }
         // Redirections are sorted by start byte.
-        let index = redirects.partition_point(|redirect| redirect.start_byte() < word.end_byte());
+        let index = redirects
+            .partition_point(|redirect| redirect_start(*redirect, source) < word.end_byte());
         match redirects
             .get(index)
-            .filter(|redirect| redirect.start_byte() == word.end_byte())
+            .filter(|redirect| redirect_start(**redirect, source) == word.end_byte())
         {
             Some(_) if descriptors[index].is_none() => {
                 descriptors[index] = Some(node_text(*word, source).to_owned());
@@ -1390,11 +1657,16 @@ fn analyze_statement_redirections(redirects: &[Node<'_>], source: &str) -> Vec<R
     redirects
         .iter()
         .map(|redirect| {
-            let (target, _) = redirect_target_nodes(*redirect, source);
+            let (target, trailing) = redirect_target_nodes(*redirect, source);
             let descriptor = redirect
                 .child_by_field_name("descriptor")
                 .map(|descriptor| node_text(descriptor, source).to_owned());
-            analyze_redirection(*redirect, source, descriptor, &target)
+            let mut redirection = analyze_redirection(*redirect, source, descriptor, &target);
+            redirection.trailing_words = group_continued_words(&trailing, source)
+                .iter()
+                .flat_map(|group| analyze_word_group(group, source))
+                .collect();
+            redirection
         })
         .collect()
 }
@@ -1558,11 +1830,14 @@ fn command_argv(has_error: bool, name: Option<&ShellWord>, arguments: &[ShellWor
     }
 }
 
-/// One character of a word after quote removal, or an opaque runtime piece.
+/// One character of a word after quote removal, an opaque runtime piece, or
+/// the zero-width mark of an empty quoted string (`''` or `""`), which keeps
+/// a word that would otherwise expand to nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WordItem {
     Char { value: char, quoted: bool },
     Opaque,
+    QuotedEmpty,
 }
 
 /// Maximum words one source word may produce through static brace expansion.
@@ -1605,6 +1880,13 @@ fn analyze_word_group(nodes: &[Node<'_>], source: &str) -> Vec<ShellWord> {
     }
     match expansions {
         None => vec![word_from_items(span, raw, &items)],
+        // Bash removes an unquoted brace alternative that expands to nothing
+        // (`{,x}` is one word), but zsh keeps it as an empty argument, so the
+        // argv positions depend on the shell.
+        Some(expansions) if expansions.iter().any(Vec::is_empty) => {
+            reasons.push(DynamicReason::BraceExpansion);
+            vec![dynamic_word(span, raw, reasons)]
+        }
         Some(expansions) => expansions
             .iter()
             .map(|items| word_from_items(span, raw.clone(), items))
@@ -1669,7 +1951,7 @@ fn items_text(items: &[WordItem]) -> String {
         .iter()
         .filter_map(|item| match item {
             WordItem::Char { value, .. } => Some(*value),
-            WordItem::Opaque => None,
+            WordItem::Opaque | WordItem::QuotedEmpty => None,
         })
         .collect()
 }
@@ -1716,8 +1998,10 @@ fn has_tilde_expansion(items: &[WordItem]) -> bool {
 fn word_pattern(items: &[WordItem], glob: bool) -> Option<String> {
     let mut pattern = String::with_capacity(items.len());
     for item in items {
-        let WordItem::Char { value, quoted } = *item else {
-            return None;
+        let (value, quoted) = match *item {
+            WordItem::Char { value, quoted } => (value, quoted),
+            WordItem::QuotedEmpty => continue,
+            WordItem::Opaque => return None,
         };
         if !glob {
             pattern.push(value);
@@ -1783,6 +2067,7 @@ fn collect_word_items(
             .strip_prefix('\'')
             .and_then(|value| value.strip_suffix('\''))
         {
+            Some("") => items.push(WordItem::QuotedEmpty),
             Some(value) => items.extend(value.chars().map(|value| WordItem::Char {
                 value,
                 quoted: true,
@@ -1801,6 +2086,7 @@ fn collect_word_items(
                 .strip_prefix('"')
                 .and_then(|value| value.strip_suffix('"'));
             match value {
+                Some("") => items.push(WordItem::QuotedEmpty),
                 Some(value) if plain && !value.contains('\\') => {
                     items.extend(value.chars().map(|value| WordItem::Char {
                         value,
@@ -2098,7 +2384,7 @@ fn analyze_redirection(
         "herestring_redirect" => RedirectionKind::HereString,
         _ => RedirectionKind::File,
     };
-    let operator = redirection_operator(node);
+    let operator = redirection_operator(node, source);
     let target = (!target.is_empty()).then(|| {
         let mut words = analyze_word_group(target, source);
         if words.len() == 1 {
@@ -2117,15 +2403,63 @@ fn analyze_redirection(
     let here_document = (kind == RedirectionKind::HereDocument)
         .then(|| analyze_here_document(node, source, operator))
         .flatten();
+    let span = match read_write_prefix(node, source) {
+        Some(prefix) => span_between(prefix, node),
+        None => source_span(node),
+    };
     Redirection {
         kind,
         operator,
-        span: source_span(node),
-        raw: node_text(node, source).to_owned(),
+        span,
+        raw: source
+            .get(span.start_byte..span.end_byte)
+            .unwrap_or("")
+            .to_owned(),
         descriptor,
         target,
+        trailing_words: Vec::new(),
         here_document,
     }
+}
+
+/// The grammar has no `<>` operator. It recovers `<>word` as an error node
+/// holding `<` directly before an output redirection; this returns that
+/// error node.
+fn read_write_prefix<'tree>(node: Node<'tree>, source: &str) -> Option<Node<'tree>> {
+    if node.kind() != "file_redirect" || node.child(0).map(|first| first.kind()) != Some(">") {
+        return None;
+    }
+    node.prev_sibling().filter(|previous| {
+        previous.kind() == "ERROR"
+            && node_text(*previous, source) == "<"
+            && previous.end_byte() == node.start_byte()
+    })
+}
+
+/// Whether a file redirection is `<>`, which the grammar recovers either as
+/// [`read_write_prefix`] or as `<` followed by an error node holding `>`
+/// (`<> word`, `3<>word`).
+fn is_read_write_redirect(node: Node<'_>, source: &str) -> bool {
+    if read_write_prefix(node, source).is_some() {
+        return true;
+    }
+    if node.kind() != "file_redirect" {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let children = node.children(&mut cursor).collect::<Vec<_>>();
+    children.windows(2).any(|pair| {
+        !pair[0].is_named()
+            && pair[0].kind() == "<"
+            && pair[1].kind() == "ERROR"
+            && node_text(pair[1], source) == ">"
+            && pair[1].start_byte() == pair[0].end_byte()
+    })
+}
+
+/// Start of a redirection including a recovered `<` of a `<>` operator.
+fn redirect_start(node: Node<'_>, source: &str) -> usize {
+    read_write_prefix(node, source).map_or(node.start_byte(), |prefix| prefix.start_byte())
 }
 
 fn heredoc_start(node: Node<'_>) -> Option<Node<'_>> {
@@ -2168,7 +2502,8 @@ fn analyze_here_document(
             return Vec::new();
         }
         let mut reasons = dynamic_reasons(body, source);
-        if !backtick_regions(body, source).is_empty() {
+        let parsed = parsed_heredoc_children(body);
+        if !scan_text_substitutions(source, body.byte_range(), &parsed, false).is_empty() {
             reasons.push(DynamicReason::CommandSubstitution);
         }
         if has_active_heredoc_escape(node_text(body, source)) {
@@ -2216,38 +2551,62 @@ fn has_active_heredoc_escape(body: &str) -> bool {
     false
 }
 
-/// One backtick command substitution in here-document text.
-struct BacktickRegion {
-    open: usize,
-    close: Option<usize>,
+/// Substitution syntax in text that the grammar leaves unparsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextSubstitution {
+    /// A backtick substitution; `close` is `None` when it is unterminated.
+    Backtick { open: usize, close: Option<usize> },
+    /// A `$(` command substitution starting at `open`.
+    Dollar { open: usize },
+    /// A `$` that backslash-newline line continuations join to a `(`.
+    ContinuedDollar,
 }
 
-/// Finds backtick substitutions in the plain-text portions of an unquoted
-/// here-document body. Escaped backticks are literal, and ranges the grammar
-/// already parsed (such as `$(...)`) are skipped.
-fn backtick_regions(body: Node<'_>, source: &str) -> Vec<BacktickRegion> {
+/// Ranges of an unquoted here-document body that the grammar parsed, such
+/// as `$(...)` and `${...}`.
+fn parsed_heredoc_children(body: Node<'_>) -> Vec<Range<usize>> {
     let mut cursor = body.walk();
-    let parsed = body
-        .named_children(&mut cursor)
+    body.named_children(&mut cursor)
         .filter(|child| child.kind() != "heredoc_content")
-        .map(|child| child.start_byte()..child.end_byte())
-        .collect::<Vec<_>>();
+        .map(|child| child.byte_range())
+        .collect()
+}
+
+/// Finds substitution syntax in `range` of `source` in source order,
+/// skipping the sorted `parsed` subranges. Backslash escapes are honored,
+/// and `single_quotes` makes single-quoted text literal, as it is outside
+/// double quotes and here-documents. A backtick region may span a parsed
+/// subrange.
+fn scan_text_substitutions(
+    source: &str,
+    range: Range<usize>,
+    parsed: &[Range<usize>],
+    single_quotes: bool,
+) -> Vec<TextSubstitution> {
     let bytes = source.as_bytes();
-    let end = body.end_byte().min(bytes.len());
-    let mut regions = Vec::new();
-    let mut open = None;
-    let mut index = body.start_byte();
+    let end = range.end.min(bytes.len());
+    let mut found = Vec::new();
+    let mut backtick = None;
+    let mut double_quoted = false;
+    let mut index = range.start;
     let mut next_parsed = 0;
     while index < end {
-        // Children are in source order, so one forward pass skips them.
+        // Subranges are in source order, so one forward pass skips them.
         while parsed
             .get(next_parsed)
-            .is_some_and(|range| range.end <= index)
+            .is_some_and(|parsed| parsed.end <= index)
         {
             next_parsed += 1;
         }
-        if let Some(range) = parsed.get(next_parsed).filter(|range| range.start <= index) {
-            index = range.end;
+        // The grammar reads `$` plus a line continuation in a here-document
+        // as a variable expansion, but the shell joins the lines first.
+        let continued_dollar =
+            bytes[index] == b'$' && bytes.get(index + 1..index + 3) == Some(b"\\\n");
+        if let Some(parsed) = parsed
+            .get(next_parsed)
+            .filter(|parsed| parsed.start <= index && !continued_dollar)
+        {
+            index = parsed.end;
             continue;
         }
         match bytes[index] {
@@ -2255,24 +2614,481 @@ fn backtick_regions(body: Node<'_>, source: &str) -> Vec<BacktickRegion> {
                 index += 2;
                 continue;
             }
-            b'`' => match open.take() {
-                Some(start) => regions.push(BacktickRegion {
-                    open: start,
+            b'\'' if single_quotes && !double_quoted && backtick.is_none() => {
+                // Single-quoted text runs to the next `'` with no escapes.
+                index = bytes[index + 1..end]
+                    .iter()
+                    .position(|byte| *byte == b'\'')
+                    .map_or(end, |offset| index + offset + 2);
+                continue;
+            }
+            b'"' if single_quotes && backtick.is_none() => double_quoted = !double_quoted,
+            b'`' => match backtick.take() {
+                Some(open) => found.push(TextSubstitution::Backtick {
+                    open,
                     close: Some(index),
                 }),
-                None => open = Some(index),
+                None => backtick = Some(index),
             },
+            b'$' if backtick.is_none() => {
+                let mut next = index + 1;
+                while bytes.get(next..next + 2) == Some(b"\\\n") {
+                    next += 2;
+                }
+                if bytes.get(next) == Some(&b'(') {
+                    if next > index + 1 {
+                        found.push(TextSubstitution::ContinuedDollar);
+                        index = next;
+                    } else {
+                        // `$((` may also open a command substitution whose
+                        // command is a subshell, so it is parsed as well.
+                        found.push(TextSubstitution::Dollar { open: index });
+                        index = next + 1;
+                    }
+                    continue;
+                }
+                index = next;
+                continue;
+            }
             _ => {}
         }
         index += 1;
     }
-    if let Some(start) = open {
-        regions.push(BacktickRegion {
-            open: start,
-            close: None,
-        });
+    if let Some(open) = backtick {
+        found.push(TextSubstitution::Backtick { open, close: None });
     }
-    regions
+    found
+}
+
+/// Whether an expansion is inside double quotes or a here-document body,
+/// where a `'` does not quote.
+fn expansion_is_double_quoted(expansion: Node<'_>) -> bool {
+    let mut current = expansion;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "expansion" | "concatenation" => current = parent,
+            "string" | "translated_string" | "heredoc_body" => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Whether a backtick command substitution contains a backslash escape
+/// (`` \` ``, `\$`, or `\\`) that the shell removes before parsing the text
+/// again, so a nested substitution is invisible to the grammar.
+fn has_escaped_backtick_content(node: Node<'_>, source: &str) -> bool {
+    let text = node_text(node, source);
+    let Some(content) = text
+        .strip_prefix('`')
+        .and_then(|content| content.strip_suffix('`'))
+    else {
+        return false;
+    };
+    let bytes = content.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            if matches!(bytes.get(index + 1), Some(b'`' | b'$' | b'\\')) {
+                return true;
+            }
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    false
+}
+
+/// Whether the shell ends an unquoted here-document body before the grammar
+/// does. The shell joins backslash-newline line continuations and then
+/// compares each line with the delimiter, while the grammar compares
+/// physical lines and does not end the body inside an expansion that spans
+/// lines (`${x:-` on one line and `}` several lines later). Any joined line
+/// of the grammar's body that equals the delimiter therefore ends the body
+/// earlier in the shell.
+fn heredoc_body_ends_early(body: &str, delimiter: &str, strip_tabs: bool) -> bool {
+    let mut joined = String::new();
+    let mut joined_without_tabs = String::new();
+    for line in body.split('\n') {
+        let trailing = line.bytes().rev().take_while(|byte| *byte == b'\\').count();
+        let continued = trailing % 2 == 1;
+        let content = if continued {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        joined.push_str(content);
+        joined_without_tabs.push_str(content.trim_start_matches('\t'));
+        if continued {
+            continue;
+        }
+        if joined == delimiter
+            || (strip_tabs
+                && (joined.trim_start_matches('\t') == delimiter
+                    || joined_without_tabs == delimiter))
+        {
+            return true;
+        }
+        joined.clear();
+        joined_without_tabs.clear();
+    }
+    false
+}
+
+/// Whether the grammar read lines after the here-document operator's line as
+/// part of the command. It does so when a body line is only a line
+/// continuation, so the body the shell reads starts, and may end, earlier
+/// than the grammar's `body_start`.
+///
+/// The operator's line ends at its first newline outside quotes,
+/// substitutions, and line continuations; the body starts right after it
+/// (after leading tabs for `<<-`).
+fn heredoc_body_starts_late(
+    redirect: Node<'_>,
+    start: Node<'_>,
+    body_start: usize,
+    source: &str,
+) -> bool {
+    let mut opaque = Vec::new();
+    let mut stack = vec![redirect];
+    while let Some(node) = stack.pop() {
+        if node.end_byte() <= start.end_byte() || node.start_byte() >= body_start {
+            continue;
+        }
+        if matches!(
+            node.kind(),
+            "string"
+                | "raw_string"
+                | "ansi_c_string"
+                | "translated_string"
+                | "command_substitution"
+                | "process_substitution"
+                | "heredoc_body"
+        ) {
+            opaque.push(node.byte_range());
+            continue;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    opaque.sort_by_key(|range| range.start);
+    let bytes = source.as_bytes();
+    let end = body_start.min(bytes.len());
+    let mut index = start.end_byte();
+    let mut next_opaque = 0;
+    while index < end {
+        while opaque
+            .get(next_opaque)
+            .is_some_and(|range| range.end <= index)
+        {
+            next_opaque += 1;
+        }
+        if let Some(range) = opaque.get(next_opaque).filter(|range| range.start <= index) {
+            index = range.end;
+            continue;
+        }
+        match bytes[index] {
+            b'\\' => index += 2,
+            // With `<<-`, the grammar's body starts after the stripped tabs.
+            b'\n' => return bytes[index + 1..end].iter().any(|byte| *byte != b'\t'),
+            _ => index += 1,
+        }
+    }
+    false
+}
+
+/// Static text of a node as the shell would see it after quote and escape
+/// removal, skipping parts expanded at run time (substitutions and parameter
+/// or arithmetic expansions). ANSI-C strings are decoded. Used only to
+/// detect text that the shell evaluates again as code.
+fn static_text(node: Node<'_>, source: &str) -> String {
+    let mut text = String::new();
+    collect_static_text(node, source, None, &mut text);
+    text.retain(|character| character != '\\');
+    text
+}
+
+/// Placeholder that [`value_shape`] puts where a value is expanded at run
+/// time.
+const RUNTIME_PART: char = '\0';
+
+/// Like [`static_text`], but each part expanded at run time becomes one
+/// [`RUNTIME_PART`], so text assembled from static and runtime pieces keeps
+/// its shape (`"a[${d}(cmd)]"` becomes `a[\0(cmd)]`).
+fn value_shape(node: Node<'_>, source: &str) -> String {
+    let mut text = String::new();
+    collect_static_text(node, source, Some(RUNTIME_PART), &mut text);
+    text.retain(|character| character != '\\');
+    text
+}
+
+fn collect_static_text(node: Node<'_>, source: &str, placeholder: Option<char>, text: &mut String) {
+    match node.kind() {
+        "command_substitution"
+        | "process_substitution"
+        | "expansion"
+        | "simple_expansion"
+        | "arithmetic_expansion" => text.extend(placeholder),
+        "raw_string" => {
+            let raw = node_text(node, source);
+            text.push_str(
+                raw.strip_prefix('\'')
+                    .and_then(|raw| raw.strip_suffix('\''))
+                    .unwrap_or(raw),
+            );
+        }
+        "ansi_c_string" => {
+            let raw = node_text(node, source);
+            let inner = raw
+                .strip_prefix("$'")
+                .and_then(|raw| raw.strip_suffix('\''))
+                .unwrap_or(raw);
+            text.push_str(&decode_ansi_c(inner));
+        }
+        _ if node.child_count() == 0 => text.push_str(node_text(node, source)),
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "\"" && !child.is_named() {
+                    continue;
+                }
+                collect_static_text(child, source, placeholder, text);
+            }
+        }
+    }
+}
+
+/// Decodes the escapes of an ANSI-C `$'...'` string body.
+fn decode_ansi_c(inner: &str) -> String {
+    let characters = inner.chars().collect::<Vec<_>>();
+    let mut decoded = String::with_capacity(inner.len());
+    let mut index = 0;
+    let digits = |start: usize, radix: u32, max: usize| {
+        let count = characters[start..]
+            .iter()
+            .take(max)
+            .take_while(|character| character.is_digit(radix))
+            .count();
+        let value = characters[start..start + count].iter().collect::<String>();
+        (u32::from_str_radix(&value, radix).ok(), count)
+    };
+    while index < characters.len() {
+        let character = characters[index];
+        if character != '\\' || index + 1 >= characters.len() {
+            decoded.push(character);
+            index += 1;
+            continue;
+        }
+        let escape = characters[index + 1];
+        let (value, consumed) = match escape {
+            'x' => digits(index + 2, 16, 2),
+            'u' => digits(index + 2, 16, 4),
+            'U' => digits(index + 2, 16, 8),
+            '0'..='7' => {
+                let (value, count) = digits(index + 1, 8, 3);
+                (value, count.saturating_sub(1))
+            }
+            _ => (None, 0),
+        };
+        match value.and_then(char::from_u32) {
+            Some(value) => {
+                decoded.push(value);
+                index += 2 + consumed;
+            }
+            None => {
+                decoded.push('\\');
+                decoded.push(escape);
+                index += 2;
+            }
+        }
+    }
+    decoded
+}
+
+/// Whether text contains command-substitution syntax.
+fn has_substitution_syntax(text: &str) -> bool {
+    text.contains("$(") || text.contains('`')
+}
+
+/// Whether text looks like `name[$(cmd)]`: arithmetic evaluation of such a
+/// value expands the subscript and runs the command.
+///
+/// Text from [`value_shape`] also matches when a [`RUNTIME_PART`] inside the
+/// brackets of `name[` could supply the substitution, as in
+/// `"a[${d}(cmd)]"`, where `d` holds `$`; the name may itself be a runtime
+/// part.
+fn has_subscript_payload(text: &str) -> bool {
+    text.char_indices()
+        .filter(|(_, character)| *character == '[')
+        .any(|(open, _)| {
+            let after = &text[open + 1..];
+            if has_substitution_syntax(after) {
+                return true;
+            }
+            let named = text[..open].chars().next_back().is_some_and(|previous| {
+                previous == '_' || previous == RUNTIME_PART || previous.is_ascii_alphanumeric()
+            });
+            named
+                && after
+                    .split(']')
+                    .next()
+                    .is_some_and(|index| index.contains(RUNTIME_PART))
+        })
+}
+
+/// Whether a `declare`, `local`, `export`, `readonly`, `typeset`, or `unset`
+/// argument is quoted or expanded text that the builtin parses again as an
+/// assignment with a subscript or compound value (`'a[$(cmd)]=1'`,
+/// `'b=($(cmd))'`), or text expanded at run time that the builtin parses
+/// as an assignment (`export $(cat .env)`).
+fn declaration_reevaluates_text(node: Node<'_>, source: &str) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).any(|argument| {
+        match argument.kind() {
+            "variable_name" => false,
+            "variable_assignment" => argument.child_by_field_name("value").is_some_and(|value| {
+                // `declare -a b='(...)'` also assigns a compound value; a
+                // parsed `b=(...)` array is ordinary syntax.
+                let text = static_text(value, source);
+                value.kind() != "array"
+                    && text.starts_with('(')
+                    && (has_substitution_syntax(&text) || has_runtime_text(value))
+            }),
+            // An argument expanded at run time (`export $(cat .env)`) is
+            // parsed as an assignment whose name and subscript are unknown.
+            _ if has_runtime_text(argument) => true,
+            _ => {
+                let text = static_text(argument, source);
+                (text.contains('[') || text.contains("=("))
+                    && (text.contains('$') || text.contains('`'))
+            }
+        }
+    })
+}
+
+/// Whether a `[[ -v name ]]` or `[[ -R name ]]` test names a variable, whose
+/// array subscript the shell evaluates.
+fn tests_variable_name(node: Node<'_>, source: &str) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .find(|child| child.kind() == "test_operator")
+        .is_some_and(|operator| matches!(node_text(operator, source), "-v" | "-R"))
+}
+
+/// Whether a command that is otherwise free of file effects names a
+/// variable whose array subscript the shell evaluates: the target of
+/// `printf -v` (Bash 4 and zsh) or the operand of `test -v`/`[ -v ]`
+/// (Bash 4.2), with a subscript that holds command-substitution syntax.
+fn names_reevaluated_variable(command: &CommandOccurrence) -> bool {
+    let Some(name) = command
+        .name
+        .as_ref()
+        .and_then(|name| name.literal.as_deref())
+    else {
+        return false;
+    };
+    let options: &[&str] = match name {
+        "printf" => &["-v"],
+        "test" | "[" => &["-v", "-R"],
+        _ => return false,
+    };
+    let arguments = command
+        .arguments
+        .iter()
+        .map(|word| word.literal.as_deref().unwrap_or(&word.raw))
+        .collect::<Vec<_>>();
+    arguments.iter().enumerate().any(|(index, argument)| {
+        let target = if options.contains(argument) {
+            arguments.get(index + 1).copied()
+        } else if name == "printf" {
+            argument
+                .strip_prefix("-v")
+                .filter(|target| !target.is_empty())
+        } else {
+            None
+        };
+        target.is_some_and(has_subscript_payload)
+    })
+}
+
+/// Whether a node's value depends on expansion or substitution at run time.
+fn has_runtime_text(node: Node<'_>) -> bool {
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if matches!(
+            current.kind(),
+            "command_substitution"
+                | "process_substitution"
+                | "expansion"
+                | "simple_expansion"
+                | "arithmetic_expansion"
+        ) {
+            return true;
+        }
+        let mut cursor = current.walk();
+        stack.extend(current.named_children(&mut cursor));
+    }
+    false
+}
+
+/// Whether a `[[ ... ]]` binary expression compares its operands
+/// arithmetically, which evaluates them as arithmetic expressions.
+fn is_arithmetic_comparison(node: Node<'_>, source: &str) -> bool {
+    if !node
+        .child_by_field_name("operator")
+        .is_some_and(|operator| {
+            matches!(
+                node_text(operator, source),
+                "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge"
+            )
+        })
+    {
+        return false;
+    }
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "test_command" => return true,
+            "binary_expression" | "unary_expression" | "parenthesized_expression" => {
+                current = parent;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Whether quoted text inside an arithmetic context (`$((...))`, `((...))`,
+/// or a C-style `for` header) contains command-substitution syntax, which
+/// arithmetic evaluation expands.
+fn arithmetic_text_has_substitution(node: Node<'_>, source: &str) -> bool {
+    let is_arithmetic = match node.kind() {
+        "arithmetic_expansion" | "c_style_for_statement" => true,
+        "compound_statement" => node.child(0).is_some_and(|first| first.kind() == "(("),
+        _ => false,
+    };
+    if !is_arithmetic {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let quoted = node
+        .named_children(&mut cursor)
+        .filter(|child| !matches!(child.kind(), "do_group" | "compound_statement"))
+        .collect::<Vec<_>>();
+    quoted.into_iter().any(|child| {
+        let mut stack = vec![child];
+        while let Some(current) = stack.pop() {
+            if matches!(current.kind(), "string" | "raw_string" | "ansi_c_string")
+                && has_substitution_syntax(&static_text(current, source))
+            {
+                return true;
+            }
+            let mut cursor = current.walk();
+            stack.extend(current.named_children(&mut cursor));
+        }
+        false
+    })
 }
 
 fn literal_heredoc_delimiter(raw: &str) -> Option<String> {
@@ -2305,7 +3121,10 @@ fn strip_heredoc_tabs(body: &str) -> String {
     stripped
 }
 
-fn redirection_operator(node: Node<'_>) -> Option<RedirectionOperator> {
+fn redirection_operator(node: Node<'_>, source: &str) -> Option<RedirectionOperator> {
+    if is_read_write_redirect(node, source) {
+        return Some(RedirectionOperator::ReadWrite);
+    }
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .filter(|child| !child.is_named())
@@ -2489,6 +3308,7 @@ fn span_between(first: Node<'_>, last: Node<'_>) -> SourceSpan {
 
 /// Converts increasing byte offsets into Tree-sitter points in one forward
 /// pass over the source.
+#[derive(Clone)]
 struct PointCursor {
     byte: usize,
     point: Point,
@@ -3351,5 +4171,221 @@ mod tests {
                 started.elapsed()
             );
         }
+    }
+
+    fn incomplete_reason(source: &str) -> Option<IncompleteReason> {
+        match BashAnalyzer::default().analyze(source) {
+            BashAnalysisOutcome::Partial { reason, .. } => Some(reason),
+            _ => None,
+        }
+    }
+
+    fn runs_in_substitution(analysis: &BashAnalysis, argv: &[&str]) -> bool {
+        analysis.commands.iter().any(|command| {
+            command
+                .literal_argv()
+                .is_some_and(|literal| literal == argv)
+                && command
+                    .context
+                    .contains(&ExecutionContext::CommandSubstitution)
+        })
+    }
+
+    #[test]
+    fn substitutions_in_expansion_operands_are_parsed() {
+        for source in [
+            "echo ${x:-`cat .env`}",
+            "echo \"${x:-`cat .env`}\"",
+            ": ${y:=`cat .env`}",
+            "echo ${x#$(cat .env)}",
+            "echo ${x##$(cat .env)}",
+            "echo ${x%`cat .env`}",
+            "echo ${x/a/`cat .env`}",
+            "echo ${x,,$(cat .env)}",
+            "echo \"${x:-'`cat .env`'}\"",
+            "[[ -n ${x:-`cat .env`} ]]",
+            "cat <<EOF\n${x:-`cat .env`}\nEOF\n",
+        ] {
+            let analysis = complete(source);
+            assert!(
+                runs_in_substitution(&analysis, &["cat", ".env"]),
+                "{source}: {analysis:#?}"
+            );
+        }
+
+        // Unquoted single quotes and backslashes keep backticks literal.
+        for source in ["echo ${x:-'`cat .env`'}", "echo ${x:-\\`cat .env\\`}"] {
+            assert_eq!(complete(source).commands.len(), 1, "{source}");
+        }
+
+        // `$((` may open a command substitution holding a subshell.
+        assert_eq!(
+            incomplete_reason("echo ${x#$((cat .env) )}"),
+            Some(IncompleteReason::UnparsedCommandSubstitution)
+        );
+        assert!(complete("echo ${x#$((1 + 2))}").commands.len() == 1);
+    }
+
+    #[test]
+    fn continued_dollar_before_a_parenthesis_is_unresolved() {
+        for source in [
+            "echo \"$\\\n(cat .env)\"",
+            "x=\"$\\\n(cat .env)\"",
+            ": \"$\\\n\\\n(cat .env)\"",
+            "cat <<EOF\n$\\\n(cat .env)\nEOF\n",
+            "echo ${x:-$\\\n(cat .env)}",
+            "echo `echo \\`cat .env\\``",
+        ] {
+            assert_eq!(
+                incomplete_reason(source),
+                Some(IncompleteReason::UnparsedCommandSubstitution),
+                "{source}"
+            );
+        }
+        complete("echo \"cost: \\$5 and $(pwd)\"");
+    }
+
+    #[test]
+    fn here_documents_the_shell_ends_early_are_unresolved() {
+        for source in [
+            // A line continuation joins lines into the delimiter.
+            "cat <<EOF\nE\\\nOF\ncat .env\nEOF\n",
+            "cat <<-EOF\n\tE\\\nOF\ncat .env\nEOF\n",
+            "cat <<EOF\nEO\\\nF\nrm -rf secrets\nEOF\n",
+            // A line that is only a continuation moves the grammar's body.
+            "cat <<EOF\n\\\nEOF\ncat .env\nEOF\n",
+            "cat <<EOF\n\\\n\\\nEOF\ncat .env\nEOF\n",
+            "cat <<EOF && true\n\\\nEOF\ncat .env\nEOF\n",
+            "cat <<'EOF'\n\\\nEOF\ncat .env\nEOF\n",
+            // An expansion spans the delimiter line.
+            "cat <<EOF\n${x:-\nEOF\ncat .env\n}\nEOF\n",
+        ] {
+            assert_eq!(
+                incomplete_reason(source),
+                Some(IncompleteReason::HereDocumentBoundary),
+                "{source}"
+            );
+        }
+        for source in [
+            "cat <<-EOF\n\tindented\n\tEOF\n",
+            "cat <<EOF > notes.md\nline \\\ncontinued\nEOF\n",
+            "cat <<EOF | grep foo\nfoo\nEOF\n",
+            "cat <<'EOF'\nE\\\nOF\nEOF\n",
+        ] {
+            complete(source);
+        }
+    }
+
+    #[test]
+    fn text_the_shell_evaluates_again_is_unresolved() {
+        for source in [
+            "declare 'd[$(cat .env)]=1'",
+            "declare -a 'b=($(cat .env))'",
+            "local 'd[$(cat .env)]=1'",
+            "typeset 'd[$(cat .env)]=1'",
+            "export 'd[$(cat .env)]=1'",
+            "readonly 'd[$(cat .env)]=1'",
+            "unset 'a[$(cat .env)]'",
+            "export $(cat .env)",
+            "x='a[$(cat .env)]'; (( x ))",
+            "x='a[$(cat .env)]'; echo $((x))",
+            "x='a[$(cat .env)]'; [[ $x -eq 0 ]]",
+            "x='a[$(cat .env)]'; echo ${a[x]}",
+            "x='a[`cat .env`]'; (( x ))",
+            "x=$'a[$(cat .env)]'; (( x ))",
+            "d='$'; x=\"a[${d}(cat .env)]\"; (( x ))",
+            "for x in 'a[$(cat .env)]'; do (( x )); done",
+            "printf -v 'a[$(cat .env)]' x",
+            "test -v 'a[$(cat .env)]'",
+            "[ -v 'a[$(cat .env)]' ]",
+            "[[ -v 'a[$(cat .env)]' ]]",
+        ] {
+            assert_eq!(
+                incomplete_reason(source),
+                Some(IncompleteReason::ReevaluatedText),
+                "{source}"
+            );
+        }
+        for source in [
+            "declare x=1 y=2",
+            "declare -a arr=(a b c)",
+            "export PATH=\"$PATH:/x\"",
+            "unset x",
+            "x=\"${p}[0]\"",
+            "msg=\"[$(pwd)] done\"",
+            "for i in 1 2 3; do echo $((i * 2)); done",
+            "printf -v out '%s' x",
+            "printf '%s\\n' 'a[1]'",
+            "[[ -v HOME ]]",
+        ] {
+            complete(source);
+        }
+    }
+
+    #[test]
+    fn empty_brace_alternatives_depend_on_the_shell() {
+        // Bash drops an unquoted empty alternative; zsh keeps it.
+        for source in ["sed {,} 'r .env' x", "rm {,} .env", "cat {.env,}"] {
+            assert!(
+                matches!(
+                    &complete(source).commands[0].argv,
+                    ArgvStatus::Dynamic { reasons } if reasons.contains(&DynamicReason::BraceExpansion)
+                ),
+                "{source}"
+            );
+        }
+        // A quoted empty string keeps its word in every shell.
+        assert_eq!(
+            argv(&complete("cat ''{,} .env"), 0),
+            ["cat", "", "", ".env"]
+        );
+    }
+
+    #[test]
+    fn read_write_and_zsh_clobber_redirections_keep_their_targets() {
+        for source in [
+            "cat <>.env",
+            "cat <> .env",
+            "cat 3<>.env",
+            "{ cat; } <>.env",
+        ] {
+            let outcome = BashAnalyzer::default().analyze(source);
+            let analysis = outcome.analysis().expect("analysis");
+            let redirection = analysis
+                .commands
+                .iter()
+                .flat_map(|command| &command.redirections)
+                .chain(
+                    analysis
+                        .statement_redirections
+                        .iter()
+                        .flat_map(|statement| &statement.redirections),
+                )
+                .next()
+                .expect("redirection");
+            assert_eq!(
+                redirection.operator,
+                Some(RedirectionOperator::ReadWrite),
+                "{source}"
+            );
+            assert_eq!(target(redirection), Some(".env"), "{source}");
+        }
+
+        let analysis = complete("{ echo x; } >! .env");
+        let redirection = &analysis.statement_redirections[0].redirections[0];
+        assert_eq!(target(redirection), Some("!"));
+        assert_eq!(
+            redirection
+                .trailing_words
+                .iter()
+                .map(|word| word.literal.as_deref())
+                .collect::<Vec<_>>(),
+            [Some(".env")]
+        );
+        assert!(
+            complete("echo x > out").commands[0].redirections[0]
+                .trailing_words
+                .is_empty()
+        );
     }
 }
