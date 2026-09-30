@@ -21,7 +21,7 @@ static LOCK_TOKENS: AtomicU64 = AtomicU64::new(0);
 static HELD_LOCKS: Mutex<Vec<HeldLock>> = Mutex::new(Vec::new());
 
 /// Minimum age before an activity stamp is rewritten.
-const ACTIVITY_REFRESH: Duration = Duration::from_secs(30);
+pub(crate) const ACTIVITY_REFRESH: Duration = Duration::from_secs(30);
 
 /// Attaches an operation and path to a raw I/O result.
 pub(crate) trait IoContext<T> {
@@ -77,8 +77,10 @@ pub(crate) fn atomic_replace(path: &Path, bytes: &[u8], durability: Durability) 
 /// content becomes visible in one step through a hard link, which fails
 /// rather than replacing an existing entry. On filesystems without hard links
 /// the content is renamed into place instead; that fallback may replace a
-/// concurrently published entry, which content-addressed callers tolerate
-/// because both writers publish identical bytes.
+/// concurrently published entry. Content-addressed callers tolerate that
+/// because both writers publish identical bytes; a caller whose concurrent
+/// writers may publish different bytes must serialize publication under a
+/// lock that every writer takes.
 pub(crate) fn publish_if_absent(path: &Path, bytes: &[u8]) -> Result<bool> {
     if entry_exists(path)? {
         return Ok(false);
@@ -87,7 +89,7 @@ pub(crate) fn publish_if_absent(path: &Path, bytes: &[u8]) -> Result<bool> {
     create_private_dir_all(parent)?;
     let temporary = temporary_path(parent);
     let result = write_temporary(&temporary, bytes, Durability::Durable).and_then(|()| {
-        match std::fs::hard_link(&temporary, path) {
+        match hard_link(&temporary, path) {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false),
             Err(_) => rename_replacing(&temporary, path).map(|()| true),
@@ -101,6 +103,27 @@ pub(crate) fn publish_if_absent(path: &Path, bytes: &[u8]) -> Result<bool> {
         sync_directory(parent)?;
     }
     Ok(published)
+}
+
+#[cfg(not(test))]
+fn hard_link(original: &Path, link: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(original, link)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes this thread's `publish_if_absent` behave as on a filesystem
+    /// without hard links (FAT, exFAT, some SMB and FUSE mounts).
+    pub(crate) static WITHOUT_HARD_LINKS: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn hard_link(original: &Path, link: &Path) -> std::io::Result<()> {
+    if WITHOUT_HARD_LINKS.with(std::cell::Cell::get) {
+        return Err(std::io::Error::from(ErrorKind::Unsupported));
+    }
+    std::fs::hard_link(original, link)
 }
 
 /// Reports whether any directory entry, including a dangling symlink, exists.
@@ -347,6 +370,31 @@ impl FileLock {
             mode,
         });
         Ok(Some(Self { file, token }))
+    }
+
+    /// Reports whether `path` still names the locked file.
+    ///
+    /// A lock protects the file it was taken on. When that file has since
+    /// been moved or replaced, for example because garbage collection moved
+    /// its whole session directory, a process that opens `path` now locks a
+    /// different file and is not excluded by this lock. Only Unix exposes a
+    /// file identity to compare; elsewhere this always reports `true`.
+    pub(crate) fn is_current(&self, path: &Path) -> Result<bool> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let locked = self.file.metadata().at("inspect lock", path)?;
+            match std::fs::metadata(path) {
+                Ok(current) => Ok(current.dev() == locked.dev() && current.ino() == locked.ino()),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(error).at("inspect lock", path),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(true)
+        }
     }
 
     /// Releases the lock now, reporting an unlock failure.

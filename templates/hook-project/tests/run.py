@@ -9,11 +9,13 @@ an uncommitted template change is what gets rendered.
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import tomllib
@@ -41,6 +43,17 @@ ALL_STATE_CAPABILITIES = (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Answers a render receives when only the required identity and HookKit
+# source are given; any drift from these is a questionnaire change.
+DEFAULT_ANSWERS = {
+    "output_mode": "project",
+    "starter": "custom",
+    "harness_mode": "cross",
+    "harnesses": list(SUPPORTED_HARNESSES),
+    "aligned_hooks": ["pre_tool"],
+    "state_capabilities": [],
+    "github_actions": True,
+}
 CATALOG_ROOT = REPO_ROOT / "templates" / "hook-project" / "catalog"
 
 # The compatibility catalog is the single source for toolchain versions;
@@ -288,6 +301,16 @@ def build_cases() -> list[Case]:
                 single_data(
                     "archetype_scoped_context_once",
                     "claude-code",
+                    ["pre_tool_use"],
+                    starter="scoped_context_once",
+                    state=("session_metadata", "claim_once"),
+                ),
+            ),
+            Case(
+                "archetype_scoped_context_once_codex",
+                single_data(
+                    "archetype_scoped_context_once_codex",
+                    "codex",
                     ["pre_tool_use"],
                     starter="scoped_context_once",
                     state=("session_metadata", "claim_once"),
@@ -844,6 +867,21 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
                 f"permission requests instead of passing through in {starter_path.name}"
             )
 
+    if data["harness_mode"] == "cross":
+        # The generated catalog test must check each starter's native output,
+        # not only its exit status, so an approving or blocking starter
+        # (such as a PermissionRequest `"behavior":"allow"`) fails it.
+        catalog_test = (crate / "tests" / "aligned_catalog_protocol.rs").read_text(
+            encoding="utf-8"
+        )
+        for test in catalog_test.split("#[test]")[1:]:
+            if "assert_neutral(" not in test and "stdout().is_empty()" not in test:
+                name = re.search(r"fn (\w+)\(", test)
+                raise AcceptanceFailure(
+                    f"{case.name}: aligned catalog test "
+                    f"{name.group(1) if name else '?'} does not check the starter's output"
+                )
+
     if (
         data["harness_mode"] == "single"
         and data["starter"] == "custom"
@@ -1004,6 +1042,39 @@ def run_render_case(
     register_workspace_member(destination, case)
     validate_generated(destination, case, validation, target)
     print(f"PASS {case.name} ({time.monotonic() - started:.1f}s)", flush=True)
+
+
+def default_answers_data(name: str, hookkit_path: Path) -> dict[str, Any]:
+    """The fewest answers a render needs: every other question keeps its default."""
+    return {
+        "project_name": f"{name.replace('_', ' ').title()} hooks",
+        "dependency_source": "path",
+        "hookkit_path": str(hookkit_path),
+    }
+
+
+def copy_default_answers(
+    source: Path, destination: Path, name: str, hookkit_path: Path
+) -> Case:
+    """Render the questionnaire's defaults and return them as a checked case."""
+    copy_case(source, destination, default_answers_data(name, hookkit_path))
+    answers = load_yaml(answers_path(destination, {"output_mode": "project"}))
+    for key, expected in DEFAULT_ANSWERS.items():
+        if answers.get(key) != expected:
+            raise AcceptanceFailure(
+                f"{name}: default answers[{key!r}]={answers.get(key)!r}, expected {expected!r}"
+            )
+    return Case(name, answers)
+
+
+def run_default_answers(source: Path, root: Path, validation: str, target: Path) -> None:
+    """Render and validate the project a user gets by accepting every default."""
+    started = time.monotonic()
+    destination = root / "renders" / "default_answers"
+    case = copy_default_answers(source, destination, "default_answers", REPO_ROOT)
+    assert_render(case, destination, source)
+    validate_generated(destination, case, validation, target)
+    print(f"PASS default_answers ({time.monotonic() - started:.1f}s)", flush=True)
 
 
 def run_coexistence(source: Path, root: Path, validation: str, target: Path) -> None:
@@ -1842,27 +1913,30 @@ def run_negative_cases(source: Path, root: Path) -> None:
     print("PASS negative_validation", flush=True)
 
 
+def git_source_data(name: str, revision: str) -> dict[str, Any]:
+    """Deferred-quality answers that depend on HookKit at a public Git revision."""
+    data = deferred_quality_data(name)
+    data.pop("hookkit_path")
+    data.update(dependency_source="git", hookkit_git_rev=revision)
+    return data
+
+
 def run_dependency_source_integrity(source: Path, root: Path) -> None:
-    """Compile the public Git source and render the gated crates.io source."""
+    """Render the pinned Git and gated crates.io sources.
+
+    Both are render-only here: a Git-mode project builds against the pinned
+    revision, which lags any unmerged change to the APIs the template uses, so
+    the ``pinned`` release gate compiles it instead.
+    """
     started = time.monotonic()
     compatibility = load_yaml(CATALOG_ROOT / "compatibility.yml")["hookkit"]
     universal = available_families(SUPPORTED_HARNESSES, alignment_catalog())
 
-    git_data = deferred_quality_data("dependency_git")
-    git_data.pop("hookkit_path")
-    git_data.update(
-        dependency_source="git",
-        hookkit_git_rev=compatibility["git_revision"],
-    )
+    git_data = git_source_data("dependency_git", compatibility["git_revision"])
     git_case = Case("dependency_git", git_data)
     git_destination = root / "dependency-sources" / "git"
     copy_case(source, git_destination, git_data)
     assert_render(git_case, git_destination, source)
-    cargo_check_generated(
-        git_destination,
-        git_data,
-        root / "cargo-target-public-git-source",
-    )
 
     crates_data = cross_data(
         "dependency_crates_io", list(SUPPORTED_HARNESSES), universal
@@ -1902,6 +1976,75 @@ def run_dependency_source_integrity(source: Path, root: Path) -> None:
     print(f"PASS dependency_sources ({time.monotonic() - started:.1f}s)", flush=True)
 
 
+def export_revision(revision: str, destination: Path) -> None:
+    """Extract ``git archive <revision>`` of this repository into ``destination``."""
+    archive = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "archive", "--format=tar", revision],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if archive.returncode:
+        raise AcceptanceFailure(
+            f"cannot export HookKit revision {revision}: "
+            f"{archive.stderr.decode(errors='replace').strip()}"
+        )
+    destination.mkdir(parents=True)
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+        tar.extractall(destination, filter="data")
+
+
+def run_pinned_revision(source: Path, root: Path, revision: str | None) -> None:
+    """Compile Git-mode renders against exactly the pinned HookKit revision.
+
+    A Git-mode project builds against ``compatibility.hookkit.git_revision``,
+    not this checkout, so every other lane can pass while the pin predates an
+    API the template emits. This lane renders the default answers and one
+    maximal single-mode project per harness with path dependencies on a
+    ``git archive`` export of that revision and compiles every target, then
+    compiles a Git-source project fetched from the public repository at the
+    same revision. It is a release gate: while a change that adds
+    template-facing APIs is unmerged, the pin cannot point at it yet, so it
+    is not part of the default run.
+    """
+    started = time.monotonic()
+    compatibility = load_yaml(CATALOG_ROOT / "compatibility.yml")["hookkit"]
+    revision = revision or str(compatibility["git_revision"])
+    export = root / "pinned-hookkit"
+    export_revision(revision, export)
+    events = event_catalog()
+    renders = [("pinned_default", None)]
+    for harness in SUPPORTED_HARNESSES:
+        name = f"pinned_single_{harness.replace('-', '_')}_maximal"
+        data = single_data(name, harness, events[harness])
+        data["hookkit_path"] = str(export)
+        renders.append((name, data))
+    target = root / "cargo-target-pinned-revision"
+    for name, data in renders:
+        destination = root / "pinned" / name
+        if data is None:
+            data = copy_default_answers(source, destination, name, export).data
+        else:
+            copy_case(source, destination, data)
+        try:
+            cargo_check_generated(destination, data, target)
+        except AcceptanceFailure as error:
+            raise AcceptanceFailure(
+                f"{name} does not compile against the pinned HookKit revision "
+                f"{revision}; repin compatibility.hookkit.git_revision to a main "
+                f"commit that has every API the template uses (see RELEASE.md)\n{error}"
+            ) from error
+        print(f"PASS {name} against {revision}", flush=True)
+
+    git_data = git_source_data("pinned_public_git", revision)
+    git_destination = root / "pinned" / "public-git"
+    copy_case(source, git_destination, git_data)
+    assert_render(Case("pinned_public_git", git_data), git_destination, source)
+    cargo_check_generated(git_destination, git_data, root / "cargo-target-public-git-source")
+    print(f"PASS pinned_public_git against {revision}", flush=True)
+    print(f"PASS pinned_revision ({time.monotonic() - started:.1f}s)", flush=True)
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1916,7 +2059,15 @@ def parse_arguments() -> argparse.Namespace:
         default=[],
         help=(
             "run one named render case (repeatable); special names: "
-            "coexistence, update, negative, sources"
+            "defaults, coexistence, update, negative, sources, and pinned "
+            "(release gate; only runs when named)"
+        ),
+    )
+    parser.add_argument(
+        "--pinned-revision",
+        help=(
+            "HookKit revision for the pinned case instead of the compatibility "
+            "catalog's git_revision, for example to try a candidate repin"
         ),
     )
     parser.add_argument("--list", action="store_true", help="list case names and exit")
@@ -1935,7 +2086,7 @@ def main() -> int:
             f"Copier {COPIER_VERSION} is required; wrapper supplied {copier.__version__}"
         )
     cases = build_cases()
-    special = ("coexistence", "update", "negative", "sources")
+    special = ("defaults", "coexistence", "update", "negative", "sources", "pinned")
     if arguments.list:
         print("\n".join([case.name for case in cases] + list(special)))
         return 0
@@ -1959,6 +2110,8 @@ def main() -> int:
         target = root / "cargo-target"
         for case in selected:
             run_render_case(case, source, root, arguments.validation, target)
+        if run_special("defaults"):
+            run_default_answers(source, root, arguments.validation, target)
         if run_special("coexistence"):
             run_coexistence(source, root, arguments.validation, target)
         if run_special("update"):
@@ -1970,6 +2123,8 @@ def main() -> int:
             run_negative_cases(source, root)
         if run_special("sources"):
             run_dependency_source_integrity(source, root)
+        if "pinned" in requested:
+            run_pinned_revision(source, root, arguments.pinned_revision)
     finally:
         if cleanup is not None:
             cleanup.cleanup()

@@ -11,9 +11,14 @@
 # - a vendored Git tree is fetched at its pinned revision and compared with the
 #   vendored MANIFEST.sha256 (evidence integrity), then fetched at the
 #   upstream default branch's HEAD and compared again (drift);
-# - a pinned-revision Git tree whose tree object differs at HEAD is listed for
-#   behavioral review without failing the run; and
-# - a URL with a recorded content_sha256 is fetched and hashed.
+# - a pinned-revision Git tree or file whose object differs at HEAD is listed
+#   for behavioral review without failing the run; and
+# - a URL with a recorded content_sha256 is fetched and hashed. A GitHub file
+#   page arrives as its raw.githubusercontent.com URL, because the page itself
+#   is HTML with per-request content. When a later selected retrieval of the
+#   same URL recorded a newer hash and cited this one after reviewing the
+#   difference, matching that newer hash is reported as acknowledged drift
+#   rather than failing the run; a successor snapshot should still pin it.
 #
 # Exit status: 0 when nothing drifted, 1 when drift or an integrity mismatch
 # was found, and 2 when discovery itself failed (for example, on a network
@@ -134,7 +139,7 @@ check_pinned_tree() {
 }
 
 check_content_hash() {
-  local label=$1 url=$2 recorded=$3 reproducibility=$4 current
+  local label=$1 url=$2 recorded=$3 reproducibility=$4 acknowledged=$5 current
   # Recorded hashes cover the decoded body. --compressed decodes a response the
   # server content-encodes even unasked (antigravity.google does, sometimes),
   # and is a no-op for identity responses.
@@ -142,6 +147,11 @@ check_content_hash() {
     | sha256_stream)" || fail "$label: cannot fetch $url"
   if [[ "$current" == "$recorded" ]]; then
     printf 'ok %s: %s still hashes to %s\n' "$label" "$url" "$recorded"
+    return
+  fi
+  if [[ "$acknowledged" != - && "$current" == "$acknowledged" ]]; then
+    printf 'acknowledged %s: %s hashes to %s, recorded %s; a later selected retrieval pinned %s after review, so cut a successor snapshot that pins it\n' \
+      "$label" "$url" "$current" "$recorded" "$acknowledged"
     return
   fi
   drift=1
@@ -157,7 +167,7 @@ sources="$(cd "$repo_root" && cargo xtask contracts upstream-sources)" \
 
 printf 'Upstream contract drift report (non-mutating; see contracts/MAINTENANCE.md)\n'
 while IFS=$'\t' read -r harness snapshot source reproducibility url revision content_sha256 \
-  clone_url path vendor_dir; do
+  clone_url path vendor_dir acknowledged_sha256; do
   label="$harness/$snapshot/$source"
   if [[ "$vendor_dir" != - ]]; then
     check_vendored_tree "$label" "$clone_url" "$path" "$revision" "$vendor_dir"
@@ -165,7 +175,7 @@ while IFS=$'\t' read -r harness snapshot source reproducibility url revision con
     check_pinned_tree "$label" "$clone_url" "$path" "$revision"
   fi
   if [[ "$content_sha256" != - ]]; then
-    check_content_hash "$label" "$url" "$content_sha256" "$reproducibility"
+    check_content_hash "$label" "$url" "$content_sha256" "$reproducibility" "$acknowledged_sha256"
   fi
   if [[ "$vendor_dir" == - && "$content_sha256" == - && ( "$clone_url" == - || "$revision" == - ) ]]; then
     printf 'skip %s: %s records no revision or content hash to compare\n' "$label" "$url"

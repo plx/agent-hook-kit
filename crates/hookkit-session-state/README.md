@@ -34,6 +34,7 @@ $TMPDIR/agent-hook-kit-<uid>/session-state/   StateRoot::default() on Unix
           pending/*.json
         entities/<entity-name>/v<entity-version>/
           descriptor.json
+          descriptor.lock
           active-generation.json
           generations/*.ndjson
           checkpoint.json
@@ -46,13 +47,23 @@ $TMPDIR/agent-hook-kit-<uid>/session-state/   StateRoot::default() on Unix
 
 The default root is per user. On Unix, `StateRoot::default()` is
 `$TMPDIR/agent-hook-kit-<uid>/session-state` (`/tmp` when `TMPDIR` is unset).
-HookKit creates `agent-hook-kit-<uid>` owner-only and refuses to use one owned
-by another user, so users sharing `/tmp` cannot lock each other out or tamper
-with each other's state. Elsewhere the default is
-`agent-hook-kit\session-state` in the already per-user temporary directory.
+HookKit creates `agent-hook-kit-<uid>` owner-only, refuses to use one owned by
+another user, makes an existing one owner-only again, and requires every
+directory from it down to the root to be a real directory owned by the current
+user, so users sharing `/tmp` cannot lock each other out or tamper with each
+other's state. Elsewhere the default is `agent-hook-kit\session-state` in the
+already per-user temporary directory.
+
+`StateRoot::per_user(relative)` gives a tool-specific root the same
+protection, for example `StateRoot::per_user("generated/my-hook")` for
+`$TMPDIR/agent-hook-kit-<uid>/generated/my-hook`; `StateRoot::default()` is
+`StateRoot::per_user("session-state")`. `StateRoot::prepare` creates and
+checks a root without opening a session, which is useful before passing its
+path to a program that takes a plain `--state-dir`.
+
 An explicit `StateRoot::new(path)`, such as a `--state-dir` value, is used as
-given: HookKit creates it owner-only when it is missing, rejects it when it is
-a symlink, and never changes the permissions of an existing directory.
+given: HookKit creates it and any missing ancestors owner-only, rejects it when
+it is a symlink, and never changes the permissions of an existing directory.
 
 A family is an explicit coordination boundary. Unrelated hooks choose different
 family names and never share state files. Hooks that intentionally cooperate
@@ -158,7 +169,12 @@ deliberate option rather than a legacy compatibility format. Its strengths are:
   pending coalesces into one entry;
 - acknowledgement deletes the exact file versions a snapshot captured, so an
   identical record re-appended after the snapshot stays pending as a new
-  occurrence;
+  occurrence. On Unix a batch keeps the files of its first 64 captured
+  records open until it is acknowledged or dropped, so no later file can
+  reuse their inode numbers. Any other captured version is identified by its
+  device and inode numbers (Unix only), modification time, and length, so an
+  identical re-append within the filesystem's timestamp granularity that is
+  given a reused inode can be acknowledged with it;
 - an interrupted write never produces a partial record, and a record that
   cannot be decoded is reported through `RecordJournalBatch::undecodable`
   instead of failing the snapshot; it stays pending unless the consumer calls
@@ -260,7 +276,9 @@ can compact retained monotonic state; manual compaction is the default for an
 
 Opening an entity publishes its descriptor without replacing an existing one,
 so two hooks that disagree on the mode cannot both succeed, even when both open
-the entity for the first time at once.
+the entity for the first time at once. First-time publication is serialized
+under `descriptor.lock`, so this also holds on filesystems without hard links,
+where publication falls back to a rename.
 
 ## Collection affordances and concrete entities
 
@@ -376,13 +394,17 @@ symlinks. Advisory locks work only when all consumers use the same resource
 name. Do not share an entity directory between different event or aggregate
 schemas without bumping its version.
 
-`SessionState::gc` renames a stale session into `.trash/` before deleting it,
-so a hook opening that session concurrently sees either the complete session
-or a fresh one. A session removed by a concurrent pass is skipped, and a
-failure affecting one session is counted in `GcReport::failed` without
-stopping the pass. Every `ensure` or `open` refreshes the session's
-`activity/_hookkit.stamp`, and opening a family refreshes that family's stamp.
-Garbage collection can still race a hook whose lifetime exceeds the retention
-age; use a conservative window and an external maintenance point. Transient
-state loss causes conservative repeated work and lower-precision metadata, not
-recovery of authoritative data.
+`SessionState::gc` checks each session's age while holding its exclusive
+`metadata.lock`, skips a session whose lock is busy, and renames a stale
+session into `.trash/` before deleting it. Every `ensure` or `open` refreshes
+the session's `activity/_hookkit.stamp` while holding that lock, and opening a
+family refreshes that family's stamp, so a hook that opened the session within
+the retention window keeps it, and a hook opening it concurrently sees either
+the complete session or a fresh one. Stamps are rewritten at most every 30
+seconds, so a shorter retention window is raised to 30 seconds. A session
+removed by a concurrent pass is skipped, and a failure affecting one session is
+counted in `GcReport::failed` without stopping the pass. Garbage collection
+can still remove a session from under a hook that keeps working with it for
+longer than the retention window; use a conservative window and an external
+maintenance point. Transient state loss causes conservative repeated work and
+lower-precision metadata, not recovery of authoritative data.

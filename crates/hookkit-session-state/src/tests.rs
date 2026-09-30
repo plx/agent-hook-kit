@@ -399,6 +399,72 @@ fn record_journal_keeps_an_identical_record_re_appended_after_the_snapshot() {
     let _ = std::fs::remove_dir_all(root.path());
 }
 
+#[cfg(unix)]
+#[test]
+fn record_journal_batches_pin_captured_versions_so_identities_are_not_reused() {
+    use std::os::unix::fs::MetadataExt;
+    let root = temporary_root("journal-pin");
+    let journal = family(&root).record_journal("dirty").unwrap();
+    let record = Record {
+        path: "a.rs".into(),
+    };
+    journal.append("path:a.rs", &record).unwrap();
+    let batch = journal.snapshot::<Record>().unwrap();
+    // The first identical re-append replaces the captured file. Unless the
+    // batch keeps it open, ext4 and XFS can hand its inode number to the
+    // second re-append, whose length and coarse timestamp also match.
+    journal.append("path:a.rs", &record).unwrap();
+    journal.append("path:a.rs", &record).unwrap();
+    let entry = &batch.entries()[0];
+    let pinned = entry
+        .captured
+        ._pin
+        .as_ref()
+        .expect("the first records of a batch are pinned")
+        .metadata()
+        .unwrap();
+    assert_eq!(pinned.nlink(), 0, "the replaced version stays allocated");
+    let current = std::fs::metadata(
+        journal
+            .directory
+            .join(format!("{}.json", entry.id().as_str())),
+    )
+    .unwrap();
+    assert_ne!((current.dev(), current.ino()), (pinned.dev(), pinned.ino()));
+    batch.acknowledge().unwrap();
+    assert_eq!(journal.snapshot::<Record>().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(root.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn record_journal_batches_pin_a_bounded_number_of_records() {
+    let root = temporary_root("journal-pin-bound");
+    let journal = family(&root).record_journal("dirty").unwrap();
+    let total = PINNED_RECORDS + 3;
+    for index in 0..total {
+        let record = Record {
+            path: format!("{index}.rs"),
+        };
+        journal.append(&format!("path:{index}"), &record).unwrap();
+    }
+    let batch = journal.snapshot::<Record>().unwrap();
+    assert_eq!(batch.len(), total);
+    let pinned = batch
+        .entries()
+        .iter()
+        .filter(|entry| entry.captured._pin.is_some())
+        .count();
+    assert_eq!(
+        pinned, PINNED_RECORDS,
+        "a large batch cannot exhaust descriptors"
+    );
+    // Unpinned records are still acknowledged by their identity.
+    batch.acknowledge().unwrap();
+    assert!(journal.snapshot::<Record>().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(root.path());
+}
+
 #[test]
 fn record_journal_snapshot_isolates_vanished_and_undecodable_records() {
     let root = temporary_root("journal-fragile");
@@ -596,7 +662,7 @@ fn mode(path: &Path) -> u32 {
 #[test]
 fn default_root_is_scoped_to_the_effective_user() {
     let root = StateRoot::default();
-    assert!(root.per_user);
+    assert_eq!(root.per_user_base.as_deref(), root.path().parent());
     assert!(root.path().starts_with(std::env::temp_dir()));
     assert!(
         root.path().ends_with(
@@ -618,7 +684,7 @@ fn per_user_root_rejects_a_base_owned_by_another_user() {
     // every supported Unix.
     let root = StateRoot {
         path: PathBuf::from("/hookkit-session-state-test"),
-        per_user: true,
+        per_user_base: Some(PathBuf::from("/")),
     };
     let error = SessionState::open(
         HarnessId::CODEX,
@@ -642,7 +708,7 @@ fn per_user_root_is_private_and_retightened_when_owned() {
     let base = parent.join("agent-hook-kit-test");
     let root = StateRoot {
         path: base.join("session-state"),
-        per_user: true,
+        per_user_base: Some(base.clone()),
     };
     let open = || {
         SessionState::open(
@@ -658,6 +724,93 @@ fn per_user_root_is_private_and_retightened_when_owned() {
     std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
     open();
     assert_eq!(mode(&base), 0o700);
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[test]
+fn per_user_roots_accept_only_plain_relative_subdirectories() {
+    let root = StateRoot::per_user(Path::new("generated").join("my-hook")).unwrap();
+    let default = StateRoot::default();
+    assert_eq!(root.per_user_base, default.per_user_base);
+    assert_eq!(
+        root.path(),
+        default
+            .path()
+            .parent()
+            .unwrap()
+            .join("generated")
+            .join("my-hook")
+    );
+    for invalid in ["", ".", "./", "..", "a/../b", "/absolute"] {
+        assert!(
+            matches!(
+                StateRoot::per_user(invalid),
+                Err(StateError::InvalidRelativePath(_))
+            ),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn per_user_subdirectory_roots_get_the_per_user_checks() {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = temporary_root("per-user-child").path().to_path_buf();
+    std::fs::create_dir_all(&parent).unwrap();
+    let base = parent.join("agent-hook-kit-test");
+    let root = StateRoot {
+        path: base.join("generated/my-hook"),
+        per_user_base: Some(base.clone()),
+    };
+    let open = || {
+        SessionState::open(
+            HarnessId::CODEX,
+            SessionIdentity::Session("s".into()),
+            root.clone(),
+        )
+    };
+
+    // Missing directories are created owner-only all the way down.
+    open().unwrap();
+    for directory in [&base, &base.join("generated"), &root.path().to_path_buf()] {
+        assert_eq!(mode(directory), 0o700, "{}", directory.display());
+    }
+
+    // A base left group- and world-writable is tightened again.
+    for directory in [&base, &base.join("generated"), &root.path().to_path_buf()] {
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o777)).unwrap();
+    }
+    open().unwrap();
+    assert_eq!(mode(&base), 0o700);
+
+    // A planted intermediate symlink is refused instead of followed.
+    let elsewhere = parent.join("elsewhere");
+    std::fs::create_dir_all(elsewhere.join("my-hook")).unwrap();
+    std::fs::remove_dir_all(base.join("generated")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, base.join("generated")).unwrap();
+    assert!(matches!(open(), Err(StateError::SymlinkStateRoot(_))));
+    assert!(matches!(
+        root.prepare(),
+        Err(StateError::SymlinkStateRoot(_))
+    ));
+    assert!(!elsewhere.join("my-hook/v1").exists());
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[cfg(unix)]
+#[test]
+fn prepare_creates_and_returns_the_root_without_opening_a_session() {
+    let parent = temporary_root("prepare").path().to_path_buf();
+    let base = parent.join("agent-hook-kit-test");
+    let root = StateRoot {
+        path: base.join("generated/prepared"),
+        per_user_base: Some(base.clone()),
+    };
+    assert_eq!(root.prepare().unwrap(), root.path());
+    assert_eq!(mode(&base), 0o700);
+    assert_eq!(mode(root.path()), 0o700);
+    assert!(!root.path().join("v1").exists());
     let _ = std::fs::remove_dir_all(parent);
 }
 
@@ -689,6 +842,19 @@ fn explicit_root_permissions_are_left_alone_and_created_directories_are_private(
         assert_eq!(mode(&directory), 0o700, "{}", directory.display());
     }
     let _ = std::fs::remove_dir_all(root.path());
+
+    // Missing ancestors of an explicit root are created owner-only too.
+    let parent = temporary_root("explicit-ancestors").path().to_path_buf();
+    let nested = StateRoot::new(parent.join("missing/state"));
+    nested.prepare().unwrap();
+    for directory in [
+        &parent,
+        &parent.join("missing"),
+        &nested.path().to_path_buf(),
+    ] {
+        assert_eq!(mode(directory), 0o700, "{}", directory.display());
+    }
+    let _ = std::fs::remove_dir_all(parent);
 }
 
 #[cfg(unix)]
@@ -739,6 +905,96 @@ fn gc_removes_only_stale_sessions_and_sweeps_leftover_trash() {
 
     // A collected session reopens cleanly.
     assert!(open("stale").metadata().is_ok());
+    let _ = std::fs::remove_dir_all(root.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn gc_skips_a_session_while_its_metadata_lock_is_held() {
+    let root = temporary_root("gc-busy");
+    let state = SessionState::open(
+        HarnessId::CODEX,
+        SessionIdentity::Session("busy".into()),
+        root.clone(),
+    )
+    .unwrap();
+    backdate_session(state.directory(), Duration::from_secs(7200));
+
+    // Another process between taking the lock and stamping the session.
+    let lock_path = metadata::lock_path(state.directory());
+    let (locked, release) = (Arc::new(Barrier::new(2)), Arc::new(Barrier::new(2)));
+    let holder = {
+        let (locked, release) = (Arc::clone(&locked), Arc::clone(&release));
+        std::thread::spawn(move || {
+            let _lock = FileLock::exclusive(&lock_path).unwrap();
+            locked.wait();
+            release.wait();
+        })
+    };
+    locked.wait();
+    let report = SessionState::gc(&root, Duration::from_secs(3600)).unwrap();
+    assert_eq!((report.scanned, report.removed), (1, 0), "{report:?}");
+    assert!(state.metadata_path().is_file());
+    release.wait();
+    holder.join().unwrap();
+
+    let report = SessionState::gc(&root, Duration::from_secs(3600)).unwrap();
+    assert_eq!((report.scanned, report.removed), (1, 1), "{report:?}");
+    let _ = std::fs::remove_dir_all(root.path());
+}
+
+#[test]
+fn gc_never_collects_a_session_within_the_stamp_refresh_interval() {
+    let root = temporary_root("gc-short-age");
+    let state = SessionState::open(
+        HarnessId::CODEX,
+        SessionIdentity::Session("fresh".into()),
+        root.clone(),
+    )
+    .unwrap();
+    // A stamp younger than the refresh interval is not rewritten, so a zero
+    // retention window would otherwise collect a session opened just now.
+    std::thread::sleep(Duration::from_millis(20));
+    let report = SessionState::gc(&root, Duration::ZERO).unwrap();
+    assert_eq!((report.scanned, report.removed), (1, 0), "{report:?}");
+    assert!(state.metadata().is_ok());
+    let _ = std::fs::remove_dir_all(root.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_opener_waiting_while_gc_moves_the_session_starts_fresh() {
+    let root = temporary_root("gc-moved");
+    let identity = SessionIdentity::Session("moved".into());
+    let state = SessionState::open(HarnessId::CODEX, identity.clone(), root.clone()).unwrap();
+    let directory = state.directory().to_path_buf();
+    let lock_path = metadata::lock_path(&directory);
+    let lock = FileLock::exclusive(&lock_path).unwrap();
+
+    let opener = {
+        let root = root.clone();
+        std::thread::spawn(move || SessionState::open(HarnessId::CODEX, identity, root))
+    };
+    // Let the opener block on the lock, then move the session as gc does.
+    std::thread::sleep(Duration::from_millis(100));
+    let trash = root.path().join(".trash/moved");
+    std::fs::create_dir_all(trash.parent().unwrap()).unwrap();
+    std::fs::rename(&directory, &trash).unwrap();
+    assert!(!lock.is_current(&lock_path).unwrap());
+    drop(lock);
+
+    let reopened = run_with_timeout(move || opener.join().unwrap()).unwrap();
+    assert_eq!(reopened.directory(), directory);
+    assert!(reopened.metadata().is_ok());
+    assert!(
+        directory
+            .join("activity")
+            .join(SESSION_ACTIVITY_STAMP)
+            .is_file()
+    );
+    let current = FileLock::exclusive(&lock_path).unwrap();
+    assert!(current.is_current(&lock_path).unwrap());
+    drop(current);
     let _ = std::fs::remove_dir_all(root.path());
 }
 
@@ -1323,6 +1579,38 @@ fn entity_modes_are_fixed_even_for_concurrent_first_opens() {
             let scope = scope.clone();
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
+                barrier.wait();
+                scope
+                    .entity::<ModifiedFiles>(
+                        EntityId::new(format!("race-{trial}"), 1).unwrap(),
+                        mode,
+                    )
+                    .is_ok()
+            })
+        });
+        let opened = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .filter(|opened| *opened)
+            .count();
+        assert_eq!(opened, 1, "trial {trial}");
+    }
+    let _ = std::fs::remove_dir_all(root.path());
+}
+
+#[test]
+fn entity_modes_are_fixed_for_concurrent_first_opens_without_hard_links() {
+    let root = temporary_root("entity-descriptor-no-links");
+    let scope = family(&root).session_scope().unwrap();
+    for trial in 0..20 {
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = [EntityMode::Windowed, EntityMode::Monotonic].map(|mode| {
+            let scope = scope.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                // FAT, exFAT, and some SMB and FUSE mounts have no hard links,
+                // so publication falls back to a replacing rename.
+                storage::WITHOUT_HARD_LINKS.with(|flag| flag.set(true));
                 barrier.wait();
                 scope
                     .entity::<ModifiedFiles>(

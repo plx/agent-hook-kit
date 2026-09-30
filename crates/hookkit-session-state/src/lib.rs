@@ -41,10 +41,10 @@ use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use storage::{
-    Durability, FileIdentity, FileLock, IoContext, LockMode, LockWait, atomic_replace,
-    create_private_dir, create_private_dir_all, entry_exists, publish_if_absent, read_optional,
-    sha256, sha256_bytes, touch_activity, unique_id, validate_identifier, validate_name,
-    validate_relative_path,
+    ACTIVITY_REFRESH, Durability, FileIdentity, FileLock, IoContext, LockMode, LockWait,
+    atomic_replace, create_private_dir, create_private_dir_all, entry_exists, publish_if_absent,
+    read_optional, sha256, sha256_bytes, touch_activity, unique_id, validate_identifier,
+    validate_name, validate_relative_path,
 };
 
 /// Result alias for session-state operations.
@@ -76,7 +76,7 @@ pub enum StateError {
     #[error("state root must not be a symbolic link: {0}")]
     SymlinkStateRoot(PathBuf),
 
-    /// The per-user default state directory is not private to this user.
+    /// A per-user state directory is not private to this user.
     #[error("state directory {} is not private to the current user: {reason}", .path.display())]
     UnsafeStateRoot {
         /// Directory that failed the ownership check.
@@ -168,61 +168,104 @@ impl SessionIdentity {
 /// Configured parent directory for all versioned session state.
 pub struct StateRoot {
     path: PathBuf,
-    // Only Unix has a shared temporary directory that needs an owner check.
+    /// The per-user directory that contains a per-user root. Only Unix has a
+    /// shared temporary directory that needs its owner checked.
     #[cfg_attr(not(unix), allow(dead_code))]
-    per_user: bool,
+    per_user_base: Option<PathBuf>,
 }
 
 impl StateRoot {
     /// Creates a state-root configuration without touching the filesystem.
     ///
-    /// An explicit root is used as given: HookKit creates it owner-only when
-    /// it is missing, rejects it when it is a symbolic link, and never changes
-    /// the permissions of an existing directory. Directories HookKit creates
-    /// beneath it are owner-only.
+    /// An explicit root is used as given: HookKit creates it, and any missing
+    /// ancestors, owner-only, rejects it when it is a symbolic link, and never
+    /// changes the permissions of an existing directory. Directories HookKit
+    /// creates beneath it are owner-only.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
-            per_user: false,
+            per_user_base: None,
         }
+    }
+
+    /// Creates a root at `relative` inside HookKit's per-user directory,
+    /// without touching the filesystem.
+    ///
+    /// On Unix the per-user directory is `$TMPDIR/agent-hook-kit-<uid>`
+    /// (`/tmp` when `TMPDIR` is unset). A per-user root gets the same
+    /// protection as [`StateRoot::default`], which is
+    /// `StateRoot::per_user("session-state")`: the per-user directory is
+    /// created owner-only and an existing one must be owned by the effective
+    /// user and is made owner-only again, and every directory from it down to
+    /// the root must be a real directory owned by the effective user. Users
+    /// who share a world-writable temporary directory therefore cannot lock
+    /// each other out or plant state for each other. Elsewhere the per-user
+    /// directory is `agent-hook-kit` in the already per-user temporary
+    /// directory.
+    ///
+    /// Use this for a tool-specific default beside HookKit's own, such as
+    /// `StateRoot::per_user("generated/my-hook")`. `relative` must name at
+    /// least one directory and contain only normal components: no root,
+    /// prefix, `.`, or `..`.
+    pub fn per_user(relative: impl AsRef<Path>) -> Result<Self> {
+        let relative = relative.as_ref();
+        if !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+            || relative.components().next().is_none()
+        {
+            return Err(StateError::InvalidRelativePath(relative.to_path_buf()));
+        }
+        let base = per_user_directory();
+        Ok(Self {
+            path: base.join(relative),
+            per_user_base: Some(base),
+        })
     }
 
     /// Returns the configured root path.
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Creates and validates the root without opening a session, returning
+    /// its path.
+    ///
+    /// [`SessionState::ensure`] and [`SessionState::open`] do this
+    /// themselves. Call it before handing [`StateRoot::path`] to code that
+    /// takes a plain directory, such as another program's `--state-dir`, so
+    /// a per-user root is checked even though that code builds its own
+    /// [`StateRoot::new`].
+    pub fn prepare(&self) -> Result<&Path> {
+        prepare_root(self)?;
+        Ok(&self.path)
+    }
 }
 
 impl Default for StateRoot {
-    /// Returns the per-user default root.
+    /// Returns the per-user default root, `StateRoot::per_user("session-state")`.
     ///
     /// On Unix this is `$TMPDIR/agent-hook-kit-<uid>/session-state` (`/tmp`
-    /// when `TMPDIR` is unset). The `agent-hook-kit-<uid>` directory is
-    /// created owner-only, and an existing one must be owned by the effective
-    /// user, so users who share a world-writable temporary directory cannot
-    /// lock each other out or tamper with each other's state. Elsewhere it is
-    /// `agent-hook-kit\session-state` in the already per-user temporary
-    /// directory.
+    /// when `TMPDIR` is unset). Elsewhere it is `agent-hook-kit\session-state`
+    /// in the already per-user temporary directory. See
+    /// [`StateRoot::per_user`] for the ownership checks.
     fn default() -> Self {
+        let base = per_user_directory();
         Self {
-            path: default_root_path(),
-            per_user: true,
+            path: base.join("session-state"),
+            per_user_base: Some(base),
         }
     }
 }
 
 #[cfg(unix)]
-fn default_root_path() -> PathBuf {
-    std::env::temp_dir()
-        .join(format!("agent-hook-kit-{}", current_uid()))
-        .join("session-state")
+fn per_user_directory() -> PathBuf {
+    std::env::temp_dir().join(format!("agent-hook-kit-{}", current_uid()))
 }
 
 #[cfg(not(unix))]
-fn default_root_path() -> PathBuf {
-    std::env::temp_dir()
-        .join("agent-hook-kit")
-        .join("session-state")
+fn per_user_directory() -> PathBuf {
+    std::env::temp_dir().join("agent-hook-kit")
 }
 
 #[cfg(unix)]
@@ -331,7 +374,6 @@ impl SessionState {
             &state.identity,
             Some(context),
         )?;
-        state.record_session_activity()?;
         Ok(state)
     }
 
@@ -348,7 +390,6 @@ impl SessionState {
     pub fn open(harness: HarnessId, identity: SessionIdentity, root: StateRoot) -> Result<Self> {
         let state = Self::open_uninitialized(harness, identity, root)?;
         metadata::ensure_metadata(&state.directory, &state.harness, &state.identity, None)?;
-        state.record_session_activity()?;
         Ok(state)
     }
 
@@ -382,14 +423,6 @@ impl SessionState {
             identity,
             directory,
         })
-    }
-
-    /// Keeps the session visibly alive for [`SessionState::gc`] even when no
-    /// family is opened and the materialized metadata does not change.
-    fn record_session_activity(&self) -> Result<()> {
-        let activity = self.directory.join("activity");
-        create_private_dir_all(&activity)?;
-        touch_activity(&activity.join(SESSION_ACTIVITY_STAMP))
     }
 
     /// Reads the current library-owned session metadata snapshot.
@@ -481,18 +514,30 @@ impl SessionState {
     /// The scan is limited to the versioned subtree under `root`. The session
     /// directory, the library's own activity stamp (refreshed by every
     /// [`SessionState::ensure`] and [`SessionState::open`]), and family
-    /// activity stamps participate in the age calculation.
+    /// activity stamps participate in the age calculation. Stamps are
+    /// rewritten at most every 30 seconds, so a `max_age` shorter than that
+    /// is raised to 30 seconds; otherwise a session opened moments ago could
+    /// look stale.
     ///
-    /// A stale session is first renamed into a trash directory under `root`,
-    /// so a hook opening it concurrently sees either the complete session or
-    /// a fresh one, and is then deleted. Sessions already removed by a
-    /// concurrent pass are skipped. A failure affecting one session is counted
-    /// in [`GcReport::failed`] and does not stop the pass; leftover trash is
+    /// Each session is checked while holding its exclusive metadata lock,
+    /// and a session whose lock is busy is skipped. Opening a session takes
+    /// that lock and refreshes the activity stamp before releasing it, so a
+    /// hook that has opened a session within the last `max_age` keeps it: a
+    /// concurrent opener sees either the complete session or, when the pass
+    /// wins the lock, a fresh one. A hook that keeps working with a session
+    /// for longer than `max_age` after opening it can still lose it, so
+    /// choose a retention window well beyond the longest hook run.
+    ///
+    /// A stale session is renamed into a trash directory under `root` and
+    /// then deleted. Sessions already removed by a concurrent pass are
+    /// skipped. A failure affecting one session is counted in
+    /// [`GcReport::failed`] and does not stop the pass; leftover trash is
     /// retried by the next pass.
     pub fn gc(root: &StateRoot, max_age: Duration) -> Result<GcReport> {
         if !entry_exists(root.path())? {
             return Ok(GcReport::default());
         }
+        let max_age = max_age.max(ACTIVITY_REFRESH);
         verify_root(root)?;
         let mut report = GcReport::default();
         let trash = root.path().join(".trash");
@@ -843,7 +888,7 @@ impl JournalEntryId {
 pub struct RecordJournalEntry<T> {
     id: JournalEntryId,
     value: T,
-    identity: FileIdentity,
+    captured: CapturedVersion,
 }
 
 impl<T> RecordJournalEntry<T> {
@@ -872,8 +917,30 @@ impl<T> RecordJournalEntry<T> {
 pub struct UndecodableRecord {
     id: JournalEntryId,
     error: String,
-    identity: FileIdentity,
+    captured: CapturedVersion,
 }
+
+/// The exact file version a snapshot read.
+///
+/// On Unix the open file of each of a batch's first [`PINNED_RECORDS`]
+/// records is kept for as long as the batch exists. Its inode then stays
+/// allocated even after a re-append replaces the path, so no later record
+/// can be given the same device and inode numbers and be mistaken for the
+/// captured version.
+#[derive(Debug)]
+struct CapturedVersion {
+    identity: FileIdentity,
+    #[cfg(unix)]
+    _pin: Option<std::fs::File>,
+}
+
+/// How many captured records a batch keeps open.
+///
+/// Pinning every record of a large batch could exhaust a small descriptor
+/// limit (256 is a common default) and then fail every snapshot, which would
+/// leave the journal unconsumable. Records beyond this bound are identified
+/// by device, inode, modification time, and length alone.
+const PINNED_RECORDS: usize = 64;
 
 impl UndecodableRecord {
     /// Returns the entry identity taken from its file name.
@@ -894,6 +961,14 @@ impl UndecodableRecord {
 /// exact file versions it captured while tolerating files already removed by
 /// a peer. A record re-appended after the snapshot is a new occurrence and
 /// stays pending even though it has the same entry ID.
+///
+/// On Unix a batch keeps one open file for each of its first 64 captured
+/// records until it is acknowledged or dropped, which makes those captured
+/// versions unambiguous. A version is otherwise identified by its device and
+/// inode numbers (Unix only), modification time, and length, so a
+/// byte-identical record re-appended within the filesystem's timestamp
+/// granularity of the captured append, and given a reused inode, can be
+/// acknowledged together with it.
 pub struct RecordJournalBatch<T> {
     directory: PathBuf,
     lock: PathBuf,
@@ -941,19 +1016,20 @@ impl RecordJournal {
                 continue;
             };
             let id = JournalEntryId(id.to_string());
-            let Some((identity, bytes)) = read_captured(&path)? else {
+            let pin = entries.len() + undecodable.len() < PINNED_RECORDS;
+            let Some((captured, bytes)) = read_captured(&path, pin)? else {
                 continue;
             };
             match serde_json::from_slice(&bytes) {
                 Ok(value) => entries.push(RecordJournalEntry {
                     id,
                     value,
-                    identity,
+                    captured,
                 }),
                 Err(error) => undecodable.push(UndecodableRecord {
                     id,
                     error: error.to_string(),
-                    identity,
+                    captured,
                 }),
             }
         }
@@ -966,9 +1042,10 @@ impl RecordJournal {
     }
 }
 
-/// Opens a record once and returns the identity and bytes of that exact file
-/// version, or `None` when it has already been removed.
-fn read_captured(path: &Path) -> Result<Option<(FileIdentity, Vec<u8>)>> {
+/// Opens a record once and returns that exact file version and its bytes, or
+/// `None` when it has already been removed. With `pin`, the version keeps the
+/// file open.
+fn read_captured(path: &Path, pin: bool) -> Result<Option<(CapturedVersion, Vec<u8>)>> {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -978,7 +1055,14 @@ fn read_captured(path: &Path) -> Result<Option<(FileIdentity, Vec<u8>)>> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .at("read journal record", path)?;
-    Ok(Some((identity, bytes)))
+    #[cfg(not(unix))]
+    let _ = pin;
+    let captured = CapturedVersion {
+        identity,
+        #[cfg(unix)]
+        _pin: pin.then_some(file),
+    };
+    Ok(Some((captured, bytes)))
 }
 
 impl<T> RecordJournalBatch<T> {
@@ -1013,7 +1097,7 @@ impl<T> RecordJournalBatch<T> {
         let targets = self
             .entries
             .iter()
-            .map(|entry| (&entry.id, &entry.identity))
+            .map(|entry| (&entry.id, &entry.captured.identity))
             .collect::<Vec<_>>();
         remove_captured(&self.directory, &self.lock, &targets)
     }
@@ -1025,11 +1109,11 @@ impl<T> RecordJournalBatch<T> {
         let targets = self
             .entries
             .iter()
-            .map(|entry| (&entry.id, &entry.identity))
+            .map(|entry| (&entry.id, &entry.captured.identity))
             .chain(
                 self.undecodable
                     .iter()
-                    .map(|record| (&record.id, &record.identity)),
+                    .map(|record| (&record.id, &record.captured.identity)),
             )
             .collect::<Vec<_>>();
         remove_captured(&self.directory, &self.lock, &targets)
@@ -1175,10 +1259,9 @@ pub(crate) fn json_files(directory: &Path) -> Result<Vec<PathBuf>> {
 
 fn prepare_root(root: &StateRoot) -> Result<()> {
     #[cfg(unix)]
-    if root.per_user {
-        if let Some(base) = root.path().parent() {
-            ensure_owned_private_dir(base)?;
-        }
+    if let Some(base) = &root.per_user_base {
+        ensure_owned_private_dir(base)?;
+        verify_per_user_descendants(base, root.path(), true)?;
     }
     let path = root.path();
     match std::fs::symlink_metadata(path) {
@@ -1188,7 +1271,7 @@ fn prepare_root(root: &StateRoot) -> Result<()> {
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
             {
-                std::fs::create_dir_all(parent).at("create state root parent", parent)?;
+                create_private_dir_all(parent)?;
             }
             match create_private_dir(path) {
                 Ok(()) => {}
@@ -1215,10 +1298,9 @@ fn prepare_root(root: &StateRoot) -> Result<()> {
 /// Checks an existing root before garbage collection deletes anything in it.
 fn verify_root(root: &StateRoot) -> Result<()> {
     #[cfg(unix)]
-    if root.per_user {
-        if let Some(base) = root.path().parent() {
-            ensure_owned_private_dir(base)?;
-        }
+    if let Some(base) = &root.per_user_base {
+        ensure_owned_private_dir(base)?;
+        verify_per_user_descendants(base, root.path(), false)?;
     }
     let path = root.path();
     if std::fs::symlink_metadata(path)
@@ -1231,7 +1313,7 @@ fn verify_root(root: &StateRoot) -> Result<()> {
     Ok(())
 }
 
-/// Creates or validates the per-user directory that isolates the default
+/// Creates or validates the per-user directory that isolates a per-user
 /// root inside a possibly shared temporary directory.
 #[cfg(unix)]
 fn ensure_owned_private_dir(path: &Path) -> Result<()> {
@@ -1243,6 +1325,49 @@ fn ensure_owned_private_dir(path: &Path) -> Result<()> {
         Err(error) if error.kind() == ErrorKind::NotFound => create_private_dir_all(path)?,
         Err(error) => return Err(error).at("create state directory", path),
     }
+    let metadata = owned_directory_metadata(path)?;
+    if metadata.mode() & 0o077 != 0 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .at("restrict permissions of", path)?;
+    }
+    Ok(())
+}
+
+/// Checks every directory below the per-user `base` down to `path`.
+///
+/// Once `base` is owner-only, no other user can create anything inside it,
+/// but a directory planted while an earlier `base` was still group- or
+/// world-writable would otherwise be trusted. With `create`, missing
+/// directories are created owner-only on the way down; without it, checking
+/// stops at the first missing one.
+#[cfg(unix)]
+fn verify_per_user_descendants(base: &Path, path: &Path, create: bool) -> Result<()> {
+    let relative = path
+        .strip_prefix(base)
+        .map_err(|_| StateError::InvalidRelativePath(path.to_path_buf()))?;
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        if create {
+            match create_private_dir(&current) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error).at("create state directory", &current),
+            }
+        } else if !entry_exists(&current)? {
+            return Ok(());
+        }
+        owned_directory_metadata(&current)?;
+    }
+    Ok(())
+}
+
+/// Returns the metadata of `path` after checking that it is a real directory
+/// owned by the effective user.
+#[cfg(unix)]
+fn owned_directory_metadata(path: &Path) -> Result<std::fs::Metadata> {
+    use std::os::unix::fs::MetadataExt;
+
     let metadata = std::fs::symlink_metadata(path).at("inspect state directory", path)?;
     if metadata.file_type().is_symlink() {
         return Err(StateError::SymlinkStateRoot(path.to_path_buf()));
@@ -1263,11 +1388,7 @@ fn ensure_owned_private_dir(path: &Path) -> Result<()> {
             ),
         });
     }
-    if metadata.mode() & 0o077 != 0 {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-            .at("restrict permissions of", path)?;
-    }
-    Ok(())
+    Ok(metadata)
 }
 
 /// Lists real subdirectories in name order; a missing directory is empty.
@@ -1294,6 +1415,26 @@ fn read_dirs(path: &Path) -> Result<Vec<PathBuf>> {
 /// Removes one stale session, returning `false` when it is still active or a
 /// concurrent pass already removed it.
 fn collect_session(session: &Path, cutoff: SystemTime, trash: &Path) -> Result<bool> {
+    // Openers refresh the activity stamp while holding this lock, so once it
+    // is held no opener is between taking it and stamping the session.
+    let lock_path = metadata::lock_path(session);
+    let lock = match FileLock::acquire(&lock_path, LockMode::Exclusive, LockWait::Try) {
+        // A hook is opening or reading the session right now.
+        Ok(None) => return Ok(false),
+        Ok(Some(lock)) => Some(lock),
+        // The session was removed concurrently, or it predates the metadata
+        // directory and no opener has created it yet. Opening such a session
+        // creates that directory, which refreshes the session directory's
+        // own modification time.
+        Err(error)
+            if error
+                .io_error()
+                .is_some_and(|error| error.kind() == ErrorKind::NotFound) =>
+        {
+            None
+        }
+        Err(error) => return Err(error),
+    };
     let newest = match newest_activity(session) {
         Ok(newest) => newest,
         Err(error)
@@ -1310,15 +1451,33 @@ fn collect_session(session: &Path, cutoff: SystemTime, trash: &Path) -> Result<b
     }
     create_private_dir_all(trash)?;
     let target = trash.join(unique_id());
+    // Windows cannot rename a directory while a file inside it is open, so
+    // the lock is released first there, leaving a narrow window in which an
+    // opener can still lose the session.
+    #[cfg(not(unix))]
+    drop(lock);
     match std::fs::rename(session, &target) {
         Ok(()) => {}
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error).at("move stale session", session),
     }
+    // An opener waiting for the lock notices that the lock file moved and
+    // starts over in a fresh session directory.
+    #[cfg(unix)]
+    drop(lock);
     // The session is no longer reachable; a failed delete leaves trash that
     // the next pass retries.
     let _ = std::fs::remove_dir_all(&target);
     Ok(true)
+}
+
+/// Keeps the session in `directory` visibly alive for [`SessionState::gc`]
+/// even when no family is opened and the materialized metadata does not
+/// change. Callers hold the session's exclusive metadata lock.
+pub(crate) fn record_session_activity(directory: &Path) -> Result<()> {
+    let activity = directory.join("activity");
+    create_private_dir_all(&activity)?;
+    touch_activity(&activity.join(SESSION_ACTIVITY_STAMP))
 }
 
 fn newest_activity(session: &Path) -> Result<SystemTime> {

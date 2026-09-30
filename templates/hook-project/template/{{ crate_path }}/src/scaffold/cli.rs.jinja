@@ -1,4 +1,5 @@
 {% from "templates/hook-project/template/_macros/rust.jinja" import variant -%}
+{% set guard_only = starter == "policy_guard" and aligned_hooks | length == 1 and "pre_tool" in aligned_hooks -%}
 {% if harness_mode == "cross" -%}
 use super::harness::Harness;
 {% endif -%}
@@ -39,6 +40,22 @@ impl Cli {
     /// Parse arguments and reject cross-field combinations Clap cannot express
     /// through derive attributes alone.
     ///
+{%- if guard_only %}
+    /// On failure this prints the requested help or version text, or answers
+    /// a usage error with [`argument_error_response`], and returns the
+    /// process status to exit with.
+    pub fn parse_validated() -> Result<Self, std::process::ExitCode> {
+        Self::try_parse().and_then(Self::validate).map_err(|error| {
+            if error.use_stderr() {
+                return argument_error_response(&error, std::env::args_os()).emit();
+            }
+            // Printing can only fail when the standard streams are gone,
+            // and the returned status still reports the outcome.
+            let _ = error.print();
+            std::process::ExitCode::SUCCESS
+        })
+    }
+{%- else %}
     /// On failure this prints Clap's diagnostic, or the requested help or
     /// version text, and returns the process status to exit with. See
     /// [`argument_error_status`] for why usage errors never exit with 2.
@@ -50,6 +67,7 @@ impl Cli {
             std::process::ExitCode::from(argument_error_status(&error))
         })
     }
+{%- endif %}
 {% if harness_mode == "cross" and "file_activity" in state_capabilities and "antigravity" in harnesses %}
     /// Validate command/harness compatibility for programmatic callers.
     pub fn validate(self) -> Result<Self, clap::Error> {
@@ -71,6 +89,58 @@ impl Cli {
 {% endif -%}
 }
 
+{% if guard_only -%}
+/// Native response to a usage error, such as a misregistered command.
+///
+/// This policy guard's only command is its pre-tool gate, and a guard that
+/// cannot decide denies. A usage error is therefore answered like any other
+/// failure under `RunOptions::fail_closed`: exit 2 with the usage message on
+/// stderr, which blocks the tool call on Claude Code and Codex, or a JSON
+/// `deny` decision when `--harness antigravity` was given, because
+/// Antigravity documents no exit-status semantics. When the harness itself
+/// cannot be read from `arguments`, the response is exit 2. Adding another
+/// aligned family to this package switches to non-blocking status 1, because
+/// exit 2 would also erase prompts or keep a session from stopping.
+pub fn argument_error_response(
+    error: &clap::Error,
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+) -> hookkit_runtime::failure::FailureResponse {
+    let diagnostic = format!(
+        "{}: {}",
+        {{ binary_name | tojson }},
+        error.render().to_string().trim_end(),
+    );
+    // Without a readable harness, answer as Claude Code and Codex expect.
+    let harness =
+        requested_harness(arguments).map_or(hookkit_core::HarnessId::CLAUDE_CODE, Harness::id);
+    hookkit_runtime::failure::failure_response(
+        hookkit_runtime::FailurePolicy::FailClosed,
+        &harness,
+        None,
+        &diagnostic,
+    )
+}
+
+/// The `--harness` value in raw arguments that failed to parse, if valid.
+fn requested_harness(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> Option<Harness> {
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        let Some(argument) = argument.to_str().map(str::to_owned) else {
+            continue;
+        };
+        let value = match argument.strip_prefix("--harness") {
+            Some("") => arguments.next()?.into_string().ok()?,
+            Some(inline) => match inline.strip_prefix('=') {
+                Some(value) => value.to_owned(),
+                None => continue,
+            },
+            None => continue,
+        };
+        return <Harness as clap::ValueEnum>::from_str(&value, false).ok();
+    }
+    None
+}
+{%- else -%}
 /// Process status for a Clap parse or validation outcome.
 ///
 /// Help and version requests succeed with 0. Every argument error uses the
@@ -78,9 +148,16 @@ impl Cli {
 /// Code and Codex treat exit status 2 from a hook as a blocking decision: a
 /// misregistered command would otherwise block tool calls, erase prompts, or
 /// keep a session from stopping.
+{%- if starter == "policy_guard" %}
+///
+/// This policy guard also serves other aligned families, so a usage error
+/// fails open: the misregistered pre-tool gate lets tool calls run. Keep the
+/// guard in a package whose only family is `pre_tool` to deny instead.
+{%- endif %}
 pub fn argument_error_status(error: &clap::Error) -> u8 {
     if error.use_stderr() { 1 } else { 0 }
 }
+{%- endif %}
 
 /// Selected hook commands. Names remain stable when more hooks are added.
 #[derive(Debug, Subcommand)]

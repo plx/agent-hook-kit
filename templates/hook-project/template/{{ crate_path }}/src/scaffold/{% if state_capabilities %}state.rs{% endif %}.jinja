@@ -4,7 +4,7 @@
 //! remain compatible. Bump the corresponding version before making an
 //! incompatible change.
 
-use hookkit_core::RuntimeContext;
+use hookkit_core::{HarnessId, RuntimeContext};
 use hookkit_session_state::{FamilyId, Result, SessionState, StateFamily, StateRoot};
 use std::path::{Path, PathBuf};
 
@@ -22,10 +22,18 @@ pub const PACKAGE_STATE_DIRECTORY: &str = {{ package_name | tojson }};
 /// Resolve the common state root used by every generated subcommand.
 ///
 /// A `--state-dir` value is passed as `override_dir`. Without one, state is
-/// isolated in [`default_state_directory`].
-pub fn resolve_state_root(override_dir: Option<&Path>) -> StateRoot {
-    let path = override_dir.map_or_else(default_state_directory, Path::to_path_buf);
-    StateRoot::new(path)
+/// isolated in [`default_state_root`]. A relative override is anchored at
+/// the harness's stable project root, exactly as HookKit's runners anchor
+/// it, so template-owned and runner-owned commands share one directory; see
+/// [`anchor_state_dir`].
+pub fn resolve_state_root(
+    context: &RuntimeContext<'_>,
+    override_dir: Option<&Path>,
+) -> Result<StateRoot> {
+    match override_dir {
+        Some(path) => Ok(StateRoot::new(anchor_state_dir(context, path))),
+        None => default_state_root(),
+    }
 }
 
 /// Ensure typed state and capture the exact metadata available to this event.
@@ -33,7 +41,7 @@ pub fn ensure_session_state(
     context: &RuntimeContext<'_>,
     override_dir: Option<&Path>,
 ) -> Result<SessionState> {
-    SessionState::ensure(context, resolve_state_root(override_dir))
+    SessionState::ensure(context, resolve_state_root(context, override_dir)?)
 }
 
 /// Open this generated tool's independently versioned state family.
@@ -41,25 +49,46 @@ pub fn state_family(state: &SessionState) -> Result<StateFamily> {
     state.family(FamilyId::new(STATE_FAMILY, STATE_FAMILY_VERSION)?)
 }
 
-/// Default per-user state directory for this package.
+/// Default per-user state root for this package.
 ///
-/// HookKit's default state root, `StateRoot::default()`, lives in a per-user
-/// directory (`$TMPDIR/agent-hook-kit-<uid>/` on Unix), so users who share a
-/// temporary directory cannot lock each other out. This package's state sits
-/// beside it, at `<per-user directory>/generated/{{ package_name }}/`. Pass
-/// `--state-dir` to choose a private location explicitly, for example when
-/// the temporary directory is shared with untrusted users.
-pub fn default_state_directory() -> PathBuf {
-    let default_root = StateRoot::default();
-    default_root
-        .path()
-        .parent()
-        .map_or_else(
-            || std::env::temp_dir().join("agent-hook-kit"),
-            Path::to_path_buf,
-        )
-        .join("generated")
-        .join(PACKAGE_STATE_DIRECTORY)
+/// It is `generated/{{ package_name }}/` inside HookKit's per-user directory
+/// (`$TMPDIR/agent-hook-kit-<uid>/` on Unix), beside HookKit's own default
+/// state root. HookKit creates that directory owner-only and refuses one that
+/// another user owns or planted, as it does for `StateRoot::default()`, so
+/// users who share a temporary directory cannot lock each other out or
+/// tamper with each other's state. Pass `--state-dir` to choose another
+/// location; an explicit directory is used as given.
+pub fn default_state_root() -> Result<StateRoot> {
+    StateRoot::per_user(Path::new("generated").join(PACKAGE_STATE_DIRECTORY))
+}
+
+/// Anchors a relative `--state-dir` at the harness's stable project root.
+///
+/// Claude Code runs hooks in the agent's current directory, which follows
+/// `cd` in its Bash tool, so a relative state directory would otherwise
+/// split one session's state across directories. Like HookKit's runners,
+/// this resolves a relative path against `CLAUDE_PROJECT_DIR` on Claude Code
+/// and against the event's first working directory elsewhere. Absolute
+/// paths, and relative paths without an absolute anchor, are unchanged.
+pub fn anchor_state_dir(context: &RuntimeContext<'_>, path: &Path) -> PathBuf {
+    let project_root = if *context.harness() == HarnessId::CLAUDE_CODE {
+        std::env::var_os("CLAUDE_PROJECT_DIR").map(PathBuf::from)
+    } else {
+        context
+            .workspace_roots()
+            .first()
+            .map(|root| PathBuf::from(root.as_str()))
+    };
+    anchor_state_dir_at(path, project_root)
+}
+
+fn anchor_state_dir_at(path: &Path, project_root: Option<PathBuf>) -> PathBuf {
+    match project_root {
+        Some(project_root) if path.is_relative() && project_root.is_absolute() => {
+            project_root.join(path)
+        }
+        _ => path.to_path_buf(),
+    }
 }
 {% if 'file_activity' in state_capabilities %}
 /// Open the package-isolated pending file-activity and reconciliation journals.
@@ -67,7 +96,10 @@ pub fn file_activity_store(
     context: &RuntimeContext<'_>,
     override_dir: Option<&Path>,
 ) -> hookkit_file_activity::Result<hookkit_file_activity::FileActivityStore> {
-    hookkit_file_activity::FileActivityStore::ensure(context, resolve_state_root(override_dir))
+    hookkit_file_activity::FileActivityStore::ensure(
+        context,
+        resolve_state_root(context, override_dir)?,
+    )
 }
 {% endif -%}
 {% if 'session_metadata' in state_capabilities %}
@@ -180,12 +212,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_state_directory_is_beside_the_per_user_default_root() {
-        let directory = default_state_directory();
-        assert!(directory.ends_with(Path::new("generated").join(PACKAGE_STATE_DIRECTORY)));
+    fn default_state_root_is_beside_the_per_user_default_root() {
+        let root = default_state_root().expect("the package directory is a plain relative path");
+        let package = Path::new("generated").join(PACKAGE_STATE_DIRECTORY);
+        assert!(root.path().ends_with(package));
         assert_eq!(
-            directory.parent().and_then(Path::parent),
+            root.path().parent().and_then(Path::parent),
             StateRoot::default().path().parent(),
+        );
+    }
+
+    #[test]
+    fn relative_state_dirs_resolve_against_the_project_root() {
+        let project = std::env::temp_dir().join("project");
+        assert_eq!(
+            anchor_state_dir_at(Path::new(".hookkit-state"), Some(project.clone())),
+            project.join(".hookkit-state"),
+        );
+        let absolute = std::env::temp_dir().join("elsewhere/state");
+        assert_eq!(anchor_state_dir_at(&absolute, Some(project)), absolute);
+        assert_eq!(
+            anchor_state_dir_at(Path::new(".hookkit-state"), None),
+            PathBuf::from(".hookkit-state"),
+        );
+        assert_eq!(
+            anchor_state_dir_at(Path::new(".hookkit-state"), Some(PathBuf::from("relative"))),
+            PathBuf::from(".hookkit-state"),
         );
     }
 }

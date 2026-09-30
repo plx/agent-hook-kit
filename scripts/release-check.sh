@@ -70,6 +70,14 @@ fi
 CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback \
   templates/hook-project/tests/run.sh --validation full
 
+# Git-mode projects, the template default, build against the pinned revision
+# rather than this checkout. Compile the default render and a maximal
+# single-mode render per harness against a `git archive` of that revision, so
+# a pin that predates an API the template emits fails here instead of in
+# users' projects. A change that adds such an API fails this until it is
+# merged and the pin is moved to main (see RELEASE.md).
+templates/hook-project/tests/run.sh --case pinned
+
 cargo "+$rust_msrv" check \
   --locked \
   -p hookkit-core \

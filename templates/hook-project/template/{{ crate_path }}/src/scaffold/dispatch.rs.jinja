@@ -1,17 +1,13 @@
 {% from "templates/hook-project/template/_macros/rust.jinja" import aligned_base, variant -%}
 {% macro handler_state_dir() -%}
-{%- if starter == "deferred_quality" or "file_activity" in state_capabilities -%}
-Some(state_dir.as_path())
-{%- elif state_capabilities -%}
+{%- if state_capabilities -%}
 state_dir.as_deref()
 {%- else -%}
 None
 {%- endif -%}
 {%- endmacro -%}
 {% macro handler_state_dir_owned() -%}
-{%- if starter == "deferred_quality" or "file_activity" in state_capabilities -%}
-Some(state_dir)
-{%- elif state_capabilities -%}
+{%- if state_capabilities -%}
 state_dir
 {%- else -%}
 None
@@ -37,11 +33,9 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
         .config
         .unwrap_or_else(crate::scaffold::runners::default_config_path);
 {%- endif %}
-{%- if starter == "deferred_quality" or "file_activity" in state_capabilities %}
-    let state_dir = cli
-        .state_dir
-        .unwrap_or_else(crate::scaffold::runners::default_state_dir);
-{%- elif state_capabilities %}
+{%- if state_capabilities %}
+    // Without `--state-dir`, each consumer resolves this package's per-user
+    // default itself, which checks that directory's ownership.
     let state_dir = cli.state_dir;
 {%- endif %}
     match cli.command {
@@ -70,13 +64,8 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
             hookkit_runtime::aligned::SessionStart,
             _,
         >(harness, move |input, environment, context| {
-{%- if "file_activity" in state_capabilities %}
-            crate::scaffold::state::ensure_session_state(context, Some(state_dir.as_path()))
-                .map_err(std::io::Error::other)?;
-{%- else %}
             crate::scaffold::state::ensure_session_state(context, state_dir.as_deref())
                 .map_err(std::io::Error::other)?;
-{%- endif %}
             let _ = environment;
             match crate::hooks::session_bootstrap::build_context(input.source()) {
                 Some(additional_context) => hookkit_common::SessionStartOutput::with_context(
@@ -132,11 +121,7 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
 {%- endfor %}
 {%- elif stable_id == "pre_tool_use" %}
 {%- if starter == "scoped_context_once" %}
-{%- if "file_activity" in state_capabilities %}
-        Command::{{ variant(stable_id) }} => run_pre_tool(Some(state_dir)),
-{%- else %}
         Command::{{ variant(stable_id) }} => run_pre_tool(state_dir),
-{%- endif %}
 {%- else %}
         Command::{{ variant(stable_id) }} => run_pre_tool(),
 {%- endif %}
@@ -161,13 +146,13 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
             {{ "hookkit_claude::protocol::SessionStart" if harness == "claude-code" else "hookkit_codex::catalog::SessionStart" }},
             _,
         >(move |input, environment, context| {
-            crate::scaffold::state::ensure_session_state(context, Some(state_dir.as_path()))
+            crate::scaffold::state::ensure_session_state(context, state_dir.as_deref())
                 .map_err(std::io::Error::other)?;
             crate::hooks::native::session_start(
                 input,
                 environment,
                 context,
-                Some(state_dir.as_path()),
+                state_dir.as_deref(),
             )
         }),
 {%- elif "file_activity" in state_capabilities and stable_id == "pre_invocation" and harness == "antigravity" %}
@@ -175,13 +160,13 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
             hookkit_antigravity::PreInvocation,
             _,
         >(move |input, environment, context| {
-            crate::scaffold::state::ensure_session_state(context, Some(state_dir.as_path()))
+            crate::scaffold::state::ensure_session_state(context, state_dir.as_deref())
                 .map_err(std::io::Error::other)?;
             crate::hooks::native::pre_invocation(
                 input,
                 environment,
                 context,
-                Some(state_dir.as_path()),
+                state_dir.as_deref(),
             )
         }),
 {%- else %}
@@ -272,6 +257,8 @@ pub fn pre_tool_output(
 }
 {%- elif harness_mode == "single" and "pre_tool_use" in native_hooks and starter != "custom" %}
 {%- if starter == "scoped_context_once" %}
+{%- set native_pre_tool = "hookkit_claude::catalog::PreToolUse" if harness == "claude-code" else "hookkit_codex::protocol::PreToolUse" %}
+{%- set native_pre_tool_output = "hookkit_claude::catalog::PreToolUseOutput" if harness == "claude-code" else "hookkit_codex::protocol::PreToolUseOutput" %}
 fn scoped_context(
     input: &hookkit_common::PreToolUseInput,
     context: &hookkit_core::RuntimeContext<'_>,
@@ -290,31 +277,40 @@ fn scoped_context(
 
 #[rustfmt::skip]
 fn run_pre_tool(state_dir: Option<std::path::PathBuf>) -> std::process::ExitCode {
+    hookkit_runtime::run_event::<{{ native_pre_tool }}, _>(
+        move |input, _environment, context| pre_tool_output(input, context, state_dir.as_deref()),
+    )
+}
+
+/// Lower the scoped-context starter to one native response.
+///
+/// Context-only output makes no permission decision, so every call,
+/// including the once-per-scope call that delivers the context, keeps
+/// {{ "Claude Code" if harness == "claude-code" else "Codex" }}'s normal permission flow. An explicit "allow" would skip
+/// the user's permission prompt.
+#[rustfmt::skip]
+pub fn pre_tool_output(
+    input: <{{ native_pre_tool }} as hookkit_core::EventSpec>::Input,
+    context: &hookkit_core::RuntimeContext<'_>,
+    state_dir: Option<&std::path::Path>,
+) -> hookkit_core::Result<<{{ native_pre_tool }} as hookkit_core::EventSpec>::CommandOutput> {
+    let aligned_input = hookkit_common::PreToolUseInput::{{ "Claude" if harness == "claude-code" else "Codex" }}(input);
+    Ok(match scoped_context(&aligned_input, context, state_dir)? {
+        Some(additional_context) => {
+            {{ native_pre_tool_output }}::with_context(additional_context)
+        }
+        None => {{ native_pre_tool_output }}::no_op(),
+    })
+}
 {%- else %}
 #[rustfmt::skip]
 fn run_pre_tool() -> std::process::ExitCode {
-{%- endif %}
 {%- if harness == "claude-code" %}
     hookkit_runtime::run_event::<hookkit_claude::catalog::PreToolUse, _>(
         |input, _environment, _context| {
-{%- if starter != "scoped_context_once" %}
             let tool_name = input
                 .field("tool_name")
                 .and_then(serde_json::Value::as_str);
-{%- endif %}
-{%- if starter == "scoped_context_once" %}
-            let aligned_input = hookkit_common::PreToolUseInput::Claude(input.clone());
-            // Context-only output makes no permission decision, so every call,
-            // including the once-per-scope call that delivers the context,
-            // keeps Claude Code's normal permission flow. An explicit "allow"
-            // would skip the user's permission prompt.
-            Ok(match scoped_context(&aligned_input, _context, state_dir.as_deref())? {
-                Some(additional_context) => {
-                    hookkit_claude::catalog::PreToolUseOutput::with_context(additional_context)
-                }
-                None => hookkit_claude::catalog::PreToolUseOutput::no_op(),
-            })
-{%- else %}
             // `Decision::Allow` means "no objection": pass through with empty
             // output so Claude Code's normal permission flow still applies. An
             // explicit "allow" decision would skip the user's permission prompt.
@@ -322,28 +318,17 @@ fn run_pre_tool() -> std::process::ExitCode {
                 Decision::Allow => hookkit_claude::catalog::PreToolUseOutput::no_op(),
                 Decision::Deny(reason) => hookkit_claude::catalog::PreToolUseOutput::deny(reason),
             })
-{%- endif %}
         },
     )
 {%- elif harness == "codex" %}
     hookkit_runtime::run_event::<hookkit_codex::protocol::PreToolUse, _>(
         |input, _environment, _context| {
-{%- if starter == "scoped_context_once" %}
-            let aligned_input = hookkit_common::PreToolUseInput::Codex(input.clone());
-            Ok(match scoped_context(&aligned_input, _context, state_dir.as_deref())? {
-                Some(additional_context) => {
-                    hookkit_codex::protocol::PreToolUseOutput::with_context(additional_context)
-                }
-                None => hookkit_codex::protocol::PreToolUseOutput::no_op(),
-            })
-{%- else %}
             Ok(match crate::hooks::pre_tool::evaluate(Some(&input.tool_name)) {
                 Decision::Allow => hookkit_codex::protocol::PreToolUseOutput::no_op(),
                 Decision::Deny(reason) => {
                     hookkit_codex::protocol::PreToolUseOutput::deny(reason)
                 }
             })
-{%- endif %}
         },
     )
 {%- elif harness == "antigravity" %}
@@ -363,4 +348,5 @@ fn run_pre_tool() -> std::process::ExitCode {
     )
 {%- endif %}
 }
+{%- endif %}
 {%- endif %}

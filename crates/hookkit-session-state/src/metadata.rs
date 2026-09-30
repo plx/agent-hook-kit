@@ -2,7 +2,7 @@ use crate::storage::{
     Durability, FileLock, IoContext, atomic_replace, create_private_dir_all, decode,
     publish_if_absent, read_optional, remove_if_present, sha256, sha256_bytes,
 };
-use crate::{Result, SessionIdentity, json_files};
+use crate::{Result, SessionIdentity, StateError, json_files};
 use hookkit_core::{HarnessId, RuntimeContext, SessionBoundaryKind, Utf8PathBuf};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::{BTreeMap, BTreeSet};
@@ -339,6 +339,24 @@ impl ProjectObservation {
     }
 }
 
+/// Path of the session's metadata lock, which [`crate::SessionState::gc`]
+/// also takes before collecting a session.
+pub(crate) fn lock_path(directory: &Path) -> PathBuf {
+    directory.join(METADATA_LOCK)
+}
+
+const METADATA_LOCK: &str = "_hookkit/metadata/v1/metadata.lock";
+
+/// How many times an opener starts over after garbage collection moved the
+/// session away while the opener waited for its lock.
+const MOVED_SESSION_RETRIES: usize = 8;
+
+/// Materializes the session's metadata and refreshes its activity stamp
+/// under the exclusive metadata lock.
+///
+/// Stamping under the lock is what lets garbage collection, which takes the
+/// same lock before checking a session's age, never remove a session that
+/// an opener has just stamped.
 pub(crate) fn ensure_metadata(
     directory: &Path,
     harness: &HarnessId,
@@ -346,10 +364,29 @@ pub(crate) fn ensure_metadata(
     context: Option<&RuntimeContext<'_>>,
 ) -> Result<SessionMetadata> {
     let internal = directory.join("_hookkit/metadata/v1");
-    create_private_dir_all(&internal)?;
-    let lock_path = internal.join("metadata.lock");
-    let lock = FileLock::exclusive(&lock_path)?;
-    let result = ensure_metadata_locked(directory, &internal, harness, identity, context);
+    let lock_path = lock_path(directory);
+    let mut attempts = 0;
+    let lock = loop {
+        create_private_dir_all(&internal)?;
+        let lock = FileLock::exclusive(&lock_path)?;
+        if lock.is_current(&lock_path)? {
+            break lock;
+        }
+        // Garbage collection moved this session into its trash while we
+        // waited; start over in a fresh session directory.
+        attempts += 1;
+        if attempts == MOVED_SESSION_RETRIES {
+            return Err(StateError::Io {
+                operation: "acquire lock",
+                path: lock_path,
+                source: std::io::Error::other(
+                    "the session directory kept moving while waiting for its lock",
+                ),
+            });
+        }
+    };
+    let result = ensure_metadata_locked(directory, &internal, harness, identity, context)
+        .and_then(|metadata| crate::record_session_activity(directory).map(|()| metadata));
     let unlock = lock.release(&lock_path);
     match (result, unlock) {
         (Ok(value), Ok(())) => Ok(value),
@@ -359,7 +396,7 @@ pub(crate) fn ensure_metadata(
 }
 
 pub(crate) fn read_metadata(directory: &Path) -> Result<SessionMetadata> {
-    let lock_path = directory.join("_hookkit/metadata/v1/metadata.lock");
+    let lock_path = lock_path(directory);
     let lock = FileLock::shared(&lock_path)?;
     let path = metadata_path(directory);
     let result = std::fs::read(&path)

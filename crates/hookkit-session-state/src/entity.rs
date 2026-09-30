@@ -1,5 +1,5 @@
 use crate::storage::{
-    Durability, FileLock, IoContext, atomic_replace, create_private_dir_all, decode,
+    Durability, FileLock, IoContext, atomic_replace, create_private_dir_all, decode, entry_exists,
     publish_if_absent, read_optional, remove_if_present, sha256_bytes, sync_directory, unique_id,
     validate_name,
 };
@@ -333,7 +333,22 @@ impl<E: JournalEntity> EntityJournal<E> {
         // Publishing never replaces an existing descriptor, so of two
         // first-time openers that disagree on the mode, the second one reads
         // the winner's descriptor and fails below instead of overwriting it.
-        if !publish_if_absent(&descriptor_path, &serde_json::to_vec_pretty(&desired)?)? {
+        // On a filesystem without hard links, publication falls back to a
+        // replacing rename, so first-time publication is also serialized
+        // under a lock that no other operation takes.
+        let published = if entry_exists(&descriptor_path)? {
+            false
+        } else {
+            let lock_path = directory.join("descriptor.lock");
+            let lock = FileLock::exclusive(&lock_path)?;
+            let published =
+                publish_if_absent(&descriptor_path, &serde_json::to_vec_pretty(&desired)?);
+            let unlock = lock.release(&lock_path);
+            let published = published?;
+            unlock?;
+            published
+        };
+        if !published {
             let bytes =
                 std::fs::read(&descriptor_path).at("read entity descriptor", &descriptor_path)?;
             let actual: Descriptor = decode(&descriptor_path, &bytes)?;

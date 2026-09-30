@@ -1424,8 +1424,8 @@ event_catalog:
         rust_type: hookkit_claude::protocol::Event
         variant: WorktreeRemove
       starter:
-        strategy: no_op
-        expression: hookkit_claude::catalog::WorktreeRemoveOutput::removed()
+        strategy: must_implement
+        expression: return Err(hookkit_core::HookkitError::InvalidProcessEmission("implement WorktreeRemove cleanup"))
       fixture:
         source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/worktree-remove/fixtures.yaml
         case: representative
@@ -1448,7 +1448,7 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: Retains Claude's exact UTF-8 worktree path; only the exit code matters, and a nonzero exit fails the removal while the worktree remains.
+        note: A registered hook replaces Claude's git worktree cleanup and exit 0 counts the worktree as removed, so a safe starter cannot report success without deleting it; complete the cleanup before registration.
     - contract: codex/commit-ff6aec9-r1/Interrupt
       harness: codex
       snapshot: commit-ff6aec9-r1

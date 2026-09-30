@@ -54,6 +54,7 @@ fn {{ selected_harness | replace('-', '_') }}_fixture_uses_native_pre_tool_outpu
 {% endif %}{% endfor -%}
 {% else -%}
 {% set pre_tool_event = event_catalog.events | selectattr("harness", "equalto", harness) | selectattr("stable_id", "equalto", "pre_tool_use") | first -%}
+{% if starter == "custom" -%}
 #[test]
 #[rustfmt::skip]
 fn selected_native_fixture_uses_exact_pre_tool_contract() {
@@ -67,11 +68,9 @@ fn selected_native_fixture_uses_exact_pre_tool_contract() {
     {%- else -%}
     let variables = EnvironmentVariables::new();
     {%- endif %}
-    {% if harness == "claude-code" -%}
-    let emission = hookkit_runtime::execute_typed::<hookkit_claude::catalog::PreToolUse, _>(
-        include_bytes!("../fixtures/claude-code/pre_tool_use.json"),
+    let emission = hookkit_runtime::execute_typed::<{{ pre_tool_event.rust_event }}, _>(
+        include_bytes!(concat!("../fixtures/", {{ harness | tojson }}, "/pre_tool_use.json")),
         &variables,
-        {% if starter == "custom" -%}
         |input, environment, context| {
             {{ package_name | replace('-', '_') }}::hooks::native::pre_tool_use(
                 input,
@@ -80,57 +79,91 @@ fn selected_native_fixture_uses_exact_pre_tool_contract() {
                 None,
             )
         },
-        {%- else -%}
-        |_input, _environment, _context| {
-            Ok(hookkit_claude::catalog::PreToolUseOutput::no_op())
-        },
-        {%- endif %}
     );
-    {%- elif harness == "codex" -%}
-    let emission = hookkit_runtime::execute_typed::<hookkit_codex::protocol::PreToolUse, _>(
-        include_bytes!("../fixtures/codex/pre_tool_use.json"),
-        &variables,
-        {% if starter == "custom" -%}
-        |input, environment, context| {
-            {{ package_name | replace('-', '_') }}::hooks::native::pre_tool_use(
-                input,
-                environment,
-                context,
-                None,
-            )
-        },
-        {%- else -%}
-        |_input, _environment, _context| {
-            Ok(hookkit_codex::protocol::PreToolUseOutput::no_op())
-        },
-        {%- endif %}
-    );
-    {%- else -%}
-    let emission = hookkit_runtime::execute_typed::<hookkit_antigravity::PreToolUse, _>(
-        include_bytes!("../fixtures/antigravity/pre_tool_use.json"),
-        &variables,
-        {% if starter == "custom" -%}
-        |input, environment, context| {
-            {{ package_name | replace('-', '_') }}::hooks::native::pre_tool_use(
-                input,
-                environment,
-                context,
-                None,
-            )
-        },
-        {%- else -%}
-        |_input, _environment, _context| {
-            Ok(hookkit_antigravity::PreToolUseOutput::ask())
-        },
-        {%- endif %}
-    );
-    {%- endif %}
 
     let emission = emission.expect("fixture should satisfy its exact native contract");
     assert_eq!(emission.exit_code(), 0);
     assert!(emission.stderr().is_empty());
-{%- if starter != "custom" %}
-    assert_never_auto_approves(emission.stdout());
-{%- endif %}
 }
+{%- else -%}
+fn temporary_state_root(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "{{ package_name }}-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should follow the Unix epoch")
+            .as_nanos(),
+    ))
+}
+
+/// Runs the scaffold's own pre-tool lowering on `payload` twice with one
+/// state root, returning both emissions.
+#[rustfmt::skip]
+fn lower_twice(
+    payload: &[u8],
+    session_id: &str,
+    label: &str,
+) -> [hookkit_core::ProcessEmission; 2] {
+    let state_root = temporary_state_root(label);
+    {% if harness == "claude-code" -%}
+    let variables = EnvironmentVariables::from_pairs([
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("CLAUDE_CODE_SESSION_ID", session_id),
+        ("CLAUDE_PROJECT_DIR", "/repo"),
+    ]);
+    {%- else -%}
+    let _ = session_id;
+    let variables = EnvironmentVariables::new();
+    {%- endif %}
+    let run = || {
+        hookkit_runtime::execute_typed::<{{ pre_tool_event.rust_event }}, _>(
+            payload,
+            &variables,
+            |input, _environment, context| {
+                {{ package_name | replace('-', '_') }}::scaffold::dispatch::pre_tool_output(
+                    input,
+                    context,
+                    Some(&state_root),
+                )
+            },
+        )
+        .expect("payload should satisfy its exact native contract")
+    };
+    let emissions = [run(), run()];
+    let _ = std::fs::remove_dir_all(&state_root);
+    for emission in &emissions {
+        assert_eq!(emission.exit_code(), 0);
+        assert!(emission.stderr().is_empty());
+        assert_never_auto_approves(emission.stdout());
+    }
+    emissions
+}
+
+#[test]
+#[rustfmt::skip]
+fn selected_native_fixture_uses_exact_pre_tool_contract() {
+    lower_twice(
+        include_bytes!(concat!("../fixtures/", {{ harness | tojson }}, "/pre_tool_use.json")),
+        {{ pre_tool_event.fixture.value.session_id | string | tojson }},
+        "pre-tool-fixture",
+    );
+}
+
+#[test]
+#[rustfmt::skip]
+fn scoped_context_is_delivered_once_without_approving_the_call() {
+    {% if harness == "claude-code" -%}
+    let payload = br#"{"session_id":"scoped-once","transcript_path":"/tmp/t.jsonl","cwd":"/repo","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/repo/src/lib.rs"},"tool_use_id":"toolu_scoped"}"#;
+    {%- else -%}
+    let payload = br#"{"session_id":"scoped-once","transcript_path":null,"cwd":"/repo","hook_event_name":"PreToolUse","model":"gpt-test","turn_id":"t1","permission_mode":"default","tool_name":"Bash","tool_use_id":"call-scoped","tool_input":{"command":"cat src/lib.rs"}}"#;
+    {%- endif %}
+    let [first, second] = lower_twice(payload, "scoped-once", "pre-tool-scoped");
+    let first = String::from_utf8_lossy(first.stdout());
+    let second = String::from_utf8_lossy(second.stdout());
+    assert!(first.contains("additionalContext"), "the first call claims and delivers context: {first}");
+    assert!(!second.contains("additionalContext"), "the claimed context is not repeated: {second}");
+}
+{%- endif %}
 {%- endif %}

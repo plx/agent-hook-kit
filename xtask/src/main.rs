@@ -1964,29 +1964,36 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
     let mut contract_ids = BTreeSet::new();
     let mut selected_snapshots = BTreeMap::new();
     let mut draft_snapshots = Vec::new();
+    let mut unselected_frozen = Vec::new();
     for snapshot_path in snapshot_paths {
         let snapshot_dir = snapshot_path
             .parent()
             .expect("snapshot.yaml has a parent directory");
         let (snapshot, loaded) =
             validate_snapshot(&catalog, &meta, snapshot_dir, &registry, &mut contract_ids)?;
-        if registry
+        let selected = registry
             .harnesses
             .get(&snapshot.harness)
-            .is_some_and(|selected| selected.current == snapshot.id)
-        {
+            .is_some_and(|selected| selected.current == snapshot.id);
+        if selected {
             selected_snapshots.insert(snapshot.harness.clone(), snapshot.retrieved.clone());
             contracts.extend(loaded);
         }
         if snapshot.state != "frozen" {
             draft_snapshots.push((snapshot_dir.to_path_buf(), snapshot));
+        } else if !selected {
+            unselected_frozen.push(snapshot_path.clone());
         }
     }
     if selected_snapshots.len() != registry.harnesses.len() {
         return Err("one or more registry-selected snapshots were not found".to_string());
     }
     validate_snapshot_states(&registry, &selected_snapshots, &draft_snapshots)?;
-    validate_command_environment_supplements(&catalog, &meta, &registry)?;
+    unselected_frozen.extend(validate_command_environment_supplements(
+        &catalog, &meta, &registry,
+    )?);
+    validate_frozen_ledger(&catalog, FROZEN_LEDGER, &unselected_frozen)?;
+    selected_content_hash_acknowledgements(&selected_sources(root)?)?;
 
     let target_keys: BTreeSet<_> = stabilization
         .targets
@@ -2079,13 +2086,138 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
     Ok(contracts)
 }
 
+/// Lifecycle files of every frozen snapshot and command-environment
+/// supplement, relative to `contracts/`, with their SHA-256.
+///
+/// `snapshot.yaml` carries a snapshot's frozen marker outside its own
+/// manifest, and deleting a supplement's manifest would unfreeze it, so a
+/// hand edit could otherwise demote published evidence to an unverified draft
+/// and then change it. `contracts check` requires each listed file to be
+/// unchanged, which also keeps it frozen, and requires every frozen snapshot
+/// or supplement that the registry does not select to be listed. Add an entry
+/// when freezing (`contracts freeze` prints it); never edit one.
+const FROZEN_LEDGER: &[(&str, &str)] = &[
+    (
+        "harnesses/antigravity/snapshots/docs-2026-07-12-r1/snapshot.yaml",
+        "90d1defa0051e2bfd7d6484f0d7ba16ec71b957177640ce459f6f86ca5f35f9e",
+    ),
+    (
+        "harnesses/antigravity/snapshots/docs-2026-07-12-r2/snapshot.yaml",
+        "2176615fdda5fcbf9ec3ddafbb1a2d21120e9f93b9385ac942fa75b8fd1a1f2a",
+    ),
+    (
+        "harnesses/antigravity/snapshots/docs-2026-08-04-r1/snapshot.yaml",
+        "162731e956e1d6789b03f73437fc3384e47265db6f78f75ac1e84b2dc4d9d7a9",
+    ),
+    (
+        "harnesses/antigravity/snapshots/docs-2026-09-29-r1/snapshot.yaml",
+        "a3b88e4d942f8a81dfe1b69cd1562666a23b109d89df0c80fbe08a2328ce8347",
+    ),
+    (
+        "harnesses/claude-code/snapshots/docs-2026-07-12-r1/snapshot.yaml",
+        "91fcb7739acb1500afaeabded55591f4353beb5c21017b5f719a19ba2c2cc4d9",
+    ),
+    (
+        "harnesses/claude-code/snapshots/docs-2026-07-12-r2/snapshot.yaml",
+        "df4815f1f6853f1d1b788192be8bd816fc21a00ea889cd3eaf443bd1aa7c0ce8",
+    ),
+    (
+        "harnesses/claude-code/snapshots/docs-2026-08-05-r1/snapshot.yaml",
+        "004f2dff8cd7fe8f0d541ac33bf89300eaa43dea11a8a77fb5549c3090399548",
+    ),
+    (
+        "harnesses/claude-code/snapshots/docs-2026-09-29-r1/snapshot.yaml",
+        "bda26b5eb6ce813aaf20e0e21ba172cd68c23553d5c760601e455cc973d5ee41",
+    ),
+    (
+        "harnesses/codex/snapshots/commit-1e59dc5-r1/snapshot.yaml",
+        "9d0a961c29057e9e3c4777a4b262503665ff9f29c304fbb409ec05ab5b39c6f4",
+    ),
+    (
+        "harnesses/codex/snapshots/commit-9e552e9-r1/snapshot.yaml",
+        "cac3c4ba21f2b03f8d6a5c3831ac8bc79482101fe301d21aa8b3eed6c7758ff4",
+    ),
+    (
+        "harnesses/codex/snapshots/commit-9e552e9-r2/snapshot.yaml",
+        "a394123d5dbbbd810ecc629c5312e00ab8fbf919ba51949d0f6fc46bcdf5b85e",
+    ),
+    (
+        "harnesses/codex/snapshots/commit-ff6aec9-r1/snapshot.yaml",
+        "733f64e3cea297648cccc272dd51df6678ca4791fc321c2907ac97421f7e63e4",
+    ),
+    (
+        "supplements/command-environments/command-environments-2026-08-05-r2/supplement.yaml",
+        "5fb7bf64a67d5e579b59cc277e222b0318c4c196735474ecf8f58419860dfc63",
+    ),
+    (
+        "supplements/command-environments/command-environments-2026-08-05-r3/supplement.yaml",
+        "96eec7fb712f5e299b0539db6219ed872ee03b1ed32014b04f111ae1a52e1970",
+    ),
+    (
+        "supplements/command-environments/command-environments-2026-08-05-r4/supplement.yaml",
+        "992c28b42d758c7852e1d625e29681e1f418565a3c91a26860dab820fdad6fff",
+    ),
+    (
+        "supplements/command-environments/command-environments-2026-09-29-r1/supplement.yaml",
+        "08e691f305123d43e4d2a6fc2240b743dccb82ab26a88586997f05a2cf0a6b31",
+    ),
+    (
+        "supplements/command-environments/command-environments-2026-09-30-r1/supplement.yaml",
+        "0a876cbbe682fd37dadeaf82012041294bb597c54fbf942e0477cfa54cc7d0c4",
+    ),
+];
+
+/// Check the frozen ledger against the catalog under `catalog`.
+///
+/// Every ledger file must exist with its recorded digest, and every lifecycle
+/// file in `unselected_frozen` (frozen but not registry-selected) must be
+/// listed.
+fn validate_frozen_ledger(
+    catalog: &Path,
+    ledger: &[(&str, &str)],
+    unselected_frozen: &[PathBuf],
+) -> Result<()> {
+    let mut listed = BTreeSet::new();
+    for (relative, digest) in ledger {
+        let path = safe_join(catalog, relative)?;
+        let bytes = fs::read(&path).map_err(|error| {
+            format!(
+                "{}: lifecycle file recorded in the frozen ledger cannot be read: {error}",
+                path.display()
+            )
+        })?;
+        if hex_sha256(&bytes) != *digest {
+            return Err(format!(
+                "{}: frozen lifecycle file changed; frozen snapshots and supplements are immutable, so create a successor instead",
+                path.display()
+            ));
+        }
+        listed.insert(path);
+    }
+    for path in unselected_frozen {
+        if !listed.contains(path) {
+            let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            let relative = path.strip_prefix(catalog).unwrap_or(path);
+            return Err(format!(
+                "{}: frozen but not registry-selected, so it must be recorded in FROZEN_LEDGER in xtask/src/main.rs as (\"{}\", \"{}\")",
+                path.display(),
+                relative.display(),
+                hex_sha256(&bytes)
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Enforce the snapshot lifecycle that content manifests alone cannot.
 ///
 /// `snapshot.yaml` carries the frozen marker outside its own manifest, so a
 /// hand edit could otherwise demote a published snapshot to an unverified
 /// draft. Registry-selected snapshots must therefore be frozen, like selected
 /// supplements, and a draft may only be a successor candidate: one retrieved
-/// no earlier than its harness's selected snapshot.
+/// no earlier than its harness's selected snapshot. [`FROZEN_LEDGER`] pins
+/// every superseded snapshot's lifecycle file, including its `retrieved`
+/// date.
 fn validate_snapshot_states(
     registry: &Registry,
     selected_retrieved: &BTreeMap<String, String>,
@@ -2190,6 +2322,7 @@ fn validate_snapshot(
     }
 
     let strict_successor = !uses_legacy_snapshot_semantics(&snapshot.harness, &snapshot.id);
+    let fetchable_hashes = requires_fetchable_content_hashes(&snapshot.state, &snapshot.retrieved);
     let sources_path = safe_join(snapshot_dir, &snapshot.sources_file)?;
     validate_yaml_metadata(&sources_path, &meta.join("sources.schema.json"))?;
     let sources: Sources = read_yaml(&sources_path)?;
@@ -2203,7 +2336,7 @@ fn validate_snapshot(
         return Err(format!("{}: duplicate source id", snapshot_dir.display()));
     }
     for source in &sources.sources {
-        validate_source(source, snapshot_dir, strict_successor)?;
+        validate_source(source, snapshot_dir, strict_successor, fetchable_hashes)?;
         if source.reproducibility.as_deref() == Some("vendored") {
             let revision = source.revision.as_deref().unwrap_or_default();
             let vendored = safe_join(&catalog.join("vendor").join(harness), revision)?;
@@ -2276,11 +2409,13 @@ fn validate_snapshot(
     Ok((snapshot, loaded))
 }
 
+/// Validate every command-environment supplement and return the lifecycle
+/// files of the frozen supplements the registry does not select.
 fn validate_command_environment_supplements(
     catalog: &Path,
     meta: &Path,
     registry: &Registry,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     let root = catalog.join("supplements/command-environments");
     let mut paths: Vec<_> = walkdir::WalkDir::new(&root)
         .into_iter()
@@ -2294,6 +2429,7 @@ fn validate_command_environment_supplements(
 
     let mut ids = BTreeSet::new();
     let mut selected_found = false;
+    let mut unselected_frozen = Vec::new();
     for path in paths {
         let directory = path
             .parent()
@@ -2330,6 +2466,9 @@ fn validate_command_environment_supplements(
                 )
             })?;
             verify_content_manifest(directory, manifest, None)?;
+            if !selected {
+                unselected_frozen.push(path.clone());
+            }
         } else if supplement.state == "draft" {
             if supplement.manifest_file.is_some() {
                 return Err(format!(
@@ -2362,8 +2501,10 @@ fn validate_command_environment_supplements(
         if source_ids.len() != sources.sources.len() {
             return Err(format!("{}: duplicate source id", directory.display()));
         }
+        let fetchable_hashes =
+            requires_fetchable_content_hashes(&supplement.state, &supplement.retrieved);
         for source in &sources.sources {
-            validate_source(source, directory, true)?;
+            validate_source(source, directory, true, fetchable_hashes)?;
         }
 
         if selected {
@@ -2425,7 +2566,7 @@ fn validate_command_environment_supplements(
             registry.supplements.command_environments
         ));
     }
-    Ok(())
+    Ok(unselected_frozen)
 }
 
 fn validate_command_environment_harness(
@@ -2558,7 +2699,23 @@ fn uses_legacy_snapshot_semantics(harness: &str, snapshot: &str) -> bool {
     )
 }
 
-fn validate_source(source: &Source, snapshot_dir: &Path, strict_successor: bool) -> Result<()> {
+/// First retrieval date whose recorded content hashes must be reproducible by
+/// fetching the source URL itself. Frozen snapshots and supplements retrieved
+/// earlier keep the hashes they were frozen with.
+const FETCHABLE_CONTENT_HASHES_FROM: &str = "2026-09-30";
+
+/// Whether a snapshot or supplement in `state`, retrieved on `retrieved`,
+/// must record content hashes only for URLs whose body they cover.
+fn requires_fetchable_content_hashes(state: &str, retrieved: &str) -> bool {
+    state != "frozen" || retrieved >= FETCHABLE_CONTENT_HASHES_FROM
+}
+
+fn validate_source(
+    source: &Source,
+    snapshot_dir: &Path,
+    strict_successor: bool,
+    fetchable_hashes: bool,
+) -> Result<()> {
     if source.kind.is_empty()
         || source.authority.is_empty()
         || source.url.is_empty()
@@ -2584,6 +2741,19 @@ fn validate_source(source: &Source, snapshot_dir: &Path, strict_successor: bool)
     {
         return Err(format!(
             "{}: source {} has invalid SHA-256",
+            snapshot_dir.display(),
+            source.id
+        ));
+    }
+    // github.com serves an HTML page with per-request content for a file, so
+    // a hash of the file itself belongs to its raw.githubusercontent.com URL,
+    // which is what the drift check fetches.
+    if fetchable_hashes
+        && source.content_sha256.is_some()
+        && source.url.starts_with("https://github.com/")
+    {
+        return Err(format!(
+            "{}: source {} records a content hash for a github.com page; record the raw.githubusercontent.com URL whose body the hash covers",
             snapshot_dir.display(),
             source.id
         ));
@@ -3346,11 +3516,23 @@ fn freeze_snapshot(root: &Path, harness: &str, snapshot_id: &str) -> Result<()> 
     snapshot.manifest_file = Some(manifest_name.to_string());
     let yaml = serde_yaml_ng::to_string(&snapshot)
         .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
-    fs::write(&snapshot_path, yaml)
+    fs::write(&snapshot_path, &yaml)
         .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
     verify_content_manifest(&directory, manifest_name, Some(SNAPSHOT_METADATA_FILE))?;
     println!("froze {harness}/{snapshot_id}");
+    print_frozen_ledger_entry(
+        &format!("harnesses/{harness}/snapshots/{snapshot_id}/{SNAPSHOT_METADATA_FILE}"),
+        yaml.as_bytes(),
+    );
     Ok(())
+}
+
+/// Print the [`FROZEN_LEDGER`] entry for a freshly frozen lifecycle file.
+fn print_frozen_ledger_entry(relative: &str, bytes: &[u8]) {
+    println!(
+        "record it in FROZEN_LEDGER in xtask/src/main.rs, which `contracts check` requires once the registry does not select it:\n    (\"{relative}\", \"{}\"),",
+        hex_sha256(bytes)
+    );
 }
 
 fn freeze_command_environment_supplement(root: &Path, supplement_id: &str) -> Result<()> {
@@ -3376,13 +3558,17 @@ fn freeze_command_environment_supplement(root: &Path, supplement_id: &str) -> Re
     supplement.manifest_file = Some(manifest_name.to_string());
     let yaml = serde_yaml_ng::to_string(&supplement)
         .map_err(|error| format!("{}: {error}", supplement_path.display()))?;
-    fs::write(&supplement_path, yaml)
+    fs::write(&supplement_path, &yaml)
         .map_err(|error| format!("{}: {error}", supplement_path.display()))?;
     let manifest = content_manifest(&directory, manifest_name, None)?;
     fs::write(directory.join(manifest_name), manifest)
         .map_err(|error| format!("{}: {error}", directory.display()))?;
     verify_content_manifest(&directory, manifest_name, None)?;
     println!("froze command-environment supplement {supplement_id}");
+    print_frozen_ledger_entry(
+        &format!("supplements/command-environments/{supplement_id}/supplement.yaml"),
+        yaml.as_bytes(),
+    );
     Ok(())
 }
 
@@ -4066,59 +4252,103 @@ fn find_snapshot(root: &Path, id: &str) -> Result<PathBuf> {
     }
 }
 
-/// Upstream GitHub tree named by a source URL of the form
-/// `https://github.com/<owner>/<repository>/tree/<revision>/<path>`.
+/// Kind of Git object a GitHub page URL names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitHubObject {
+    /// A directory, `https://github.com/<owner>/<repository>/tree/...`.
+    Tree,
+    /// A file, `https://github.com/<owner>/<repository>/blob/...`.
+    Blob,
+}
+
+/// Upstream GitHub tree or file named by a source URL of the form
+/// `https://github.com/<owner>/<repository>/{tree,blob}/<revision>/<path>`.
 #[derive(Debug, PartialEq, Eq)]
-struct GitHubTree<'a> {
+struct GitHubPath<'a> {
     owner: &'a str,
     repository: &'a str,
+    object: GitHubObject,
     revision: &'a str,
     path: &'a str,
 }
 
-impl GitHubTree<'_> {
+impl GitHubPath<'_> {
     /// Anonymous clone URL for the repository.
     fn clone_url(&self) -> String {
         format!("https://github.com/{}/{}.git", self.owner, self.repository)
     }
+
+    /// URL that serves a file's bytes rather than GitHub's HTML page for it.
+    fn raw_url(&self) -> Option<String> {
+        (self.object == GitHubObject::Blob).then(|| {
+            format!(
+                "https://raw.githubusercontent.com/{}/{}/{}/{}",
+                self.owner, self.repository, self.revision, self.path
+            )
+        })
+    }
 }
 
-fn parse_github_tree(url: &str) -> Option<GitHubTree<'_>> {
+fn parse_github_path(url: &str) -> Option<GitHubPath<'_>> {
     let mut parts = url.strip_prefix("https://github.com/")?.splitn(5, '/');
     let owner = parts.next()?;
     let repository = parts.next()?;
-    if parts.next()? != "tree" {
-        return None;
-    }
+    let object = match parts.next()? {
+        "tree" => GitHubObject::Tree,
+        "blob" => GitHubObject::Blob,
+        _ => return None,
+    };
     let revision = parts.next()?;
     let path = parts.next()?.trim_end_matches('/');
     [owner, repository, revision, path]
         .iter()
         .all(|part| !part.is_empty() && !part.split('/').any(|segment| segment == ".."))
-        .then_some(GitHubTree {
+        .then_some(GitHubPath {
             owner,
             repository,
+            object,
             revision,
             path,
         })
 }
 
-/// Render the upstream inputs of every registry-selected snapshot, and of the
-/// registry-selected command-environment supplement, for
-/// `scripts/check-upstream-contract-drift.sh`.
-///
-/// Each row holds tab-separated fields, with `-` for an absent value:
-/// harness, snapshot, source ID, reproducibility, URL, pinned revision,
-/// recorded content SHA-256, Git clone URL, upstream path, and the vendored
-/// directory relative to the workspace root. Supplement rows use
-/// [`SUPPLEMENT_SOURCE_GROUP`] as the harness and the supplement ID as the
-/// snapshot, so documentation pages that only the supplement cites (such as
-/// the Claude Code environment-variable reference) are drift-checked too.
-fn render_upstream_sources(root: &Path) -> Result<String> {
+/// URL whose body a recorded `content_sha256` covers: the raw file for a
+/// GitHub file page, which itself serves HTML with per-request content, and
+/// the source URL otherwise.
+fn content_hash_url(url: &str) -> String {
+    parse_github_path(url)
+        .and_then(|path| path.raw_url())
+        .unwrap_or_else(|| url.to_string())
+}
+
+/// One source of a registry-selected snapshot or of the registry-selected
+/// command-environment supplement.
+struct SelectedSource {
+    /// Harness (or [`SUPPLEMENT_SOURCE_GROUP`]) and snapshot or supplement ID.
+    identity: [String; 2],
+    /// Snapshot or supplement directory.
+    directory: PathBuf,
+    /// Harness whose vendor directory holds a vendored source's evidence.
+    vendor_harness: Option<String>,
+    source: Source,
+}
+
+impl SelectedSource {
+    fn label(&self) -> String {
+        format!(
+            "{}/{}/{}",
+            self.identity[0], self.identity[1], self.source.id
+        )
+    }
+}
+
+/// Every source of the registry-selected snapshots, then of the
+/// registry-selected command-environment supplement.
+fn selected_sources(root: &Path) -> Result<Vec<SelectedSource>> {
     let catalog = root.join("contracts");
     let registry: Registry = read_yaml(&catalog.join("registry.yaml"))?;
     require_version(registry.format_version, "registry")?;
-    let mut output = String::new();
+    let mut selected_sources = Vec::new();
     for (harness, selected) in &registry.harnesses {
         let snapshot_dir = safe_join(
             &catalog.join("harnesses"),
@@ -4126,15 +4356,13 @@ fn render_upstream_sources(root: &Path) -> Result<String> {
         )?;
         let snapshot: Snapshot = read_yaml(&snapshot_dir.join(SNAPSHOT_METADATA_FILE))?;
         let sources: Sources = read_yaml(&safe_join(&snapshot_dir, &snapshot.sources_file)?)?;
-        for source in &sources.sources {
-            render_source_row(
-                &mut output,
-                root,
-                &snapshot_dir,
-                [harness.as_str(), selected.current.as_str()],
-                Some(harness.as_str()),
+        for source in sources.sources {
+            selected_sources.push(SelectedSource {
+                identity: [harness.clone(), selected.current.clone()],
+                directory: snapshot_dir.clone(),
+                vendor_harness: Some(harness.clone()),
                 source,
-            )?;
+            });
         }
     }
 
@@ -4146,26 +4374,126 @@ fn render_upstream_sources(root: &Path) -> Result<String> {
     let supplement: CommandEnvironmentSupplement =
         read_yaml(&supplement_dir.join("supplement.yaml"))?;
     let sources: Sources = read_yaml(&safe_join(&supplement_dir, &supplement.sources_file)?)?;
-    for source in &sources.sources {
+    for source in sources.sources {
         // A vendored supplement source is stored under the one harness that
         // cites it.
         let mut citing = supplement
             .harnesses
             .iter()
             .filter(|(_, harness)| harness.sources.contains(&source.id))
-            .map(|(harness, _)| harness.as_str());
+            .map(|(harness, _)| harness.clone());
         let vendor_harness = match (citing.next(), citing.next()) {
             (Some(harness), None) => Some(harness),
             _ => None,
         };
-        render_source_row(
-            &mut output,
-            root,
-            &supplement_dir,
-            [SUPPLEMENT_SOURCE_GROUP, supplement_id.as_str()],
+        selected_sources.push(SelectedSource {
+            identity: [SUPPLEMENT_SOURCE_GROUP.to_string(), supplement_id.clone()],
+            directory: supplement_dir.clone(),
             vendor_harness,
             source,
-        )?;
+        });
+    }
+    Ok(selected_sources)
+}
+
+/// For each selected source, the newer content hash that a later selected
+/// retrieval of the same URL records after reviewing the difference.
+///
+/// Two selected sources that pin one URL to different hashes can never both
+/// match upstream, so the drift check would fail on one of them forever. The
+/// later retrieval (by its `retrieved` date) must acknowledge the earlier one
+/// by citing the earlier hash in full in its limitations; the earlier source
+/// then accepts the later hash as reviewed drift. Same-day retrievals are
+/// ordered by which one cites the other. An unacknowledged or ambiguous
+/// disagreement is an error.
+fn selected_content_hash_acknowledgements(sources: &[SelectedSource]) -> Result<Vec<Option<&str>>> {
+    let cites = |source: &SelectedSource, hash: &str| {
+        source
+            .source
+            .limitations
+            .iter()
+            .any(|limitation| limitation.contains(hash))
+    };
+    let mut acknowledged: Vec<Option<&str>> = vec![None; sources.len()];
+    for (first_index, first) in sources.iter().enumerate() {
+        let Some(first_hash) = first.source.content_sha256.as_deref() else {
+            continue;
+        };
+        let url = content_hash_url(&first.source.url);
+        for (second_index, second) in sources.iter().enumerate().skip(first_index + 1) {
+            let Some(second_hash) = second.source.content_sha256.as_deref() else {
+                continue;
+            };
+            if second_hash == first_hash || content_hash_url(&second.source.url) != url {
+                continue;
+            }
+            let first_is_older = match first.source.retrieved.cmp(&second.source.retrieved) {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Greater => false,
+                std::cmp::Ordering::Equal => {
+                    match (cites(second, first_hash), cites(first, second_hash)) {
+                        (true, false) => true,
+                        (false, true) => false,
+                        _ => {
+                            return Err(format!(
+                                "{url} is pinned to {first_hash} by {} and to {second_hash} by {}, both retrieved {}, and neither is the reviewed successor of the other; cut successors that agree",
+                                first.label(),
+                                second.label(),
+                                first.source.retrieved
+                            ));
+                        }
+                    }
+                }
+            };
+            let ((older_index, older, older_hash), (newer, newer_hash)) = if first_is_older {
+                ((first_index, first, first_hash), (second, second_hash))
+            } else {
+                ((second_index, second, second_hash), (first, first_hash))
+            };
+            if !cites(newer, older_hash) {
+                return Err(format!(
+                    "{url} is pinned to {older_hash} by {} and to {newer_hash} by the later retrieval {}, so one of them can never match upstream; after reviewing the difference, cite the earlier hash in the later source's limitations, or cut successors that agree",
+                    older.label(),
+                    newer.label()
+                ));
+            }
+            match acknowledged[older_index] {
+                Some(previous) if previous != newer_hash => {
+                    return Err(format!(
+                        "{url}: {} is superseded by later selected retrievals with different hashes {previous} and {newer_hash}; cut successors that agree",
+                        older.label()
+                    ));
+                }
+                _ => acknowledged[older_index] = Some(newer_hash),
+            }
+        }
+    }
+    Ok(acknowledged)
+}
+
+/// Render the upstream inputs of every registry-selected snapshot, and of the
+/// registry-selected command-environment supplement, for
+/// `scripts/check-upstream-contract-drift.sh`.
+///
+/// Each row holds tab-separated fields, with `-` for an absent value:
+/// harness, snapshot, source ID, reproducibility, URL, pinned revision,
+/// recorded content SHA-256, Git clone URL, upstream path, the vendored
+/// directory relative to the workspace root, and an acknowledged newer
+/// content SHA-256. The URL is the one whose body the recorded hash covers:
+/// the raw.githubusercontent.com URL for a GitHub file page. GitHub tree and
+/// file pages also carry their revision, clone URL, and path. The
+/// acknowledged hash is one that another selected source records for the
+/// same URL after reviewing the difference; see
+/// [`selected_content_hash_acknowledgements`]. Supplement rows use
+/// [`SUPPLEMENT_SOURCE_GROUP`] as the harness and the supplement ID as the
+/// snapshot, so documentation pages that only the supplement cites (such as
+/// the Claude Code environment-variable reference) are drift-checked too.
+fn render_upstream_sources(root: &Path) -> Result<String> {
+    let sources = selected_sources(root)?;
+    let acknowledged = selected_content_hash_acknowledgements(&sources)?;
+    let mut output = String::new();
+    for (selected, acknowledged) in sources.iter().zip(acknowledged) {
+        render_source_row(&mut output, root, selected, acknowledged)?;
     }
     Ok(output)
 }
@@ -4174,17 +4502,21 @@ fn render_upstream_sources(root: &Path) -> Result<String> {
 /// command-environment supplement.
 const SUPPLEMENT_SOURCE_GROUP: &str = "command-environments";
 
-/// Appends one upstream-source row; `identity` is the harness and snapshot
-/// columns, and `vendor_harness` locates a vendored source's evidence.
+/// Appends one upstream-source row for `selected`, whose recorded content hash
+/// another selected source may have `acknowledged` as superseded.
 fn render_source_row(
     output: &mut String,
     root: &Path,
-    directory: &Path,
-    identity: [&str; 2],
-    vendor_harness: Option<&str>,
-    source: &Source,
+    selected: &SelectedSource,
+    acknowledged: Option<&str>,
 ) -> Result<()> {
-    let tree = parse_github_tree(&source.url);
+    let SelectedSource {
+        identity,
+        directory,
+        vendor_harness,
+        source,
+    } = selected;
+    let tree = parse_github_path(&source.url);
     let mismatch = tree
         .as_ref()
         .zip(source.revision.as_deref())
@@ -4198,8 +4530,8 @@ fn render_source_row(
         ));
     }
     let vendored = match (&tree, source.reproducibility.as_deref()) {
-        (Some(tree), Some("vendored")) => {
-            let harness = vendor_harness.ok_or_else(|| {
+        (Some(tree), Some("vendored")) if tree.object == GitHubObject::Tree => {
+            let harness = vendor_harness.as_deref().ok_or_else(|| {
                 format!(
                     "{}: vendored source {} is not cited by exactly one harness",
                     directory.display(),
@@ -4222,22 +4554,24 @@ fn render_source_row(
         }
         _ => None,
     };
-    let clone_url = tree.as_ref().map(GitHubTree::clone_url);
-    // Only a Git tree's revision can be fetched. Other sources may
+    let clone_url = tree.as_ref().map(GitHubPath::clone_url);
+    // Only a Git tree's or file's revision can be fetched. Other sources may
     // record a free-form revision label, such as a documentation
     // site's build ETag, which the drift check never uses.
     let revision = tree.as_ref().and(source.revision.as_deref());
+    let url = content_hash_url(&source.url);
     let fields = [
-        Some(identity[0]),
-        Some(identity[1]),
+        Some(identity[0].as_str()),
+        Some(identity[1].as_str()),
         Some(source.id.as_str()),
         source.reproducibility.as_deref(),
-        Some(source.url.as_str()),
+        Some(url.as_str()),
         revision,
         source.content_sha256.as_deref(),
         clone_url.as_deref(),
         tree.as_ref().map(|tree| tree.path),
         vendored.as_deref(),
+        acknowledged,
     ];
     let mut row = Vec::with_capacity(fields.len());
     for field in fields {
@@ -4887,11 +5221,16 @@ mod tests {
             assert!(scaffold.capabilities.output_ignored, "{event}");
             assert!(!scaffold.capabilities.post_action_feedback, "{event}");
         }
+        // A WorktreeRemove hook that exits 0 counts the worktree as removed
+        // and replaces Claude Code's `git worktree remove` fallback, so a
+        // starter that deletes nothing must not report success.
+        let worktree_remove = find("claude-code/docs-2026-09-29-r1/WorktreeRemove");
+        assert_eq!(worktree_remove.starter.strategy, "must_implement");
         assert!(
-            find("claude-code/docs-2026-09-29-r1/WorktreeRemove")
+            worktree_remove
                 .starter
                 .expression
-                .ends_with("::removed()")
+                .contains("implement WorktreeRemove cleanup")
         );
         assert!(
             find("claude-code/docs-2026-09-29-r1/PreModelSwitch")
@@ -5096,21 +5435,244 @@ mod tests {
     }
 
     #[test]
-    fn github_tree_urls_parse_into_clone_url_revision_and_path() {
-        let tree = parse_github_tree(
+    fn github_tree_and_file_urls_parse_into_clone_url_revision_and_path() {
+        let tree = parse_github_path(
             "https://github.com/openai/codex/tree/1e59dc5/codex-rs/hooks/schema/generated/",
         )
         .expect("tree URL parses");
+        assert_eq!(tree.object, GitHubObject::Tree);
         assert_eq!(tree.revision, "1e59dc5");
         assert_eq!(tree.path, "codex-rs/hooks/schema/generated");
         assert_eq!(tree.clone_url(), "https://github.com/openai/codex.git");
-        assert!(parse_github_tree("https://learn.chatgpt.com/docs/hooks").is_none());
+        assert_eq!(tree.raw_url(), None);
+
+        let blob = parse_github_path("https://github.com/openai/codex/blob/1e59dc5/README.md")
+            .expect("file URL parses");
+        assert_eq!(blob.object, GitHubObject::Blob);
+        assert_eq!(blob.path, "README.md");
+        assert_eq!(
+            blob.raw_url().as_deref(),
+            Some("https://raw.githubusercontent.com/openai/codex/1e59dc5/README.md")
+        );
+        // A recorded content hash covers the raw file, never GitHub's page.
+        assert_eq!(
+            content_hash_url("https://github.com/openai/codex/blob/1e59dc5/README.md"),
+            "https://raw.githubusercontent.com/openai/codex/1e59dc5/README.md"
+        );
+        assert_eq!(
+            content_hash_url("https://learn.chatgpt.com/docs/hooks.md"),
+            "https://learn.chatgpt.com/docs/hooks.md"
+        );
+
+        assert!(parse_github_path("https://learn.chatgpt.com/docs/hooks").is_none());
         assert!(
-            parse_github_tree("https://github.com/openai/codex/blob/1e59dc5/README.md").is_none()
+            parse_github_path("https://github.com/openai/codex/commits/1e59dc5/README.md")
+                .is_none()
         );
         assert!(
-            parse_github_tree("https://github.com/openai/codex/tree/1e59dc5/../escape").is_none()
+            parse_github_path("https://github.com/openai/codex/tree/1e59dc5/../escape").is_none()
         );
+    }
+
+    fn documentation_source(url: &str, hash: &str, limitations: &[&str]) -> Source {
+        Source {
+            id: "page".to_string(),
+            kind: "official-documentation".to_string(),
+            authority: "primary".to_string(),
+            url: url.to_string(),
+            retrieved: "2026-09-30".to_string(),
+            revision: None,
+            content_sha256: Some(hash.to_string()),
+            license: None,
+            reproducibility: Some("content-hash-only".to_string()),
+            limitations: limitations.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn new_retrievals_cannot_hash_github_pages() {
+        let hash = "a".repeat(64);
+        let blob = documentation_source(
+            "https://github.com/google-antigravity/antigravity-cli/blob/eaf9e06/CHANGELOG.md",
+            &hash,
+            &[],
+        );
+        let error = validate_source(&blob, Path::new("snapshot"), true, true)
+            .expect_err("a hash of a github.com page is irreproducible");
+        assert!(error.contains("raw.githubusercontent.com"), "{error}");
+        // Frozen snapshots retrieved before the rule keep their evidence.
+        validate_source(&blob, Path::new("snapshot"), true, false)
+            .expect("grandfathered retrievals are accepted");
+        let raw = documentation_source(
+            "https://raw.githubusercontent.com/google-antigravity/antigravity-cli/eaf9e06/CHANGELOG.md",
+            &hash,
+            &[],
+        );
+        validate_source(&raw, Path::new("snapshot"), true, true)
+            .expect("the raw file URL is what the hash covers");
+
+        assert!(requires_fetchable_content_hashes("draft", "2026-07-12"));
+        assert!(requires_fetchable_content_hashes("frozen", "2026-09-30"));
+        assert!(!requires_fetchable_content_hashes("frozen", "2026-09-29"));
+    }
+
+    #[test]
+    fn selected_sources_must_agree_on_a_url_hash_or_acknowledge_the_difference() {
+        let older_hash = "c".repeat(64);
+        let newer_hash = "5".repeat(64);
+        let selected = |group: &str, retrieved: &str, source: Source| SelectedSource {
+            identity: [group.to_string(), "snapshot".to_string()],
+            directory: PathBuf::from(group),
+            vendor_harness: None,
+            source: Source {
+                retrieved: retrieved.to_string(),
+                ..source
+            },
+        };
+        let url = "https://code.claude.com/docs/en/hooks.md";
+        let cites_older = format!("It differs from the older retrieval (sha256 {older_hash}).");
+        let cites_newer = format!("A later retrieval (sha256 {newer_hash}) is not pinned.");
+        let older = |limitations: &[&str]| {
+            selected(
+                "claude-code",
+                "2026-09-29",
+                documentation_source(url, &older_hash, limitations),
+            )
+        };
+        let newer = |limitations: &[&str]| {
+            selected(
+                "supplement",
+                "2026-09-30",
+                documentation_source(url, &newer_hash, limitations),
+            )
+        };
+
+        let error = selected_content_hash_acknowledgements(&[older(&[]), newer(&[])])
+            .expect_err("an unreviewed disagreement must fail");
+        assert!(error.contains("can never match upstream"), "{error}");
+        // Only the later retrieval can review the difference.
+        let error =
+            selected_content_hash_acknowledgements(&[older(&[cites_newer.as_str()]), newer(&[])])
+                .expect_err("the earlier source cannot acknowledge a later one");
+        assert!(error.contains("can never match upstream"), "{error}");
+
+        // The later retrieval's citation makes the later hash acceptable for
+        // the earlier source, never the reverse, whatever the source order or
+        // whether the earlier source also mentions the later hash.
+        let reviewed = [older(&[]), newer(&[cites_older.as_str()])];
+        assert_eq!(
+            selected_content_hash_acknowledgements(&reviewed).expect("reviewed drift"),
+            vec![Some(newer_hash.as_str()), None]
+        );
+        let mutual = [
+            newer(&[cites_older.as_str()]),
+            older(&[cites_newer.as_str()]),
+        ];
+        assert_eq!(
+            selected_content_hash_acknowledgements(&mutual).expect("reviewed drift"),
+            vec![None, Some(newer_hash.as_str())]
+        );
+
+        // Same-day retrievals are ordered by which one reviewed the other.
+        let same_day = [
+            selected(
+                "a",
+                "2026-09-30",
+                documentation_source(url, &older_hash, &[]),
+            ),
+            selected(
+                "b",
+                "2026-09-30",
+                documentation_source(url, &newer_hash, &[cites_older.as_str()]),
+            ),
+        ];
+        assert_eq!(
+            selected_content_hash_acknowledgements(&same_day).expect("reviewed same-day drift"),
+            vec![Some(newer_hash.as_str()), None]
+        );
+        let ambiguous = [
+            selected(
+                "a",
+                "2026-09-30",
+                documentation_source(url, &older_hash, &[]),
+            ),
+            selected(
+                "b",
+                "2026-09-30",
+                documentation_source(url, &newer_hash, &[]),
+            ),
+        ];
+        let error = selected_content_hash_acknowledgements(&ambiguous)
+            .expect_err("same-day retrievals that disagree need a reviewed successor");
+        assert!(
+            error.contains("neither is the reviewed successor"),
+            "{error}"
+        );
+
+        // The same body under GitHub's page and raw URLs is one URL.
+        let page = "https://github.com/o/r/blob/0123/CHANGELOG.md";
+        let raw = "https://raw.githubusercontent.com/o/r/0123/CHANGELOG.md";
+        let aliases = [
+            selected(
+                "a",
+                "2026-09-29",
+                documentation_source(page, &older_hash, &[]),
+            ),
+            selected(
+                "b",
+                "2026-09-30",
+                documentation_source(raw, &newer_hash, &[]),
+            ),
+        ];
+        assert!(selected_content_hash_acknowledgements(&aliases).is_err());
+    }
+
+    #[test]
+    fn frozen_ledger_pins_lifecycle_files_and_requires_superseded_entries() {
+        let catalog = temp_tree("ledger");
+        let old = catalog.join("harnesses/codex/snapshots/old/snapshot.yaml");
+        let unlisted = catalog.join("harnesses/codex/snapshots/unlisted/snapshot.yaml");
+        write_file(&old, "state: frozen\nretrieved: 2026-08-04\n");
+        write_file(&unlisted, "state: frozen\nretrieved: 2026-08-05\n");
+        let digest = hex_sha256(b"state: frozen\nretrieved: 2026-08-04\n");
+        let ledger = [(
+            "harnesses/codex/snapshots/old/snapshot.yaml",
+            digest.as_str(),
+        )];
+
+        validate_frozen_ledger(&catalog, &ledger, std::slice::from_ref(&old))
+            .expect("an unchanged superseded snapshot is valid");
+        let error = validate_frozen_ledger(&catalog, &ledger, &[old.clone(), unlisted.clone()])
+            .expect_err("a superseded snapshot must be recorded");
+        assert!(error.contains("FROZEN_LEDGER"), "{error}");
+        assert!(
+            error.contains("harnesses/codex/snapshots/unlisted/snapshot.yaml"),
+            "{error}"
+        );
+
+        // Demoting a recorded snapshot to a later-dated draft is detected even
+        // though its manifest was removed with it.
+        write_file(&old, "state: draft\nretrieved: 2026-12-01\n");
+        let error = validate_frozen_ledger(&catalog, &ledger, &[])
+            .expect_err("a demoted snapshot must fail");
+        assert!(error.contains("frozen lifecycle file changed"), "{error}");
+        fs::remove_file(&old).expect("remove lifecycle file");
+        let error = validate_frozen_ledger(&catalog, &ledger, &[])
+            .expect_err("a removed snapshot must fail");
+        assert!(error.contains("cannot be read"), "{error}");
+        fs::remove_dir_all(catalog).expect("remove temporary tree");
+    }
+
+    #[test]
+    fn frozen_ledger_matches_the_checked_in_catalog() {
+        let root = workspace_root().expect("workspace root");
+        let catalog = root.join("contracts");
+        validate_frozen_ledger(&catalog, FROZEN_LEDGER, &[])
+            .expect("every recorded lifecycle file is unchanged");
+        for (relative, _) in FROZEN_LEDGER {
+            let text = fs::read_to_string(catalog.join(relative)).expect("lifecycle file");
+            assert!(text.contains("state: frozen"), "{relative}");
+        }
     }
 
     #[test]
@@ -5123,7 +5685,7 @@ mod tests {
             .lines()
             .map(|line| line.split('\t').collect())
             .collect();
-        assert!(rows.iter().all(|row| row.len() == 10));
+        assert!(rows.iter().all(|row| row.len() == 11));
         for (harness, selected) in &registry.harnesses {
             assert!(
                 rows.iter()
@@ -5150,8 +5712,40 @@ mod tests {
                         && row[2] == source.id
                 })
                 .unwrap_or_else(|| panic!("supplement source {} has no row", source.id));
-            assert_eq!(row[4], source.url);
+            assert_eq!(row[4], content_hash_url(&source.url));
             assert_eq!(row[6], source.content_sha256.as_deref().unwrap_or("-"));
+        }
+        // A GitHub file page is hashed through its raw URL and compared with
+        // upstream HEAD through its pinned revision and path.
+        for row in rows
+            .iter()
+            .filter(|row| row[4].starts_with("https://github.com/"))
+        {
+            assert_eq!(row[6], "-", "{row:?} hashes a github.com page");
+        }
+        let selected = selected_sources(&root).expect("selected sources load");
+        assert_eq!(selected.len(), rows.len());
+        for (selected, row) in selected.iter().zip(&rows) {
+            let Some(file) = parse_github_path(&selected.source.url)
+                .filter(|path| path.object == GitHubObject::Blob)
+            else {
+                continue;
+            };
+            assert_eq!(Some(row[4].to_string()), file.raw_url(), "{row:?}");
+            assert_eq!(row[5], file.revision, "{row:?}");
+            assert_eq!(row[7], file.clone_url(), "{row:?}");
+            assert_eq!(row[8], file.path, "{row:?}");
+        }
+        // A hash that another selected source reviewed and superseded is
+        // acknowledged, so the drift check does not fail on it forever.
+        for row in rows.iter().filter(|row| row[10] != "-") {
+            assert!(valid_sha256(row[10]), "{row:?}");
+            assert_ne!(row[10], row[6], "{row:?}");
+            assert!(
+                rows.iter()
+                    .any(|other| other[4] == row[4] && other[6] == row[10]),
+                "{row:?} acknowledges a hash no selected source records"
+            );
         }
         assert!(
             rows.iter().any(|row| row[0] == SUPPLEMENT_SOURCE_GROUP

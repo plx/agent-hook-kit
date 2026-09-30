@@ -40,11 +40,25 @@ It never guesses the hook from input JSON.
 {% for event in event_catalog.events -%}
 {% if event.harness == harness and event.stable_id in native_hooks and event.starter.strategy == "must_implement" -%}
 > `{{ event.stable_id | replace('_', '-') }}` is scaffold-only: its safe
-> starter fails explicitly instead of inventing a required native value.
+> starter fails explicitly instead of inventing a required native value{% if event.stable_id == "worktree_remove" %} or
+> reporting cleanup it did not do. Registering it replaces Claude Code's own
+> `git worktree remove` cleanup, and exit 0 counts the worktree as removed{% endif %}.
 > Implement and test its protected handler before registering this command.
 
 {% endif -%}
 {% endfor -%}
+{% endif -%}
+{% if starter == "policy_guard" -%}
+{% if aligned_hooks | length == 1 -%}
+The guard fails closed: when it cannot decide, including when a registration
+passes arguments it cannot parse, it blocks the tool call with exit status 2
+on Claude Code and Codex and a `deny` decision on Antigravity.
+{% else -%}
+The guard fails closed once it runs. Because this package also serves other
+aligned families, arguments it cannot parse exit with the non-blocking status
+1 instead, so a misregistered guard lets tool calls run; check each
+registration.
+{% endif %}
 {% endif -%}
 Use only the harnesses recorded in `hookkit-template.manifest.yml`. Register
 the complete command line for the matching native hook event. The template
@@ -79,10 +93,17 @@ HookKit's per-user default state root:
 
 `$TMPDIR/agent-hook-kit-<uid>/generated/{{ package_name }}/` (Unix)
 
-The per-user directory keeps users who share a temporary directory from
-locking each other out. Use `--state-dir` to override it, for example to keep
-state in a private location on a machine shared with untrusted users. Every coordinated producer and consumer must
-receive the same override. Persisted family/entity versions are visible in
+HookKit creates `agent-hook-kit-<uid>` owner-only, refuses one that another
+user owns, and requires every directory from it down to this package's root
+to be yours, so users who share a temporary directory cannot tamper with each
+other's state, and a directory another user created first fails loudly
+instead of being trusted. Use `--state-dir` to override the default, for
+example to keep state out of a shared temporary directory altogether. Every
+coordinated producer and consumer must receive the same override. A relative
+`--state-dir` is resolved against Claude Code's `CLAUDE_PROJECT_DIR`, or the
+event's working directory on Codex and Antigravity, by both the generated
+state helpers and HookKit's runners, so it names one directory even after the
+agent runs `cd`. Persisted family/entity versions are visible in
 `src/scaffold/state.rs`.
 
 Every generated event-handler seam receives the parsed state directory as its

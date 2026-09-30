@@ -9,6 +9,50 @@ fn command_tree_is_internally_consistent() {
     {{ package_name | replace('-', '_') }}::scaffold::cli::Cli::command().debug_assert();
 }
 
+{% if starter == "policy_guard" and aligned_hooks | length == 1 and "pre_tool" in aligned_hooks -%}
+#[test]
+fn argument_errors_fail_closed() {
+    let binary = env!("CARGO_BIN_EXE_{{ binary_name }}");
+    let run = |arguments: &[&str]| {
+        std::process::Command::new(binary)
+            .args(arguments)
+            .output()
+            .expect("the generated hook binary should start")
+    };
+
+    // A guard that cannot decide denies: without a readable harness, exit
+    // status 2 blocks the tool call on Claude Code and Codex.
+    let invalid = run(&["--not-a-generated-argument"]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(invalid.stdout.is_empty());
+    assert!(
+        !invalid.stderr.is_empty(),
+        "the usage error must be reported"
+    );
+{%- for selected_harness in harnesses %}
+{%- set harness_value = "claude" if selected_harness == "claude-code" else selected_harness %}
+
+    let misregistered = run(&["--harness", {{ harness_value | tojson }}, "not-a-generated-command"]);
+{%- if selected_harness == "antigravity" %}
+    // Antigravity documents no exit-status semantics, so it gets a decision.
+    assert_eq!(misregistered.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&misregistered.stdout).contains(r#""decision":"deny""#),
+        "{}",
+        String::from_utf8_lossy(&misregistered.stdout),
+    );
+{%- else %}
+    assert_eq!(misregistered.status.code(), Some(2));
+    assert!(misregistered.stdout.is_empty());
+    assert!(!misregistered.stderr.is_empty());
+{%- endif %}
+{%- endfor %}
+
+    let help = run(&["--help"]);
+    assert_eq!(help.status.code(), Some(0));
+    assert!(!help.stdout.is_empty(), "help must still be printed");
+}
+{% else -%}
 #[test]
 fn argument_errors_exit_non_blockingly() {
     let binary = env!("CARGO_BIN_EXE_{{ binary_name }}");
@@ -30,6 +74,7 @@ fn argument_errors_exit_non_blockingly() {
     assert_eq!(help.status.code(), Some(0));
     assert!(!help.stdout.is_empty(), "help must still be printed");
 }
+{% endif -%}
 {% if harness_mode == "cross" and "file_activity" in state_capabilities and "antigravity" in harnesses %}
 #[test]
 fn antigravity_cannot_select_exact_session_start_support() {

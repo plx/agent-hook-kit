@@ -10,5 +10,5 @@ pub fn handle(
 ) -> hookkit_core::Result<
     <hookkit_claude::catalog::WorktreeRemove as hookkit_core::EventSpec>::CommandOutput,
 > {
-    Ok(hookkit_claude::catalog::WorktreeRemoveOutput::removed())
+    Err(hookkit_core::HookkitError::InvalidProcessEmission("implement WorktreeRemove cleanup"))
 }
