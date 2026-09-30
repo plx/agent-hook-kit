@@ -27,6 +27,7 @@ pub enum EventCategory {
 
 /// Native mechanism used to invoke a hook handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HandlerKind {
     /// A local process using stdin, stdout, stderr, and an exit code.
     Command,
@@ -235,22 +236,6 @@ impl NativeEventDescriptor {
     /// Returns the catalog snapshot implemented by the adapter.
     pub fn snapshot(&self) -> SnapshotId {
         self.snapshot
-    }
-
-    /// Reports whether the descriptor has a native input implementation.
-    ///
-    /// A [`NativeEventDescriptor`] can only be constructed from an
-    /// [`EventSpec`], so this currently always returns `true`.
-    pub fn native_input(&self) -> bool {
-        true
-    }
-
-    /// Reports whether the descriptor has a native output implementation.
-    ///
-    /// A [`NativeEventDescriptor`] can only be constructed from an
-    /// [`EventSpec`], so this currently always returns `true`.
-    pub fn native_output(&self) -> bool {
-        true
     }
 
     /// Returns all implemented native handler mechanisms.

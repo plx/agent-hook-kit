@@ -306,6 +306,12 @@ run = new Listing {{ "check" }}
     }
 
     /// Run one Stop, check the cross-harness invariants, and return stdout.
+    ///
+    /// Every response is one JSON object, except that Codex's snapshot
+    /// defines empty stdout as the `no-op` outcome: an allowed Codex Stop
+    /// with nothing to report prints nothing. That case alone is returned as
+    /// `Value::Null`, which no harness ever prints and which reads as neither
+    /// blocked nor carrying a message.
     fn stop_hook(&self, stop_hook_active: bool) -> Value {
         let output = self.run(
             env!("CARGO_BIN_EXE_turn-completion-agent-hook"),
@@ -318,6 +324,14 @@ run = new Listing {{ "check" }}
             self.harness,
             String::from_utf8_lossy(&output.stderr)
         );
+        if output.stdout.is_empty() {
+            assert_eq!(
+                self.harness, "codex",
+                "only the Codex no-op is empty stdout; {} printed nothing",
+                self.harness
+            );
+            return Value::Null;
+        }
         let stdout: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
             panic!(
                 "{} Stop stdout is not JSON ({error}): {}",

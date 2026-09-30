@@ -976,17 +976,17 @@ mod tests {
         vec![
             (
                 HarnessId::CLAUDE_CODE,
-                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Read","tool_input":{"path":".env"},"tool_use_id":"u","claude_only":{"retained":true}}"#,
+                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Read","tool_input":{"file_path":"/repo/.env"},"tool_use_id":"u","claude_only":{"retained":true}}"#,
                 claude_variables(),
             ),
             (
                 HarnessId::CODEX,
-                br#"{"session_id":"s","transcript_path":null,"cwd":"/repo","hook_event_name":"PreToolUse","model":"gpt-5","turn_id":"t","permission_mode":"default","tool_name":"Read","tool_input":{"path":".env"},"tool_use_id":"u","codex_only":"retained"}"#,
+                br#"{"session_id":"s","transcript_path":null,"cwd":"/repo","hook_event_name":"PreToolUse","model":"gpt-5","turn_id":"t","permission_mode":"default","tool_name":"mcp__fs__read","tool_input":{"path":".env"},"tool_use_id":"u","codex_only":"retained"}"#,
                 EnvironmentVariables::new(),
             ),
             (
                 HarnessId::ANTIGRAVITY,
-                br#"{"conversationId":"s","workspacePaths":["/repo","/lib"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"read_file","args":{"path":".env"},"nativeFlag":true},"stepIdx":7,"antigravityOnly":"retained"}"#,
+                br#"{"conversationId":"s","workspacePaths":["/repo","/lib"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"view_file","args":{"AbsolutePath":"/repo/.env"},"nativeFlag":true},"stepIdx":7,"antigravityOnly":"retained"}"#,
                 EnvironmentVariables::from_pairs([("AMBIENT_ONLY", "ignored")]),
             ),
         ]
@@ -1106,7 +1106,9 @@ mod tests {
             marker: PreCompact,
             input: PreCompactInput,
             event: "PreCompact",
-            claude: serde_json::json!({"trigger": "auto", "custom_instructions": "keep tests"}),
+            // Claude Code sends `custom_instructions: null` for automatic
+            // compaction; only a manual `/compact` carries instructions.
+            claude: serde_json::json!({"trigger": "auto", "custom_instructions": null}),
             codex: serde_json::json!({"turn_id": "t", "trigger": "auto"}),
             output: |harness: &HarnessId| PreCompactOutput::no_op(harness)
         );
@@ -1279,9 +1281,17 @@ mod tests {
                         input.cwd().is_none(),
                         handler_harness == HarnessId::ANTIGRAVITY
                     );
+                    // Each payload uses a real tool of its harness, so the
+                    // path argument keeps that tool's native name.
+                    let (path_key, path) = match handler_harness.as_str() {
+                        "claude-code" => ("file_path", "/repo/.env"),
+                        "codex" => ("path", ".env"),
+                        "antigravity" => ("AbsolutePath", "/repo/.env"),
+                        _ => unreachable!(),
+                    };
                     assert_eq!(
-                        input.tool_input().and_then(|input| input.get("path")),
-                        Some(&serde_json::json!(".env"))
+                        input.tool_input().and_then(|input| input.get(path_key)),
+                        Some(&serde_json::json!(path))
                     );
                     assert!(input.tool_name().is_some());
 
@@ -1497,17 +1507,23 @@ mod tests {
                         TurnCompletionInput::Codex(_) => Ok(TurnCompletionOutput::Codex(
                             hookkit_codex::catalog::StopOutput::no_op(),
                         )),
-                        TurnCompletionInput::Antigravity(_) => Ok(
-                            TurnCompletionOutput::Antigravity(hookkit_antigravity::StopOutput {
-                                decision: "stop".into(),
-                                reason: None,
-                            }),
-                        ),
+                        TurnCompletionInput::Antigravity(_) => {
+                            Ok(TurnCompletionOutput::Antigravity(
+                                hookkit_antigravity::StopOutput::allow_stop(),
+                            ))
+                        }
                         _ => unreachable!(),
                     }
                 },
             )
             .unwrap();
+            assert_eq!(emission.exit_code(), 0);
+            assert!(emission.stderr().is_empty());
+            if expected == HarnessId::CODEX {
+                // Empty stdout is Codex's documented `no-op` outcome.
+                assert!(emission.stdout().is_empty());
+                continue;
+            }
             let json: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
             if expected == HarnessId::ANTIGRAVITY {
                 assert_eq!(json, serde_json::json!({"decision": "stop"}));

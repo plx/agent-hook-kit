@@ -802,6 +802,25 @@ fn artifact_text(dir: &Path) -> String {
     text
 }
 
+/// Asserts the exact quiet no-op stdout of `harness`: an empty JSON object
+/// for Claude Code and Antigravity, and empty stdout for Codex, whose
+/// snapshot defines empty stdout as the `no-op` outcome of every event.
+fn assert_no_op_stdout(harness: &str, stdout: &[u8]) {
+    if harness == "codex" {
+        assert!(
+            stdout.is_empty(),
+            "the Codex no-op is empty stdout, got {:?}",
+            String::from_utf8_lossy(stdout)
+        );
+    } else {
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(stdout).unwrap(),
+            serde_json::json!({}),
+            "{harness} no-op"
+        );
+    }
+}
+
 /// The user-facing `systemMessage` of a Claude or Codex response.
 fn system_message(response: &serde_json::Value) -> &str {
     response["systemMessage"]
@@ -1207,9 +1226,7 @@ fn shared_autofix_codex_stays_quiet() {
     let fixture = fixture_bytes("codex", "post_tool_use.json");
     let output = run_example("shared-posttool-autofix", &fixture, &["--codex"]);
     assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
-    assert_eq!(json, serde_json::json!({}));
+    assert_no_op_stdout("codex", &output.stdout);
 }
 
 #[test]
@@ -1436,10 +1453,7 @@ fn file_activity_agent_hook_records_all_supported_posttool_paths() {
             &[harness_arg.as_str(), "--state-dir", state_arg.as_str()],
         );
         assert!(output.status.success(), "{harness} tracker should succeed");
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
-            serde_json::json!({})
-        );
+        assert_no_op_stdout(harness, &output.stdout);
 
         let identity = if harness == "antigravity" {
             hookkit_session_state::SessionIdentity::Conversation(session.into())
@@ -1476,10 +1490,7 @@ fn file_activity_agent_hook_records_all_supported_posttool_paths() {
         &["--harness=codex", "--state-dir", state_arg.as_str()],
     );
     assert!(compatibility.status.success());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&compatibility.stdout).unwrap(),
-        serde_json::json!({})
-    );
+    assert_no_op_stdout("codex", &compatibility.stdout);
 }
 
 #[test]
@@ -1527,10 +1538,7 @@ fn file_activity_observer_persists_shared_writer_patch_shell_and_gap_analysis_qu
             "{id}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
-            serde_json::json!({})
-        );
+        assert_no_op_stdout("codex", &output.stdout);
         assert!(output.stderr.is_empty(), "{id} observer must remain quiet");
     }
 
@@ -1613,10 +1621,7 @@ fn bundled_start_observer_and_turn_runner_share_one_explicit_state_root() {
         &["--harness=codex", &format!("--state-dir={state_arg}")],
     );
     assert!(started.status.success());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&started.stdout).unwrap(),
-        serde_json::json!({})
-    );
+    assert_no_op_stdout("codex", &started.stdout);
 
     let file = project.join("src/clean.py");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -1627,10 +1632,7 @@ fn bundled_start_observer_and_turn_runner_share_one_explicit_state_root() {
         &["--harness=codex", &format!("--state-dir={state_arg}")],
     );
     assert!(observed.status.success());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&observed.stdout).unwrap(),
-        serde_json::json!({})
-    );
+    assert_no_op_stdout("codex", &observed.stdout);
     assert_eq!(
         session_journal_len(&state_dir, "codex", "codex-ruff-test"),
         1
@@ -1668,11 +1670,11 @@ fn turn_completion_no_pending_work_emits_each_exact_native_no_op() {
         let state_arg = state_dir.to_string_lossy().into_owned();
         let output = run_deferred_case(harness, &project, &state_arg);
         assert!(output.status.success(), "{harness}: {:?}", output.stderr);
-        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         if harness == "antigravity" {
+            let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(response, serde_json::json!({"decision": "stop"}));
         } else {
-            assert_eq!(response, serde_json::json!({}));
+            assert_no_op_stdout(harness, &output.stdout);
         }
         assert!(files_named(&state_dir, "summary.json").is_empty());
     }
@@ -2075,10 +2077,7 @@ fn turn_completion_handled_baseline_suppresses_unchanged_git_dirty_fallback() {
     let second = run_deferred_case("codex", &project, &state_arg);
 
     assert!(second.status.success());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&second.stdout).unwrap(),
-        serde_json::json!({})
-    );
+    assert_no_op_stdout("codex", &second.stdout);
     assert_eq!(
         files_named(&state_dir, "summary.json").len(),
         1,

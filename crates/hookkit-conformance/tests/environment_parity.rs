@@ -20,10 +20,12 @@ struct Supplement {
 #[derive(Deserialize)]
 struct HarnessEnvironment {
     profiles: Vec<EnvironmentProfile>,
+    event_profiles: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
 struct EnvironmentProfile {
+    id: String,
     variables: Vec<EnvironmentVariable>,
 }
 
@@ -54,6 +56,34 @@ fn production_environment_selectors_match_the_selected_supplement() {
     assert_eq!(actual, expected);
 }
 
+#[test]
+fn claude_environment_file_events_match_the_selected_supplement() {
+    let supplement = selected_supplement();
+    let claude = &supplement.harnesses["claude-code"];
+    let profile_variables: BTreeSet<_> = claude
+        .profiles
+        .iter()
+        .find(|profile| profile.id == "environment-file")
+        .expect("environment-file profile")
+        .variables
+        .iter()
+        .filter_map(|variable| variable.name.as_deref())
+        .collect();
+    assert_eq!(profile_variables, BTreeSet::from(["CLAUDE_ENV_FILE"]));
+
+    let expected: BTreeSet<_> = claude
+        .event_profiles
+        .iter()
+        .filter(|(_, profiles)| profiles.iter().any(|profile| profile == "environment-file"))
+        .map(|(event, _)| event.as_str())
+        .collect();
+    let actual: BTreeSet<_> = hookkit_claude::environment::ENVIRONMENT_FILE_EVENTS
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(actual, expected);
+}
+
 fn selectors<E: CommandEnvironmentSpec>() -> (BTreeSet<String>, BTreeSet<String>) {
     (
         E::VARIABLE_NAMES
@@ -67,7 +97,7 @@ fn selectors<E: CommandEnvironmentSpec>() -> (BTreeSet<String>, BTreeSet<String>
     )
 }
 
-fn selected_supplement_selectors() -> BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> {
+fn selected_supplement() -> Supplement {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(std::path::Path::parent)
@@ -80,10 +110,11 @@ fn selected_supplement_selectors() -> BTreeMap<String, (BTreeSet<String>, BTreeS
         .join("contracts/supplements/command-environments")
         .join(registry.supplements.command_environments)
         .join("supplement.yaml");
-    let supplement: Supplement =
-        serde_yaml_ng::from_slice(&std::fs::read(supplement_path).unwrap()).unwrap();
+    serde_yaml_ng::from_slice(&std::fs::read(supplement_path).unwrap()).unwrap()
+}
 
-    supplement
+fn selected_supplement_selectors() -> BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> {
+    selected_supplement()
         .harnesses
         .into_iter()
         .map(|(harness, environment)| {

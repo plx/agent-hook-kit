@@ -552,14 +552,14 @@ mod tests {
                 };
                 assert_eq!(input.tool_name, "shell");
                 assert_eq!(context.harness(), &HarnessId::CODEX);
-                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-1e59dc5-r1"));
+                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-ff6aec9-r1"));
                 assert_eq!(
                     context.event(),
                     &EventId::builtin(HarnessId::CODEX, "PreToolUse")
                 );
                 assert_eq!(
                     context.contract(),
-                    ContractId::builtin("codex/commit-1e59dc5-r1/PreToolUse")
+                    ContractId::builtin("codex/commit-ff6aec9-r1/PreToolUse")
                 );
                 assert_eq!(
                     context.provenance(),
@@ -587,6 +587,97 @@ mod tests {
         let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
         assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
         assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    }
+
+    #[test]
+    fn selected_harnesses_dispatch_events_added_by_the_current_snapshots() {
+        // Claude Code PreModelSwitch, added in docs-2026-09-29-r1.
+        let pre_model_switch = serde_json::to_vec(&serde_json::json!({
+            "session_id": "session-1",
+            "transcript_path": "/tmp/claude-transcript.jsonl",
+            "cwd": "/workspace",
+            "hook_event_name": "PreModelSwitch",
+            "from_model": "claude-sonnet-5",
+            "to_model": "claude-opus-5",
+            "requested_model": "opus",
+            "source": "command",
+            "context_tokens": 182340,
+            "prompt_cache_warm": true,
+            "cache_ttl": "5m",
+            "estimated_cache_write_usd": 1.1396,
+            "pricing": "catalog"
+        }))
+        .unwrap();
+        let claude_variables = EnvironmentVariables::from_pairs([
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_CHILD_SESSION", "1"),
+            ("CLAUDE_CODE_SESSION_ID", "session-1"),
+            ("CLAUDE_PROJECT_DIR", "/workspace"),
+        ]);
+        let emission = execute_harness::<hookkit_claude::protocol::ClaudeCode, _>(
+            pre_model_switch,
+            None,
+            &claude_variables,
+            |input, _environment, context| {
+                assert_eq!(
+                    context.event(),
+                    &EventId::builtin(HarnessId::CLAUDE_CODE, "PreModelSwitch")
+                );
+                assert_eq!(
+                    context.provenance(),
+                    ResolutionProvenance::DefinitiveDiscriminator
+                );
+                let hookkit_claude::protocol::AnyInput::PreModelSwitch(input) = input else {
+                    panic!("resolved the wrong Claude Code event")
+                };
+                assert_eq!(input.to_model, "claude-opus-5");
+                Ok(hookkit_claude::protocol::AnyCommandOutput::PreModelSwitch(
+                    hookkit_claude::events::PreModelSwitchOutput::block("Opus is not approved."),
+                ))
+            },
+        )
+        .unwrap();
+        assert_eq!(emission.exit_code(), 0);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(emission.stdout()).unwrap(),
+            serde_json::json!({"decision": "block", "reason": "Opus is not approved."})
+        );
+
+        // Codex Interrupt, added in commit-ff6aec9-r1.
+        let interrupt = serde_json::to_vec(&serde_json::json!({
+            "session_id": "session-123",
+            "transcript_path": null,
+            "cwd": "/workspace",
+            "hook_event_name": "Interrupt",
+            "model": "gpt-test",
+            "turn_id": "turn-456",
+            "permission_mode": "default"
+        }))
+        .unwrap();
+        let emission = execute_builtin_harness(
+            BuiltinHarness::Codex,
+            interrupt,
+            None,
+            &EnvironmentVariables::new(),
+            |input, _environment, context| {
+                assert_eq!(
+                    context.event(),
+                    &EventId::builtin(HarnessId::CODEX, "Interrupt")
+                );
+                assert_eq!(context.turn_id().unwrap().as_str(), "turn-456");
+                assert!(matches!(input, BuiltinInput::Codex(_)));
+                Ok(BuiltinOutput::Codex(
+                    hookkit_codex::catalog::InterruptOutput::system_message("Turn interrupted.")
+                        .into(),
+                ))
+            },
+        )
+        .unwrap();
+        assert_eq!(emission.exit_code(), 0);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(emission.stdout()).unwrap(),
+            serde_json::json!({"systemMessage": "Turn interrupted."})
+        );
     }
 
     #[test]

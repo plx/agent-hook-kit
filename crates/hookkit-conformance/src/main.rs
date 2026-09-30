@@ -27,9 +27,17 @@ fn main() {
         std::process::exit(1);
     });
     descriptors.sort_by_key(|descriptor| descriptor.contract().as_str());
+    let events = descriptors
+        .iter()
+        .map(event)
+        .collect::<Result<_, _>>()
+        .unwrap_or_else(|error| {
+            eprintln!("conformance failed: {error}");
+            std::process::exit(1);
+        });
     let registry = Registry {
         format_version: 1,
-        events: descriptors.iter().map(event).collect(),
+        events,
     };
     let rendered = format!(
         "{}\n",
@@ -48,25 +56,34 @@ fn main() {
     }
 }
 
-fn event(descriptor: &NativeEventDescriptor) -> Event {
-    Event {
+fn event(descriptor: &NativeEventDescriptor) -> Result<Event, String> {
+    Ok(Event {
         contract: descriptor.contract().to_string(),
         harness: descriptor.event().harness().to_string(),
         event: descriptor.event().name().to_string(),
-        native_input: descriptor.native_input(),
-        native_output: descriptor.native_output(),
-        bindings: descriptor.bindings().iter().map(binding_name).collect(),
+        // A descriptor can only be built from an `EventSpec`, which supplies
+        // both the native parser and the native emitter.
+        native_input: true,
+        native_output: true,
+        bindings: descriptor
+            .bindings()
+            .iter()
+            .map(binding_name)
+            .collect::<Result<_, _>>()?,
         conformance_cases: descriptor.conformance_cases().to_vec(),
-    }
+    })
 }
 
-fn binding_name(binding: &HandlerKind) -> &'static str {
+fn binding_name(binding: &HandlerKind) -> Result<&'static str, String> {
     match binding {
-        HandlerKind::Command => "command",
-        HandlerKind::Http => "http",
-        HandlerKind::McpTool => "mcp_tool",
-        HandlerKind::Prompt => "prompt",
-        HandlerKind::Agent => "agent",
+        HandlerKind::Command => Ok("command"),
+        HandlerKind::Http => Ok("http"),
+        HandlerKind::McpTool => Ok("mcp_tool"),
+        HandlerKind::Prompt => Ok("prompt"),
+        HandlerKind::Agent => Ok("agent"),
+        other => Err(format!(
+            "handler binding {other:?} has no implementation-registry name"
+        )),
     }
 }
 

@@ -1,1 +1,1 @@
-{"decision":"deny","reason":"force push to main not allowed"}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"force push to main not allowed"}}
