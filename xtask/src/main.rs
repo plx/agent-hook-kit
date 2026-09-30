@@ -1775,9 +1775,9 @@ fn render_aligned_handler_template(family: &AlignmentFamily) -> Result<String> {
         "turn_completion" => {
             "    hookkit_common::TurnCompletionOutput::allow(context.harness())\n".to_owned()
         }
-        "permission_request" => {
-            "    hookkit_common::PermissionRequestOutput::allow(context.harness())\n".to_owned()
-        }
+        // Every other family, including `permission_request`, starts from the
+        // aligned no-op. For PermissionRequest that leaves the dialog to the
+        // user; `PermissionRequestOutput::allow` would answer it for them.
         _ => format!("    hookkit_common::{base}Output::no_op(context.harness())\n"),
     };
     Ok(format!(

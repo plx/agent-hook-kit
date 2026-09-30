@@ -1,5 +1,6 @@
+use crate::util::unsupported_harness;
 use hookkit_common::TurnCompletionOutput;
-use hookkit_core::{HarnessId, HookkitError};
+use hookkit_core::{BuiltinHarness, HarnessId, HookkitError};
 use hookkit_pkl_config::schema as pkl;
 use serde::Serialize;
 
@@ -21,20 +22,20 @@ struct HarnessCapabilities {
 /// `reason` only when `decision` is `"continue"`, so an allowed Antigravity
 /// stop has no channel at all.
 fn capabilities(harness: &HarnessId) -> Option<HarnessCapabilities> {
-    match harness.as_str() {
-        "claude-code" => Some(HarnessCapabilities {
+    match BuiltinHarness::from_id(harness)? {
+        BuiltinHarness::ClaudeCode => Some(HarnessCapabilities {
             allowed_user: Some("systemMessage"),
             allowed_agent: None,
             blocked_user: Some("systemMessage"),
             blocked_agent: Some("reason"),
         }),
-        "codex" => Some(HarnessCapabilities {
+        BuiltinHarness::Codex => Some(HarnessCapabilities {
             allowed_user: Some("systemMessage"),
             allowed_agent: None,
             blocked_user: Some("systemMessage"),
             blocked_agent: Some("reason"),
         }),
-        "antigravity" => Some(HarnessCapabilities {
+        BuiltinHarness::Antigravity => Some(HarnessCapabilities {
             allowed_user: None,
             allowed_agent: None,
             blocked_user: None,
@@ -99,7 +100,10 @@ pub(crate) fn plan_stop_lowering(
     policy: pkl::LoweringPolicy,
 ) -> hookkit_core::Result<StopLoweringPlan> {
     let capabilities = capabilities(harness).ok_or_else(|| {
-        invalid_data(format!("turn-completion runner does not support {harness}"))
+        unsupported_harness(
+            harness,
+            "the turn-completion runner has no Stop lowering for this harness",
+        )
     })?;
     let user_channel = if blocked {
         capabilities.blocked_user
@@ -251,8 +255,8 @@ fn build_native_output(
             .filter(|reason| !reason.trim().is_empty())
             .ok_or_else(|| invalid_data("a blocked deferred Stop needs a reason".to_owned()))
     };
-    match harness.as_str() {
-        "claude-code" => {
+    match BuiltinHarness::from_id(harness) {
+        Some(BuiltinHarness::ClaudeCode) => {
             let native = if blocked {
                 hookkit_claude::catalog::StopOutput::block(reason()?)
             } else {
@@ -263,7 +267,7 @@ fn build_native_output(
                 None => native,
             }))
         }
-        "codex" => {
+        Some(BuiltinHarness::Codex) => {
             let native = if blocked {
                 hookkit_codex::catalog::StopOutput::block(reason()?)
             } else {
@@ -274,14 +278,15 @@ fn build_native_output(
                 None => native,
             }))
         }
-        "antigravity" => Ok(TurnCompletionOutput::Antigravity(if blocked {
+        Some(BuiltinHarness::Antigravity) => Ok(TurnCompletionOutput::Antigravity(if blocked {
             hookkit_antigravity::StopOutput::continue_with(reason()?)
         } else {
             hookkit_antigravity::StopOutput::allow_stop()
         })),
-        _ => Err(invalid_data(format!(
-            "turn-completion runner does not support {harness}"
-        ))),
+        _ => Err(unsupported_harness(
+            harness,
+            "the turn-completion runner has no Stop lowering for this harness",
+        )),
     }
 }
 

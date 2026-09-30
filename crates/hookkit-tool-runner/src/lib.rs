@@ -41,14 +41,14 @@ pub use deferred::{
 };
 
 use hookkit_common::{PostToolUseCommandEnvironment, PostToolUseOutput};
-use hookkit_core::{HarnessId, RuntimeContext};
+use hookkit_core::{BuiltinHarness, HarnessId, RuntimeContext};
 use hookkit_file_activity::{
     ActivityReport, FileActivityStore, observe_claude_post_tool_failure,
     observe_post_tool as observe_file_activity, observe_tool_call,
 };
 use hookkit_session_state::{SessionState, StateRoot};
 use std::path::{Path, PathBuf};
-use util::{activity_error, invalid_data, sha256_hex, state_error};
+use util::{activity_error, sha256_hex, state_error, unsupported_harness};
 
 /// Run the full post-tool-use hook from parsed CLI args.
 pub fn run_runner(cli: Cli) -> std::process::ExitCode {
@@ -150,19 +150,20 @@ fn observation_key(ctx: &RuntimeContext<'_>) -> String {
 }
 
 fn post_tool_no_op(harness: &HarnessId) -> hookkit_core::Result<PostToolUseOutput> {
-    match harness.as_str() {
-        "claude-code" => Ok(PostToolUseOutput::Claude(
+    match BuiltinHarness::from_id(harness) {
+        Some(BuiltinHarness::ClaudeCode) => Ok(PostToolUseOutput::Claude(
             hookkit_claude::protocol::PostToolUseOutput::no_op(),
         )),
-        "codex" => Ok(PostToolUseOutput::Codex(
+        Some(BuiltinHarness::Codex) => Ok(PostToolUseOutput::Codex(
             hookkit_codex::protocol::PostToolUseOutput::no_op(),
         )),
-        "antigravity" => Ok(PostToolUseOutput::Antigravity(
+        Some(BuiltinHarness::Antigravity) => Ok(PostToolUseOutput::Antigravity(
             hookkit_antigravity::PostToolUseOutput::default(),
         )),
-        _ => Err(invalid_data(format!(
-            "file-activity observer does not support {harness}"
-        ))),
+        _ => Err(unsupported_harness(
+            harness,
+            "the file-activity observer has no PostToolUse lowering for this harness",
+        )),
     }
 }
 
@@ -186,8 +187,8 @@ pub fn run_turn_completion_runner(cli: TurnCompletionCli) -> std::process::ExitC
 /// session-start timing is desired even before another stateful hook runs.
 pub fn run_session_start_observer(cli: SessionStartCli) -> std::process::ExitCode {
     let state_dir = cli.state_dir;
-    match cli.harness.as_str() {
-        "claude-code" => hookkit_runtime::typed::run_typed::<
+    match BuiltinHarness::from_id(&cli.harness) {
+        Some(BuiltinHarness::ClaudeCode) => hookkit_runtime::typed::run_typed::<
             hookkit_claude::protocol::SessionStart,
             _,
         >(move |_, environment, ctx| {
@@ -195,19 +196,24 @@ pub fn run_session_start_observer(cli: SessionStartCli) -> std::process::ExitCod
             ensure_session_metadata(ctx, state_dir.as_deref(), Some(&anchor))?;
             Ok(hookkit_claude::protocol::SessionStartOutput::no_op())
         }),
-        "codex" => hookkit_runtime::typed::run_typed::<hookkit_codex::catalog::SessionStart, _>(
-            move |_, _, ctx| {
-                let anchor = ctx
-                    .workspace_roots()
-                    .first()
-                    .map(|root| PathBuf::from(root.as_str()));
-                ensure_session_metadata(ctx, state_dir.as_deref(), anchor.as_deref())?;
-                Ok(hookkit_codex::catalog::SessionStartOutput::no_op())
-            },
-        ),
-        harness => {
+        Some(BuiltinHarness::Codex) => hookkit_runtime::typed::run_typed::<
+            hookkit_codex::catalog::SessionStart,
+            _,
+        >(move |_, _, ctx| {
+            let anchor = ctx
+                .workspace_roots()
+                .first()
+                .map(|root| PathBuf::from(root.as_str()));
+            ensure_session_metadata(ctx, state_dir.as_deref(), anchor.as_deref())?;
+            Ok(hookkit_codex::catalog::SessionStartOutput::no_op())
+        }),
+        _ => {
             eprintln!(
-                "session-start-state-agent-hook: {harness} has no native SessionStart event; use --claude or --codex"
+                "session-start-state-agent-hook: {}",
+                unsupported_harness(
+                    &cli.harness,
+                    "it has no native SessionStart event; use --claude or --codex",
+                )
             );
             std::process::ExitCode::from(1)
         }

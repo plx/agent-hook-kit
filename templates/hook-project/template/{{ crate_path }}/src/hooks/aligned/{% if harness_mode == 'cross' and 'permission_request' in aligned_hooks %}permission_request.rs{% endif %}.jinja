@@ -8,5 +8,5 @@ pub fn handle(
     context: &hookkit_core::RuntimeContext<'_>,
     _state_dir: Option<&std::path::Path>,
 ) -> hookkit_core::Result<hookkit_common::PermissionRequestOutput> {
-    hookkit_common::PermissionRequestOutput::allow(context.harness())
+    hookkit_common::PermissionRequestOutput::no_op(context.harness())
 }

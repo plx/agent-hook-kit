@@ -49,6 +49,15 @@ It never guesses the hook from input JSON.
 Use only the harnesses recorded in `hookkit-template.manifest.yml`. Register
 the complete command line for the matching native hook event. The template
 does not edit live Claude Code, Codex, or Antigravity configuration.
+{% if "file_activity" in state_capabilities and starter != "immediate_quality"
+      and ((harness_mode == "cross" and "post_tool" in aligned_hooks and "claude-code" in harnesses)
+           or (harness_mode == "single" and harness == "claude-code" and "post_tool_use" in native_hooks)) %}
+On Claude Code, register the
+`{{ "post-tool" if harness_mode == "cross" else "post-tool-use" }}` command for both `PostToolUse` and
+`PostToolUseFailure`. It runs HookKit's file-activity observer, which also
+records the writes of a tool call that failed afterwards (for example
+`sed -i … && pytest`), so the Stop runner still checks those files.
+{% endif -%}
 {% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
 The runner requires `pkl` {{ compatibility.pkl_version }}. The generated package
 owns this policy:

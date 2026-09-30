@@ -804,6 +804,46 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
                 "instead of passing through in dispatch.rs"
             )
 
+    claude_file_activity_post_tool = (
+        "file_activity" in data["state_capabilities"]
+        and data["starter"] != "immediate_quality"
+        and (
+            (
+                data["harness_mode"] == "cross"
+                and "post_tool" in data["aligned_hooks"]
+                and "claude-code" in data["harnesses"]
+            )
+            or (
+                data["harness_mode"] == "single"
+                and data["harness"] == "claude-code"
+                and "post_tool_use" in data["native_hooks"]
+            )
+        )
+    )
+    if claude_file_activity_post_tool:
+        # The file-activity observer also records failed Claude tool calls,
+        # which may have written files before failing.
+        readme = (crate / "README.md").read_text(encoding="utf-8")
+        if "`PostToolUseFailure`" not in readme:
+            raise AcceptanceFailure(
+                f"{case.name}: README does not bind the file-activity command to "
+                "Claude Code PostToolUseFailure"
+            )
+
+    if data["harness_mode"] == "cross" and "permission_request" in data["aligned_hooks"]:
+        # An aligned PermissionRequest allow answers the permission dialog on
+        # the user's behalf; the starter must leave the dialog to the user.
+        starter_path = crate / "src" / "hooks" / "aligned" / "permission_request.rs"
+        starter_source = starter_path.read_text(encoding="utf-8")
+        if (
+            "hookkit_common::PermissionRequestOutput::no_op(" not in starter_source
+            or "PermissionRequestOutput::allow(" in starter_source
+        ):
+            raise AcceptanceFailure(
+                f"{case.name}: aligned PermissionRequest starter auto-approves "
+                f"permission requests instead of passing through in {starter_path.name}"
+            )
+
     if (
         data["harness_mode"] == "single"
         and data["starter"] == "custom"

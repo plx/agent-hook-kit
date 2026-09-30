@@ -18,12 +18,13 @@ use crate::exec::{
 use crate::snapshot::{Snapshot, snapshot_scope};
 use crate::util::{
     absolute_from, invalid_data, normalize_path, rel_display, slash_path, truncate_chars,
+    unsupported_harness,
 };
 use hookkit_common::message::{DiagnosticArtifact, DiagnosticReport};
 use hookkit_common::{
     NoticeLevel, PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput, UserNotice,
 };
-use hookkit_core::{HarnessId, RuntimeContext};
+use hookkit_core::{BuiltinHarness, HarnessId, RuntimeContext};
 use hookkit_file_activity::{FileActivityTarget, observe_post_tool as observe_file_activity};
 use hookkit_pkl_config::schema as pkl;
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
@@ -502,8 +503,8 @@ pub(crate) fn lower_report(
         .as_deref()
         .map(|reason| nonblank_block_reason(reason, agent.as_deref()));
 
-    match harness.as_str() {
-        "claude-code" => {
+    match BuiltinHarness::from_id(harness) {
+        Some(BuiltinHarness::ClaudeCode) => {
             let mut native = match &agent {
                 Some(agent) => hookkit_claude::protocol::PostToolUseOutput::with_context(agent),
                 None => hookkit_claude::protocol::PostToolUseOutput::no_op(),
@@ -516,7 +517,7 @@ pub(crate) fn lower_report(
             }
             Ok(PostToolUseOutput::Claude(native))
         }
-        "codex" => {
+        Some(BuiltinHarness::Codex) => {
             let mut native = match &agent {
                 Some(agent) => hookkit_codex::protocol::PostToolUseOutput::with_context(agent),
                 None => hookkit_codex::protocol::PostToolUseOutput::no_op(),
@@ -529,7 +530,7 @@ pub(crate) fn lower_report(
             }
             Ok(PostToolUseOutput::Codex(native))
         }
-        "antigravity" => {
+        Some(BuiltinHarness::Antigravity) => {
             // Antigravity's PostToolUse output is an empty object: no user,
             // agent, or block channel exists, so every message is unavailable.
             let unrepresentable = user.is_some() || agent.is_some() || block.is_some();
@@ -559,9 +560,10 @@ pub(crate) fn lower_report(
             }
             Ok(PostToolUseOutput::Antigravity(native))
         }
-        _ => Err(invalid_data(format!(
-            "post-tool-use runner does not support {harness}"
-        ))),
+        _ => Err(unsupported_harness(
+            harness,
+            "the post-tool-use runner has no PostToolUse lowering for this harness",
+        )),
     }
 }
 
@@ -579,9 +581,10 @@ fn nonblank_block_reason(reason: &str, agent: Option<&str>) -> String {
 
 fn format_notice(notice: &UserNotice) -> String {
     match notice.level {
-        NoticeLevel::Info => notice.text.clone(),
         NoticeLevel::Warning => format!("warning: {}", notice.text),
         NoticeLevel::Error => format!("error: {}", notice.text),
+        // `Info` and any level added later render without a prefix.
+        _ => notice.text.clone(),
     }
 }
 

@@ -1,6 +1,6 @@
 //! Small path, error, and text helpers shared by both runners.
 
-use hookkit_core::HookkitError;
+use hookkit_core::{HarnessId, HookkitError};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn state_error(error: hookkit_session_state::StateError) -> HookkitError {
@@ -13,6 +13,14 @@ pub(crate) fn activity_error(error: hookkit_file_activity::FileActivityError) ->
 
 pub(crate) fn invalid_data(message: String) -> HookkitError {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message).into()
+}
+
+/// The error a runner returns for a harness it has no native lowering for.
+pub(crate) fn unsupported_harness(harness: &HarnessId, message: impl Into<String>) -> HookkitError {
+    HookkitError::UnsupportedHarness {
+        harness: harness.clone(),
+        message: message.into(),
+    }
 }
 
 pub(crate) fn path_arg(path: &Path) -> String {

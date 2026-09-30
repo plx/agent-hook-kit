@@ -38,6 +38,10 @@ pub struct UserNotice {
 }
 
 /// Severity level for user-facing notices.
+///
+/// Levels may be added in later releases, so matches outside this crate need
+/// a wildcard arm.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoticeLevel {
