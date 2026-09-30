@@ -280,5 +280,6 @@ The coordinated work that selecting this snapshot required has landed:
 A final review after selection found gaps in this frozen snapshot: missing
 exit-0 and exit-2 outcomes, HTTP bindings that ignore per-event failure
 contracts, and a `UserPromptExpansion` input that the Agent SDK types
-optional. The successor `docs-2026-09-30-r1` corrects them; see
+optional. The successor `docs-2026-09-30-r1` corrects them and is selected
+in its place; see
 [`2026-09-30-claude-code-hooks.md`](2026-09-30-claude-code-hooks.md).

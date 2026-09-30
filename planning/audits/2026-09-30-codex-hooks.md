@@ -1,8 +1,8 @@
 # Codex hook contract correction: `commit-ff6aec9-r2`
 
 - Audit date: 2026-09-30
-- Previous snapshot: `commit-ff6aec9-r1` (selected)
-- Successor snapshot: `commit-ff6aec9-r2` (frozen, not yet selected)
+- Previous snapshot: `commit-ff6aec9-r1` (superseded)
+- Successor snapshot: `commit-ff6aec9-r2` (frozen; selected in `620d5f1`)
 - Pinned upstream revision: unchanged,
   `ff6aec96948b70d94983af2641a6b67c94faeff5` (tag `rust-v0.159.2`)
 - Official hook reference: <https://learn.chatgpt.com/docs/hooks.md>,
@@ -92,4 +92,8 @@ is incomplete but not wrong, so `-r2` keeps the outcome sets unchanged.
   change the same way.
 - A successor command-environment supplement must target `-r2`.
 
-Until then `contracts/registry.yaml` keeps `commit-ff6aec9-r1` selected.
+`9fb45bb` corrected the `PostToolUseOutput::with_continue` rustdoc.
+`620d5f1` moved the literals, documented the compaction turn abort on
+`PostCompactOutput` and `PreCompactOutput`, and selected this snapshot
+together with the other 2026-09-30 successors and the supplement
+`command-environments-2026-09-30-r2`.

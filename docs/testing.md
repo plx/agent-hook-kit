@@ -139,11 +139,18 @@ supplement through `cargo xtask contracts upstream-sources`; supplement rows
 are labeled `command-environments/<supplement-id>/<source-id>`. It checks the
 vendored Codex schemas against upstream at the pinned revision and at upstream
 HEAD, lists pinned source trees that changed for review, and re-hashes every
-documentation URL that records a `content_sha256`. It exits 0 when nothing
-drifted, 1 on drift or a vendored-evidence mismatch, and 2 when discovery
-itself fails, so a broken check never looks clean. It never modifies the
-checkout: a drift report is a prompt to author a successor snapshot or
-supplement, never to edit the selected one.
+documentation URL that records a `content_sha256`. A file in a GitHub
+repository is hashed through its `raw.githubusercontent.com` URL, because a
+`github.com/.../blob/...` page is HTML that changes per request; new evidence
+must record the raw URL, and `contracts check` rejects a content hash on a
+`github.com` URL in a draft or in evidence retrieved on or after 2026-09-30.
+When two selected sources pin one URL to different hashes and the later
+retrieval cites the earlier hash after review, the earlier row is reported as
+acknowledged drift rather than failing. It exits 0 when nothing drifted, 1 on
+drift or a vendored-evidence mismatch, and 2 when discovery itself fails, so a
+broken check never looks clean. It never modifies the checkout: a drift report
+is a prompt to author a successor snapshot or supplement, never to edit the
+selected one.
 
 ## Failure classification
 

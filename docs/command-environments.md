@@ -75,9 +75,10 @@ uses it as the stable Claude Code root: aligned `project_roots()` and
 
 Every row also accepts this optional state:
 
-- `CLAUDE_EFFORT` when the model supports effort, and `TRACEPARENT` (which may
-  be empty) when trace context propagates. An empty `CLAUDE_EFFORT` is absent,
-  and an unknown effort value is kept.
+- `CLAUDE_EFFORT` (Claude Code v2.1.133 or later) when the model supports
+  effort, and `TRACEPARENT` (which may be empty) when trace context
+  propagates. An empty `CLAUDE_EFFORT` is absent, and an unknown effort value
+  is kept.
 - `CLAUDE_PID`, Claude Code's own process ID (v2.1.214 or later), as a
   positive decimal integer. Claude Code never exports anything else, so an
   empty, signed, padded, non-digit, zero, overflowing, or non-UTF-8 value is
@@ -277,7 +278,8 @@ source:
   [self-hosted environment configuration](https://code.claude.com/docs/en/self-hosted-environments-configuration)
   (runner-provided `CLAUDE_CODE_REMOTE_SESSION_ID`), and the
   [Claude Code changelog](https://github.com/anthropics/claude-code/blob/2282079d6ac8824ec4b72a432a03e0c636e0512f/CHANGELOG.md)
-  pinned by the selected snapshot (the v2.1.224 self-hosted floor).
+  pinned by the selected snapshot (the v2.1.224 self-hosted and v2.1.133
+  `CLAUDE_EFFORT` floors).
 - Codex: [hooks reference](https://learn.chatgpt.com/docs/hooks) and pinned
   `rust-v0.159.2` source:
   [`discovery.rs`](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/hooks/src/engine/discovery.rs#L262-L270)
@@ -295,9 +297,11 @@ source:
 
 The event inventory remains governed by the immutable snapshots under
 [`contracts/`](../contracts/README.md). Its separately versioned
-[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-09-30-r1/),
-`command-environments-2026-09-30-r1`, is the machine-validated evidence behind
+[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-09-30-r2/),
+`command-environments-2026-09-30-r2`, is the machine-validated evidence behind
 the command-process state summarized here. It succeeds
-`command-environments-2026-09-29-r1` without a schema change: the messaging
-token became its own profile, conditional on the socket, and the self-hosted
-evidence gained the two sources above.
+`command-environments-2026-09-30-r1` with the same profiles and event
+mappings: it links the 2026-09-30 successor snapshots, and its changelog
+evidence now cites the entries that add `CLAUDE_PROJECT_DIR` (1.0.58),
+`CLAUDE_PLUGIN_DATA` (2.1.78), and `CLAUDE_EFFORT` (2.1.133), which the
+earlier revision said did not exist.

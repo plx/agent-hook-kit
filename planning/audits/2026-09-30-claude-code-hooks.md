@@ -1,8 +1,8 @@
 # Claude Code hook contract refresh: `docs-2026-09-30-r1`
 
 - Audit date: 2026-09-30
-- Previous snapshot: `docs-2026-09-29-r1` (selected; Claude Code 2.1.285)
-- Successor snapshot: `docs-2026-09-30-r1` (frozen, not yet selected)
+- Previous snapshot: `docs-2026-09-29-r1` (superseded; Claude Code 2.1.285)
+- Successor snapshot: `docs-2026-09-30-r1` (frozen; selected in `620d5f1`)
 - Official hook reference: <https://code.claude.com/docs/en/hooks.md>
 - Claude Code changelog revision: `2282079d6ac8824ec4b72a432a03e0c636e0512f`
   (byte-identical at `main` `732e167ee9d71296b4b63d6f529ac1334513826a`)
@@ -150,8 +150,8 @@ No event, field, or enum value was removed.
 
 ## Follow-up
 
-Selecting this snapshot needs coordinated work outside the ledger. The
-command-environment supplement and native Rust changes are listed with the
+Selecting this snapshot needed coordinated work outside the ledger. The
+command-environment supplement and native Rust changes were listed with the
 other harnesses in the integration notes for this refresh:
 
 - A successor command-environment supplement that targets this snapshot,
@@ -169,4 +169,16 @@ other harnesses in the integration notes for this refresh:
 - The status overlays, the template catalog, the `xtask` template tests, and
   the README selection table.
 
-Until then `contracts/registry.yaml` keeps `docs-2026-09-29-r1` selected.
+That work has landed:
+
+- `9fb45bb` made `command_source` optional, added
+  `UserPromptExpansionOutput::with_suppress_original_prompt`, and corrected
+  the `Stop`/`SubagentStop` `with_context` and `PreToolUse` rewrite rustdoc.
+- `620d5f1` selected this snapshot in `contracts/registry.yaml` together with
+  `codex/commit-ff6aec9-r2`, `antigravity/docs-2026-09-30-r1`, and the
+  successor supplement `command-environments-2026-09-30-r2`. It moved the
+  contract ids, status overlays, template catalog, and `xtask` tests, and
+  declared `user-prompt-submit/command-exit-2-suppress-original-prompt`. The
+  crate's snapshot test classifies every other new process case, and the
+  `block-without-reason` negatives, with the reason no typed constructor
+  emits it.

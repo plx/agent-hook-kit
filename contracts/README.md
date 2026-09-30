@@ -23,14 +23,14 @@ rewriting protocol history.
 
 | Harness | Selected snapshot | Events | Audit |
 | --- | --- | --- | --- |
-| Claude Code | [`docs-2026-09-29-r1`](harnesses/claude-code/snapshots/docs-2026-09-29-r1/) (Claude Code 2.1.285) | 33, including `PreModelSwitch` and `PostModelSwitch` | [`2026-09-29-claude-code-hooks.md`](../planning/audits/2026-09-29-claude-code-hooks.md) |
-| Codex | [`commit-ff6aec9-r1`](harnesses/codex/snapshots/commit-ff6aec9-r1/) (`rust-v0.159.2`) | 12, including `Interrupt` | [`2026-09-29-codex-hooks.md`](../planning/audits/2026-09-29-codex-hooks.md) |
-| Antigravity | [`docs-2026-09-29-r1`](harnesses/antigravity/snapshots/docs-2026-09-29-r1/) | 5 | [`2026-09-29-antigravity-hooks.md`](../planning/audits/2026-09-29-antigravity-hooks.md) |
+| Claude Code | [`docs-2026-09-30-r1`](harnesses/claude-code/snapshots/docs-2026-09-30-r1/) (Claude Code 2.1.285) | 33, including `PreModelSwitch` and `PostModelSwitch` | [`2026-09-30-claude-code-hooks.md`](../planning/audits/2026-09-30-claude-code-hooks.md) |
+| Codex | [`commit-ff6aec9-r2`](harnesses/codex/snapshots/commit-ff6aec9-r2/) (`rust-v0.159.2`) | 12, including `Interrupt` | [`2026-09-30-codex-hooks.md`](../planning/audits/2026-09-30-codex-hooks.md) |
+| Antigravity | [`docs-2026-09-30-r1`](harnesses/antigravity/snapshots/docs-2026-09-30-r1/) | 5 | [`2026-09-30-antigravity-hooks.md`](../planning/audits/2026-09-30-antigravity-hooks.md) |
 
 <!-- markdownlint-enable MD013 -->
 
 The selected command-environment supplement is
-[`command-environments-2026-09-30-r1`](supplements/command-environments/command-environments-2026-09-30-r1/),
+[`command-environments-2026-09-30-r2`](supplements/command-environments/command-environments-2026-09-30-r2/),
 which maps all 50 events; [`docs/command-environments.md`](../docs/command-environments.md)
 summarizes it. [`status/support.md`](status/support.md) is the generated
 support matrix.

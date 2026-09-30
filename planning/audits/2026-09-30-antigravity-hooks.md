@@ -1,8 +1,8 @@
 # Antigravity hook contract refresh: `docs-2026-09-30-r1`
 
 - Audit date: 2026-09-30
-- Previous snapshot: `docs-2026-09-29-r1` (selected)
-- Successor snapshot: `docs-2026-09-30-r1` (frozen, not yet selected)
+- Previous snapshot: `docs-2026-09-29-r1` (superseded)
+- Successor snapshot: `docs-2026-09-30-r1` (frozen; selected in `620d5f1`)
 - Official hook reference: <https://antigravity.google/docs/hooks> and
   <https://antigravity.google/docs/hooks.md> (site build ETag `"_KFTNQ"`)
 
@@ -72,4 +72,7 @@ so the successor relaxes both tool events:
 - A successor command-environment supplement must target this snapshot. The
   environment contract is unchanged.
 
-Until then `contracts/registry.yaml` keeps `docs-2026-09-29-r1` selected.
+`620d5f1` made these changes and selected this snapshot, together with the
+other 2026-09-30 successors and the supplement
+`command-environments-2026-09-30-r2`. `ToolCall.args` now reads a missing
+or `null` value as an empty map and re-serializes each form as sent.

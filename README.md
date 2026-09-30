@@ -102,14 +102,14 @@ snapshots, and conformance fails if they drift apart.
 
 | Harness | Selected snapshot | Events | Refresh audit |
 | --- | --- | --- | --- |
-| Claude Code | `claude-code/docs-2026-09-29-r1` (Claude Code 2.1.285) | 33, including `PreModelSwitch` and `PostModelSwitch` | [`2026-09-29-claude-code-hooks.md`](planning/audits/2026-09-29-claude-code-hooks.md) |
-| Codex | `codex/commit-ff6aec9-r1` (`rust-v0.159.2`) | 12, including `Interrupt` | [`2026-09-29-codex-hooks.md`](planning/audits/2026-09-29-codex-hooks.md) |
-| Antigravity | `antigravity/docs-2026-09-29-r1` (2.0, CLI, and IDE) | 5 | [`2026-09-29-antigravity-hooks.md`](planning/audits/2026-09-29-antigravity-hooks.md) |
+| Claude Code | `claude-code/docs-2026-09-30-r1` (Claude Code 2.1.285) | 33, including `PreModelSwitch` and `PostModelSwitch` | [`2026-09-30-claude-code-hooks.md`](planning/audits/2026-09-30-claude-code-hooks.md) |
+| Codex | `codex/commit-ff6aec9-r2` (`rust-v0.159.2`) | 12, including `Interrupt` | [`2026-09-30-codex-hooks.md`](planning/audits/2026-09-30-codex-hooks.md) |
+| Antigravity | `antigravity/docs-2026-09-30-r1` (2.0, CLI, and IDE) | 5 | [`2026-09-30-antigravity-hooks.md`](planning/audits/2026-09-30-antigravity-hooks.md) |
 
 <!-- markdownlint-enable MD013 -->
 
 The command-process environment is recorded separately in supplement
-`command-environments-2026-09-30-r1` and summarized in
+`command-environments-2026-09-30-r2` and summarized in
 [`docs/command-environments.md`](docs/command-environments.md).
 
 ### Claude Code notes
@@ -131,7 +131,14 @@ The command-process environment is recorded separately in supplement
   `terminalSequence`; builders for discarded fields are deprecated.
 - `WorktreeRemove` is decided by exit code alone, so a HookKit runtime error
   (exit 1) blocks the removal while the worktree still exists. A
-  `UserPromptSubmit` block reason is shown only to the user, never to Claude.
+  `UserPromptSubmit` block reason is shown only to the user, never to Claude,
+  and the block message ends with the prompt text unless the response sets
+  `with_suppress_original_prompt(true)`, which also works on an exit-2 block
+  (`into_blocking_error`).
+- On `Stop` and `SubagentStop`, `with_context` keeps Claude working just as a
+  block does, subject to `stop_hook_active` and the continuation cap. A hook
+  that only reports should return `no_op()`, adding a user notice with
+  `with_system_message`.
 - Exit-0 stderr reaches only Claude Code's debug log. User-visible notices
   belong in `systemMessage`.
 
@@ -152,6 +159,10 @@ The command-process environment is recorded separately in supplement
 - A blank (after trimming) block reason or exit-2 stderr is an emission error,
   because Codex would treat it as a failed hook and not block. Text context
   that starts with `{` or `[` is sent as structured `additionalContext`.
+- A synchronous `continue: false` means different things per event. On
+  `PostToolUse` it replaces the tool result the model sees and the turn goes
+  on; on `PreCompact` and `PostCompact` it aborts the turn, for manual and
+  automatic compaction alike.
 - `apply_patch` hooks carry the patch text in `tool_input.command`, for example
   `{"command": "*** Begin Patch\n*** Update File: src/lib.rs\n...*** End Patch\n"}`.
   Tool events report the step's own working directory in `cwd`.
@@ -164,8 +175,10 @@ The command-process environment is recorded separately in supplement
 - Every input carries five common fields: `conversationId`, `workspacePaths`,
   `transcriptPath`, `artifactDirectoryPath`, and the optional `modelName`
   (`model_name`). `workspacePaths` may be empty, and `PostToolUse.toolCall`
-  may be absent (`Option<ToolCall>`) on IDE builds. An empty `error` means
-  success; use `error_message()` or `failed()` instead of `error.is_some()`.
+  may be absent (`Option<ToolCall>`) on IDE builds. A tool that takes no
+  arguments may send `toolCall.args` as `null` or leave it out; both read as
+  an empty `args` map. An empty `error` means success; use `error_message()`
+  or `failed()` instead of `error.is_some()`.
 - Built-in file tools take PascalCase arguments, such as
   `view_file {"AbsolutePath": ...}` and `write_to_file {"TargetFile": ...}`.
 - `PreToolUseOutput::allow()` auto-approves and bypasses Ask presets. There is
