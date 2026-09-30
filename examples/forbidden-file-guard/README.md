@@ -9,6 +9,9 @@ forbidden-file-guard --harness=codex
 forbidden-file-guard --harness=antigravity
 ```
 
+`--harness=claude-code`, HookKit's canonical identity, is accepted as an alias
+for `claude`.
+
 ## Responses
 
 A call that touches a forbidden path gets the harness's native deny, with a
@@ -34,9 +37,12 @@ or panics, or the response cannot be emitted), it blocks the call: exit 2 with
 the diagnostic on stderr for Claude Code and Codex, and a `deny` decision for
 Antigravity. A policy file that fails to load is also a deny.
 
-Argument errors, such as `--harness=claud`, print the usage error and exit 1,
-which Claude Code and Codex treat as a non-blocking hook error. Clap's default
-status 2 would be read as a blocking decision. `--help` and `--version` exit 0.
+Argument errors, such as `--harness=claud` or `--confg`, block the call too:
+a guard that cannot read its own command line cannot decide. The usage error
+becomes one `hookkit:` stderr line and the guard exits 2, which Claude Code
+and Codex treat as a block, or answers `deny` when `--harness` names
+Antigravity. A non-blocking exit 1 would let every call through while the hook
+is misconfigured. `--help` and `--version` exit 0.
 
 ## Configuration
 
@@ -66,19 +72,24 @@ commented version. Patterns are matched against both absolute paths and paths
 relative to each policy root. Home `~/` patterns are expanded before glob
 compilation.
 
-The policy roots are the stable project roots followed by the native working
-directory: Claude Code's `CLAUDE_PROJECT_DIR` and its current `cwd`, Codex's
-`cwd`, and Antigravity's workspace paths. Claude Code's `cwd` follows `cd` and
-worktree switches, so after `cd src` or `cd /tmp` the guard still discovers the
-project policy and matches `secrets/**` relative to the project root. The
-current directory stays a root so a worktree the agent entered is covered too.
+The policy roots are the stable project roots, then the native working
+directory, then the checkout enclosing it: Claude Code's `CLAUDE_PROJECT_DIR`,
+its current `cwd`, and the nearest ancestor of `cwd` with a `.git` directory
+or file; Codex's `cwd`; and Antigravity's workspace paths. Claude Code's `cwd`
+follows `cd` and worktree switches, so after `cd src` or `cd /tmp` the guard
+still discovers the project policy and matches `secrets/**` relative to the
+project root. `CLAUDE_PROJECT_DIR` stays at the main checkout when Claude Code
+enters a git worktree, so the worktree's root (its `.git` file) is a root as
+well, and `secrets/**` still covers the worktree's `secrets/` after a `cd src`
+inside it.
 
 `access_policy` selects one of three postures:
 
 - `inspect_known` matches recovered candidates and allows analysis or resolver gaps;
 - `deny_unresolved` also denies any incomplete analysis or materialization; and
-- `deny_all_shell` denies exact native shell calls while continuing to inspect
-  non-shell calls.
+- `deny_all_shell` denies native shell calls (Claude Code `Bash`,
+  `PowerShell`, and `Monitor`, Codex `Bash`, and Antigravity `run_command`)
+  while continuing to inspect non-shell calls.
 
 The legacy `block_shell_commands: true` remains accepted and maps to
 `deny_all_shell`; `false` maps to the default `inspect_known` behavior.
@@ -134,3 +145,14 @@ treating static analysis as isolation.
 
 Native cwd determines relative operand meaning. Workspace roots determine
 policy discovery and project-relative matching; they never rewrite operands.
+
+Two shells are only partly visible. Claude Code's `PowerShell` and `Monitor`
+commands are not parsed at all: `deny_all_shell` denies them and
+`deny_unresolved` denies them as unresolved, but under `inspect_known` a
+command such as `Get-Content .env` goes through. Codex runs a shell command in its `workdir` argument, which the
+`Bash` hook payload omits, so a relative operand such as `token.txt` may name
+`secrets/token.txt`. The guard resolves it against the hook's `cwd` anyway,
+also matches it against every root-relative pattern anchored anywhere (so
+`app/secrets/token.txt` matches `secrets/**`), and counts it as unresolved:
+`deny_unresolved` denies such a call, while `inspect_known` cannot see a
+workdir inside the forbidden directory.

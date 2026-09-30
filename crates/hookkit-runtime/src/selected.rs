@@ -47,7 +47,14 @@ where
 {
     let hint = hint.as_ref().map(EventSelector::event_id);
     let invocation = parse_for_harness(&H::ID, hint.as_ref(), bytes.into())?;
-    execute_invocation::<H, _>(&invocation, hint, variables, diagnostics, handler)
+    execute_invocation::<H, _>(
+        &invocation,
+        hint,
+        variables,
+        diagnostics,
+        &mut None,
+        handler,
+    )
 }
 
 /// Rejects a hint for another harness before any payload analysis, then
@@ -66,11 +73,16 @@ fn parse_for_harness(
     RawInvocation::parse(bytes)
 }
 
+/// Resolves, decodes, handles, and emits one invocation.
+///
+/// `resolved` receives the event once the payload has decoded as it, so a
+/// runner can lower a later handler or emission failure for that event.
 fn execute_invocation<H, F>(
     invocation: &RawInvocation,
     hint: Option<EventId>,
     variables: &EnvironmentVariables,
     diagnostics: &dyn DiagnosticsSink,
+    resolved: &mut Option<EventId>,
     handler: F,
 ) -> hookkit_core::Result<ProcessEmission>
 where
@@ -86,39 +98,40 @@ where
     // `H::decode` then parses the payload exactly once. Only a decoding
     // failure re-runs the validating resolver, to classify the error the same
     // way `resolve_event` does.
-    let resolved = resolve_event_with(
+    let selected = resolve_event_with(
         &descriptors,
         H::ID,
         invocation,
         hint.clone(),
         ParserCheck::DeferToDecode,
     )?;
-    let input = match H::decode(&resolved.event, invocation) {
+    let input = match H::decode(&selected.event, invocation) {
         Ok(input) => input,
         Err(error) => {
             resolve_event(&descriptors, H::ID, invocation, hint)?;
             return Err(hookkit_core::HookkitError::InvalidInputForEvent {
-                event: resolved.event,
+                event: selected.event,
                 source: Box::new(error),
             });
         }
     };
     let input_event = H::input_event(&input);
-    if input_event != resolved.event {
+    if input_event != selected.event {
         return Err(hookkit_core::HookkitError::DecodedEventMismatch {
-            resolved: resolved.event,
+            resolved: selected.event,
             decoded: input_event,
         });
     }
+    *resolved = Some(input_event.clone());
     let environment =
         <H::CommandEnvironment as CommandEnvironmentSpec>::from_variables(&input_event, variables)?;
     H::validate_command_environment(&input, &environment)?;
     let context = RuntimeContext::new(
         H::ID,
-        resolved.snapshot,
+        selected.snapshot,
         input_event.clone(),
-        resolved.contract,
-        resolved.provenance,
+        selected.contract,
+        selected.provenance,
         invocation,
         H::context(&input),
         diagnostics,
@@ -133,7 +146,7 @@ where
     }
     crate::typed::validate_command_emission(
         H::encode_command(&input_event, output)?,
-        resolved.contract,
+        selected.contract,
     )
 }
 
@@ -141,8 +154,10 @@ where
 ///
 /// On any failure it writes one `hookkit: <program> <hook> failed: ...` line
 /// to stderr and exits 1, which Claude Code and Codex treat as a non-blocking
-/// error: the pending action proceeds. Use [`run_harness_with_options`] to
-/// install a diagnostics sink or to fail closed.
+/// error: the pending action proceeds (Claude Code `WorktreeCreate` and
+/// `WorktreeRemove` fail on any non-zero exit). Use
+/// [`run_harness_with_options`] to install a diagnostics sink or to fail
+/// closed.
 pub fn run_harness<H, F>(hint: Option<H::EventSelector>, handler: F) -> std::process::ExitCode
 where
     H: HarnessSpec,
@@ -160,11 +175,16 @@ where
 ///
 /// `options` selects the diagnostics sink handed to the handler and the
 /// [`crate::failure::FailurePolicy`] applied to failures, including a handler
-/// panic. Every failure is recorded in the sink and reported on stderr. When a
-/// failure happens before the event is resolved, the runner identifies the
-/// event from `hint` or from the payload's authoritative discriminator,
-/// without running any parser, so the policy can still choose that event's
-/// native response.
+/// panic. Every failure is recorded in the sink and reported on stderr.
+///
+/// A failure is lowered for the event the harness actually sent: the event
+/// the runner resolved when the failure came later (a handler error, a
+/// panic, or an emission failure), otherwise the event the payload's
+/// authoritative discriminator names, and only when the payload names none,
+/// `hint`. No parser runs to classify a failure. A hint that contradicts the
+/// payload's discriminator is itself a failure, lowered for the payload's
+/// event, so a hook registered under the wrong event does not let a
+/// `PreToolUse` through or block a `Stop`.
 pub fn run_harness_with_options<H, F>(
     hint: Option<H::EventSelector>,
     options: RunOptions<'_>,
@@ -179,29 +199,34 @@ where
     ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
     let hint = hint.as_ref().map(EventSelector::event_id);
-    let fail = |invocation: Option<&RawInvocation>, error: &dyn std::error::Error| {
+    let mut resolved = None;
+    let fail = |invocation: Option<&RawInvocation>,
+                resolved: Option<&EventId>,
+                error: &dyn std::error::Error| {
         let event = failure_event(
             &H::identification_descriptors(),
             &H::ID,
-            hint.as_ref(),
+            resolved,
             invocation,
+            hint.as_ref(),
         );
         report_failure_for(&options, &H::ID, event.as_ref(), error)
     };
     let bytes = match read_stdin() {
         Ok(bytes) => bytes,
-        Err(error) => return fail(None, &error),
+        Err(error) => return fail(None, None, &error),
     };
+    let parsed = parse_for_harness(&H::ID, hint.as_ref(), bytes);
     let variables = match crate::environment::capture_command_environment_with_diagnostics::<
         H::CommandEnvironment,
     >(options.diagnostics())
     {
         Ok(variables) => variables,
-        Err(error) => return fail(RawInvocation::parse(bytes).ok().as_ref(), &error),
+        Err(error) => return fail(parsed.as_ref().ok(), None, &error),
     };
-    let invocation = match parse_for_harness(&H::ID, hint.as_ref(), bytes) {
+    let invocation = match parsed {
         Ok(invocation) => invocation,
-        Err(error) => return fail(None, &error),
+        Err(error) => return fail(None, None, &error),
     };
     let executed = catch_panic(|| {
         execute_invocation::<H, _>(
@@ -209,32 +234,43 @@ where
             hint.clone(),
             &variables,
             options.diagnostics(),
+            &mut resolved,
             handler,
         )
     });
+    let resolved = resolved.as_ref();
     match executed {
         Ok(Ok(emission)) => match crate::typed::try_write_emission(&emission) {
             Ok(code) => code,
-            Err(error) => fail(Some(&invocation), &error),
+            Err(error) => fail(Some(&invocation), resolved, &error),
         },
-        Ok(Err(error)) => fail(Some(&invocation), &error),
-        Err(panic) => fail(Some(&invocation), &panic),
+        Ok(Err(error)) => fail(Some(&invocation), resolved, &error),
+        Err(panic) => fail(Some(&invocation), resolved, &panic),
     }
 }
 
-/// Best-effort native event for a failed invocation: the hint when it
-/// belongs to `harness`, otherwise the event named by an authoritative
-/// discriminator in the payload. No parser runs.
-fn failure_event(
+/// Best-effort native event for a failed invocation, without running any
+/// parser: the event execution resolved, else the event an authoritative
+/// discriminator in the payload names, else the hint when it belongs to
+/// `harness`.
+///
+/// The harness interprets the exit code for the event it actually sent, so
+/// the payload outranks a hint that contradicts it.
+pub(crate) fn failure_event(
     descriptors: &[IdentificationDescriptor],
     harness: &HarnessId,
-    hint: Option<&EventId>,
+    resolved: Option<&EventId>,
     invocation: Option<&RawInvocation>,
+    hint: Option<&EventId>,
 ) -> Option<EventId> {
-    if let Some(hint) = hint.filter(|hint| hint.harness() == harness) {
-        return Some(hint.clone());
-    }
-    crate::resolution::discriminated_event(descriptors, harness, invocation?)
+    resolved
+        .cloned()
+        .or_else(|| {
+            invocation.and_then(|invocation| {
+                crate::resolution::discriminated_event(descriptors, harness, invocation)
+            })
+        })
+        .or_else(|| hint.filter(|hint| hint.harness() == harness).cloned())
 }
 
 fn report_failure_for(
@@ -328,7 +364,15 @@ where
     ) -> hookkit_core::Result<BuiltinOutput>,
 {
     let invocation = parse_for_harness(&harness.id(), hint.as_ref(), bytes.into())?;
-    execute_builtin_invocation(harness, &invocation, hint, variables, diagnostics, handler)
+    execute_builtin_invocation(
+        harness,
+        &invocation,
+        hint,
+        variables,
+        diagnostics,
+        &mut None,
+        handler,
+    )
 }
 
 fn execute_builtin_invocation<F>(
@@ -337,6 +381,7 @@ fn execute_builtin_invocation<F>(
     hint: Option<EventId>,
     variables: &EnvironmentVariables,
     diagnostics: &dyn DiagnosticsSink,
+    resolved: &mut Option<EventId>,
     handler: F,
 ) -> hookkit_core::Result<ProcessEmission>
 where
@@ -353,6 +398,7 @@ where
                 hint,
                 variables,
                 diagnostics,
+                resolved,
                 |input, environment, context| {
                     let environment = BuiltinCommandEnvironment::Claude(environment.clone());
                     match handler(BuiltinInput::Claude(input), &environment, context)? {
@@ -367,6 +413,7 @@ where
             hint,
             variables,
             diagnostics,
+            resolved,
             |input, environment, context| {
                 let environment = BuiltinCommandEnvironment::Codex(environment.clone());
                 match handler(BuiltinInput::Codex(input), &environment, context)? {
@@ -380,6 +427,7 @@ where
             hint,
             variables,
             diagnostics,
+            resolved,
             |input, environment, context| {
                 let environment = BuiltinCommandEnvironment::Antigravity(*environment);
                 match handler(BuiltinInput::Antigravity(input), &environment, context)? {
@@ -398,7 +446,8 @@ where
 ///
 /// On any failure it writes one `hookkit: <program> <hook> failed: ...` line
 /// to stderr and exits 1, which Claude Code and Codex treat as a non-blocking
-/// error: the pending action proceeds. Use
+/// error: the pending action proceeds (Claude Code `WorktreeCreate` and
+/// `WorktreeRemove` fail on any non-zero exit). Use
 /// [`dispatch_builtin_harness_with_options`] to install a diagnostics sink or
 /// to fail closed.
 pub fn dispatch_builtin_harness<F>(
@@ -432,26 +481,31 @@ where
     ) -> hookkit_core::Result<BuiltinOutput>,
 {
     let id = harness.id();
-    let fail = |invocation: Option<&RawInvocation>, error: &dyn std::error::Error| {
+    let mut resolved = None;
+    let fail = |invocation: Option<&RawInvocation>,
+                resolved: Option<&EventId>,
+                error: &dyn std::error::Error| {
         let event = failure_event(
             &builtin_harness_descriptors(harness),
             &id,
-            hint.as_ref(),
+            resolved,
             invocation,
+            hint.as_ref(),
         );
         report_failure_for(&options, &id, event.as_ref(), error)
     };
     let bytes = match read_stdin() {
         Ok(bytes) => bytes,
-        Err(error) => return fail(None, &error),
+        Err(error) => return fail(None, None, &error),
     };
+    let parsed = parse_for_harness(&id, hint.as_ref(), bytes);
     let variables = match capture_builtin_command_environment(&harness, options.diagnostics()) {
         Ok(variables) => variables,
-        Err(error) => return fail(RawInvocation::parse(bytes).ok().as_ref(), &error),
+        Err(error) => return fail(parsed.as_ref().ok(), None, &error),
     };
-    let invocation = match parse_for_harness(&id, hint.as_ref(), bytes) {
+    let invocation = match parsed {
         Ok(invocation) => invocation,
-        Err(error) => return fail(None, &error),
+        Err(error) => return fail(None, None, &error),
     };
     let executed = catch_panic(|| {
         execute_builtin_invocation(
@@ -460,20 +514,39 @@ where
             hint.clone(),
             &variables,
             options.diagnostics(),
+            &mut resolved,
             handler,
         )
     });
+    let resolved = resolved.as_ref();
     match executed {
         Ok(Ok(emission)) => match crate::typed::try_write_emission(&emission) {
             Ok(code) => code,
-            Err(error) => fail(Some(&invocation), &error),
+            Err(error) => fail(Some(&invocation), resolved, &error),
         },
-        Ok(Err(error)) => fail(Some(&invocation), &error),
-        Err(panic) => fail(Some(&invocation), &panic),
+        Ok(Err(error)) => fail(Some(&invocation), resolved, &error),
+        Err(panic) => fail(Some(&invocation), resolved, &panic),
     }
 }
 
-fn builtin_harness_descriptors(harness: BuiltinHarness) -> Vec<IdentificationDescriptor> {
+/// The event an authoritative discriminator in `invocation` names, when
+/// `harness` is a built-in harness. No parser runs.
+pub(crate) fn builtin_payload_event(
+    harness: &HarnessId,
+    invocation: Option<&RawInvocation>,
+) -> Option<EventId> {
+    let builtin = BuiltinHarness::from_id(harness)?;
+    crate::resolution::discriminated_event(
+        &builtin_harness_descriptors(builtin),
+        harness,
+        invocation?,
+    )
+}
+
+/// The identification descriptors of one built-in harness adapter.
+pub(crate) fn builtin_harness_descriptors(
+    harness: BuiltinHarness,
+) -> Vec<IdentificationDescriptor> {
     match harness {
         BuiltinHarness::ClaudeCode => hookkit_claude::protocol::identification_descriptors(),
         BuiltinHarness::Codex => hookkit_codex::protocol::identification_descriptors(),

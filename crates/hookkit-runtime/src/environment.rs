@@ -25,7 +25,8 @@ pub fn capture_command_environment<E: CommandEnvironmentSpec>()
 /// for each prefix-matched or lenient variable skipped because its value is
 /// not UTF-8.
 ///
-/// The warning names the variable but never includes its value.
+/// The warning names the variable but never includes its value. If the sink
+/// panics, the warning is dropped and capture continues.
 pub fn capture_command_environment_with_diagnostics<E: CommandEnvironmentSpec>(
     diagnostics: &dyn DiagnosticsSink,
 ) -> hookkit_core::Result<EnvironmentVariables> {
@@ -48,13 +49,18 @@ struct Declared<'a> {
     prefixes: &'a [&'a str],
 }
 
+/// Records the skipped variable's name, never its value. A panic in the sink
+/// is contained so that the warning can never fail the hook.
 fn skipped_non_utf8(diagnostics: &dyn DiagnosticsSink, name: &str) {
-    diagnostics.record(Diagnostic::new(
-        DiagnosticLevel::Warning,
-        format!(
-            "hookkit: ignored environment variable `{name}` because its value is not valid UTF-8"
+    crate::failure::record_contained(
+        diagnostics,
+        Diagnostic::new(
+            DiagnosticLevel::Warning,
+            format!(
+                "hookkit: ignored environment variable `{name}` because its value is not valid UTF-8"
+            ),
         ),
-    ));
+    );
 }
 
 fn capture_from(
@@ -186,6 +192,35 @@ mod tests {
         assert_eq!(recorded[0].level, DiagnosticLevel::Warning);
         assert!(recorded[0].message.contains("PREFIX_BAD"));
         assert!(!recorded[0].message.contains("secret"));
+    }
+
+    struct Panicking;
+
+    impl DiagnosticsSink for Panicking {
+        fn record(&self, _diagnostic: Diagnostic) {
+            panic!("audit log is read-only");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_panicking_sink_does_not_fail_capture() {
+        let captured = capture_from(
+            Declared {
+                names: &[],
+                lenient: &[],
+                prefixes: &["PREFIX_"],
+            },
+            |_| None,
+            [
+                (OsString::from("PREFIX_BAD"), non_utf8()),
+                (OsString::from("PREFIX_GOOD"), OsString::from("value")),
+            ],
+            &Panicking,
+        )
+        .unwrap();
+        assert_eq!(captured.get("PREFIX_GOOD"), Some("value"));
+        assert!(!captured.contains_key("PREFIX_BAD"));
     }
 
     #[cfg(unix)]

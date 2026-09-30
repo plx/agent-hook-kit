@@ -10,6 +10,11 @@
 //!   re-reads them before editing again), or a pointer to the full diagnostics
 //!   when manual fixes remain.
 //!
+//! The pass runs in the Cargo workspace that holds the edited file (for a
+//! shell call, the agent's working directory), never blindly in the project
+//! root: after Claude Code enters a git worktree, `CLAUDE_PROJECT_DIR` still
+//! names the main checkout, which the agent is not editing.
+//!
 //! Whether the pass changed anything is decided from content digests of the
 //! workspace's Rust sources taken before and after, not from whether a tool
 //! printed anything: `cargo clippy` always prints progress to stderr.
@@ -77,13 +82,14 @@ fn handle_post_tool(
         return native_output(ctx.harness(), None, None);
     }
 
-    // The stable project root: Claude Code's CLAUDE_PROJECT_DIR rather than
-    // its input `cwd`, which follows `cd`; Codex's configured cwd.
-    let roots = post_tool.project_roots(environment);
-    let root = roots
-        .first()
-        .ok_or_else(|| std::io::Error::other("missing project root"))?;
-    let outcome = run_autofix_pipeline(test_outcome_override(&post_tool), root.as_std_path());
+    let outcome = match test_outcome_override(&post_tool) {
+        Some(mode) => test_outcome(mode),
+        None => match cargo_root(&post_tool, environment) {
+            Some(root) => run_autofix_pipeline(&root),
+            // No Cargo workspace encloses the edit: nothing to format.
+            None => AutofixOutcome::Clean,
+        },
+    };
 
     match outcome {
         AutofixOutcome::Clean => native_output(ctx.harness(), None, None),
@@ -143,6 +149,65 @@ fn edits_files(harness: &HarnessId, tool_name: &str) -> bool {
     }
 }
 
+/// The Cargo workspace the autofix pass runs in, found from the first of:
+/// the edited file, the agent's working directory, and the stable project
+/// root, that lies in one.
+///
+/// Claude Code reports edits by absolute `file_path` (`notebook_path` for
+/// `NotebookEdit`), and its `cwd` follows the agent into a worktree, while
+/// `CLAUDE_PROJECT_DIR` stays at the main checkout. Starting from the edit
+/// formats the checkout the agent is changing; the project root is only the
+/// last resort, for a shell call made after `cd` out of the project.
+fn cargo_root(
+    post_tool: &PostToolUseInput,
+    environment: &PostToolUseCommandEnvironment,
+) -> Option<PathBuf> {
+    let cwd = post_tool.cwd().map(|cwd| cwd.as_std_path());
+    let edited = post_tool
+        .tool_input()
+        .and_then(|input| {
+            input
+                .get("file_path")
+                .or_else(|| input.get("notebook_path"))
+        })
+        .and_then(serde_json::Value::as_str)
+        .map(|path| match cwd {
+            Some(cwd) => cwd.join(path),
+            None => PathBuf::from(path),
+        });
+    let project_roots = post_tool.project_roots(environment);
+    edited
+        .as_deref()
+        .and_then(Path::parent)
+        .into_iter()
+        .chain(cwd)
+        .chain(project_roots.iter().map(|root| root.as_std_path()))
+        .find_map(cargo_workspace_root)
+}
+
+/// The Cargo workspace enclosing `directory`: the nearest ancestor whose
+/// `Cargo.toml` declares `[workspace]`, else the nearest package, never
+/// looking past the checkout (a directory holding `.git`, which in a linked
+/// worktree is a file) that contains `directory`.
+fn cargo_workspace_root(directory: &Path) -> Option<PathBuf> {
+    let mut package = None;
+    for ancestor in directory.ancestors() {
+        let manifest = ancestor.join("Cargo.toml");
+        if manifest.is_file() {
+            let declares_workspace = std::fs::read_to_string(&manifest)
+                .is_ok_and(|text| text.lines().any(|line| line.trim() == "[workspace]"));
+            if declares_workspace {
+                return Some(ancestor.to_path_buf());
+            }
+            package.get_or_insert_with(|| ancestor.to_path_buf());
+        }
+        if ancestor.join(".git").exists() {
+            break;
+        }
+    }
+    package
+}
+
 /// Keys the diagnostics artifact by session and tool call, so concurrent
 /// PostToolUse hooks in one session never overwrite each other's report.
 fn artifact_key(post_tool: &PostToolUseInput, ctx: &RuntimeContext<'_>) -> ArtifactKey {
@@ -193,20 +258,21 @@ fn native_output(
     }
 }
 
-fn run_autofix_pipeline(test_mode: Option<&str>, root: &Path) -> AutofixOutcome {
-    if let Some(mode) = test_mode {
-        return match mode {
-            "autofixed" => AutofixOutcome::AutoFixed {
-                changed: vec![root.join("src/lib.rs")],
-            },
-            "manual" => AutofixOutcome::ManualActionRequired {
-                summary: "Formatter/linter reported remaining issues".to_string(),
-                diagnostics: "manual issues remain (test override)".to_string(),
-            },
-            _ => AutofixOutcome::Clean,
-        };
+/// The outcome a `test-support` build reports instead of running Cargo.
+fn test_outcome(mode: &str) -> AutofixOutcome {
+    match mode {
+        "autofixed" => AutofixOutcome::AutoFixed {
+            changed: vec![PathBuf::from("src/lib.rs")],
+        },
+        "manual" => AutofixOutcome::ManualActionRequired {
+            summary: "Formatter/linter reported remaining issues".to_string(),
+            diagnostics: "manual issues remain (test override)".to_string(),
+        },
+        _ => AutofixOutcome::Clean,
     }
+}
 
+fn run_autofix_pipeline(root: &Path) -> AutofixOutcome {
     if !root.join("Cargo.toml").is_file() {
         return AutofixOutcome::Clean;
     }
@@ -425,6 +491,112 @@ mod tests {
                 "{harness}"
             );
         }
+    }
+
+    fn claude_post_tool(
+        cwd: &Path,
+        project: &Path,
+        tool_name: &str,
+        tool_input: serde_json::Value,
+    ) -> (PostToolUseInput, PostToolUseCommandEnvironment) {
+        let input = PostToolUseInput::Claude(
+            serde_json::from_value(serde_json::json!({
+                "session_id": "session",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": cwd,
+                "permission_mode": "default",
+                "hook_event_name": "PostToolUse",
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "tool_response": {},
+                "tool_use_id": "toolu_1"
+            }))
+            .unwrap(),
+        );
+        let environment = PostToolUseCommandEnvironment::Claude(
+            <hookkit_claude::ClaudeCommandEnvironment as hookkit_core::CommandEnvironmentSpec>::from_variables(
+                &hookkit_core::EventId::builtin(HarnessId::CLAUDE_CODE, "PostToolUse"),
+                &hookkit_core::EnvironmentVariables::from_pairs([
+                    ("CLAUDECODE", "1"),
+                    ("CLAUDE_CODE_CHILD_SESSION", "1"),
+                    ("CLAUDE_CODE_SESSION_ID", "session"),
+                    ("CLAUDE_PROJECT_DIR", project.to_str().unwrap()),
+                ]),
+            )
+            .unwrap(),
+        );
+        (input, environment)
+    }
+
+    #[test]
+    fn the_pipeline_runs_in_the_worktree_the_agent_edits() {
+        let directory = std::env::temp_dir().join(format!(
+            "hookkit-autofix-worktree-{}-{}",
+            std::process::id(),
+            NEXT_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
+        let project = directory.join("project");
+        let worktree = project.join(".claude/worktrees/w");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::create_dir_all(worktree.join("crates/core/src")).unwrap();
+        std::fs::write(project.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: ../../../.git/worktrees/w\n").unwrap();
+        std::fs::write(
+            worktree.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/core\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            worktree.join("crates/core/Cargo.toml"),
+            "[package]\nname = \"core\"\n",
+        )
+        .unwrap();
+        let edited = worktree.join("crates/core/src/lib.rs");
+        // A checkout of its own, so the upward search stops there wherever
+        // the temporary directory lives.
+        let outside = directory.join("elsewhere");
+        std::fs::create_dir_all(outside.join(".git")).unwrap();
+
+        // CLAUDE_PROJECT_DIR stays at the main checkout after Claude enters
+        // the worktree; the edit and `cwd` are in the worktree.
+        let (input, environment) = claude_post_tool(
+            &worktree,
+            &project,
+            "Write",
+            serde_json::json!({"file_path": edited.to_str().unwrap(), "content": ""}),
+        );
+        assert_eq!(cargo_root(&input, &environment), Some(worktree.clone()));
+
+        // A shell edit has no path: the agent's directory decides, and a
+        // member crate resolves to its workspace.
+        let (input, environment) = claude_post_tool(
+            &worktree.join("crates/core/src"),
+            &project,
+            "Bash",
+            serde_json::json!({"command": "sed -i s/a/b/ lib.rs"}),
+        );
+        assert_eq!(cargo_root(&input, &environment), Some(worktree.clone()));
+
+        // After `cd` out of every project, the project root is the fallback.
+        let (input, environment) = claude_post_tool(
+            &outside,
+            &project,
+            "Bash",
+            serde_json::json!({"command": "touch x"}),
+        );
+        assert_eq!(cargo_root(&input, &environment), Some(project.clone()));
+
+        // An edit outside any Cargo workspace, with no project to fall back
+        // on, formats nothing.
+        let (input, environment) = claude_post_tool(
+            &outside,
+            &outside,
+            "Write",
+            serde_json::json!({"file_path": outside.join("notes.md").to_str().unwrap()}),
+        );
+        assert_eq!(cargo_root(&input, &environment), None);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

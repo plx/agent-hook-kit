@@ -1124,6 +1124,45 @@ fn codex_bash_guard_denies_force_push() {
 }
 
 #[test]
+fn codex_bash_guard_denies_hidden_and_uninspectable_commands() {
+    let oversized = format!("rm -rf / #{}", "x".repeat(300 * 1024));
+    for (command, reason) in [
+        // Bypasses of the parser-based rules: a here-document payload, a
+        // wrapper the guard does not model, and a backslash-escaped name.
+        ("bash <<'EOF'\nrm -rf /\nEOF\n", "recursively deletes `/`"),
+        ("timeout 10 rm -rf /", "recursively deletes `/`"),
+        ("\\rm -rf /.", "recursively deletes `/.`"),
+        // Input the guard cannot read is denied rather than allowed.
+        ("echo 'rm -rf /' | sh", "cannot be inspected"),
+        (oversized.as_str(), "cannot be inspected"),
+    ] {
+        let fixture = serde_json::json!({
+            "session_id": "test",
+            "transcript_path": null,
+            "cwd": "/tmp",
+            "hook_event_name": "PreToolUse",
+            "model": "gpt-test",
+            "turn_id": "turn-test",
+            "permission_mode": "default",
+            "tool_name": "Bash",
+            "tool_use_id": "call-test",
+            "tool_input": {"command": command}
+        });
+        let output = run_example(
+            "codex-bash-guard",
+            &serde_json::to_vec(&fixture).unwrap(),
+            &[],
+        );
+        assert!(output.status.success(), "{:?}", output.stderr);
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let specific = &json["hookSpecificOutput"];
+        assert_eq!(specific["permissionDecision"], "deny");
+        let shown = specific["permissionDecisionReason"].as_str().unwrap();
+        assert!(shown.contains(reason), "{shown:?}");
+    }
+}
+
+#[test]
 fn codex_bash_guard_rejects_non_pretool() {
     let fixture = fixture_bytes("codex", "session_start.json");
     let output = run_example("codex-bash-guard", &fixture, &[]);

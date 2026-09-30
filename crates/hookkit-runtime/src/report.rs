@@ -56,12 +56,17 @@ fn program_name_from(argv0: Option<std::ffi::OsString>) -> String {
 }
 
 /// Renders the one-line failure diagnostic, without a trailing newline.
+///
+/// Line breaks inside the cause chain (a multi-line error or panic message)
+/// become spaces, so the report stays one line: Claude Code shows only the
+/// first stderr line of a non-blocking error.
 pub(crate) fn failure_line(hook: impl Display, error: &dyn std::error::Error) -> String {
-    format!(
+    let line = format!(
         "hookkit: {program} {hook} failed: {chain}",
         program = program_name(),
         chain = error_chain(error),
-    )
+    );
+    line.replace("\r\n", " ").replace(['\r', '\n'], " ")
 }
 
 #[cfg(test)]
@@ -131,6 +136,25 @@ mod tests {
         let argv0 = std::ffi::OsString::from_vec(b"/opt/hooks/bad\xff-guard".to_vec());
         assert_eq!(program_name_from(Some(argv0)), "bad\u{FFFD}-guard");
         assert_eq!(program_name_from(None), "hookkit");
+    }
+
+    #[derive(Debug)]
+    struct MultiLine;
+    impl std::fmt::Display for MultiLine {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "first\r\nsecond\nthird\rfourth")
+        }
+    }
+    impl std::error::Error for MultiLine {}
+
+    #[test]
+    fn failure_line_collapses_line_breaks() {
+        let rendered = failure_line("codex/PreToolUse", &MultiLine);
+        assert!(
+            rendered.ends_with("failed: first second third fourth"),
+            "{rendered:?}"
+        );
+        assert!(!rendered.contains(['\r', '\n']));
     }
 
     #[test]

@@ -33,6 +33,16 @@ impl DiagnosticsSink for FileSink {
     }
 }
 
+/// A sink whose storage is broken: every record panics, as an audit log
+/// that unwraps a failed file open would on a full or read-only disk.
+struct PanickingSink;
+
+impl DiagnosticsSink for PanickingSink {
+    fn record(&self, _diagnostic: Diagnostic) {
+        panic!("audit log is read-only");
+    }
+}
+
 fn fail_closed() -> RunOptions<'static> {
     RunOptions::new().with_failure_policy(FailurePolicy::FailClosed)
 }
@@ -83,6 +93,18 @@ fn stdin_runner_helper() {
                 codex_deny(format!("saw {command}"))
             })
         }
+        "typed-fail-closed-panicking-sink" => {
+            run_event_with_options::<hookkit_codex::protocol::PreToolUse, _>(
+                fail_closed().with_diagnostics(&PanickingSink),
+                |_, _, _| codex_deny("unreachable".into()),
+            )
+        }
+        "claude-session-start-panicking-sink" => {
+            run_event_with_options::<hookkit_claude::protocol::SessionStart, _>(
+                RunOptions::new().with_diagnostics(&PanickingSink),
+                |_, _, _| Ok(hookkit_claude::protocol::SessionStartOutput::no_op()),
+            )
+        }
         "typed-sink" => {
             let sink = FileSink(std::env::var_os(SINK_FILE).unwrap().into());
             run_event_with_options::<hookkit_codex::protocol::PreToolUse, _>(
@@ -117,6 +139,18 @@ fn stdin_runner_helper() {
                 ))
             },
         ),
+        "dispatch-codex-stop-hint-fail-closed" => dispatch_builtin_harness_with_options(
+            BuiltinHarness::Codex,
+            Some(EventId::builtin(HarnessId::CODEX, "Stop")),
+            fail_closed(),
+            |_, _, _| unreachable!("the hint contradicts the payload"),
+        ),
+        "harness-antigravity-handler-error" => run_harness_with_options::<
+            hookkit_antigravity::Antigravity,
+            _,
+        >(None, fail_closed(), |_, _, _| {
+            Err(HookkitError::handler("policy file is missing"))
+        }),
         "dispatch-antigravity-fail-closed" => dispatch_builtin_harness_with_options(
             BuiltinHarness::Antigravity,
             Some(EventId::builtin(HarnessId::ANTIGRAVITY, "PreToolUse")),
@@ -200,15 +234,6 @@ fn json(text: &str) -> serde_json::Value {
     serde_json::from_str(text).unwrap_or_else(|error| panic!("{error}: {text:?}"))
 }
 
-/// The runner's own diagnostic line, ignoring the panic message the default
-/// panic hook may print first.
-fn diagnostic_line(stderr: &str) -> &str {
-    stderr
-        .lines()
-        .find(|line| line.starts_with("hookkit: "))
-        .unwrap_or_else(|| panic!("no hookkit diagnostic in {stderr:?}"))
-}
-
 #[test]
 fn default_policy_exits_one_with_one_diagnostic_line_and_empty_stdout() {
     let outcome = spawn("typed-default", b"not json", &[]);
@@ -263,11 +288,179 @@ fn fail_closed_gate_denies_on_handler_errors_and_panics() {
     let panicked = spawn("typed-fail-closed-panic", &codex_pre_tool_use("ls"), &[]);
     assert_eq!(panicked.code, Some(2), "a panic must not exit 101");
     assert_eq!(panicked.stdout, "");
+    assert_eq!(panicked.stderr.lines().count(), 1, "{:?}", panicked.stderr);
     assert!(
-        diagnostic_line(&panicked.stderr).contains("panicked: policy engine exploded"),
+        panicked.stderr.contains("panicked: policy engine exploded"),
         "{:?}",
         panicked.stderr
     );
+}
+
+#[test]
+fn a_caught_panic_prints_only_the_one_line_report() {
+    // Even with a backtrace requested, the harness sees one stderr line.
+    let panicked = spawn(
+        "typed-fail-closed-panic",
+        &codex_pre_tool_use("ls"),
+        &[("RUST_BACKTRACE", "1".as_ref())],
+    );
+    assert_eq!(panicked.code, Some(2));
+    assert_eq!(panicked.stderr.lines().count(), 1, "{:?}", panicked.stderr);
+    assert!(
+        panicked.stderr.starts_with("hookkit: ")
+            && panicked
+                .stderr
+                .contains("panicked: policy engine exploded (at crates/hookkit-runtime/tests/"),
+        "{:?}",
+        panicked.stderr
+    );
+}
+
+#[test]
+fn a_panicking_sink_does_not_change_the_failure_response() {
+    // The sink panics while the runner records the failure; the guard must
+    // still fail closed rather than exit 101, which the harness ignores.
+    let outcome = spawn("typed-fail-closed-panicking-sink", b"not json", &[]);
+    assert_eq!(outcome.code, Some(2), "{:?}", outcome.stderr);
+    assert_eq!(outcome.stdout, "");
+    assert_eq!(outcome.stderr.lines().count(), 1, "{:?}", outcome.stderr);
+    assert!(
+        outcome
+            .stderr
+            .contains("codex/PreToolUse failed: invalid JSON"),
+        "{:?}",
+        outcome.stderr
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_panicking_sink_does_not_fail_environment_capture() {
+    use std::os::unix::ffi::OsStrExt;
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "session_id": "stdin-session",
+        "transcript_path": "/tmp/stdin-session.jsonl",
+        "cwd": "/tmp",
+        "hook_event_name": "SessionStart",
+        "source": "startup"
+    }))
+    .unwrap();
+    let stray = std::ffi::OsStr::from_bytes(b"stray\xff");
+    let outcome = spawn(
+        "claude-session-start-panicking-sink",
+        &payload,
+        &[
+            ("CLAUDECODE", "1".as_ref()),
+            ("CLAUDE_CODE_CHILD_SESSION", "1".as_ref()),
+            ("CLAUDE_CODE_SESSION_ID", "stdin-session".as_ref()),
+            ("CLAUDE_PROJECT_DIR", "/tmp".as_ref()),
+            ("CLAUDE_PLUGIN_OPTION_STRAY", stray),
+        ],
+    );
+    assert_eq!(outcome.code, Some(0), "{:?}", outcome.stderr);
+    assert_eq!(outcome.stdout, "{}");
+    assert_eq!(outcome.stderr, "");
+}
+
+#[test]
+fn fail_closed_lowers_for_the_event_the_payload_names() {
+    // A PreToolUse hook registered under Stop must not force the agent to
+    // keep working when it fails.
+    let outcome = spawn("typed-fail-closed", br#"{"hook_event_name":"Stop"}"#, &[]);
+    assert_eq!(outcome.code, Some(1), "{:?}", outcome.stderr);
+    assert_eq!(outcome.stdout, "");
+    assert!(outcome.stderr.contains("codex/PreToolUse failed"));
+
+    // A Stop hint registered for a PreToolUse call must not let it through.
+    let outcome = spawn(
+        "dispatch-codex-stop-hint-fail-closed",
+        &codex_pre_tool_use("rm -rf /"),
+        &[],
+    );
+    assert_eq!(outcome.code, Some(2), "{:?}", outcome.stderr);
+    assert_eq!(outcome.stdout, "");
+    assert!(
+        outcome.stderr.contains("codex/PreToolUse failed")
+            && outcome.stderr.contains("contradicts observed event"),
+        "{:?}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn failures_after_resolution_are_lowered_for_the_resolved_event() {
+    // Antigravity has no discriminator: the runner resolves Stop by shape,
+    // and a handler failure there must not become an unknown-event deny.
+    let stop = serde_json::json!({
+        "conversationId": "stdin-conversation",
+        "workspacePaths": ["/tmp"],
+        "transcriptPath": "/tmp/stdin-transcript.jsonl",
+        "artifactDirectoryPath": "/tmp/stdin-artifacts",
+        "executionNum": 1,
+        "terminationReason": "agent-finished",
+        "fullyIdle": true
+    });
+    let outcome = spawn(
+        "harness-antigravity-handler-error",
+        &serde_json::to_vec(&stop).unwrap(),
+        &[],
+    );
+    assert_eq!(outcome.code, Some(1), "{:?}", outcome.stderr);
+    assert_eq!(outcome.stdout, "");
+    assert!(
+        outcome.stderr.contains(" antigravity/Stop failed: "),
+        "{:?}",
+        outcome.stderr
+    );
+
+    // A tool-call payload is shaped like both PreToolUse and PostToolUse, so
+    // without a hint nothing resolves and the unknown event is denied.
+    let tool_call = serde_json::json!({
+        "conversationId": "stdin-conversation",
+        "workspacePaths": ["/tmp"],
+        "transcriptPath": "/tmp/stdin-transcript.jsonl",
+        "artifactDirectoryPath": "/tmp/stdin-artifacts",
+        "toolCall": {"name": "view_file", "args": {"AbsolutePath": "/tmp/notes.txt"}},
+        "stepIdx": 1
+    });
+    let outcome = spawn(
+        "harness-antigravity-handler-error",
+        &serde_json::to_vec(&tool_call).unwrap(),
+        &[],
+    );
+    assert_eq!(outcome.code, Some(0), "{:?}", outcome.stderr);
+    assert_eq!(json(&outcome.stdout)["decision"], "deny");
+    assert!(
+        outcome
+            .stderr
+            .contains(" antigravity failed: event resolution is ambiguous"),
+        "{:?}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn payloads_nested_beyond_the_json_depth_limit_fail_under_the_policy() {
+    // serde_json's recursion limit rejects the payload before the handler
+    // runs; a fail-closed guard then denies the call instead of passing it.
+    let depth = hookkit_core::RawInvocation::MAX_NESTING_DEPTH;
+    let payload = String::from_utf8(codex_pre_tool_use("ls"))
+        .unwrap()
+        .replace(
+            r#"{"command":"ls"}"#,
+            &format!(r#"{{"a":{}1{}}}"#, "[".repeat(depth), "]".repeat(depth)),
+        );
+    let outcome = spawn("typed-fail-closed", payload.as_bytes(), &[]);
+    assert_eq!(outcome.code, Some(2), "{:?}", outcome.stderr);
+    assert!(
+        outcome
+            .stderr
+            .contains("codex/PreToolUse failed: invalid JSON: recursion limit exceeded"),
+        "{:?}",
+        outcome.stderr
+    );
+    let outcome = spawn("typed-default", payload.as_bytes(), &[]);
+    assert_eq!(outcome.code, Some(1), "{:?}", outcome.stderr);
 }
 
 #[test]

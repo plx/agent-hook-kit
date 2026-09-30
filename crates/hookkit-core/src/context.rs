@@ -55,6 +55,13 @@ pub trait DiagnosticsSink: Send + Sync {
     ///
     /// Implementations must be safe to call concurrently. A sink decides its
     /// own buffering, persistence, and redaction policy.
+    ///
+    /// Recording is best effort and must not panic: a sink that cannot
+    /// persist a diagnostic (a full disk, a read-only mount, a poisoned lock)
+    /// should drop it instead. The `hookkit-runtime` stdin runners contain a
+    /// panic from a sink they call themselves and discard that diagnostic, so
+    /// a broken sink never changes the hook's response. A panic from a
+    /// `record` call the handler makes is a handler panic.
     fn record(&self, diagnostic: Diagnostic);
 }
 

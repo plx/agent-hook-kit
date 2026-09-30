@@ -384,12 +384,21 @@ The sealed aligned-runtime catalog is intentionally capability-based:
 The output helpers cover what the harnesses genuinely share and document
 where they still differ; the `hookkit_common::aligned` module docs are the
 reference. For example, aligned `PreCompact` is observer-only even though each
-native arm retains its harness-specific controls;
+native arm retains its harness-specific controls (a fail-closed runner still
+blocks a Claude Code compaction when it fails; see
+[Failure policy](#failure-policy));
 `PostCompactOutput::with_system_notice` is a documented no-op on Claude Code,
 which discards `PostCompact` `systemMessage` (see `system_notice_delivered`);
 and a `UserPromptSubmitOutput::block` reason is shown to the Claude Code user
 only. A pair-only marker, or any harness without an aligned adapter, fails
 with `HookkitError::UnsupportedHarness` before the payload is parsed.
+
+The aligned runners take canonical harness identities (`claude-code`, `codex`,
+`antigravity`). Parse command-line input with `BuiltinHarness::from_str`,
+which also accepts the `claude` alias, and pass its `id()`. A runner handed the
+bare `claude` alias fails every invocation; under `RunOptions::fail_closed()`
+those failures are still lowered for Claude Code, so the guard blocks rather
+than fails open.
 
 Aligned inputs report locations the way the native payloads do.
 `workspace_roots()` is `[cwd]` on Claude Code and Codex and `workspacePaths`
@@ -397,6 +406,12 @@ on Antigravity. Claude Code's `cwd` follows `cd` in the Bash tool, so use
 `project_roots(environment)` (Claude Code's `CLAUDE_PROJECT_DIR`, Codex's
 `cwd`, Antigravity's `workspacePaths`) for configuration discovery and
 project-relative matching, and `cwd()` to resolve relative operands.
+`project_roots()` names the checkout the session started in: after Claude Code
+enters a git worktree, `CLAUDE_PROJECT_DIR` stays at the main checkout while
+`cwd` and the edited files move into the worktree. A hook that acts on the
+edited files, such as a formatter, should locate them from the edited path or
+`cwd()` rather than run in the main checkout; `shared-posttool-autofix` runs in
+the Cargo workspace that holds the edited file.
 
 ## Quick Start: Aligned `PostToolUse`
 
@@ -542,8 +557,11 @@ percent-encoded fields (session, turn, tool call, label).
 By default (`FailurePolicy::NonBlocking`) a failed runner exits 1 with empty
 stdout. Claude Code and Codex treat exit 1 as a non-blocking hook error: the
 pending action proceeds, and Claude Code shows the first stderr line to the
-user. A policy hook therefore fails *open* by default. Guards should opt into
-`FailurePolicy::FailClosed`:
+user. A policy hook therefore fails *open* by default. The exception is Claude
+Code `WorktreeCreate` and `WorktreeRemove`, which any non-zero exit fails
+(removal fails while the directory remains), so a failure there blocks under
+either policy and `FailureResponse::fails_closed` reports it. Guards should opt
+into `FailurePolicy::FailClosed`:
 
 ```rust
 use hookkit_codex::protocol::{PreToolUse, PreToolUseOutput};
@@ -573,10 +591,38 @@ pending action:
 
 <!-- markdownlint-enable MD013 -->
 
-When the payload cannot be identified at all, Claude Code and Codex exit 2 and
-Antigravity receives a JSON deny. Runners outside the typed, selected, and
-aligned families can reuse the same lowering through
-`hookkit_runtime::failure::report_run_failure`.
+A failure is lowered for the event the harness actually sent, because that
+is the event whose exit code the harness interprets: the event the runner
+resolved, else the event the payload's `hook_event_name` names, and only then
+the configured hint or the typed or aligned runner's own event. A guard
+registered under the wrong event therefore neither lets a `PreToolUse` through
+nor forces the agent on at every `Stop`. When the payload cannot be identified
+at all, Claude Code and Codex exit 2 and Antigravity receives a JSON deny.
+Exit 2 blocks every exit-2 gate, but a Claude Code `PermissionRequest` ignores
+it and shows the normal permission prompt.
+
+Claude Code `PreCompact` is a gate even though the aligned `PreCompact`
+helpers only observe: when Claude Code compacts automatically to recover from a
+context-limit error, a blocked compaction surfaces that error and fails the
+user's current request. Run a compaction observer with the default policy.
+
+The runners also catch a panic in parsing, the handler, or emission and report
+it under the policy instead of exiting 101. The report stays one stderr line
+naming the panic message and location, with no panic banner or backtrace,
+because Claude Code and Codex show that stderr to the user or hand it to the
+model as the block reason. Catching requires unwinding: a hook binary built
+with `panic = "abort"` aborts instead, which the harnesses treat as a
+non-blocking error, so keep the default `panic = "unwind"` for a guard. A
+`DiagnosticsSink` must not panic either; a panic while the runner records a
+failure or an environment warning is contained and that record dropped.
+
+Payloads are parsed with serde_json's recursion limit, so JSON nested more than
+127 arrays and objects deep (for example a model-generated MCP `tool_input`)
+fails before the handler runs and is reported under the policy: it proceeds by
+default and is denied by a fail-closed guard.
+
+Runners outside the typed, selected, and aligned families can reuse the same
+lowering through `hookkit_runtime::failure::report_run_failure`.
 
 ## Run The Examples With Fixtures
 
@@ -1027,11 +1073,17 @@ Git-dirty reconciliation recover only best-effort candidates.
     `systemMessage` on `SessionStart`.
 - `codex-bash-guard`:
   - parses `PreToolUse` Bash commands with `hookkit-shell` and matches command
-    names, flags, and operands (including wrappers, `bash -c`, and `eval`),
-  - emits deny JSON for blocked commands and fails closed.
+    names, flags, and operands (including wrappers, `bash -lc`, shell
+    here-documents, `eval`, and backslash-escaped names),
+  - emits deny JSON for blocked commands and fails closed: it also denies a
+    command too large or complex to analyze, payloads nested more than three
+    levels deep, and a shell reading commands from a pipe, a file, or the
+    terminal.
 - `shared-posttool-autofix`:
   - triggers on edits, including Codex `apply_patch` and Claude
-    `MultiEdit`/`NotebookEdit`, and runs a formatter/linter-autofix pipeline,
+    `MultiEdit`/`NotebookEdit`, and runs a formatter/linter-autofix pipeline
+    in the Cargo workspace holding the edited file (a Claude Code worktree,
+    not the main checkout),
   - emits each harness's exact native no-op response on clean success,
   - decides "auto-fixed" from before/after content digests and tells the agent
     which files were rewritten,
@@ -1048,12 +1100,14 @@ Git-dirty reconciliation recover only best-effort candidates.
 - `forbidden-file-guard`:
   - uses one aligned handler for Claude, Codex, and Antigravity pre-tool events,
   - merges additive YAML glob policy from home and workspace configuration,
-    resolved against the stable project root as well as the current `cwd`,
+    resolved against the stable project root, the current `cwd`, and the
+    checkout enclosing it,
   - applies inspect-known, deny-unresolved, and deny-all-shell postures (OR-ed
     across settings and layers) to bounded structured, patch, and shell access
-    evidence,
+    evidence, treating Codex shell operands relative to an unreported
+    `workdir` as uncertain,
   - answers non-matches with the aligned pass-through, never `allow`, and
-    fails closed.
+    fails closed, including on argument errors.
 - `file-activity-agent-hook`:
   - uses the aligned post-tool API for Codex and Antigravity and the selected
     Claude Code harness API for Claude's `PostToolUse` and

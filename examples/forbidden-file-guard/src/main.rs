@@ -2,28 +2,37 @@ use clap::{Parser, ValueEnum};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_common::{PreToolUseCommandEnvironment, PreToolUseInput, PreToolUseOutput};
 use hookkit_core::{
-    HarnessId, Utf8Path, Utf8PathBuf, expand_utf8_home, normalize_utf8_path, resolve_utf8_path,
-    utf8_path_to_slash,
+    EventId, HarnessId, Utf8Path, Utf8PathBuf, expand_utf8_home, normalize_utf8_path,
+    resolve_utf8_path, utf8_path_to_slash,
 };
 use hookkit_shell::{
     ANTIGRAVITY_RUN_COMMAND_PROFILE, BashAnalyzer, CLAUDE_BASH_PROFILE, CODEX_BASH_PROFILE,
     FileAccessAnalyzer, UnknownCommandFallback,
 };
 use hookkit_tool_access::{
-    AccessCandidate, AccessProvenance, AccessSource, AccessTarget, ExactPathPolicy,
-    TargetResolutionOptions, ToolAccessAnalyzer, ToolCallObservation, observe_pre_tool,
-    resolve_targets,
+    AccessCandidate, AccessProvenance, AccessSource, AccessTarget, ExactPathPolicy, PathBase,
+    PathExpression, TargetResolutionOptions, ToolAccessAnalyzer, ToolAccessReport,
+    ToolCallObservation, observe_pre_tool, resolve_targets,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
 const PROJECT_CONFIG: &str = ".agent-hook-kit/forbidden-files.yaml";
 const TARGET_RESOLUTION_BUDGET: usize = 100_000;
 
+/// Claude Code tools that run shell commands the analyzer cannot parse:
+/// `PowerShell`, the primary shell on Windows wherever it is enabled, and
+/// `Monitor`, whose watch commands Claude Code reviews the same way as `Bash`
+/// commands.
+const CLAUDE_UNPARSED_SHELL_TOOLS: &[&str] = &["PowerShell", "Monitor"];
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Harness {
+    /// Claude Code; `claude-code` is the canonical HookKit identity.
+    #[value(alias = "claude-code")]
     Claude,
     Codex,
     Antigravity,
@@ -64,6 +73,10 @@ struct FileConfig {
 
 struct Policy {
     patterns: GlobSet,
+    /// Every root-relative pattern prefixed with `**/`, for operands whose
+    /// working directory the payload does not report; see
+    /// [`session_relative_operands`].
+    floating: GlobSet,
     posture: Posture,
 }
 
@@ -77,7 +90,8 @@ enum AccessPolicy {
     InspectKnown,
     /// Match candidates and deny when either analysis or resolution is incomplete.
     DenyUnresolved,
-    /// Deny exact native shell calls; inspect non-shell calls like `InspectKnown`.
+    /// Deny native shell calls (see [`is_native_shell`]); inspect non-shell
+    /// calls like `InspectKnown`.
     DenyAllShell,
 }
 
@@ -91,7 +105,7 @@ enum AccessPolicy {
 /// stricter one.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Posture {
-    /// Deny every exact native shell call.
+    /// Deny every native shell call.
     deny_shell: bool,
     /// Deny any call whose access analysis or target resolution is incomplete.
     deny_unresolved: bool,
@@ -108,15 +122,14 @@ impl Posture {
 }
 
 fn main() -> std::process::ExitCode {
-    // Clap exits with status 2 on a usage error, which Claude Code and Codex
-    // treat as a blocking hook decision. Report argument errors with the
-    // non-blocking status 1 instead, and keep 0 for --help and --version.
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
-        Err(error) => {
+        // `--help` and `--version` print to stdout and succeed.
+        Err(error) if !error.use_stderr() => {
             let _ = error.print();
-            return std::process::ExitCode::from(if error.use_stderr() { 1 } else { 0 });
+            return std::process::ExitCode::SUCCESS;
         }
+        Err(error) => return usage_error(&error),
     };
     let harness = cli.harness.id();
     // A guard must not let a call through because it failed to decide: every
@@ -144,27 +157,98 @@ fn main() -> std::process::ExitCode {
     )
 }
 
+/// Blocks the call when the command line is invalid.
+///
+/// A guard that cannot read its own configuration cannot decide, so it fails
+/// closed like any other failure: exit 2 with the usage error as the reason,
+/// which Claude Code and Codex treat as a block, or a `deny` decision when
+/// `--harness` names Antigravity. Exiting 1, a non-blocking hook error, would
+/// let every call through on a typo such as `--confg`.
+fn usage_error(error: &clap::Error) -> std::process::ExitCode {
+    let Some(harness) = requested_harness(std::env::args_os().skip(1)) else {
+        // The harness is unknown, so no native deny can be chosen; exit 2
+        // blocks on Claude Code and Codex.
+        eprintln!("{}", usage_diagnostic(None, error));
+        return std::process::ExitCode::from(2);
+    };
+    let harness = harness.id();
+    let event = EventId::builtin(harness.clone(), "PreToolUse");
+    hookkit_runtime::failure::failure_response(
+        hookkit_runtime::FailurePolicy::FailClosed,
+        &harness,
+        Some(&event),
+        &usage_diagnostic(Some(&event), error),
+    )
+    .emit()
+}
+
+/// The harness a `--harness` argument names, even when another argument is
+/// invalid (including one that is not UTF-8).
+fn requested_harness(arguments: impl IntoIterator<Item = OsString>) -> Option<Harness> {
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        let Some(argument) = argument.to_str() else {
+            continue;
+        };
+        let value = match argument.strip_prefix("--harness") {
+            Some("") => arguments.next()?.into_string().ok()?,
+            Some(value) => match value.strip_prefix('=') {
+                Some(value) => value.to_owned(),
+                None => continue,
+            },
+            None if argument == "--" => return None,
+            None => continue,
+        };
+        return Harness::from_str(&value, false).ok();
+    }
+    None
+}
+
+/// One stderr line naming the program, the hook, and clap's message.
+fn usage_diagnostic(event: Option<&EventId>, error: &clap::Error) -> String {
+    let message = error.to_string();
+    let message = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    match event {
+        Some(event) => {
+            format!("hookkit: forbidden-file-guard {event} failed: invalid arguments: {message}")
+        }
+        None => format!("hookkit: forbidden-file-guard failed: invalid arguments: {message}"),
+    }
+}
+
 /// Returns the roots used for policy discovery and root-relative matching:
 /// the stable project roots (Claude Code's `CLAUDE_PROJECT_DIR`, Codex's
-/// `cwd`, Antigravity's workspace paths) followed by the native working
-/// directory when it differs.
+/// `cwd`, Antigravity's workspace paths), then the native working directory,
+/// then the checkout that encloses it, each when it differs.
 ///
 /// Claude Code's `cwd` follows `cd` and worktree switches, so on its own it
 /// would miss the project configuration after `cd /tmp` and mis-anchor
-/// root-relative patterns after `cd src`. Keeping it as an extra root still
-/// covers a worktree the agent entered, whose root `CLAUDE_PROJECT_DIR` does
-/// not name.
+/// root-relative patterns after `cd src`. Keeping it as an extra root covers
+/// a worktree the agent entered, whose root `CLAUDE_PROJECT_DIR` does not
+/// name, and the enclosing checkout (the nearest ancestor with a `.git`
+/// directory or file) keeps covering that worktree after a `cd src` inside it.
 fn policy_roots(
     input: &PreToolUseInput,
     environment: &PreToolUseCommandEnvironment,
 ) -> Vec<Utf8PathBuf> {
     let mut roots = input.project_roots(environment).into_owned();
-    for root in input.workspace_roots().iter() {
-        if !roots.contains(root) {
-            roots.push(root.clone());
+    for directory in input.workspace_roots().iter() {
+        let checkout = enclosing_checkout(directory);
+        for root in std::iter::once(directory.as_path()).chain(checkout) {
+            if !roots.iter().any(|known| known == root) {
+                roots.push(root.to_path_buf());
+            }
         }
     }
     roots
+}
+
+/// The nearest ancestor of `directory`, itself included, that holds a `.git`
+/// directory, or the `.git` file of a linked worktree.
+fn enclosing_checkout(directory: &Utf8Path) -> Option<&Utf8Path> {
+    directory
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
 }
 
 /// Load the active policy and return a deny reason, or `None` for no
@@ -197,6 +281,7 @@ fn load_policy(config_paths: &[PathBuf], roots: &[Utf8PathBuf]) -> hookkit_core:
     };
 
     let mut builder = GlobSetBuilder::new();
+    let mut floating = GlobSetBuilder::new();
     let mut posture = Posture::default();
     for path in paths {
         if !path.is_file() {
@@ -221,14 +306,26 @@ fn load_policy(config_paths: &[PathBuf], roots: &[Utf8PathBuf]) -> hookkit_core:
             if pattern.trim().is_empty() {
                 continue;
             }
-            builder.add(Glob::new(&expand_pattern_home(&pattern)).map_err(invalid_data)?);
+            let pattern = expand_pattern_home(&pattern);
+            builder.add(Glob::new(&pattern).map_err(invalid_data)?);
+            if let Some(pattern) = floating_pattern(&pattern) {
+                floating.add(Glob::new(&pattern).map_err(invalid_data)?);
+            }
         }
     }
 
     Ok(Policy {
         patterns: builder.build().map_err(invalid_data)?,
+        floating: floating.build().map_err(invalid_data)?,
         posture,
     })
+}
+
+/// `pattern` anchored anywhere (`**/pattern`) when it is relative to a policy
+/// root; `None` for an absolute pattern or one that already floats.
+fn floating_pattern(pattern: &str) -> Option<String> {
+    (!pattern.starts_with('/') && !pattern.starts_with("**/") && pattern != "**")
+        .then(|| format!("**/{}", pattern.trim_start_matches("./")))
 }
 
 fn default_config_paths(roots: &[Utf8PathBuf]) -> Vec<PathBuf> {
@@ -252,7 +349,7 @@ fn evaluate(
     roots: &[Utf8PathBuf],
     max_entries: usize,
 ) -> Option<String> {
-    let shell_call = is_exact_native_shell(input);
+    let shell_call = is_native_shell(input);
     if policy.posture.deny_shell && shell_call {
         return Some(blocked_shell_reason(
             input.tool_name().unwrap_or("<unknown>"),
@@ -272,6 +369,16 @@ fn evaluate(
         .find_map(|candidate| forbidden_candidate(policy, candidate, roots))
     {
         return Some(reason);
+    }
+    let session_relative = session_relative_operands(&report);
+    if let Some(expression) = session_relative
+        .iter()
+        .find(|expression| matches_floating_policy(policy, &expression.raw))
+    {
+        return Some(format!(
+            "Forbidden-file policy denies access to `{}`: the tool's working directory is not reported, so it may name a forbidden path",
+            expression.raw
+        ));
     }
 
     let mut options = TargetResolutionOptions::new(roots.to_vec());
@@ -297,14 +404,54 @@ fn evaluate(
         return Some(forbidden_path_reason(path));
     }
 
-    if policy.posture.deny_unresolved && (!report.is_complete() || !resolution.is_complete()) {
+    if policy.posture.deny_unresolved
+        && (!report.is_complete() || !resolution.is_complete() || !session_relative.is_empty())
+    {
         return Some(format!(
-            "Forbidden-file policy denies unresolved access analysis ({} analysis gap(s), {} resolution gap(s))",
+            "Forbidden-file policy denies unresolved access analysis ({} analysis gap(s), {} resolution gap(s), {} operand(s) relative to an unreported working directory)",
             report.gaps.len(),
-            resolution.unresolved.len()
+            resolution.unresolved.len(),
+            session_relative.len()
         ));
     }
     None
+}
+
+/// Relative shell operands the analyzer could only resolve against the hook's
+/// session directory ([`PathBase::SessionCwd`]).
+///
+/// The command may run elsewhere: a Codex shell call's `workdir` argument
+/// moves it, and the `Bash` hook payload omits it. `cat token.txt` run in
+/// `secrets/` then reads `secrets/token.txt` although the operand resolves to
+/// `<cwd>/token.txt`. `deny_unresolved` counts such operands as unresolved,
+/// and every posture matches them against root-relative patterns anchored
+/// anywhere (`**/secrets/**`), which catches a workdir above the forbidden
+/// path but not one inside it.
+fn session_relative_operands(report: &ToolAccessReport) -> Vec<&PathExpression> {
+    report
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.provenance.source() == AccessSource::Shell)
+        .filter_map(|candidate| match &candidate.target {
+            AccessTarget::Path { expression, .. }
+                if expression.base == PathBase::SessionCwd
+                    && Utf8Path::new(&expression.raw).is_relative() =>
+            {
+                Some(expression)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn matches_floating_policy(policy: &Policy, raw: &str) -> bool {
+    let path = Utf8Path::new(raw);
+    [
+        utf8_path_to_slash(path),
+        utf8_path_to_slash(normalize_utf8_path(path)),
+    ]
+    .iter()
+    .any(|form| policy.floating.is_match(form.trim_start_matches("./")))
 }
 
 fn blocked_shell_reason(tool_name: &str) -> String {
@@ -390,11 +537,17 @@ fn forbidden_path_reason(path: &Utf8Path) -> String {
     format!("Forbidden-file policy denies access to `{path}`")
 }
 
-fn is_exact_native_shell(input: &PreToolUseInput) -> bool {
+/// Whether the call runs a shell command: an exact native shell profile
+/// (Claude Code `Bash`, Codex `Bash`, Antigravity `run_command`) or a Claude
+/// Code shell tool the analyzer cannot parse (see
+/// [`CLAUDE_UNPARSED_SHELL_TOOLS`]).
+fn is_native_shell(input: &PreToolUseInput) -> bool {
     let ToolCallObservation::Call(call) = observe_pre_tool(input) else {
         return false;
     };
-    (call.harness() == &HarnessId::CLAUDE_CODE && call.tool_name == CLAUDE_BASH_PROFILE.tool_name())
+    (call.harness() == &HarnessId::CLAUDE_CODE
+        && (call.tool_name == CLAUDE_BASH_PROFILE.tool_name()
+            || CLAUDE_UNPARSED_SHELL_TOOLS.contains(&call.tool_name)))
         || (call.harness() == &HarnessId::CODEX && call.tool_name == CODEX_BASH_PROFILE.tool_name())
         || (call.harness() == &HarnessId::ANTIGRAVITY
             && call.tool_name == ANTIGRAVITY_RUN_COMMAND_PROFILE.tool_name())
@@ -439,13 +592,18 @@ mod tests {
 
     fn policy(patterns: &[&str], access_policy: AccessPolicy) -> Policy {
         let mut builder = GlobSetBuilder::new();
+        let mut floating = GlobSetBuilder::new();
         for pattern in patterns {
             builder.add(Glob::new(pattern).unwrap());
+            if let Some(pattern) = floating_pattern(pattern) {
+                floating.add(Glob::new(&pattern).unwrap());
+            }
         }
         let mut posture = Posture::default();
         posture.include(access_policy);
         Policy {
             patterns: builder.build().unwrap(),
+            floating: floating.build().unwrap(),
             posture,
         }
     }
@@ -778,8 +936,8 @@ mod tests {
             "exec_command",
             serde_json::json!({"command": "cat secrets/token.txt"}),
         );
-        assert!(is_exact_native_shell(&native));
-        assert!(!is_exact_native_shell(&guessed));
+        assert!(is_native_shell(&native));
+        assert!(!is_native_shell(&guessed));
 
         let alias_input = serde_json::json!({"request": {"command": "cat secrets/token.txt"}});
         let alias = ToolCallRef::new(
@@ -944,6 +1102,151 @@ mod tests {
         // the agent moved into.
         let guard = policy(&["secrets/**"], AccessPolicy::InspectKnown);
         assert!(evaluate(&guard, &input, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+    }
+
+    #[test]
+    fn claude_powershell_and_monitor_are_shell_tools() {
+        let deny_all = policy(&["**/.env"], AccessPolicy::DenyAllShell);
+        for (tool, input) in [
+            (
+                "PowerShell",
+                serde_json::json!({"command": "Get-Content .env"}),
+            ),
+            (
+                "PowerShell",
+                serde_json::json!({"command": "Write-Output hi"}),
+            ),
+            ("Monitor", serde_json::json!({"command": "tail -f .env"})),
+        ] {
+            let input = claude_input_at_cwd("/repo", tool, input);
+            assert!(is_native_shell(&input), "{tool}");
+            let reason = evaluate_codex(&deny_all, &input).unwrap();
+            assert!(reason.contains(&format!("shell tool `{tool}`")), "{reason}");
+        }
+        // The analyzer parses neither, so deny_unresolved also denies them.
+        let strict = policy(&["**/.env"], AccessPolicy::DenyUnresolved);
+        for tool in ["PowerShell", "Monitor"] {
+            let input = claude_input_at_cwd(
+                "/repo",
+                tool,
+                serde_json::json!({"command": "Get-Content notes.txt"}),
+            );
+            assert!(evaluate_codex(&strict, &input).is_some(), "{tool}");
+        }
+    }
+
+    #[test]
+    fn codex_shell_operands_relative_to_an_unreported_workdir_are_uncertain() {
+        // Codex runs `exec_command` in its `workdir` argument, which the Bash
+        // hook payload omits: `cat token.txt` may read `secrets/token.txt`.
+        let hidden = codex_input("Bash", serde_json::json!({"command": "cat token.txt"}));
+        let inspect = policy(&["secrets/**"], AccessPolicy::InspectKnown);
+        assert!(evaluate_codex(&inspect, &hidden).is_none());
+        let strict = policy(&["secrets/**"], AccessPolicy::DenyUnresolved);
+        let reason = evaluate_codex(&strict, &hidden).unwrap();
+        assert!(
+            reason.contains("1 operand(s) relative to an unreported working directory"),
+            "{reason}"
+        );
+
+        // A workdir above the forbidden directory is caught under every
+        // posture by matching the pattern anywhere below it.
+        for command in ["cat app/secrets/token.txt", "cat ../secrets/token.txt"] {
+            let input = codex_input("Bash", serde_json::json!({"command": command}));
+            let reason = evaluate_codex(&inspect, &input).unwrap_or_else(|| panic!("{command}"));
+            assert!(
+                reason.contains("working directory is not reported"),
+                "{reason}"
+            );
+        }
+
+        // Absolute operands, and tools whose directory is reported, are
+        // unaffected.
+        let absolute = codex_input("Bash", serde_json::json!({"command": "cat /tmp/notes.txt"}));
+        assert!(evaluate_codex(&strict, &absolute).is_none());
+        let claude = claude_input_at_cwd(
+            "/repo",
+            "Bash",
+            serde_json::json!({"command": "cat notes.txt"}),
+        );
+        assert!(evaluate_codex(&strict, &claude).is_none());
+        let patch = codex_patch("*** Update File: app/secrets.txt\n@@\n-a\n+b\n");
+        assert!(evaluate_codex(&strict, &patch).is_none());
+    }
+
+    #[test]
+    fn a_worktree_stays_a_policy_root_after_cd_inside_it() {
+        let directory = test_dir("forbidden-worktree");
+        let project = Utf8PathBuf::from_path_buf(directory.clone()).unwrap();
+        let worktree = project.join(".claude/worktrees/feat");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(worktree.join("src")).unwrap();
+        std::fs::create_dir_all(worktree.join("secrets")).unwrap();
+        // A linked worktree's `.git` is a file naming the main repository.
+        std::fs::write(
+            worktree.join(".git"),
+            "gitdir: ../../../.git/worktrees/feat\n",
+        )
+        .unwrap();
+        std::fs::write(worktree.join("secrets/token.txt"), "token").unwrap();
+
+        let input = claude_input_at_cwd(
+            worktree.join("src").as_str(),
+            "Read",
+            serde_json::json!({"file_path": worktree.join("secrets/token.txt").as_str()}),
+        );
+        let environment = PreToolUseCommandEnvironment::Claude(
+            <hookkit_claude::ClaudeCommandEnvironment as hookkit_core::CommandEnvironmentSpec>::from_variables(
+                &EventId::builtin(HarnessId::CLAUDE_CODE, "PreToolUse"),
+                &hookkit_core::EnvironmentVariables::from_pairs([
+                    ("CLAUDECODE", "1"),
+                    ("CLAUDE_CODE_CHILD_SESSION", "1"),
+                    ("CLAUDE_CODE_SESSION_ID", "session"),
+                    ("CLAUDE_PROJECT_DIR", project.as_str()),
+                ]),
+            )
+            .unwrap(),
+        );
+        let roots = policy_roots(&input, &environment);
+        assert_eq!(
+            roots,
+            [project.clone(), worktree.join("src"), worktree.clone()]
+        );
+        let guard = policy(&["secrets/**"], AccessPolicy::InspectKnown);
+        assert!(evaluate(&guard, &input, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_requested_harness_is_found_despite_other_argument_errors() {
+        let arguments =
+            |text: &str| -> Vec<OsString> { text.split_whitespace().map(OsString::from).collect() };
+        for (text, expected) in [
+            ("--harness=codex --bogus", Some("codex")),
+            ("--confg x --harness antigravity", Some("antigravity")),
+            ("--harness=claude-code", Some("claude")),
+            ("--harness=claude", Some("claude")),
+            ("--harness=claud", None),
+            ("--harnessx=codex", None),
+            ("--config x", None),
+            ("--harness", None),
+        ] {
+            let found = requested_harness(arguments(text))
+                .map(|harness| harness.to_possible_value().unwrap().get_name().to_owned());
+            assert_eq!(found.as_deref(), expected, "{text}");
+        }
+
+        // An argument that is not UTF-8 is what clap rejected; it must not
+        // stop the scan (`std::env::args` would panic on it).
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let arguments = [
+                OsString::from_vec(b"--config=\xff".to_vec()),
+                OsString::from("--harness=codex"),
+            ];
+            assert!(matches!(requested_harness(arguments), Some(Harness::Codex)));
+        }
     }
 
     #[test]

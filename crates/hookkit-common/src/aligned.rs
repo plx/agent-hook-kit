@@ -45,6 +45,15 @@
 //! for Antigravity. Use `project_roots()` for configuration discovery and
 //! project-relative matching, and `cwd()` to resolve relative operands.
 //!
+//! `project_roots()` names the checkout the session started in, not
+//! necessarily the one the agent is working in. After Claude Code enters a
+//! git worktree, `CLAUDE_PROJECT_DIR` stays at the original checkout while
+//! `cwd` and the edited files move into the worktree. A hook that acts on the
+//! files the agent is editing (a formatter, a build) should locate them from
+//! the edited path or `cwd()` (for example, its enclosing checkout) rather
+//! than run in `project_roots()`, which would touch the user's main checkout
+//! instead.
+//!
 //! # Reasons
 //!
 //! Every deny and block helper rejects a reason that is empty after trimming,
@@ -230,6 +239,10 @@ impl PreToolUseInput {
     /// empty). When `environment` belongs to another harness, which the
     /// aligned runtime never produces, this falls back to
     /// [`Self::workspace_roots`].
+    ///
+    /// On Claude Code this stays at the session's original checkout after the
+    /// agent enters a git worktree; see the
+    /// [module documentation](self#roots-and-working-directories).
     pub fn project_roots<'a>(
         &'a self,
         environment: &'a PreToolUseCommandEnvironment,
@@ -547,7 +560,11 @@ impl PostToolUseInput {
     /// Returns the stable project roots for this invocation: Claude Code's
     /// `CLAUDE_PROJECT_DIR`, Codex's `cwd`, or Antigravity's `workspacePaths`.
     ///
-    /// See [`PreToolUseInput::project_roots`].
+    /// These name the checkout the session started in. After Claude Code
+    /// enters a git worktree, the file a tool just edited lies in the
+    /// worktree instead, so a post-edit formatter must not run here blindly;
+    /// see the [module documentation](self#roots-and-working-directories) and
+    /// [`PreToolUseInput::project_roots`].
     pub fn project_roots<'a>(
         &'a self,
         environment: &'a PostToolUseCommandEnvironment,

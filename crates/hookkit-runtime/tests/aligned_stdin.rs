@@ -73,6 +73,16 @@ fn aligned_stdin_helper() {
             fail_closed,
             |_, _, _| panic!("policy engine exploded"),
         ),
+        "pre-tool-fail-closed-claude" => run_aligned_event_with_options::<PreToolUse, _>(
+            HarnessId::CLAUDE_CODE,
+            fail_closed,
+            |_, _, context| PreToolUseOutput::pass_through(context.harness()),
+        ),
+        "pre-tool-fail-closed-claude-alias" => run_aligned_event_with_options::<PreToolUse, _>(
+            HarnessId::new("claude").unwrap(),
+            fail_closed,
+            |_, _, context| PreToolUseOutput::pass_through(context.harness()),
+        ),
         "user-prompt-fail-closed-claude" => run_aligned_event_with_options::<UserPromptSubmit, _>(
             HarnessId::CLAUDE_CODE,
             fail_closed,
@@ -257,12 +267,95 @@ fn fail_closed_denies_when_the_handler_cannot_produce_a_decision() {
         blank.stderr
     );
 
-    let panicked = spawn("pre-tool-fail-closed-panic", &codex_pre_tool_use(), &[]);
+    let panicked = spawn(
+        "pre-tool-fail-closed-panic",
+        &codex_pre_tool_use(),
+        &[("RUST_BACKTRACE", "full")],
+    );
     assert_eq!(panicked.code, Some(2), "{:?}", panicked.stderr);
+    // No panic message or backtrace precedes the report, which Codex hands
+    // to the model as the block reason.
+    assert_eq!(panicked.stderr.lines().count(), 1, "{:?}", panicked.stderr);
     assert!(
-        diagnostic_line(&panicked.stderr).contains("panicked: policy engine exploded"),
+        diagnostic_line(&panicked.stderr).contains("panicked: policy engine exploded (at "),
         "{:?}",
         panicked.stderr
+    );
+}
+
+fn claude_environment() -> [(&'static str, &'static str); 4] {
+    [
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ("CLAUDE_CODE_SESSION_ID", "s"),
+        ("CLAUDE_PROJECT_DIR", "/repo"),
+    ]
+}
+
+fn claude_pre_tool_use() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "session_id": "s",
+        "transcript_path": "/tmp/t.jsonl",
+        "cwd": "/repo",
+        "hook_event_name": "PreToolUse",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf build"},
+        "tool_use_id": "toolu_1"
+    }))
+    .unwrap()
+}
+
+#[test]
+fn fail_closed_lowers_for_the_event_the_payload_names() {
+    // An aligned PreToolUse guard registered under Claude's Stop by mistake
+    // must not answer every Stop with exit 2, which keeps Claude working.
+    let stop = serde_json::json!({
+        "session_id": "s",
+        "transcript_path": "/tmp/t.jsonl",
+        "cwd": "/repo",
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "done"
+    });
+    let outcome = spawn(
+        "pre-tool-fail-closed-claude",
+        &serde_json::to_vec(&stop).unwrap(),
+        &claude_environment(),
+    );
+    assert_eq!(outcome.code, Some(1), "{:?}", outcome.stderr);
+    assert_eq!(outcome.stdout, "");
+    assert!(
+        diagnostic_line(&outcome.stderr).contains("claude-code/PreToolUse failed"),
+        "{:?}",
+        outcome.stderr
+    );
+
+    // The matching payload still fails closed when the handler cannot run.
+    let outcome = spawn(
+        "pre-tool-fail-closed-claude",
+        &claude_pre_tool_use(),
+        &[("CLAUDECODE", "1")],
+    );
+    assert_eq!(outcome.code, Some(2), "{:?}", outcome.stderr);
+}
+
+#[test]
+fn fail_closed_with_the_claude_alias_still_blocks() {
+    // `claude` is not an aligned harness identity, so execution fails; the
+    // failure must still block on Claude Code rather than exit 1.
+    let outcome = spawn(
+        "pre-tool-fail-closed-claude-alias",
+        &claude_pre_tool_use(),
+        &claude_environment(),
+    );
+    assert_eq!(outcome.code, Some(2), "{:?}", outcome.stderr);
+    assert_eq!(outcome.stdout, "");
+    assert!(
+        diagnostic_line(&outcome.stderr)
+            .contains("claude/PreToolUse failed: unsupported harness `claude`"),
+        "{:?}",
+        outcome.stderr
     );
 }
 

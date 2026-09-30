@@ -13,27 +13,43 @@
 //! be emitted) as one stderr line and exits 1. Claude Code and Codex treat
 //! exit 1 as a non-blocking hook error, so the pending action proceeds: a
 //! policy hook built on a gating family (`PreToolUse`, `PermissionRequest`,
-//! `UserPromptSubmit`, `PreCompact`) *fails open* by default.
+//! `UserPromptSubmit`) *fails open* by default.
 //!
 //! A guard that must deny when it cannot decide should run through
 //! [`run_aligned_event_with_options`] with
 //! [`RunOptions::fail_closed`](crate::failure::RunOptions::fail_closed). Every
 //! failure is then lowered to the harness's native blocking response for the
-//! family's native event, as [`crate::failure::failure_response`] describes:
+//! family's native event (or the event the payload names; see below), as
+//! [`crate::failure::failure_response`] describes:
 //!
 //! | Family | Claude Code | Codex | Antigravity |
 //! | :- | :- | :- | :- |
 //! | [`PreToolUse`] | exit 2, reason on stderr | exit 2, reason on stderr | `{"decision":"deny"}` at exit 0 |
 //! | [`PermissionRequest`] | JSON `behavior: "deny"` at exit 0 | exit 2 | not aligned |
 //! | [`UserPromptSubmit`] | exit 2 | exit 2 | not aligned |
-//! | [`PreCompact`] | exit 2 | exit 1 (Codex's stop is broader than a compaction block) | not aligned |
+//! | [`PreCompact`] | exit 2: blocks the compaction (see below) | exit 1 (Codex's stop is broader than a compaction block) | not aligned |
 //! | every other family | exit 1 | exit 1 | exit 1 |
+//!
+//! The aligned [`PreCompact`] helpers are observer-only, but fail-closed
+//! lowering follows the native event, which Claude Code lets a hook block. A
+//! blocked automatic compaction that Claude Code started to recover from a
+//! context-limit error makes that error surface and fails the user's current
+//! request, while the same failure on Codex lets compaction proceed. Run a
+//! `PreCompact` observer with the default non-blocking policy, and fail
+//! closed only for a Claude Code guard that means to refuse compaction.
 //!
 //! Observer and turn-completion families keep the non-blocking response under
 //! either policy, because blocking them would keep the agent working rather
 //! than stop an action. A [`crate::failure::RunOptions`] diagnostics sink also
 //! reaches the handler through [`RuntimeContext::diagnostics`] and records
 //! every runner failure.
+//!
+//! A failure is lowered for the event the payload's discriminator names when
+//! it names one (Claude Code and Codex always send `hook_event_name`), and
+//! for the family's native event otherwise, so a runner registered under the
+//! wrong event gets the semantics of the event the harness sent. The `claude`
+//! alias lowers like `claude-code`, even though execution rejects it with
+//! [`HookkitError::UnsupportedHarness`].
 
 use crate::failure::{RunOptions, catch_panic, read_stdin, report_run_failure};
 use hookkit_common::{
@@ -107,6 +123,25 @@ pub trait AlignedEventSpec: sealed::Sealed {
     fn execute_with_diagnostics<F>(
         harness: HarnessId,
         bytes: Vec<u8>,
+        variables: &EnvironmentVariables,
+        diagnostics: &dyn DiagnosticsSink,
+        handler: F,
+    ) -> hookkit_core::Result<ProcessEmission>
+    where
+        F: FnOnce(
+            Self::Input,
+            &Self::CommandEnvironment,
+            &RuntimeContext<'_>,
+        ) -> hookkit_core::Result<Self::Output>;
+
+    /// [`Self::execute_with_diagnostics`] for a payload that is already
+    /// parsed.
+    ///
+    /// A harness with no adapter for the family fails with
+    /// [`HookkitError::UnsupportedHarness`] before the invocation is read.
+    fn execute_invocation_with_diagnostics<F>(
+        harness: HarnessId,
+        invocation: &RawInvocation,
         variables: &EnvironmentVariables,
         diagnostics: &dyn DiagnosticsSink,
         handler: F,
@@ -244,15 +279,37 @@ macro_rules! aligned_family {
                     &RuntimeContext<'_>,
                 ) -> hookkit_core::Result<Self::Output>,
             {
-                let selected = BuiltinHarness::from_id(&harness);
-                if !matches!(selected, $(Some($builtin))|+) {
+                if !matches!(BuiltinHarness::from_id(&harness), $(Some($builtin))|+) {
                     return Err(unsupported_harness(&harness, $family));
                 }
                 let invocation = RawInvocation::parse(bytes)?;
-                let parsed = match selected {
+                Self::execute_invocation_with_diagnostics(
+                    harness,
+                    &invocation,
+                    variables,
+                    diagnostics,
+                    handler,
+                )
+            }
+
+            fn execute_invocation_with_diagnostics<F>(
+                harness: HarnessId,
+                invocation: &RawInvocation,
+                variables: &EnvironmentVariables,
+                diagnostics: &dyn DiagnosticsSink,
+                handler: F,
+            ) -> hookkit_core::Result<ProcessEmission>
+            where
+                F: FnOnce(
+                    Self::Input,
+                    &Self::CommandEnvironment,
+                    &RuntimeContext<'_>,
+                ) -> hookkit_core::Result<Self::Output>,
+            {
+                let parsed = match BuiltinHarness::from_id(&harness) {
                     $(
                         Some($builtin) => parse_arm::<$native, _, _>(
-                            &invocation,
+                            invocation,
                             variables,
                             $input::$arm,
                             $environment::$arm,
@@ -260,7 +317,7 @@ macro_rules! aligned_family {
                     )+
                     _ => return Err(unsupported_harness(&harness, $family)),
                 };
-                execute_parsed(harness, &invocation, parsed, diagnostics, handler, |output: $output| {
+                execute_parsed(harness, invocation, parsed, diagnostics, handler, |output: $output| {
                     match output {
                         $($output::$arm(output) => <$native as EventSpec>::emit(output),)+
                         _ => Err(HookkitError::InvalidProcessEmission(
@@ -567,9 +624,9 @@ where
 /// `options` selects the diagnostics sink handed to the handler and the
 /// [`crate::failure::FailurePolicy`] applied when stdin, the environment,
 /// parsing, the handler (including a panic), or emission fails. The failure
-/// is reported for the family's native event, so
-/// [`RunOptions::fail_closed`] denies a pending tool call, prompt, or
-/// permission instead of letting it proceed; see the
+/// is reported for the event the payload names, or else the family's native
+/// event, so [`RunOptions::fail_closed`] denies a pending tool call, prompt,
+/// or permission instead of letting it proceed; see the
 /// [module documentation](self#failure-policy).
 pub fn run_aligned_event_with_options<K, F>(
     harness: HarnessId,
@@ -585,23 +642,37 @@ where
     ) -> hookkit_core::Result<K::Output>,
 {
     let hook = format!("{harness}/{}", K::FAMILY);
-    let event = EventId::builtin(harness.clone(), <K as sealed::Sealed>::NATIVE_EVENT);
-    let fail = |error: &dyn std::error::Error| {
-        report_run_failure(&options, &harness, Some(&event), &hook, error)
+    // Lower for the harness a `claude` alias means, even though execution
+    // rejects the alias.
+    let lowering = harness
+        .as_str()
+        .parse::<BuiltinHarness>()
+        .map_or_else(|_| harness.clone(), BuiltinHarness::id);
+    let fail = |invocation: Option<&RawInvocation>, error: &dyn std::error::Error| {
+        let event =
+            crate::selected::builtin_payload_event(&lowering, invocation).unwrap_or_else(|| {
+                EventId::builtin(lowering.clone(), <K as sealed::Sealed>::NATIVE_EVENT)
+            });
+        report_run_failure(&options, &lowering, Some(&event), &hook, error)
     };
     let bytes = match read_stdin() {
         Ok(bytes) => bytes,
-        Err(error) => return fail(&error),
+        Err(error) => return fail(None, &error),
     };
+    let parsed = RawInvocation::parse(bytes);
     let variables =
         match capture_aligned_command_environment(&harness, K::FAMILY, options.diagnostics()) {
             Ok(variables) => variables,
-            Err(error) => return fail(&error),
+            Err(error) => return fail(parsed.as_ref().ok(), &error),
         };
+    let invocation = match parsed {
+        Ok(invocation) => invocation,
+        Err(error) => return fail(None, &error),
+    };
     let executed = catch_panic(|| {
-        execute_aligned_event_with_diagnostics::<K, _>(
+        K::execute_invocation_with_diagnostics(
             harness.clone(),
-            bytes,
+            &invocation,
             &variables,
             options.diagnostics(),
             handler,
@@ -610,10 +681,10 @@ where
     match executed {
         Ok(Ok(emission)) => match crate::typed::try_write_emission(&emission) {
             Ok(code) => code,
-            Err(error) => fail(&error),
+            Err(error) => fail(Some(&invocation), &error),
         },
-        Ok(Err(error)) => fail(&error),
-        Err(panic) => fail(&panic),
+        Ok(Err(error)) => fail(Some(&invocation), &error),
+        Err(panic) => fail(Some(&invocation), &panic),
     }
 }
 

@@ -193,18 +193,101 @@ fn claude_discovers_project_policy_after_the_agent_changes_directory() {
 }
 
 #[test]
-fn argument_errors_exit_one_instead_of_the_blocking_status_two() {
+fn claude_worktree_policy_still_applies_after_cd_inside_the_worktree() {
+    let temporary = TempDirectory::new("claude-worktree");
+    let project = temporary.0.join("project");
+    let worktree = project.join(".claude/worktrees/feat");
+    let home = temporary.0.join("home");
+    std::fs::create_dir_all(project.join(".agent-hook-kit")).unwrap();
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    std::fs::create_dir_all(worktree.join("src")).unwrap();
+    std::fs::create_dir_all(worktree.join("secrets")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        project.join(".agent-hook-kit/forbidden-files.yaml"),
+        "patterns: ['secrets/**']\n",
+    )
+    .unwrap();
+    // A linked worktree's `.git` is a file naming the main repository.
+    std::fs::write(
+        worktree.join(".git"),
+        "gitdir: ../../../.git/worktrees/feat\n",
+    )
+    .unwrap();
+    let token = worktree.join("secrets/token.txt");
+    std::fs::write(&token, "token").unwrap();
+
+    // CLAUDE_PROJECT_DIR stays at the main checkout while `cwd` moves into
+    // the worktree and then below its root.
+    for cwd in [worktree.clone(), worktree.join("src")] {
+        let mut read = input("claude", &cwd, "unused");
+        read["tool_input"] = serde_json::json!({"file_path": token.to_str().unwrap()});
+        let mut shell = input("claude", &cwd, "unused");
+        shell["tool_name"] = serde_json::json!("Bash");
+        shell["tool_input"] = serde_json::json!({"command": "cat ../secrets/token.txt"});
+        for payload in [read, shell] {
+            let output = run_with(
+                &["--harness=claude".to_owned()],
+                "claude",
+                &project,
+                &home,
+                &serde_json::to_vec(&payload).unwrap(),
+            );
+            assert!(output.status.success(), "{:?}", output.stderr);
+            if cwd == worktree && payload["tool_name"] == "Bash" {
+                // From the worktree root, `../secrets` is outside it.
+                continue;
+            }
+            assert_eq!(
+                decision(&output),
+                "deny",
+                "cwd {}: {payload}",
+                cwd.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn argument_errors_block_the_call() {
     let temporary = TempDirectory::new("usage");
+    let config = temporary.0.join("policy.yaml");
+    std::fs::write(&config, "patterns: ['.env']\n").unwrap();
+    // Clap's own usage status would be 2 as well; exiting 1 instead, a
+    // non-blocking hook error, would let every call through on a typo.
     for args in [
         vec!["--harness=claud".to_owned()],
         vec![],
         vec!["--harness=codex".to_owned(), "--bogus".to_owned()],
+        vec![
+            "--harness=claude".to_owned(),
+            "--confg".to_owned(),
+            "x".to_owned(),
+        ],
     ] {
         let output = run_with(&args, "codex", &temporary.0, &temporary.0, b"{}");
-        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
         assert!(output.stdout.is_empty(), "{args:?}");
-        assert!(!output.stderr.is_empty(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.lines().count(), 1, "{args:?}: {stderr:?}");
+        assert!(
+            stderr.starts_with("hookkit: forbidden-file-guard ")
+                && stderr.contains("failed: invalid arguments: error: "),
+            "{args:?}: {stderr:?}"
+        );
     }
+
+    // Antigravity reads a decision rather than an exit status.
+    let output = run_with(
+        &["--harness=antigravity".to_owned(), "--bogus".to_owned()],
+        "antigravity",
+        &temporary.0,
+        &temporary.0,
+        b"{}",
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(decision(&output), "deny");
+
     let help = run_with(
         &["--help".to_owned()],
         "codex",
@@ -214,6 +297,21 @@ fn argument_errors_exit_one_instead_of_the_blocking_status_two() {
     );
     assert_eq!(help.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&help.stdout).contains("--harness"));
+
+    // The canonical HookKit identity is accepted as an alias.
+    let payload = input("claude", &temporary.0, ".env");
+    let output = run_with(
+        &[
+            "--harness=claude-code".to_owned(),
+            format!("--config={}", config.display()),
+        ],
+        "claude",
+        &temporary.0,
+        &temporary.0,
+        &serde_json::to_vec(&payload).unwrap(),
+    );
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(decision(&output), "deny");
 }
 
 #[test]

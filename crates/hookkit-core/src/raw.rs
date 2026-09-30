@@ -7,6 +7,11 @@ pub struct RawInvocation {
 }
 
 impl RawInvocation {
+    /// Deepest nesting of JSON arrays and objects that [`Self::parse`]
+    /// accepts. serde_json's default recursion limit of 128 rejects the
+    /// 128th nested level.
+    pub const MAX_NESTING_DEPTH: usize = 127;
+
     /// Parses JSON while retaining the exact input bytes.
     ///
     /// The input may be any JSON value; native event parsers impose their own
@@ -22,6 +27,16 @@ impl RawInvocation {
     /// the input is parsed once more. [`Self::json`] then contains U+FFFD in
     /// place of each unpaired surrogate, while [`Self::bytes`] still returns
     /// the input exactly as received.
+    ///
+    /// Nesting is limited to [`Self::MAX_NESTING_DEPTH`] arrays and objects
+    /// (serde_json's recursion limit), which keeps a hostile payload from
+    /// overflowing the stack. Claude Code and Codex impose no such limit, and
+    /// an MCP tool's `tool_input` is arbitrary model-generated JSON, so a
+    /// deeper payload is valid for the harness but is rejected here with
+    /// [`crate::HookkitError::InvalidJson`] (`recursion limit exceeded`). The
+    /// hook then never reaches its handler and is reported under the stdin
+    /// runner's failure policy: by default the pending action proceeds, and a
+    /// fail-closed guard denies it.
     pub fn parse(bytes: impl Into<Vec<u8>>) -> crate::Result<Self> {
         let bytes = bytes.into();
         let json = match serde_json::from_slice(&bytes) {
@@ -200,6 +215,33 @@ mod tests {
         assert!(parse("{}{}").is_err(), "trailing data is rejected");
         assert!(parse(" {}\n").is_ok(), "surrounding whitespace is accepted");
         assert_eq!(parse("null").unwrap().json(), &serde_json::Value::Null);
+    }
+
+    /// A Codex-shaped `PreToolUse` payload whose MCP `tool_input` nests
+    /// `depth` arrays inside its outer object.
+    fn nested_tool_input(depth: usize) -> String {
+        format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"mcp__x__y","tool_input":{{"a":{}1{}}}}}"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        )
+    }
+
+    #[test]
+    fn nesting_is_limited_to_serde_jsons_recursion_limit() {
+        // The payload object and `tool_input` are two levels themselves.
+        let deepest = RawInvocation::MAX_NESTING_DEPTH - 2;
+        let raw = parse(&nested_tool_input(deepest)).unwrap();
+        assert_eq!(raw.json()["tool_name"], "mcp__x__y");
+
+        let error = parse(&nested_tool_input(deepest + 1)).unwrap_err();
+        assert!(
+            matches!(&error, crate::HookkitError::InvalidJson(source)
+                if source.to_string().starts_with("recursion limit exceeded")),
+            "{error}"
+        );
+        // Deeper payloads fail the same way instead of overflowing the stack.
+        assert!(parse(&nested_tool_input(100_000)).is_err());
     }
 
     #[test]

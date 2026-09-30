@@ -50,7 +50,24 @@ where
     ) -> hookkit_core::Result<E::CommandOutput>,
 {
     let invocation = RawInvocation::parse(bytes)?;
-    let input = E::parse(&invocation)?;
+    execute_typed_invocation::<E, _>(&invocation, variables, diagnostics, handler)
+}
+
+fn execute_typed_invocation<E, F>(
+    invocation: &RawInvocation,
+    variables: &EnvironmentVariables,
+    diagnostics: &dyn DiagnosticsSink,
+    handler: F,
+) -> hookkit_core::Result<ProcessEmission>
+where
+    E: EventSpec,
+    F: FnOnce(
+        E::Input,
+        &E::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<E::CommandOutput>,
+{
+    let input = E::parse(invocation)?;
     let environment =
         <E::CommandEnvironment as CommandEnvironmentSpec>::from_variables(&E::EVENT, variables)?;
     E::validate_command_environment(&input, &environment)?;
@@ -60,7 +77,7 @@ where
         E::EVENT,
         E::CONTRACT,
         ResolutionProvenance::TypedStatic,
-        &invocation,
+        invocation,
         E::context(&input),
         diagnostics,
     )?;
@@ -76,8 +93,9 @@ where
 /// [`execute_typed`], and writes the emission. On any failure it writes one
 /// `hookkit: <program> <event> failed: ...` line to stderr and exits 1, which
 /// Claude Code and Codex treat as a non-blocking error: the pending action
-/// proceeds. Policy hooks that must deny when they cannot decide should use
-/// [`run_event_with_options`] with [`RunOptions::fail_closed`].
+/// proceeds (Claude Code `WorktreeCreate` and `WorktreeRemove` fail on any
+/// non-zero exit). Policy hooks that must deny when they cannot decide should
+/// use [`run_event_with_options`] with [`RunOptions::fail_closed`].
 pub fn run_event<E, F>(handler: F) -> std::process::ExitCode
 where
     E: EventSpec,
@@ -117,6 +135,11 @@ where
 /// parsing, the handler (including a panic), or emission fails. Every failure
 /// is recorded in the sink and reported on stderr; see [`crate::failure`] for
 /// the native response each policy produces.
+///
+/// A failure is lowered for `E`'s event unless the payload's authoritative
+/// discriminator names another event of the same harness: the harness reads
+/// the exit code for the event it sent, so a hook registered under the wrong
+/// event gets that event's semantics.
 pub fn run_event_with_options<E, F>(options: RunOptions<'_>, handler: F) -> std::process::ExitCode
 where
     E: EventSpec,
@@ -126,30 +149,37 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<E::CommandOutput>,
 {
-    let fail = |error: &dyn std::error::Error| {
-        report_run_failure(&options, &E::HARNESS, Some(&E::EVENT), &E::EVENT, error)
+    let fail = |invocation: Option<&RawInvocation>, error: &dyn std::error::Error| {
+        let event =
+            crate::selected::builtin_payload_event(&E::HARNESS, invocation).unwrap_or(E::EVENT);
+        report_run_failure(&options, &E::HARNESS, Some(&event), &E::EVENT, error)
     };
     let bytes = match read_stdin() {
         Ok(bytes) => bytes,
-        Err(error) => return fail(&error),
+        Err(error) => return fail(None, &error),
     };
+    let parsed = RawInvocation::parse(bytes);
     let variables = match crate::environment::capture_command_environment_with_diagnostics::<
         E::CommandEnvironment,
     >(options.diagnostics())
     {
         Ok(variables) => variables,
-        Err(error) => return fail(&error),
+        Err(error) => return fail(parsed.as_ref().ok(), &error),
+    };
+    let invocation = match parsed {
+        Ok(invocation) => invocation,
+        Err(error) => return fail(None, &error),
     };
     let executed = catch_panic(|| {
-        execute_typed_with_diagnostics::<E, _>(bytes, &variables, options.diagnostics(), handler)
+        execute_typed_invocation::<E, _>(&invocation, &variables, options.diagnostics(), handler)
     });
     match executed {
         Ok(Ok(emission)) => match try_write_emission(&emission) {
             Ok(code) => code,
-            Err(error) => fail(&error),
+            Err(error) => fail(Some(&invocation), &error),
         },
-        Ok(Err(error)) => fail(&error),
-        Err(panic) => fail(&panic),
+        Ok(Err(error)) => fail(Some(&invocation), &error),
+        Err(panic) => fail(Some(&invocation), &panic),
     }
 }
 
