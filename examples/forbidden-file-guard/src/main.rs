@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use hookkit_common::{PreToolUseInput, PreToolUseOutput};
+use hookkit_common::{PreToolUseCommandEnvironment, PreToolUseInput, PreToolUseOutput};
 use hookkit_core::{
     HarnessId, Utf8Path, Utf8PathBuf, expand_utf8_home, normalize_utf8_path, resolve_utf8_path,
     utf8_path_to_slash,
@@ -64,10 +64,12 @@ struct FileConfig {
 
 struct Policy {
     patterns: GlobSet,
-    access_policy: AccessPolicy,
+    posture: Posture,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+/// One configured uncertainty posture. Each value turns on one independent
+/// strictness flag; see [`Posture`].
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AccessPolicy {
     /// Match recovered candidates and allow analysis/resolver gaps.
@@ -79,30 +81,102 @@ enum AccessPolicy {
     DenyAllShell,
 }
 
+/// The effective uncertainty posture: independent strictness flags OR-ed
+/// across every setting in every loaded configuration file.
+///
+/// `deny_unresolved` and `deny_all_shell` constrain different calls (the first
+/// non-shell gaps, the second every shell call), so neither subsumes the
+/// other. Combining them, within one file or across the home and project
+/// layers, keeps both: a later or weaker layer can never relax an earlier,
+/// stricter one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Posture {
+    /// Deny every exact native shell call.
+    deny_shell: bool,
+    /// Deny any call whose access analysis or target resolution is incomplete.
+    deny_unresolved: bool,
+}
+
+impl Posture {
+    fn include(&mut self, policy: AccessPolicy) {
+        match policy {
+            AccessPolicy::InspectKnown => {}
+            AccessPolicy::DenyUnresolved => self.deny_unresolved = true,
+            AccessPolicy::DenyAllShell => self.deny_shell = true,
+        }
+    }
+}
+
 fn main() -> std::process::ExitCode {
-    let cli = Cli::parse();
+    // Clap exits with status 2 on a usage error, which Claude Code and Codex
+    // treat as a blocking hook decision. Report argument errors with the
+    // non-blocking status 1 instead, and keep 0 for --help and --version.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let _ = error.print();
+            return std::process::ExitCode::from(if error.use_stderr() { 1 } else { 0 });
+        }
+    };
     let harness = cli.harness.id();
-    hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PreToolUse, _>(
+    // A guard must not let a call through because it failed to decide: every
+    // parse, environment, handler, or emission failure becomes a native deny.
+    hookkit_runtime::aligned::run_aligned_event_with_options::<
+        hookkit_runtime::aligned::PreToolUse,
+        _,
+    >(
         harness.clone(),
-        move |input, _environment, _context| {
-            let reason = deny_reason(&cli.config_paths, &input, TARGET_RESOLUTION_BUDGET);
+        hookkit_runtime::RunOptions::new().fail_closed(),
+        move |input, environment, _context| {
+            let reason = deny_reason(
+                &cli.config_paths,
+                &input,
+                environment,
+                TARGET_RESOLUTION_BUDGET,
+            );
             match reason {
                 Some(reason) => PreToolUseOutput::deny(&harness, reason),
-                None => PreToolUseOutput::allow(&harness),
+                // No objection: leave the call to the harness's normal
+                // permission flow. An explicit allow would auto-approve it.
+                None => PreToolUseOutput::pass_through(&harness),
             }
         },
     )
 }
 
-/// Load the active policy and return a deny reason, or `None` to allow. A policy
-/// that fails to load is itself a deny so a broken configuration never silently
-/// opens the boundary.
+/// Returns the roots used for policy discovery and root-relative matching:
+/// the stable project roots (Claude Code's `CLAUDE_PROJECT_DIR`, Codex's
+/// `cwd`, Antigravity's workspace paths) followed by the native working
+/// directory when it differs.
+///
+/// Claude Code's `cwd` follows `cd` and worktree switches, so on its own it
+/// would miss the project configuration after `cd /tmp` and mis-anchor
+/// root-relative patterns after `cd src`. Keeping it as an extra root still
+/// covers a worktree the agent entered, whose root `CLAUDE_PROJECT_DIR` does
+/// not name.
+fn policy_roots(
+    input: &PreToolUseInput,
+    environment: &PreToolUseCommandEnvironment,
+) -> Vec<Utf8PathBuf> {
+    let mut roots = input.project_roots(environment).into_owned();
+    for root in input.workspace_roots().iter() {
+        if !roots.contains(root) {
+            roots.push(root.clone());
+        }
+    }
+    roots
+}
+
+/// Load the active policy and return a deny reason, or `None` for no
+/// objection. A policy that fails to load is itself a deny so a broken
+/// configuration never silently opens the boundary.
 fn deny_reason(
     config_paths: &[PathBuf],
     input: &PreToolUseInput,
+    environment: &PreToolUseCommandEnvironment,
     max_entries: usize,
 ) -> Option<String> {
-    let roots = input.workspace_roots();
+    let roots = policy_roots(input, environment);
     let policy = match load_policy(config_paths, &roots) {
         Ok(policy) => policy,
         Err(error) => {
@@ -123,7 +197,7 @@ fn load_policy(config_paths: &[PathBuf], roots: &[Utf8PathBuf]) -> hookkit_core:
     };
 
     let mut builder = GlobSetBuilder::new();
-    let mut access_policy = AccessPolicy::InspectKnown;
+    let mut posture = Posture::default();
     for path in paths {
         if !path.is_file() {
             if explicit_paths {
@@ -138,10 +212,10 @@ fn load_policy(config_paths: &[PathBuf], roots: &[Utf8PathBuf]) -> hookkit_core:
         let content = std::fs::read_to_string(&path)?;
         let config: FileConfig = serde_yaml_ng::from_str(&content).map_err(invalid_data)?;
         if config.block_shell_commands {
-            access_policy = access_policy.max(AccessPolicy::DenyAllShell);
+            posture.include(AccessPolicy::DenyAllShell);
         }
         if let Some(configured) = config.access_policy {
-            access_policy = access_policy.max(configured);
+            posture.include(configured);
         }
         for pattern in config.patterns {
             if pattern.trim().is_empty() {
@@ -153,7 +227,7 @@ fn load_policy(config_paths: &[PathBuf], roots: &[Utf8PathBuf]) -> hookkit_core:
 
     Ok(Policy {
         patterns: builder.build().map_err(invalid_data)?,
-        access_policy,
+        posture,
     })
 }
 
@@ -179,7 +253,7 @@ fn evaluate(
     max_entries: usize,
 ) -> Option<String> {
     let shell_call = is_exact_native_shell(input);
-    if policy.access_policy == AccessPolicy::DenyAllShell && shell_call {
+    if policy.posture.deny_shell && shell_call {
         return Some(blocked_shell_reason(
             input.tool_name().unwrap_or("<unknown>"),
         ));
@@ -223,9 +297,7 @@ fn evaluate(
         return Some(forbidden_path_reason(path));
     }
 
-    if policy.access_policy == AccessPolicy::DenyUnresolved
-        && (!report.is_complete() || !resolution.is_complete())
-    {
+    if policy.posture.deny_unresolved && (!report.is_complete() || !resolution.is_complete()) {
         return Some(format!(
             "Forbidden-file policy denies unresolved access analysis ({} analysis gap(s), {} resolution gap(s))",
             report.gaps.len(),
@@ -370,9 +442,11 @@ mod tests {
         for pattern in patterns {
             builder.add(Glob::new(pattern).unwrap());
         }
+        let mut posture = Posture::default();
+        posture.include(access_policy);
         Policy {
             patterns: builder.build().unwrap(),
-            access_policy,
+            posture,
         }
     }
 
@@ -787,9 +861,89 @@ mod tests {
 
         let guard = load_policy(&[first, second], &[Utf8PathBuf::from("/repo")]).unwrap();
         assert_eq!(guard.patterns.len(), 2);
-        assert_eq!(guard.access_policy, AccessPolicy::DenyAllShell);
+        // The second file's shell block adds to, and does not replace, the
+        // first file's unresolved-access denial.
+        assert_eq!(
+            guard.posture,
+            Posture {
+                deny_shell: true,
+                deny_unresolved: true
+            }
+        );
         assert!(guard.patterns.is_match("keys/private.pem"));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn combined_postures_keep_denying_unresolved_non_shell_calls() {
+        // Regression: taking the "maximum" posture let `deny_all_shell`
+        // silently replace `deny_unresolved`, so an incomplete non-shell
+        // analysis was allowed as soon as shell blocking was also enabled.
+        let directory = test_dir("forbidden-posture");
+        std::fs::create_dir_all(&directory).unwrap();
+        let home = directory.join("home.yaml");
+        let project = directory.join("project.yaml");
+        std::fs::write(
+            &home,
+            "patterns: ['secrets/**']\naccess_policy: deny_unresolved\n",
+        )
+        .unwrap();
+        std::fs::write(&project, "access_policy: deny_all_shell\n").unwrap();
+        let single = directory.join("single.yaml");
+        std::fs::write(
+            &single,
+            "patterns: ['secrets/**']\naccess_policy: deny_unresolved\nblock_shell_commands: true\n",
+        )
+        .unwrap();
+
+        let incomplete = codex_input("Bash", serde_json::json!({"command": "cat \"$SECRET\""}));
+        let incomplete_patch = codex_input(
+            "apply_patch",
+            serde_json::json!({"command": "*** Begin Patch\n*** Update File: \n*** End Patch\n"}),
+        );
+        let roots = [Utf8PathBuf::from("/repo")];
+        for paths in [vec![home.clone(), project.clone()], vec![single.clone()]] {
+            let guard = load_policy(&paths, &roots).unwrap();
+            assert!(guard.posture.deny_shell && guard.posture.deny_unresolved);
+            assert!(evaluate(&guard, &incomplete, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+            let analysis = ToolAccessAnalyzer::default().analyze_pre_tool(&incomplete_patch);
+            assert!(!analysis.is_complete(), "{:?}", analysis.gaps);
+            assert!(
+                evaluate(&guard, &incomplete_patch, &roots, TARGET_RESOLUTION_BUDGET).is_some(),
+                "an incomplete non-shell analysis must still be denied"
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn claude_policy_roots_prefer_the_project_dir_and_keep_the_moving_cwd() {
+        let input = claude_input_at_cwd(
+            "/repo/src",
+            "Read",
+            serde_json::json!({"file_path": "/repo/secrets/token.txt"}),
+        );
+        let environment = PreToolUseCommandEnvironment::Claude(
+            <hookkit_claude::ClaudeCommandEnvironment as hookkit_core::CommandEnvironmentSpec>::from_variables(
+                &EventId::builtin(HarnessId::CLAUDE_CODE, "PreToolUse"),
+                &hookkit_core::EnvironmentVariables::from_pairs([
+                    ("CLAUDECODE", "1"),
+                    ("CLAUDE_CODE_CHILD_SESSION", "1"),
+                    ("CLAUDE_CODE_SESSION_ID", "session"),
+                    ("CLAUDE_PROJECT_DIR", "/repo"),
+                ]),
+            )
+            .unwrap(),
+        );
+        let roots = policy_roots(&input, &environment);
+        assert_eq!(
+            roots,
+            [Utf8PathBuf::from("/repo"), Utf8PathBuf::from("/repo/src")]
+        );
+        // `secrets/**` is relative to the project root, not to the directory
+        // the agent moved into.
+        let guard = policy(&["secrets/**"], AccessPolicy::InspectKnown);
+        assert!(evaluate(&guard, &input, &roots, TARGET_RESOLUTION_BUDGET).is_some());
     }
 
     #[test]

@@ -1,5 +1,16 @@
 use hookkit_core::EnvironmentVariables;
 
+{% if harness_mode == "cross" or starter != "custom" -%}
+/// An explicit allow skips Claude Code's permission prompt and bypasses
+/// Antigravity's Ask presets, so the scaffold must never emit one.
+fn assert_never_auto_approves(stdout: &[u8]) {
+    let stdout = String::from_utf8_lossy(stdout);
+    for approval in [r#""permissionDecision":"allow""#, r#""decision":"allow""#] {
+        assert!(!stdout.contains(approval), "{stdout}");
+    }
+}
+
+{% endif -%}
 {% if harness_mode == "cross" -%}
 {% for selected_harness in harnesses -%}
 {% set pre_tool_event = event_catalog.events | selectattr("harness", "equalto", selected_harness) | selectattr("stable_id", "equalto", "pre_tool_use") | first -%}
@@ -29,12 +40,15 @@ fn {{ selected_harness | replace('-', '_') }}_fixture_uses_native_pre_tool_outpu
         {%- endif %}
         include_bytes!(concat!("../fixtures/", {{ selected_harness | tojson }}, "/pre_tool_use.json")),
         &variables,
-        |_input, _environment, context| hookkit_common::PreToolUseOutput::allow(context.harness()),
+        |input, _environment, context| {
+            {{ package_name | replace('-', '_') }}::scaffold::dispatch::pre_tool_output(input, context, None)
+        },
     )
     .expect("fixture should satisfy its exact native contract");
 
     assert_eq!(emission.exit_code(), 0);
     assert!(emission.stderr().is_empty());
+    assert_never_auto_approves(emission.stdout());
 }{% if not loop.last %}
 
 {% endif %}{% endfor -%}
@@ -106,7 +120,7 @@ fn selected_native_fixture_uses_exact_pre_tool_contract() {
         },
         {%- else -%}
         |_input, _environment, _context| {
-            Ok(hookkit_antigravity::PreToolUseOutput::allow())
+            Ok(hookkit_antigravity::PreToolUseOutput::ask())
         },
         {%- endif %}
     );
@@ -115,5 +129,8 @@ fn selected_native_fixture_uses_exact_pre_tool_contract() {
     let emission = emission.expect("fixture should satisfy its exact native contract");
     assert_eq!(emission.exit_code(), 0);
     assert!(emission.stderr().is_empty());
+{%- if starter != "custom" %}
+    assert_never_auto_approves(emission.stdout());
+{%- endif %}
 }
 {%- endif %}

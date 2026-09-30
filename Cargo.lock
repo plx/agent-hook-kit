@@ -242,6 +242,7 @@ dependencies = [
  "hookkit-codex",
  "hookkit-core",
  "hookkit-runtime",
+ "hookkit-shell",
  "serde_json",
 ]
 
@@ -253,7 +254,6 @@ dependencies = [
  "dirs",
  "globset",
  "hookkit-codex",
- "hookkit-common",
  "hookkit-core",
  "hookkit-runtime",
  "hookkit-session-state",
@@ -431,6 +431,7 @@ dependencies = [
  "clap",
  "dirs",
  "globset",
+ "hookkit-claude",
  "hookkit-common",
  "hookkit-core",
  "hookkit-runtime",

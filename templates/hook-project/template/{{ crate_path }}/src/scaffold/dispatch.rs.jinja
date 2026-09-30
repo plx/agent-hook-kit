@@ -211,42 +211,64 @@ fn run_pre_tool(
     harness: hookkit_core::HarnessId,
     state_dir: Option<std::path::PathBuf>,
 ) -> std::process::ExitCode {
-    hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PreToolUse, _>(
-        harness,
-{%- if starter == "pre_tool_rewrite" %}
-        |input, _environment, context| {
-            match crate::hooks::pre_tool::transform(input.tool_input(), state_dir.as_deref()) {
-                Some(updated_input) => {
-                    hookkit_common::PreToolUseOutput::rewrite(context.harness(), updated_input)
-                }
-                None => hookkit_common::PreToolUseOutput::allow(context.harness()),
-            }
-        },
-{%- else %}
 {%- if starter == "policy_guard" %}
-        |input, _environment, context| {
-            let report = hookkit_tool_access::ToolAccessAnalyzer::default()
-                .analyze_pre_tool(&input);
-            match crate::hooks::pre_tool::evaluate(&report, state_dir.as_deref()) {
-                Decision::Allow => hookkit_common::PreToolUseOutput::allow(context.harness()),
-                Decision::Deny(reason) => {
-                    hookkit_common::PreToolUseOutput::deny(context.harness(), reason)
-                }
-            }
-        },
+    // A guard that cannot decide denies instead of letting the call run:
+    // parse, environment, handler, and emission failures become each
+    // harness's native block.
+    let options = hookkit_runtime::RunOptions::new().fail_closed();
 {%- else %}
-        |input, _environment, context| match crate::hooks::pre_tool::evaluate(
-            input.tool_name(),
-            state_dir.as_deref(),
-        ) {
-            Decision::Allow => hookkit_common::PreToolUseOutput::allow(context.harness()),
-            Decision::Deny(reason) => {
-                hookkit_common::PreToolUseOutput::deny(context.harness(), reason)
-            }
-        },
+    // Failures exit 1, which Claude Code and Codex treat as non-blocking.
+    // Use `RunOptions::new().fail_closed()` to deny instead once this hook
+    // enforces a policy.
+    let options = hookkit_runtime::RunOptions::new();
 {%- endif %}
+    hookkit_runtime::aligned::run_aligned_event_with_options::<
+        hookkit_runtime::aligned::PreToolUse,
+        _,
+    >(harness, options, move |input, _environment, context| {
+        pre_tool_output(input, context, state_dir.as_deref())
+    })
+}
+
+/// Lower the portable pre-tool policy to one native response.
+///
+/// "No objection" becomes `PreToolUseOutput::pass_through`, which leaves the
+/// call to each harness's normal permission flow: empty output on Claude
+/// Code and Codex, and `ask` on Antigravity, which requires a decision.
+/// `PreToolUseOutput::allow` would instead auto-approve the call on Claude
+/// Code and Antigravity.
+#[rustfmt::skip]
+pub fn pre_tool_output(
+    input: hookkit_common::PreToolUseInput,
+    context: &hookkit_core::RuntimeContext<'_>,
+    state_dir: Option<&std::path::Path>,
+) -> hookkit_core::Result<hookkit_common::PreToolUseOutput> {
+{%- if starter == "pre_tool_rewrite" %}
+    match crate::hooks::pre_tool::transform(input.tool_input(), state_dir) {
+        // Claude Code has no rewrite that defers to its normal permission
+        // flow, so the rewritten call is shown to the user for confirmation.
+        // Codex applies its normal approval policy to the rewritten call.
+        Some(updated_input) => hookkit_common::PreToolUseOutput::rewrite(
+            context.harness(),
+            updated_input,
+            hookkit_common::RewriteApproval::Ask(String::from(
+                {{ (package_name ~ " rewrote this tool call") | tojson }},
+            )),
+        ),
+        None => hookkit_common::PreToolUseOutput::pass_through(context.harness()),
+    }
+{%- elif starter == "policy_guard" %}
+    let report = hookkit_tool_access::ToolAccessAnalyzer::default().analyze_pre_tool(&input);
+    match crate::hooks::pre_tool::evaluate(&report, state_dir) {
+        Decision::Allow => hookkit_common::PreToolUseOutput::pass_through(context.harness()),
+        Decision::Deny(reason) => hookkit_common::PreToolUseOutput::deny(context.harness(), reason),
+    }
+{%- else %}
+    match crate::hooks::pre_tool::evaluate(input.tool_name(), state_dir) {
+        Decision::Allow => hookkit_common::PreToolUseOutput::pass_through(context.harness()),
+        Decision::Deny(reason) => hookkit_common::PreToolUseOutput::deny(context.harness(), reason),
+    }
 {%- endif %}
-    )
 }
 {%- elif harness_mode == "single" and "pre_tool_use" in native_hooks and starter != "custom" %}
 {%- if starter == "scoped_context_once" %}
@@ -327,18 +349,15 @@ fn run_pre_tool() -> std::process::ExitCode {
 {%- elif harness == "antigravity" %}
     hookkit_runtime::run_event::<hookkit_antigravity::PreToolUse, _>(
         |input, _environment, _context| {
-            let (decision, reason) = match crate::hooks::pre_tool::evaluate(Some(
-                &input.tool_call.name,
-            )) {
-                Decision::Allow => (hookkit_antigravity::ToolDecision::Allow, None),
+            // Antigravity requires a decision and has no pass-through, so "no
+            // objection" is `ask`: it respects "Always Allow" grants and
+            // prompts only where none covers the call. `allow` would
+            // auto-approve every call and bypass the user's Ask presets.
+            Ok(match crate::hooks::pre_tool::evaluate(Some(&input.tool_call.name)) {
+                Decision::Allow => hookkit_antigravity::PreToolUseOutput::ask(),
                 Decision::Deny(reason) => {
-                    (hookkit_antigravity::ToolDecision::Deny, Some(reason))
+                    hookkit_antigravity::PreToolUseOutput::deny().with_reason(reason)
                 }
-            };
-            Ok(hookkit_antigravity::PreToolUseOutput {
-                decision,
-                reason,
-                permission_overrides: Vec::new(),
             })
         },
     )

@@ -57,7 +57,7 @@ fn claim_once_returns_claimed_then_already_claimed() {
                     .expect("second claim should be readable"),
                 hookkit_session_state::ClaimResult::AlreadyClaimed,
             );
-            hookkit_common::PreToolUseOutput::allow(context.harness())
+            hookkit_common::PreToolUseOutput::pass_through(context.harness())
         },
     )
     .expect("aligned pre-tool fixture should create session state");

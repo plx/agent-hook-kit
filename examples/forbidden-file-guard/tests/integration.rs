@@ -71,38 +71,53 @@ fn input(harness: &str, cwd: &Path, path: &str) -> serde_json::Value {
     }
 }
 
-fn run(harness: &str, config: &Path, input: &serde_json::Value) -> std::process::Output {
+/// Runs the guard with `args`, feeding `stdin`. On Claude Code the baseline
+/// environment names `project_dir` as `CLAUDE_PROJECT_DIR`. `home` replaces
+/// `$HOME` so default discovery never reads the developer's own policy.
+fn run_with(
+    args: &[String],
+    harness: &str,
+    project_dir: &Path,
+    home: &Path,
+    stdin: &[u8],
+) -> std::process::Output {
     let binary = env!("CARGO_BIN_EXE_forbidden-file-guard");
     let mut command = Command::new(binary);
     command
-        .args([
-            format!("--harness={harness}"),
-            format!("--config={}", config.display()),
-        ])
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     clear_hook_environment(&mut command);
-    let cwd = input
-        .get("cwd")
-        .or_else(|| input.get("workspacePaths").and_then(|roots| roots.get(0)))
-        .and_then(serde_json::Value::as_str)
-        .unwrap();
+    command.env("HOME", home);
     if harness == "claude" {
         command
             .env("CLAUDECODE", "1")
             .env("CLAUDE_CODE_CHILD_SESSION", "1")
             .env("CLAUDE_CODE_SESSION_ID", "session")
-            .env("CLAUDE_PROJECT_DIR", cwd);
+            .env("CLAUDE_PROJECT_DIR", project_dir);
     }
     let mut child = command.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(&serde_json::to_vec(input).unwrap())
-        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
     child.wait_with_output().unwrap()
+}
+
+fn run(harness: &str, config: &Path, input: &serde_json::Value) -> std::process::Output {
+    let cwd = input
+        .get("cwd")
+        .or_else(|| input.get("workspacePaths").and_then(|roots| roots.get(0)))
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    run_with(
+        &[
+            format!("--harness={harness}"),
+            format!("--config={}", config.display()),
+        ],
+        harness,
+        Path::new(cwd),
+        config.parent().unwrap(),
+        &serde_json::to_vec(input).unwrap(),
+    )
 }
 
 fn decision(output: &std::process::Output) -> String {
@@ -115,7 +130,7 @@ fn decision(output: &std::process::Output) -> String {
 }
 
 #[test]
-fn every_aligned_harness_emits_native_deny_and_allow() {
+fn every_aligned_harness_denies_matches_and_passes_other_calls_through() {
     let temporary = TempDirectory::new("harnesses");
     let config = temporary.0.join("policy.yaml");
     std::fs::write(
@@ -129,12 +144,105 @@ fn every_aligned_harness_emits_native_deny_and_allow() {
         assert!(denied.status.success(), "{harness}: {:?}", denied.stderr);
         assert_eq!(decision(&denied), "deny", "{harness}");
 
-        let allowed = run(harness, &config, &input(harness, &temporary.0, "notes.txt"));
-        assert!(allowed.status.success(), "{harness}: {:?}", allowed.stderr);
-        if harness == "codex" {
-            assert!(allowed.stdout.is_empty(), "{harness}");
+        // No objection must not auto-approve: Claude Code and Codex keep
+        // their normal permission flow, and Antigravity, which requires a
+        // decision, gets the least-privilege "ask".
+        let passed = run(harness, &config, &input(harness, &temporary.0, "notes.txt"));
+        assert!(passed.status.success(), "{harness}: {:?}", passed.stderr);
+        match harness {
+            "claude" => assert_eq!(passed.stdout, b"{}"),
+            "codex" => assert!(passed.stdout.is_empty(), "{harness}"),
+            _ => assert_eq!(passed.stdout, br#"{"decision":"ask"}"#),
+        }
+    }
+}
+
+#[test]
+fn claude_discovers_project_policy_after_the_agent_changes_directory() {
+    let temporary = TempDirectory::new("claude-cd");
+    let project = temporary.0.join("project");
+    let home = temporary.0.join("home");
+    std::fs::create_dir_all(project.join(".agent-hook-kit")).unwrap();
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::create_dir_all(project.join("secrets")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        project.join(".agent-hook-kit/forbidden-files.yaml"),
+        "patterns: ['secrets/**']\n",
+    )
+    .unwrap();
+    let token = project.join("secrets/token.txt");
+    std::fs::write(&token, "token").unwrap();
+
+    // After `cd src` (or `cd /tmp`), Claude Code reports the agent's new
+    // directory as `cwd`; CLAUDE_PROJECT_DIR still names the project root.
+    for cwd in [project.join("src"), temporary.0.join("elsewhere")] {
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut payload = input("claude", &cwd, "unused");
+        payload["tool_input"] = serde_json::json!({"file_path": token.to_str().unwrap()});
+        let output = run_with(
+            &["--harness=claude".to_owned()],
+            "claude",
+            &project,
+            &home,
+            &serde_json::to_vec(&payload).unwrap(),
+        );
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(decision(&output), "deny", "cwd {}", cwd.display());
+    }
+}
+
+#[test]
+fn argument_errors_exit_one_instead_of_the_blocking_status_two() {
+    let temporary = TempDirectory::new("usage");
+    for args in [
+        vec!["--harness=claud".to_owned()],
+        vec![],
+        vec!["--harness=codex".to_owned(), "--bogus".to_owned()],
+    ] {
+        let output = run_with(&args, "codex", &temporary.0, &temporary.0, b"{}");
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(!output.stderr.is_empty(), "{args:?}");
+    }
+    let help = run_with(
+        &["--help".to_owned()],
+        "codex",
+        &temporary.0,
+        &temporary.0,
+        b"",
+    );
+    assert_eq!(help.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--harness"));
+}
+
+#[test]
+fn unreadable_invocations_fail_closed_with_each_native_block() {
+    let temporary = TempDirectory::new("fail-closed");
+    let config = temporary.0.join("policy.yaml");
+    std::fs::write(&config, "patterns: ['.env']\n").unwrap();
+    for harness in ["claude", "codex", "antigravity"] {
+        let output = run_with(
+            &[
+                format!("--harness={harness}"),
+                format!("--config={}", config.display()),
+            ],
+            harness,
+            &temporary.0,
+            &temporary.0,
+            b"not json",
+        );
+        if harness == "antigravity" {
+            assert_eq!(output.status.code(), Some(0));
+            assert_eq!(decision(&output), "deny");
         } else {
-            assert_eq!(decision(&allowed), "allow", "{harness}");
+            // Exit 2 with a reason blocks the call on Claude Code and Codex.
+            assert_eq!(output.status.code(), Some(2), "{harness}");
+            assert!(output.stdout.is_empty(), "{harness}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("PreToolUse failed"),
+                "{harness}"
+            );
         }
     }
 }

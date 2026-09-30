@@ -769,6 +769,43 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
 
     if (
         data["harness_mode"] == "single"
+        and data["harness"] == "antigravity"
+        and "pre_tool_use" in data["native_hooks"]
+    ):
+        # Antigravity requires a decision and documents no pass-through;
+        # "allow" auto-approves and bypasses Ask presets, so the no-objection
+        # path must answer the least-privilege "ask".
+        if data["starter"] == "custom":
+            starter_path = crate / "src" / "hooks" / "native" / "antigravity_pre_tool_use.rs"
+        else:
+            starter_path = crate / "src" / "scaffold" / "dispatch.rs"
+        starter_source = starter_path.read_text(encoding="utf-8")
+        if "hookkit_antigravity::PreToolUseOutput::ask()" not in starter_source or any(
+            allow in starter_source
+            for allow in ("ToolDecision::Allow", "PreToolUseOutput::allow()")
+        ):
+            raise AcceptanceFailure(
+                f"{case.name}: Antigravity PreToolUse starter auto-approves tool calls "
+                f"instead of answering ask in {starter_path.name}"
+            )
+
+    if data["harness_mode"] == "cross" and "pre_tool" in data["aligned_hooks"]:
+        # The portable no-objection path is the aligned pass-through; an
+        # aligned allow auto-approves on Claude Code and Antigravity, and a
+        # rewrite starter must not approve the calls it rewrites.
+        dispatch = (crate / "src" / "scaffold" / "dispatch.rs").read_text(encoding="utf-8")
+        if (
+            "hookkit_common::PreToolUseOutput::pass_through(" not in dispatch
+            or "PreToolUseOutput::allow(" in dispatch
+            or "RewriteApproval::AutoApprove" in dispatch
+        ):
+            raise AcceptanceFailure(
+                f"{case.name}: aligned PreToolUse starter auto-approves tool calls "
+                "instead of passing through in dispatch.rs"
+            )
+
+    if (
+        data["harness_mode"] == "single"
         and data["starter"] == "custom"
         and "pre_tool_use" in data["native_hooks"]
     ):

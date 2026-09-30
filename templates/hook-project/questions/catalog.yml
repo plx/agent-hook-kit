@@ -2098,8 +2098,8 @@ event_catalog:
         rust_type: hookkit_antigravity::Event
         variant: PreToolUse
       starter:
-        strategy: allow
-        expression: hookkit_antigravity::PreToolUseOutput::allow()
+        strategy: no_op
+        expression: hookkit_antigravity::PreToolUseOutput::ask()
       fixture:
         source: contracts/harnesses/antigravity/snapshots/docs-2026-09-29-r1/events/pre-tool-use/fixtures.yaml
         case: representative

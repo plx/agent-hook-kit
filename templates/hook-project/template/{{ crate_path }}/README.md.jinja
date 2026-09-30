@@ -55,17 +55,24 @@ owns this policy:
 
 `{{ quality_config_path }}`
 
-Hook processes do not necessarily start in this repository, so use an absolute
-policy path in live registration while retaining this package-owned file. The
+Hook processes do not necessarily start in this repository. A relative
+`--config` path, including this default, is resolved against Claude Code's
+`CLAUDE_PROJECT_DIR` (the project root where the session started), because
+Claude Code runs hooks in the agent's current directory, which follows `cd`.
+Codex and Antigravity resolve it against the hook's working directory, so an
+absolute policy path remains the most robust live registration. The
 concrete tools and lowering policy are recorded in both the Pkl file and
 `hookkit-template.manifest.yml`.
 {% endif -%}
 {% if state_capabilities %}
-All selected state helpers share this package-specific default root:
+All selected state helpers share this package-specific default root, beside
+HookKit's per-user default state root:
 
-`$TMPDIR/agent-hook-kit/generated/{{ package_name }}/`
+`$TMPDIR/agent-hook-kit-<uid>/generated/{{ package_name }}/` (Unix)
 
-Use `--state-dir` to override it. Every coordinated producer and consumer must
+The per-user directory keeps users who share a temporary directory from
+locking each other out. Use `--state-dir` to override it, for example to keep
+state in a private location on a machine shared with untrusted users. Every coordinated producer and consumer must
 receive the same override. Persisted family/entity versions are visible in
 `src/scaffold/state.rs`.
 

@@ -22,7 +22,7 @@ pub const PACKAGE_STATE_DIRECTORY: &str = {{ package_name | tojson }};
 /// Resolve the common state root used by every generated subcommand.
 ///
 /// A `--state-dir` value is passed as `override_dir`. Without one, state is
-/// isolated beneath `$TMPDIR/agent-hook-kit/generated/{{ package_name }}/`.
+/// isolated in [`default_state_directory`].
 pub fn resolve_state_root(override_dir: Option<&Path>) -> StateRoot {
     let path = override_dir.map_or_else(default_state_directory, Path::to_path_buf);
     StateRoot::new(path)
@@ -41,9 +41,23 @@ pub fn state_family(state: &SessionState) -> Result<StateFamily> {
     state.family(FamilyId::new(STATE_FAMILY, STATE_FAMILY_VERSION)?)
 }
 
-fn default_state_directory() -> PathBuf {
-    std::env::temp_dir()
-        .join("agent-hook-kit")
+/// Default per-user state directory for this package.
+///
+/// HookKit's default state root, `StateRoot::default()`, lives in a per-user
+/// directory (`$TMPDIR/agent-hook-kit-<uid>/` on Unix), so users who share a
+/// temporary directory cannot lock each other out. This package's state sits
+/// beside it, at `<per-user directory>/generated/{{ package_name }}/`. Pass
+/// `--state-dir` to choose a private location explicitly, for example when
+/// the temporary directory is shared with untrusted users.
+pub fn default_state_directory() -> PathBuf {
+    let default_root = StateRoot::default();
+    default_root
+        .path()
+        .parent()
+        .map_or_else(
+            || std::env::temp_dir().join("agent-hook-kit"),
+            Path::to_path_buf,
+        )
         .join("generated")
         .join(PACKAGE_STATE_DIRECTORY)
 }
@@ -160,4 +174,18 @@ pub fn custom_aggregate(
         CUSTOM_AGGREGATE_MODE,
     )
 }
-{% endif -%}
+{% endif %}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_state_directory_is_beside_the_per_user_default_root() {
+        let directory = default_state_directory();
+        assert!(directory.ends_with(Path::new("generated").join(PACKAGE_STATE_DIRECTORY)));
+        assert_eq!(
+            directory.parent().and_then(Path::parent),
+            StateRoot::default().path().parent(),
+        );
+    }
+}

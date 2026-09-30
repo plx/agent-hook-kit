@@ -35,7 +35,7 @@ fn {{ event.harness | replace('-', '_') }}_{{ family.stable_id }}_uses_native_ar
         include_bytes!(concat!("../fixtures/", {{ event.harness | tojson }}, "/", {{ event.stable_id | tojson }}, ".json")),
         &variables,
 {% if family.stable_id == "pre_tool" -%}
-        |_input, _environment, context| hookkit_common::PreToolUseOutput::allow(context.harness()),
+        |_input, _environment, context| hookkit_common::PreToolUseOutput::pass_through(context.harness()),
 {%- else -%}
         |input, environment, context| {
             {{ package_name | replace('-', '_') }}::hooks::aligned::{{ family.stable_id }}(

@@ -2,8 +2,6 @@
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 
-// The aligned family markers are uninhabited enums without `Debug`.
-#[allow(missing_debug_implementations)]
 pub mod aligned;
 pub mod artifacts;
 /// Capture of declared command-hook process environment variables.

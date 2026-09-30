@@ -802,7 +802,7 @@ events:
     rust_event: hookkit_antigravity::PreToolUse
     rust_output: hookkit_antigravity::PreToolUseOutput
     selector: { rust_type: hookkit_antigravity::Event, variant: PreToolUse }
-    starter: { strategy: allow, expression: "hookkit_antigravity::PreToolUseOutput::allow()" }
+    starter: { strategy: no_op, expression: "hookkit_antigravity::PreToolUseOutput::ask()" }
     fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-09-29-r1/events/pre-tool-use/fixtures.yaml, case: representative }
     aligned_family: pre_tool
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }

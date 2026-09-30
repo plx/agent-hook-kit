@@ -166,12 +166,6 @@ where
     run_event::<E, _>(handler)
 }
 
-/// Writes an emission to the process streams, returning exit 1 if a stream
-/// write fails.
-pub(crate) fn write_emission(emission: &ProcessEmission) -> std::process::ExitCode {
-    try_write_emission(emission).unwrap_or_else(|_| std::process::ExitCode::from(1))
-}
-
 /// Writes an emission to the process streams and returns its exit code.
 pub(crate) fn try_write_emission(
     emission: &ProcessEmission,

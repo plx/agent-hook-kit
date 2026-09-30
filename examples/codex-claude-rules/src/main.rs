@@ -62,7 +62,16 @@ impl PathPatterns {
 }
 
 fn main() -> std::process::ExitCode {
-    let cli = Cli::parse();
+    // Clap exits with status 2 on a usage error, which Codex treats as a
+    // blocking hook decision. Report argument errors with the non-blocking
+    // status 1 instead, and keep 0 for --help and --version.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let _ = error.print();
+            return std::process::ExitCode::from(if error.use_stderr() { 1 } else { 0 });
+        }
+    };
     hookkit_runtime::typed::run_event::<PreToolUse, _>(move |input, _environment, runtime| {
         let project_root = absolute_utf8_path(
             cli.project_root

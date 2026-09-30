@@ -10,5 +10,5 @@ pub fn handle(
 ) -> hookkit_core::Result<
     <hookkit_antigravity::PreToolUse as hookkit_core::EventSpec>::CommandOutput,
 > {
-    Ok(hookkit_antigravity::PreToolUseOutput::allow())
+    Ok(hookkit_antigravity::PreToolUseOutput::ask())
 }

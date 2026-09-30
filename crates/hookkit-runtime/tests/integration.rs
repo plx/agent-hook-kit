@@ -1252,14 +1252,18 @@ fn shared_autofix_claude_manual_mode_emits_user_and_agent_signals() {
     );
     assert!(output.status.success());
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Diagnostics:"),
-        "manual mode should print concise user status with artifact path"
-    );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("should be JSON");
+    // Claude Code writes exit-0 stderr only to its debug log, so the user
+    // status travels in `systemMessage`.
+    assert!(
+        json["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("Diagnostics:"),
+        "manual mode should show concise user status with artifact path"
+    );
+    assert!(output.stderr.is_empty());
     assert!(
         json["hookSpecificOutput"]["additionalContext"]
             .as_str()
@@ -1301,8 +1305,14 @@ fn shared_autofix_codex_manual_mode_emits_agent_context() {
             .unwrap()
             .contains("Manual fixes remain")
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Diagnostics:"));
+    // Codex discards exit-0 stderr; the user status is a `systemMessage`.
+    assert!(
+        json["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("Diagnostics:")
+    );
+    assert!(output.stderr.is_empty());
 }
 
 // --- codex-claude-rules ---

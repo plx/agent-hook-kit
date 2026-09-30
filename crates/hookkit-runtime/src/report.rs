@@ -1,7 +1,9 @@
 //! Stderr diagnostics for the stdin/stdout runtime adapters.
 //!
-//! [`crate::aligned::run_aligned_event`], [`crate::typed::run_event_with_options`]
-//! (and therefore [`crate::typed::run_event`] and [`crate::typed::run_typed`]),
+//! [`crate::aligned::run_aligned_event_with_options`],
+//! [`crate::typed::run_event_with_options`] (and therefore their convenience
+//! spellings such as [`crate::aligned::run_aligned_event`],
+//! [`crate::typed::run_event`], and [`crate::typed::run_typed`]),
 //! [`crate::selected::run_harness_with_options`], and
 //! [`crate::selected::dispatch_builtin_harness_with_options`] each read stdin,
 //! capture the hook environment, and execute a handler. Hook protocols require
@@ -14,7 +16,6 @@
 //! [`crate::failure`] for the fail-closed alternative.
 
 use std::fmt::Display;
-use std::io::Write;
 
 /// Renders `error` and its full [`std::error::Error::source`] chain, most specific
 /// cause last, the way `anyhow`'s alternate (`{:#}`) `Display` does.
@@ -61,38 +62,6 @@ pub(crate) fn failure_line(hook: impl Display, error: &dyn std::error::Error) ->
         program = program_name(),
         chain = error_chain(error),
     )
-}
-
-/// Writes the one-block failure diagnostic (program identity, hook identity, and
-/// the error's full cause chain) to `sink`. Split out from [`report_failure`] so
-/// tests can assert on the rendered bytes without touching real process stderr.
-pub(crate) fn write_failure_diagnostic(
-    sink: &mut dyn Write,
-    hook: impl Display,
-    error: &dyn std::error::Error,
-) -> std::io::Result<()> {
-    writeln!(sink, "{}", failure_line(hook, error))
-}
-
-/// Writes the failure diagnostic to real stderr, then returns the `exit 1` the
-/// caller was already going to return. Never touches stdout.
-pub(crate) fn report_failure(
-    hook: impl Display,
-    error: &dyn std::error::Error,
-) -> std::process::ExitCode {
-    // Best effort: if stderr itself is broken there is nowhere left to report to,
-    // but the process must still exit non-zero.
-    let _ = write_failure_diagnostic(&mut std::io::stderr(), hook, error);
-    std::process::ExitCode::from(1)
-}
-
-/// Same as [`report_failure`] for a bare [`std::io::Error`] (for example, reading
-/// stdin) that never became a [`hookkit_core::HookkitError`].
-pub(crate) fn report_io_failure(
-    hook: impl Display,
-    error: std::io::Error,
-) -> std::process::ExitCode {
-    report_failure(hook, &error)
 }
 
 #[cfg(test)]
@@ -165,11 +134,10 @@ mod tests {
     }
 
     #[test]
-    fn write_failure_diagnostic_names_the_program_and_hook_and_carries_the_chain() {
+    fn failure_line_names_the_program_and_hook_and_carries_the_chain() {
         let error = Enriching(Leaf);
-        let mut buffer = Vec::new();
-        write_failure_diagnostic(&mut buffer, "codex/PreToolUse", &error).unwrap();
-        let rendered = String::from_utf8(buffer).unwrap();
+        let rendered = failure_line("codex/PreToolUse", &error);
+        assert!(!rendered.contains('\n'));
         assert!(rendered.starts_with("hookkit: "));
         assert!(rendered.contains("codex/PreToolUse"));
         assert!(rendered.contains("failed: enriching context: leaf cause"));

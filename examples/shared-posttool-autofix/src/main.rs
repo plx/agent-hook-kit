@@ -1,14 +1,37 @@
+//! One aligned `PostToolUse` handler that runs a formatter/linter autofix pass
+//! after Claude Code or Codex edits files.
+//!
+//! The two audiences get different channels:
+//!
+//! - The user sees a one-line status through the top-level `systemMessage`.
+//!   Stderr from a hook that exits 0 is not a user channel: Claude Code writes
+//!   it only to its debug log and Codex discards it.
+//! - The agent gets `additionalContext`: which files the autofix rewrote (so it
+//!   re-reads them before editing again), or a pointer to the full diagnostics
+//!   when manual fixes remain.
+//!
+//! Whether the pass changed anything is decided from content digests of the
+//! workspace's Rust sources taken before and after, not from whether a tool
+//! printed anything: `cargo clippy` always prints progress to stderr.
+
 use hookkit_common::{PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput};
-use hookkit_core::{HarnessId, RuntimeContext};
+use hookkit_core::{BuiltinHarness, HarnessId, RuntimeContext};
 use hookkit_runtime::artifacts::{ArtifactKey, ArtifactManager};
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::hash::{DefaultHasher, Hasher};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[derive(Debug)]
+const STATUS_PREFIX: &str = "[shared-posttool-autofix]";
+
+/// Directories never scanned for Rust sources.
+const SKIPPED_DIRECTORIES: &[&str] = &["target", "node_modules"];
+
+#[derive(Debug, PartialEq, Eq)]
 enum AutofixOutcome {
     Clean,
     AutoFixed {
-        summary: String,
+        changed: Vec<PathBuf>,
     },
     ManualActionRequired {
         summary: String,
@@ -44,61 +67,51 @@ fn main() -> std::process::ExitCode {
 
 fn handle_post_tool(
     post_tool: PostToolUseInput,
-    _environment: &PostToolUseCommandEnvironment,
+    environment: &PostToolUseCommandEnvironment,
     ctx: &RuntimeContext<'_>,
 ) -> hookkit_core::Result<PostToolUseOutput> {
-    let tool_name = match &post_tool {
-        PostToolUseInput::Claude(input) => input.tool_name.as_str(),
-        PostToolUseInput::Codex(input) => input.tool_name.as_str(),
-        PostToolUseInput::Antigravity(_) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "Antigravity PostToolUse has no tool payload",
-            )
-            .into());
-        }
-        _ => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "unknown aligned PostToolUse arm",
-            )
-            .into());
-        }
-    };
-    let is_file_tool = matches!(
-        tool_name,
-        "Write" | "Edit" | "Bash" | "write_file" | "replace"
-    );
-
-    if !is_file_tool {
+    let edits_files = post_tool
+        .tool_name()
+        .is_some_and(|tool| edits_files(ctx.harness(), tool));
+    if !edits_files {
         return native_output(ctx.harness(), None, None);
     }
 
-    let cwd = ctx
-        .workspace_roots()
+    // The stable project root: Claude Code's CLAUDE_PROJECT_DIR rather than
+    // its input `cwd`, which follows `cd`; Codex's configured cwd.
+    let roots = post_tool.project_roots(environment);
+    let root = roots
         .first()
-        .ok_or_else(|| std::io::Error::other("missing workspace root"))?;
-    let outcome = run_autofix_pipeline(test_outcome_override(&post_tool), cwd.as_str());
+        .ok_or_else(|| std::io::Error::other("missing project root"))?;
+    let outcome = run_autofix_pipeline(test_outcome_override(&post_tool), root.as_std_path());
 
     match outcome {
         AutofixOutcome::Clean => native_output(ctx.harness(), None, None),
-        AutofixOutcome::AutoFixed { summary } => native_output(
-            ctx.harness(),
-            None,
-            Some(format!("[shared-posttool-autofix] {summary}")),
-        ),
+        AutofixOutcome::AutoFixed { changed } => {
+            let files = changed
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            native_output(
+                ctx.harness(),
+                Some(format!(
+                    "Formatter/linter autofixes rewrote {} file(s) after this edit: {files}. \
+                     Re-read them before editing them again.",
+                    changed.len()
+                )),
+                Some(format!(
+                    "{STATUS_PREFIX} Applied formatter/linter autofixes to {} file(s).",
+                    changed.len()
+                )),
+            )
+        }
         AutofixOutcome::ManualActionRequired {
             summary,
             diagnostics,
         } => {
-            let manager = ArtifactManager::in_temp_dir()?;
-            let session = ctx
-                .session_id()
-                .map(ToString::to_string)
-                .or_else(|| ctx.conversation_id().map(ToString::to_string))
-                .unwrap_or_else(|| "unknown-session".into());
-            let key = ArtifactKey::new(session, "autofix-diagnostics");
-            let path = manager.write_text(&key, &diagnostics)?;
+            let path = ArtifactManager::in_temp_dir()?
+                .write_text(&artifact_key(&post_tool, ctx), &diagnostics)?;
             let guidance = format!(
                 "Manual fixes remain. Review diagnostics at {} and continue with targeted changes.",
                 path.display()
@@ -107,7 +120,7 @@ fn handle_post_tool(
                 ctx.harness(),
                 Some(guidance),
                 Some(format!(
-                    "[shared-posttool-autofix] {summary}. Diagnostics: {}",
+                    "{STATUS_PREFIX} {summary}. Diagnostics: {}",
                     path.display()
                 )),
             )
@@ -115,46 +128,76 @@ fn handle_post_tool(
     }
 }
 
+/// Native tools that can change files on each harness.
+///
+/// Codex edits files only through `apply_patch` (`Write` and `Edit` are
+/// matcher aliases, never the reported tool name) and its shell.
+fn edits_files(harness: &HarnessId, tool_name: &str) -> bool {
+    match BuiltinHarness::from_id(harness) {
+        Some(BuiltinHarness::ClaudeCode) => matches!(
+            tool_name,
+            "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "Bash"
+        ),
+        Some(BuiltinHarness::Codex) => matches!(tool_name, "apply_patch" | "Bash"),
+        _ => false,
+    }
+}
+
+/// Keys the diagnostics artifact by session and tool call, so concurrent
+/// PostToolUse hooks in one session never overwrite each other's report.
+fn artifact_key(post_tool: &PostToolUseInput, ctx: &RuntimeContext<'_>) -> ArtifactKey {
+    let session = ctx
+        .session_id()
+        .map(ToString::to_string)
+        .or_else(|| ctx.conversation_id().map(ToString::to_string))
+        .unwrap_or_else(|| "unknown-session".into());
+    let key = ArtifactKey::new(session, "autofix-diagnostics");
+    match post_tool.tool_call_id() {
+        Some(tool_call_id) => key.with_tool_use(tool_call_id),
+        None => key,
+    }
+}
+
+/// Lowers agent context and a user status line to the native channels:
+/// `additionalContext` for the agent and `systemMessage` for the user.
 fn native_output(
     harness: &HarnessId,
     context: Option<String>,
-    stderr: Option<String>,
+    user_status: Option<String>,
 ) -> hookkit_core::Result<PostToolUseOutput> {
-    match harness.as_str() {
-        "claude-code" => {
+    match BuiltinHarness::from_id(harness) {
+        Some(BuiltinHarness::ClaudeCode) => {
             let output = context.map_or_else(
                 hookkit_claude::protocol::PostToolUseOutput::no_op,
                 hookkit_claude::protocol::PostToolUseOutput::with_context,
             );
-            Ok(PostToolUseOutput::Claude(match stderr {
-                Some(stderr) => output.with_protocol_stderr(stderr)?,
+            Ok(PostToolUseOutput::Claude(match user_status {
+                Some(status) => output.with_system_message(status)?,
                 None => output,
             }))
         }
-        "codex" => {
+        Some(BuiltinHarness::Codex) => {
             let output = context.map_or_else(
                 hookkit_codex::protocol::PostToolUseOutput::no_op,
                 hookkit_codex::protocol::PostToolUseOutput::with_context,
             );
-            Ok(PostToolUseOutput::Codex(match stderr {
-                Some(stderr) => output.with_protocol_stderr(stderr)?,
+            Ok(PostToolUseOutput::Codex(match user_status {
+                Some(status) => output.with_system_message(status)?,
                 None => output,
             }))
         }
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            format!("unsupported harness {harness}"),
-        )
-        .into()),
+        _ => Err(hookkit_core::HookkitError::UnsupportedHarness {
+            harness: harness.clone(),
+            message: "shared-posttool-autofix supports claude-code and codex".into(),
+        }),
     }
 }
 
-fn run_autofix_pipeline(test_mode: Option<&str>, cwd: &str) -> AutofixOutcome {
+fn run_autofix_pipeline(test_mode: Option<&str>, root: &Path) -> AutofixOutcome {
     if let Some(mode) = test_mode {
         return match mode {
-            "clean" => AutofixOutcome::Clean,
             "autofixed" => AutofixOutcome::AutoFixed {
-                summary: "Applied formatter/linter autofixes".to_string(),
+                changed: vec![root.join("src/lib.rs")],
             },
             "manual" => AutofixOutcome::ManualActionRequired {
                 summary: "Formatter/linter reported remaining issues".to_string(),
@@ -164,47 +207,30 @@ fn run_autofix_pipeline(test_mode: Option<&str>, cwd: &str) -> AutofixOutcome {
         };
     }
 
-    let root = Path::new(cwd);
-    if !root.exists() {
+    if !root.join("Cargo.toml").is_file() {
         return AutofixOutcome::Clean;
     }
+    let specs: [(&'static str, &'static str, &'static [&'static str]); 2] = [
+        ("formatter", "cargo", &["fmt", "--all"]),
+        (
+            "linter-autofix",
+            "cargo",
+            &[
+                "clippy",
+                "--all-targets",
+                "--fix",
+                "--allow-dirty",
+                "--allow-staged",
+            ],
+        ),
+    ];
 
-    let specs: Vec<(&'static str, &'static str, &'static [&'static str])> =
-        if root.join("Cargo.toml").exists() {
-            vec![
-                ("formatter", "cargo", &["fmt", "--all"]),
-                (
-                    "linter-autofix",
-                    "cargo",
-                    &[
-                        "clippy",
-                        "--all-targets",
-                        "--fix",
-                        "--allow-dirty",
-                        "--allow-staged",
-                    ],
-                ),
-            ]
-        } else {
-            Vec::new()
-        };
-
-    if specs.is_empty() {
-        return AutofixOutcome::Clean;
-    }
-
+    let before = source_digests(root);
     let mut logs: Vec<CommandLog> = Vec::new();
-    let mut had_output = false;
-
     for (label, program, args) in specs {
-        let log = run_command(label, program, args, cwd);
-        if !log.stdout.trim().is_empty() || !log.stderr.trim().is_empty() {
-            had_output = true;
-        }
-
-        let failed = log.error.is_some() || log.status.unwrap_or(1) != 0;
+        let log = run_command(label, program, args, root);
+        let failed = log.error.is_some() || log.status != Some(0);
         logs.push(log);
-
         if failed {
             return AutofixOutcome::ManualActionRequired {
                 summary: "Formatter/linter reported remaining issues".to_string(),
@@ -212,21 +238,69 @@ fn run_autofix_pipeline(test_mode: Option<&str>, cwd: &str) -> AutofixOutcome {
             };
         }
     }
+    classify(&before, &source_digests(root))
+}
 
-    if had_output {
-        AutofixOutcome::AutoFixed {
-            summary: "Applied formatter/linter autofixes".to_string(),
-        }
-    } else {
+/// Compares two digest snapshots: any added, removed, or rewritten file means
+/// the autofix pass changed the workspace.
+fn classify(before: &BTreeMap<PathBuf, u64>, after: &BTreeMap<PathBuf, u64>) -> AutofixOutcome {
+    let mut changed: Vec<PathBuf> = after
+        .iter()
+        .filter(|(path, digest)| before.get(*path) != Some(digest))
+        .map(|(path, _)| path.clone())
+        .chain(
+            before
+                .keys()
+                .filter(|path| !after.contains_key(*path))
+                .cloned(),
+        )
+        .collect();
+    changed.sort();
+    if changed.is_empty() {
         AutofixOutcome::Clean
+    } else {
+        AutofixOutcome::AutoFixed { changed }
     }
+}
+
+/// Content digests of every Rust source below `root`, skipping build output
+/// and hidden directories. Symbolic links are not followed.
+fn source_digests(root: &Path) -> BTreeMap<PathBuf, u64> {
+    let mut digests = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if kind.is_dir() {
+                if !name.starts_with('.') && !SKIPPED_DIRECTORIES.contains(&name.as_ref()) {
+                    pending.push(path);
+                }
+            } else if kind.is_file() && name.ends_with(".rs") {
+                let Ok(bytes) = std::fs::read(&path) else {
+                    continue;
+                };
+                let mut hasher = DefaultHasher::new();
+                hasher.write(&bytes);
+                digests.insert(path, hasher.finish());
+            }
+        }
+    }
+    digests
 }
 
 fn run_command(
     label: &'static str,
     program: &'static str,
     args: &'static [&'static str],
-    cwd: &str,
+    cwd: &Path,
 ) -> CommandLog {
     match Command::new(program).args(args).current_dir(cwd).output() {
         Ok(output) => CommandLog {
@@ -277,16 +351,109 @@ fn format_diagnostics(logs: &[CommandLog]) -> String {
 
 #[cfg(feature = "test-support")]
 fn test_outcome_override(input: &PostToolUseInput) -> Option<&str> {
-    match input {
-        PostToolUseInput::Claude(input) => input.tool_input.get("__hookkit_test_outcome"),
-        PostToolUseInput::Codex(input) => input.tool_input.get("__hookkit_test_outcome"),
-        PostToolUseInput::Antigravity(_) => None,
-        _ => None,
-    }
-    .and_then(serde_json::Value::as_str)
+    input
+        .tool_input()?
+        .get("__hookkit_test_outcome")
+        .and_then(serde_json::Value::as_str)
 }
 
 #[cfg(not(feature = "test-support"))]
 fn test_outcome_override(_input: &PostToolUseInput) -> Option<&str> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hookkit_core::EventSpec;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    fn stdout_json(output: PostToolUseOutput) -> serde_json::Value {
+        let emission = match output {
+            PostToolUseOutput::Claude(output) => {
+                hookkit_claude::protocol::PostToolUse::emit(output).unwrap()
+            }
+            PostToolUseOutput::Codex(output) => {
+                hookkit_codex::protocol::PostToolUse::emit(output).unwrap()
+            }
+            other => panic!("unexpected arm {other:?}"),
+        };
+        assert_eq!(emission.exit_code(), 0);
+        assert!(emission.stderr().is_empty(), "exit-0 stderr reaches no one");
+        serde_json::from_slice(emission.stdout()).unwrap()
+    }
+
+    #[test]
+    fn each_harness_edit_tools_trigger_the_pipeline() {
+        for tool in ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"] {
+            assert!(edits_files(&HarnessId::CLAUDE_CODE, tool), "{tool}");
+        }
+        for tool in ["apply_patch", "Bash"] {
+            assert!(edits_files(&HarnessId::CODEX, tool), "{tool}");
+        }
+        for (harness, tool) in [
+            (HarnessId::CLAUDE_CODE, "Read"),
+            (HarnessId::CLAUDE_CODE, "apply_patch"),
+            (HarnessId::CODEX, "Write"),
+            (HarnessId::CODEX, "write_file"),
+            (HarnessId::CODEX, "replace"),
+            (HarnessId::ANTIGRAVITY, "write_to_file"),
+        ] {
+            assert!(!edits_files(&harness, tool), "{harness} {tool}");
+        }
+    }
+
+    #[test]
+    fn user_status_uses_system_message_and_guidance_uses_additional_context() {
+        for harness in [HarnessId::CLAUDE_CODE, HarnessId::CODEX] {
+            let output = stdout_json(
+                native_output(
+                    &harness,
+                    Some("Manual fixes remain.".into()),
+                    Some("[shared-posttool-autofix] Diagnostics: /tmp/d.txt".into()),
+                )
+                .unwrap(),
+            );
+            assert_eq!(
+                output["systemMessage"], "[shared-posttool-autofix] Diagnostics: /tmp/d.txt",
+                "{harness}"
+            );
+            assert_eq!(
+                output["hookSpecificOutput"]["additionalContext"], "Manual fixes remain.",
+                "{harness}"
+            );
+        }
+    }
+
+    #[test]
+    fn autofix_classification_follows_file_contents_not_tool_output() {
+        let root = std::env::temp_dir().join(format!(
+            "hookkit-autofix-{}-{}",
+            std::process::id(),
+            NEXT_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn  main() {}\n").unwrap();
+        std::fs::write(root.join("target/debug/build.rs"), "// output\n").unwrap();
+
+        let before = source_digests(&root);
+        assert_eq!(before.len(), 1, "build output is not scanned");
+        // Nothing changed: clean, however noisy the tools were.
+        assert_eq!(
+            classify(&before, &source_digests(&root)),
+            AutofixOutcome::Clean
+        );
+
+        std::fs::write(root.join("src/lib.rs"), "fn main() {}\n").unwrap();
+        assert_eq!(
+            classify(&before, &source_digests(&root)),
+            AutofixOutcome::AutoFixed {
+                changed: vec![root.join("src/lib.rs")]
+            }
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

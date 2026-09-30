@@ -14,13 +14,38 @@ pub fn default_config_path() -> PathBuf {
     PathBuf::from({{ quality_config_path | tojson }})
 }
 
+/// Anchors a relative `--config` path at the harness's stable project root.
+///
+/// Claude Code runs hooks in the agent's current directory, which follows
+/// `cd` in its Bash tool, so a repository-relative policy path would stop
+/// resolving after `cd src`. Claude Code exports the project root where the
+/// session started as `CLAUDE_PROJECT_DIR`; a relative path is resolved
+/// against it when it is set and absolute. Absolute paths, and every other
+/// harness, keep the path unchanged.
+pub fn anchor_config_path(harness: &HarnessId, config_path: PathBuf) -> PathBuf {
+    let project_dir = (*harness == HarnessId::CLAUDE_CODE)
+        .then(|| std::env::var_os("CLAUDE_PROJECT_DIR"))
+        .flatten()
+        .map(PathBuf::from);
+    anchor_config_path_at(config_path, project_dir)
+}
+
+fn anchor_config_path_at(config_path: PathBuf, project_dir: Option<PathBuf>) -> PathBuf {
+    match project_dir {
+        Some(project_dir) if config_path.is_relative() && project_dir.is_absolute() => {
+            project_dir.join(config_path)
+        }
+        _ => config_path,
+    }
+}
+
 {% if starter == "deferred_quality" or "file_activity" in state_capabilities -%}
 /// Package-specific state root shared by the lifecycle producer and consumer.
+///
+/// This is the same per-user default the state helpers use; see
+/// [`crate::scaffold::state::default_state_directory`].
 pub fn default_state_dir() -> PathBuf {
-    std::env::temp_dir()
-        .join("agent-hook-kit")
-        .join("generated")
-        .join({{ package_name | tojson }})
+    crate::scaffold::state::default_state_directory()
 }
 
 /// Record precise session metadata at Claude/Codex SessionStart.
@@ -48,6 +73,7 @@ pub fn run_turn_completion(
     config_path: PathBuf,
     state_dir: PathBuf,
 ) -> ExitCode {
+    let config_path = anchor_config_path(&harness, config_path);
     hookkit_tool_runner::run_turn_completion_runner(hookkit_tool_runner::TurnCompletionCli {
         harness,
         config_path: Some(config_path),
@@ -57,9 +83,36 @@ pub fn run_turn_completion(
 {% else -%}
 /// Run the selected formatter/linter policy immediately after a tool call.
 pub fn run_immediate(harness: HarnessId, config_path: PathBuf) -> ExitCode {
+    let config_path = anchor_config_path(&harness, config_path);
     hookkit_tool_runner::run_runner(hookkit_tool_runner::Cli {
         harness,
         config_path: Some(config_path),
     })
 }
-{% endif -%}
+{% endif %}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_policy_paths_resolve_against_the_project_root() {
+        let project = std::env::temp_dir().join("project");
+        assert_eq!(
+            anchor_config_path_at(PathBuf::from("policy.pkl"), Some(project.clone())),
+            project.join("policy.pkl"),
+        );
+        let absolute = std::env::temp_dir().join("elsewhere/policy.pkl");
+        assert_eq!(
+            anchor_config_path_at(absolute.clone(), Some(project)),
+            absolute,
+        );
+        assert_eq!(
+            anchor_config_path_at(PathBuf::from("policy.pkl"), None),
+            PathBuf::from("policy.pkl"),
+        );
+        assert_eq!(
+            anchor_config_path_at(PathBuf::from("policy.pkl"), Some(PathBuf::from("relative"))),
+            PathBuf::from("policy.pkl"),
+        );
+    }
+}
