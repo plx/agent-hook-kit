@@ -1103,8 +1103,10 @@ fn earliest_directory_change(analysis: &BashAnalysis) -> Option<usize> {
             )
         }) {
             let index = outermost.partition_point(|range| range.start <= offset);
-            if let Some(range) = index.checked_sub(1).map(|index| &outermost[index])
-                && range.contains(&offset)
+            if let Some(range) = index
+                .checked_sub(1)
+                .map(|index| &outermost[index])
+                .filter(|range| range.contains(&offset))
             {
                 offset = range.start;
             }
@@ -1126,9 +1128,9 @@ pub(crate) fn builtin_command_name(name: &str) -> &str {
         "/opt/homebrew/bin/",
     ];
     for directory in SYSTEM_BIN_DIRECTORIES {
-        if let Some(base) = name.strip_prefix(directory)
-            && !base.is_empty()
-            && !base.contains('/')
+        if let Some(base) = name
+            .strip_prefix(directory)
+            .filter(|base| !base.is_empty() && !base.contains('/'))
         {
             return base;
         }
