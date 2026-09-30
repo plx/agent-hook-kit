@@ -547,11 +547,13 @@ dependencies = [
 name = "hookkit-codex"
 version = "0.1.0"
 dependencies = [
- "camino",
+ "base64",
  "hookkit-core",
+ "jsonschema",
  "proptest",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
 ]
 
 [[package]]
