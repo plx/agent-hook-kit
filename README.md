@@ -649,9 +649,11 @@ cat fixtures/claude/post_tool_use.json \
 
 The CLI accepts `--claude`, `--codex`, `--antigravity`, or
 `--harness=claude|codex|antigravity` to choose the harness, and `--config PATH`
-to load a single Pkl file directly (bypassing discovery). A usage error prints
-a diagnostic naming the binary and exits 1, never the harness-blocking exit 2;
-`--help` exits 0.
+to load a single Pkl file directly (bypassing discovery). A relative
+`--config` resolves against the harness project root (`CLAUDE_PROJECT_DIR` on
+Claude Code, otherwise the input's first workspace root), not the hook's
+current directory. A usage error prints a diagnostic naming the binary and
+exits 1, never the harness-blocking exit 2; `--help` exits 0.
 
 A tool call that wrote no existing file returns the native no-op before any Pkl
 is evaluated. Otherwise the runner lowers its results to the native channels:
@@ -661,7 +663,19 @@ artifact), agent feedback to `hookSpecificOutput.additionalContext`, and
 `missingToolPolicy = "harness-block"` to an exit-0 `decision: "block"` that
 keeps earlier tools' notices and feedback. Neither harness shows stderr from a
 hook that exits 0, so the runner never uses it for notices on those harnesses.
-Full tool output stays in the diagnostics artifacts.
+A failure of the run itself (`missingToolPolicy = "hard-failure"`, or a
+configuration that cannot be loaded, including a missing `pkl`) stops the run
+and is reported the same way, as an `error:` notice leading `systemMessage`
+with earlier tools' feedback kept in `additionalContext`: a failed PostToolUse
+hook's stderr never reaches the agent, Claude shows the user only its first
+line, and Codex drops it. On Antigravity, which has no channel, it is a hook
+error. Full tool output stays in the diagnostics artifacts.
+
+Tool commands never outlive the hook. Each runs in a process group whose
+watchdog kills it when the hook process dies, including when Codex SIGKILLs
+the hook's own process group on a hook timeout or turn interrupt;
+`settings.commandTimeoutSeconds` bounds each command and
+`settings.runTimeoutSeconds` bounds all of them together.
 
 The companion `turn-completion-agent-hook` reconciles and consumes the
 NDJSON-backed pending file-activity window at each supported harness's `Stop`
@@ -682,29 +696,46 @@ state directory, because the fixtures' placeholder project directory does not
 exist.) Use the same `--state-dir` for `file-activity-agent-hook`. A relative
 `--state-dir` resolves against the harness project root (`CLAUDE_PROJECT_DIR`
 on Claude Code, otherwise the input's first workspace root), never the hook's
-current directory, which Claude Code moves with `cd`; on Claude Code the Stop
-runner also uses `CLAUDE_PROJECT_DIR` as its reconciliation and configuration
-root. Before sealing the window, the runner scans workspace mtimes since the
-durable reconciliation cursor (or the current session start on its first
-pass). It commits artifacts and `summary.json` (schema version 2), requeues
+current directory, which Claude Code moves with `cd`. On Claude Code both
+runners work in the session's working root: `CLAUDE_PROJECT_DIR`, or the
+linked Git worktree of the same repository that the session entered (Claude
+keeps `CLAUDE_PROJECT_DIR` at the main checkout while `cwd` follows the
+session into the worktree). Linked worktrees below that root, such as other
+sessions' `.claude/worktrees/*`, are excluded from mtime and Git-dirty
+reconciliation. Before sealing the window, the runner scans workspace mtimes
+since the durable reconciliation cursor (or the current session start on its
+first pass). It commits artifacts and `summary.json` (schema version 2), requeues
 only manual and operationally incomplete files and targets the traversal
-budget never reached, records handled fingerprints for clean/auto-fixed/deleted
-files, and then acknowledges the sealed source generations. Manual issues block
-the stop attempt and point to those committed logs.
+budget never reached, records handled fingerprints for every discharged file
+(clean, auto-fixed, deleted, uncovered, or left unchecked by a missing tool),
+and then acknowledges the sealed source generations. Manual issues block the
+stop attempt and point to those committed logs. The summary's `status` is
+`operational-failure`, `issues`, `incomplete` (a tool was unavailable or
+coverage has gaps, so some files were not checked), `not-applicable`, or
+`clean`, most severe first.
 
 Stop semantics are designed not to trap the agent:
 
 - Coverage gaps and unresolvable targets are reported once, in the Stop that
   first sees them, and are not re-queued; `coverageGapPolicy = "strict"` blocks
-  only that Stop.
+  only that Stop. A reconciliation gap that reconciliation observes again at
+  every Stop (an unreadable directory, a scan that hit `maxEntries`, a root
+  that is not a Git repository) is reported once per session.
 - Under the default `missingToolPolicy = "user-notice"`, a missing tool is
-  reported to the user without blocking or re-queueing its files; a missing
-  `pkl` does not block either.
+  reported to the user without blocking or re-queueing its files. A missing,
+  unrunnable, or timed-out `pkl`, or an unreadable configuration file, does
+  not block either; a configuration that fails to evaluate does.
 - `failFast` skips only the failing tool's remaining remedies.
 - A block that would repeat unchanged (same manual-fix file contents,
   operational problems, and strict gaps) is allowed to stop, with a note to the
   user, when `stop_hook_active` marks a continuation (Claude Code, Codex), and
   always on Antigravity, which has no such signal.
+- After eight consecutive blocked attempts in one continuation chain, the next
+  Stop is allowed with a note, matching Claude Code's own continuation cap on
+  Codex and Antigravity, which have none.
+- An Antigravity Stop whose `terminationReason` is `max_steps_exceeded` or
+  `error` is allowed without running any tool, so `decision: "continue"` never
+  re-enters a loop the harness is ending; the work stays queued.
 
 See the
 [file-activity crate](crates/hookkit-file-activity/README.md) and
@@ -775,9 +806,12 @@ When `--config` is not used the runner loads, in order:
 3. each `<ancestor>/.agent-hook-kit/post-tool-use.local.pkl` walking up from
    the start directory (root → leaf, intended to be `.gitignore`d)
 
-The start directory is the input's first workspace root (Claude Code and Codex
-`cwd`, Antigravity's first `workspacePaths` entry); the Claude Code Stop runner
-starts from `CLAUDE_PROJECT_DIR` instead. The home directory's own file is only
+The start directory is the input's first workspace root (Codex `cwd`,
+Antigravity's first `workspacePaths` entry, or, for an Antigravity
+conversation without a workspace, the deepest directory containing the written
+files). On Claude Code both runners start from the session's working root,
+`CLAUDE_PROJECT_DIR` or the linked worktree the session entered, never the
+`cwd` that follows `cd`. The home directory's own file is only
 the home layer, and the project root is the deepest directory holding a
 project or local config (never `$HOME`). Later files override earlier ones;
 `settings.fileActivity` and `settings.deferredReporting` merge field by field.
@@ -785,8 +819,11 @@ A file can opt out of earlier state with `merge { resetAll = true }`,
 `merge { reset = new Listing { "tools"; "run" } }`, or
 `merge { resetTools = new Listing { "ruff" } }`. All layers are evaluated by
 one `pkl` process in a private staging directory, and Pkl errors name the real
-configuration file. Imports that climb above a config's directory (`../`) are
-not supported; sibling imports are.
+configuration file (frames from the bundled schema name
+`<hookkit embedded builtins>/...`). A `pkl eval` that runs longer than 60
+seconds, for example on an import stalled on the network, is killed. Imports
+that climb above a config's directory (`../`) are not supported; sibling
+imports are.
 
 ### Bundled builtins
 
@@ -806,8 +843,11 @@ Representative entries include:
 
 Ruff has distinct lint and format workflows. `go-fmt`, `gofumpt`, `goimports`,
 and `golines` use non-mutating stdout-aware checks; `gomod-tidy` uses
-`go mod tidy -diff`; and yq uses a per-file comparator. No enabled builtin
-relies on an unchecked mutator-first fallback.
+`go mod tidy -diff`; yq uses a per-file comparator; and jq validates each file
+in its own invocation, because `jq empty a.json b.json` parses its files as one
+concatenated JSON stream. A phase's `invocation = "per-file"` runs it once per
+file in both runners. No enabled builtin relies on an unchecked mutator-first
+fallback.
 
 ### Example project config
 
@@ -855,16 +895,17 @@ run = new Listing<String> { "ruff"; "prettier" }
 | `settings.failFast` | `true` | After an operational failure, the immediate runner stops running later tools; the Stop runner skips only the failing tool's remaining remedies. |
 | `settings.continueAfterIssues` | `true` | Keep running later tools after source issues. |
 | `settings.exclude` | `["**/.git/**", "**/node_modules/**"]` | Global file exclusions, matched against project-relative paths, applied before per-tool filters. Setting it replaces the default. |
-| `settings.loweringPolicy` | `"best-effort-with-warnings"` | How to handle a nonempty user/agent message that the selected native event cannot represent faithfully: fail, omit, or omit with a native-channel warning. |
+| `settings.loweringPolicy` | `"best-effort-with-warnings"` | How to handle a nonempty user/agent message that the selected native event cannot represent faithfully: fail, omit, or omit with a native-channel warning. Deferred Stop text that comes only from the built-in templates is omitted silently under every policy. |
 | `settings.diagnosticsDirectory` | `".agent-hook-kit/post-tool-use"` | Where the immediate runner writes diagnostic artifacts (relative to the project root). The Stop runner writes into session state instead. |
-| `settings.missingToolPolicy` | `"user-notice"` | What to do when a configured tool executable is missing: `"user-notice"` reports it (at Stop without blocking or re-queueing its files), `"hard-failure"` fails the hook, and `"harness-block"` blocks through the native decision. |
-| `settings.commandTimeoutSeconds` | `300` | Deadline for each external tool command; `0` disables it. A command that runs longer is killed with its whole process group and reported as an operational failure. Keep it below your hook timeout (Antigravity defaults to 30 seconds). |
+| `settings.missingToolPolicy` | `"user-notice"` | What to do when a configured tool executable is missing: `"user-notice"` reports it (at Stop without blocking or re-queueing its files), `"hard-failure"` stops the run and reports an error (through `systemMessage` on Claude Code and Codex, as a hook error on Antigravity; at Stop it blocks), and `"harness-block"` blocks through the native decision. |
+| `settings.commandTimeoutSeconds` | `300` | Deadline for each external tool command; `0` disables it. A command that runs longer is killed with its whole process group and reported as an operational failure. It bounds one command; see `runTimeoutSeconds` for the total. |
+| `settings.runTimeoutSeconds` | `540` | Budget for all external tool commands of one hook invocation together; `0` disables it. Each command gets the smaller of `commandTimeoutSeconds` and the budget left, and a command that would start after the budget is spent is reported as an operational failure instead of running. The default fits Claude Code's and Codex's 600-second default hook timeout; lower both deadlines below any shorter hook timeout you configure (Antigravity defaults to 30 seconds). |
 | `settings.fileActivity.filesystemMtime` | `true` | Reconcile mtime evidence through a durable cutoff before each Stop. |
 | `settings.fileActivity.vcs` | `"disabled"` | Optional `"git-dirty"` fallback; broad because it cannot identify which dirty changes came from the agent. |
 | `settings.fileActivity.timestampToleranceMillis` | `2000` | Clock-resolution slack subtracted from every mtime scan's lower bound. |
 | `settings.fileActivity.maxEntries` | `100000` | Bound scoped/workspace traversal; targets never reached are retried at the next Stop. |
-| `settings.fileActivity.coverageGapPolicy` | `"best-effort"` | Gaps are reported once, in the Stop that first sees them. `"best-effort"` reports without blocking; `"strict"` also blocks that Stop. |
-| `settings.fileActivity.ignoredDirectoryNames` | 23 names (`.agent-hook-kit`, `.context`, `.git`, `node_modules`, `target`, `.venv`, `__pycache__`, ...) | Directory basenames pruned from reconciliation, target resolution, and snapshot walks. Setting it replaces the whole default list. |
+| `settings.fileActivity.coverageGapPolicy` | `"best-effort"` | Gaps are reported once, in the Stop that first sees them; a gap reconciliation observes at every Stop is reported once per session. `"best-effort"` reports without blocking; `"strict"` also blocks that Stop. |
+| `settings.fileActivity.ignoredDirectoryNames` | 23 names (`.agent-hook-kit`, `.context`, `.git`, `node_modules`, `target`, `.venv`, `__pycache__`, ...) | Directory basenames pruned from reconciliation, target resolution, and snapshot walks. Setting it replaces the whole default list; write-attribution snapshots always also prune `.agent-hook-kit`, `.git`, `.hg`, `.jj`, `.svn`, `node_modules`, and `target`. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -884,18 +925,24 @@ the record on stderr; a persistence failure fails the hook. Plain
 `settings.deferredReporting` controls only the session-batched
 `turn-completion-agent-hook` report. Its ordered `groups` assign the first
 matching file group, then fall back to `other`. The `clean`, `autoFixed`,
-`manualFixesNeeded`, and `operationalError` fields each contain `user` and
-`agent` MiniJinja templates; `masterUser` and `masterAgent` combine the
-rendered nonempty buckets. Set `renderEmptyBuckets = true` to render empty
-buckets too, or use an empty template to suppress one audience.
+`manualFixesNeeded`, `operationalError`, and `unavailableTool` fields each
+contain `user` and `agent` MiniJinja templates; `masterUser` and
+`masterAgent` combine the rendered nonempty buckets, which they receive in
+bucket order as `rendered_bucket_lists.user` and `rendered_bucket_lists.agent`.
+`unavailableTool` renders when a configured tool's executable is missing under
+`missingToolPolicy = "user-notice"`, so a custom master template that joins
+the bucket lists still reports tools that never ran. Set
+`renderEmptyBuckets = true` to render empty buckets too, or use an empty
+template to suppress one audience.
 
 Templates receive run paths, counts, typed file/report/artifact records,
-ordered groups, operational problems and coverage gaps. They also receive
-`artifact_paths`, `artifact_contents`, raw `buckets`, and
-`rendered_buckets` as independent views. Paths stored in file `displayPath`
-are project-relative when possible. Reporting syntax is validated before any
-configured tool runs; a later rendering error is retained as a durable
-operational artifact.
+ordered groups, operational problems, coverage gaps, and `unavailable_tools`
+(each with `message`, `toolId`, `toolName`, `executable`, `installHint`, and
+`affectedFiles`). They also receive `artifact_paths`, `artifact_contents`, raw
+`buckets`, and `rendered_buckets` as independent views. Paths stored in file
+`displayPath` are project-relative when possible. Reporting syntax is
+validated before any configured tool runs; a later rendering error is retained
+as a durable operational artifact.
 
 Layered Pkl files merge this block field by field, including nested template
 pairs, so overriding only `manualFixesNeeded.agent` preserves inherited
@@ -932,14 +979,23 @@ agent text once, as `reason`. Every block carries a non-empty reason: when the
 rendered agent message is empty, the runner synthesizes one that points at
 `summary.json` and records the agent audience as `synthesized`.
 
-`strict` fails before pending-state acknowledgement if a configured audience
-is unavailable. `best-effort` omits it. `best-effort-with-warnings` adds an
-omission warning to a representable native user channel, or to Antigravity's
-blocked `reason`; an allowed Antigravity stop has no channel, so its warnings
-are recorded only in the summary (`warningsDelivered: false`). The summary
-records each audience disposition and any warning. An unrepresentable
-allowed-stop agent note never turns a successful result into a block under
-either best-effort policy.
+`strict` fails the hook if a configured audience is unavailable. A blocked
+Stop that fails this way keeps its work pending, since the block was never
+delivered; an allowed Stop ends the turn anyway, so its results are recorded
+and not re-run at every later Stop. `best-effort` omits the audience.
+`best-effort-with-warnings` adds an omission warning to a representable native
+user channel, or to Antigravity's blocked `reason`; an allowed Antigravity
+stop has no channel, so its warnings are recorded only in the summary
+(`warningsDelivered: false`). The summary records each audience disposition
+and any warning. An unrepresentable allowed-stop agent note never turns a
+successful result into a block under either best-effort policy.
+
+These policies govern configured templates. An audience rendered entirely
+from the built-in templates, such as the default "re-read changed files" agent
+text on an allowed Stop or any user text on Antigravity, is omitted without a
+warning or a strict failure where the Stop has no channel for it (recorded as
+`omitted-builtin`). Customizing any template of an audience makes it
+configured.
 
 ### Migration from per-tool binaries
 
@@ -999,8 +1055,9 @@ Git-dirty reconciliation recover only best-effort candidates.
   - answers non-matches with the aligned pass-through, never `allow`, and
     fails closed.
 - `file-activity-agent-hook`:
-  - uses the aligned post-tool API for Claude, Codex, and Antigravity, and
-    also accepts Claude Code `PostToolUseFailure`,
+  - uses the aligned post-tool API for Codex and Antigravity and the selected
+    Claude Code harness API for Claude's `PostToolUse` and
+    `PostToolUseFailure` (bind it to both),
   - delegates structured writers, patches, and shell inference to the shared tool-access analyzer and never shells out to Git,
   - appends detailed observations to rotated NDJSON generations whose projection is a versioned per-session path set.
 - `post-tool-use-agent-hook`:
@@ -1009,8 +1066,12 @@ Git-dirty reconciliation recover only best-effort candidates.
   - runs each tool's phases for format/fix/verify commands,
   - classifies clean versus issues and changed versus unchanged from exit policies plus file snapshots,
   - reports missing tools and operational failures per `missingToolPolicy`,
+    and run failures (including configuration errors) through `systemMessage`
+    rather than an exit-1 stderr the harness would drop,
   - writes remaining diagnostics to artifacts and user notices to
     `systemMessage`,
+  - runs every tool in a process group that cannot outlive the hook, bounded
+    per command and per invocation,
   - lowers every result through an explicit Claude, Codex, or Antigravity native output arm.
 - `turn-completion-agent-hook`:
   - seals the current modified-file generations under an exclusive entity consumer lock,
@@ -1018,8 +1079,10 @@ Git-dirty reconciliation recover only best-effort candidates.
   - commits detailed per-tool logs and a summary before producing its decision,
   - acknowledges the sealed window after requeueing only unfinished work and recording handled baselines for discharged files,
   - emits configured clean/auto reports without blocking and uses each harness's native continue-working signal for manual or operational results,
-  - reports coverage gaps once and lets an unchanged repeat block stop on a
-    continuation, so it cannot trap the agent in a Stop loop.
+  - reports coverage gaps once (persistent reconciliation gaps once per
+    session), lets an unchanged repeat block stop on a continuation, and stops
+    blocking after eight consecutive blocked attempts, so it cannot trap the
+    agent in a Stop loop.
 
 ## License
 

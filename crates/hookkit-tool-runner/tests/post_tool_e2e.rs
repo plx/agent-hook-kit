@@ -4,9 +4,10 @@
 #![cfg(unix)]
 
 use serde_json::{Value, json};
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn pkl_available() -> bool {
     Command::new("pkl")
@@ -75,7 +76,7 @@ fn claude_post_tool(project: &Path, tool: &str, tool_input: Value) -> Value {
     })
 }
 
-fn run_claude(binary: &str, args: &[&str], project: &Path, cwd: &Path, input: &Value) -> Output {
+fn claude_command(binary: &str, args: &[&str], project: &Path, cwd: &Path) -> Command {
     let mut command = Command::new(binary);
     command
         .args(args)
@@ -91,6 +92,10 @@ fn run_claude(binary: &str, args: &[&str], project: &Path, cwd: &Path, input: &V
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    command
+}
+
+fn run_with_input(mut command: Command, input: &Value) -> Output {
     let mut child = command.spawn().unwrap();
     {
         use std::io::Write as _;
@@ -102,6 +107,51 @@ fn run_claude(binary: &str, args: &[&str], project: &Path, cwd: &Path, input: &V
             .unwrap();
     }
     child.wait_with_output().unwrap()
+}
+
+fn run_claude(binary: &str, args: &[&str], project: &Path, cwd: &Path, input: &Value) -> Output {
+    run_with_input(claude_command(binary, args, project, cwd), input)
+}
+
+fn write_executable(path: &Path, body: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, body).unwrap();
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).unwrap();
+}
+
+/// A project config running one verify-only tool over `*.txt` files.
+fn configure_txt_tool(project: &Path, executable: &Path, settings: &str) {
+    let config_dir = project.join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("post-tool-use.pkl"),
+        format!(
+            r#"amends "Config.pkl"
+
+settings {{
+{settings}
+}}
+
+tools {{
+  ["ghost"] = new ToolSpec {{
+    id = "ghost"
+    displayName = "Ghost"
+    executable = "{}"
+    installHint = "install ghost"
+    files {{ include = new Listing {{ "**/*.txt" }} }}
+    phases {{
+      ["verify"] = new Phase {{ mode = "verify"; argv = new Listing {{ new Files {{}} }} }}
+    }}
+  }}
+}}
+run = new Listing {{ "ghost" }}
+"#,
+            executable.display()
+        ),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -183,6 +233,248 @@ run = new Listing {{ "ghost" }}
     let message = stdout["systemMessage"].as_str().unwrap();
     assert!(message.contains("Ghost"), "{message}");
     assert!(message.contains("install ghost"), "{message}");
+}
+
+/// A run failure reaches the user through `systemMessage` on exit 0: a
+/// failed PostToolUse hook's stderr never reaches the agent, Claude shows the
+/// user only its first line, and Codex drops it entirely.
+#[test]
+fn configuration_failures_are_reported_through_the_native_response() {
+    require_pkl!();
+    let project = TempProject::new("config-failure");
+    let config_dir = project.path().join(".agent-hook-kit");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join("post-tool-use.pkl"), "this is not pkl {{{").unwrap();
+    std::fs::write(project.path().join("a.txt"), "x\n").unwrap();
+
+    let output = run_claude(
+        env!("CARGO_BIN_EXE_post-tool-use-agent-hook"),
+        &["--claude"],
+        project.path(),
+        project.path(),
+        &claude_post_tool(
+            project.path(),
+            "Write",
+            json!({"file_path": "a.txt", "content": "x"}),
+        ),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let message = stdout["systemMessage"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("error: post-tool-use configuration could not be loaded")
+            && message.contains("post-tool-use.pkl"),
+        "{stdout}"
+    );
+    assert!(stdout.get("decision").is_none(), "{stdout}");
+}
+
+/// Codex runs each command hook in a new session and, when the hook times
+/// out or the turn is interrupted, SIGKILLs the hook's whole process group.
+/// Tools run in process groups of their own, so they must not survive that:
+/// a fixer that outlived the hook would keep rewriting files under the agent.
+#[test]
+fn tools_die_with_a_hook_whose_process_group_is_killed() {
+    require_pkl!();
+    let project = TempProject::new("group-kill");
+    let started = project.path().join("tool-started");
+    let late = project.path().join("late-write.txt");
+    let tool = project.path().join("bin/slow-fixer");
+    write_executable(
+        &tool,
+        &format!(
+            "#!/bin/sh\ntouch '{}'\nsleep 2\necho late > '{}'\n",
+            started.display(),
+            late.display()
+        ),
+    );
+    configure_txt_tool(project.path(), &tool, "");
+    std::fs::write(project.path().join("a.txt"), "x\n").unwrap();
+
+    let mut command = claude_command(
+        env!("CARGO_BIN_EXE_post-tool-use-agent-hook"),
+        &["--claude"],
+        project.path(),
+        project.path(),
+    );
+    {
+        use std::os::unix::process::CommandExt as _;
+        // Like Codex, give the hook a process group of its own to kill.
+        command.process_group(0);
+    }
+    let mut hook = command.spawn().unwrap();
+    {
+        use std::io::Write as _;
+        hook.stdin
+            .take()
+            .unwrap()
+            .write_all(
+                &serde_json::to_vec(&claude_post_tool(
+                    project.path(),
+                    "Write",
+                    json!({"file_path": "a.txt", "content": "x"}),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    let waiting = Instant::now();
+    while !started.exists() {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(60),
+            "the tool never started"
+        );
+        if let Some(status) = hook.try_wait().unwrap() {
+            panic!("the hook exited before its tool started: {status}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let hook_group = libc::pid_t::try_from(hook.id()).unwrap();
+    // SAFETY: `killpg` has no memory-safety preconditions; the group is the
+    // hook's own, which is still running (it is not reaped until `wait`).
+    assert_eq!(unsafe { libc::killpg(hook_group, libc::SIGKILL) }, 0);
+    hook.wait().unwrap();
+
+    std::thread::sleep(Duration::from_millis(3500));
+    assert!(
+        !late.exists(),
+        "a tool outlived the hook whose process group was killed"
+    );
+}
+
+/// Claude Code's `cwd` follows `cd`, even out of the project, while the
+/// Stop runner discovers configuration from `CLAUDE_PROJECT_DIR`; both
+/// runners must apply the same project configuration.
+#[test]
+fn claude_configuration_is_discovered_from_the_project_not_the_cwd() {
+    require_pkl!();
+    let project = TempProject::new("claude-discovery");
+    let elsewhere = TempProject::new("claude-discovery-cwd");
+    configure_txt_tool(
+        project.path(),
+        &project.path().join("bin/ghost"),
+        "  runTimeoutSeconds = 30",
+    );
+    std::fs::write(project.path().join("a.txt"), "x\n").unwrap();
+
+    let output = run_claude(
+        env!("CARGO_BIN_EXE_post-tool-use-agent-hook"),
+        &["--claude"],
+        project.path(),
+        elsewhere.path(),
+        &claude_post_tool(
+            elsewhere.path(),
+            "Write",
+            json!({"file_path": project.path().join("a.txt"), "content": "x"}),
+        ),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let message = stdout["systemMessage"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("Ghost") && message.contains("install ghost"),
+        "the project's configuration ran: {stdout}"
+    );
+}
+
+/// `--config` relative to the project, including a bare file name, keeps
+/// naming the same file after the agent changes directory.
+#[test]
+fn relative_config_paths_follow_the_project_root_not_the_hook_cwd() {
+    require_pkl!();
+    let project = TempProject::new("relative-config");
+    let subdir = project.path().join("src");
+    std::fs::create_dir_all(&subdir).unwrap();
+    configure_txt_tool(project.path(), &project.path().join("bin/ghost"), "");
+    std::fs::rename(
+        project.path().join(".agent-hook-kit/post-tool-use.pkl"),
+        project.path().join("hooks.pkl"),
+    )
+    .unwrap();
+    std::fs::write(project.path().join("a.txt"), "x\n").unwrap();
+
+    for cwd in [project.path(), subdir.as_path()] {
+        let output = run_claude(
+            env!("CARGO_BIN_EXE_post-tool-use-agent-hook"),
+            &["--claude", "--config", "hooks.pkl"],
+            project.path(),
+            cwd,
+            &claude_post_tool(
+                cwd,
+                "Write",
+                json!({"file_path": project.path().join("a.txt"), "content": "x"}),
+            ),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}: {}",
+            cwd.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            stdout["systemMessage"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Ghost"),
+            "{}: {stdout}",
+            cwd.display()
+        );
+    }
+}
+
+/// Antigravity accepts conversations without a workspace; a detected write
+/// must still find the file's project configuration instead of failing.
+#[test]
+fn antigravity_writes_without_a_workspace_find_the_file_s_project() {
+    require_pkl!();
+    let project = TempProject::new("antigravity-no-workspace");
+    configure_txt_tool(
+        project.path(),
+        &project.path().join("bin/ghost"),
+        r#"  loweringPolicy = "best-effort""#,
+    );
+    let file = project.path().join("notes/a.txt");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "x\n").unwrap();
+    let input = json!({
+        "conversationId": "post-e2e-antigravity",
+        "workspacePaths": [],
+        "transcriptPath": project.path().join("transcript.jsonl").to_string_lossy(),
+        "artifactDirectoryPath": project.path().join("artifacts").to_string_lossy(),
+        "toolCall": {
+            "name": "write_to_file",
+            "args": {"TargetFile": file.to_string_lossy(), "CodeContent": "x"}
+        },
+        "stepIdx": 1
+    });
+    let mut command = Command::new(env!("CARGO_BIN_EXE_post-tool-use-agent-hook"));
+    command
+        .arg("--antigravity")
+        .current_dir(project.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_with_input(command, &input);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"{}");
 }
 
 #[test]

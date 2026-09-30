@@ -34,12 +34,12 @@ pub use eval::{
 };
 pub use schema::{
     ArgToken, ArgvElement, CheckScope, CoverageGapPolicy, DEFAULT_COMMAND_TIMEOUT_SECONDS,
-    DEFAULT_IGNORED_DIRECTORY_NAMES, DeferredReporting, DeferredReportingPatch, Diagnostics,
-    ExitCodes, FileActivitySettings, FileActivitySettingsPatch, FileActivityVcsFallback, FileGroup,
-    FileSelection, InvocationGranularity, LoweringPolicy, Merge, MergeResetKey, Messages,
-    MissingToolPolicy, Phase, PhaseMode, RunnerConfig, RunnerConfigPatch, Settings, SettingsPatch,
-    TemplatePair, TemplatePairPatch, ToolSpec, UnexpectedExitPolicy, Workflow, WorkflowCommand,
-    WriteBehavior,
+    DEFAULT_IGNORED_DIRECTORY_NAMES, DEFAULT_RUN_TIMEOUT_SECONDS, DeferredReporting,
+    DeferredReportingPatch, Diagnostics, ExitCodes, FileActivitySettings,
+    FileActivitySettingsPatch, FileActivityVcsFallback, FileGroup, FileSelection,
+    InvocationGranularity, LoweringPolicy, Merge, MergeResetKey, Messages, MissingToolPolicy,
+    Phase, PhaseMode, RunnerConfig, RunnerConfigPatch, Settings, SettingsPatch, TemplatePair,
+    TemplatePairPatch, ToolSpec, UnexpectedExitPolicy, Workflow, WorkflowCommand, WriteBehavior,
 };
 
 /// Result of loading the config chain.

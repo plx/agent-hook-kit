@@ -149,6 +149,8 @@ pub(crate) struct ToolPhase {
     pub extra_args: Vec<String>,
     /// Whether the phase participates in execution.
     pub enabled: bool,
+    /// Whether the immediate runner invokes the phase once per file.
+    pub per_file: bool,
 }
 
 impl ToolPhase {
@@ -165,6 +167,7 @@ impl ToolPhase {
             writes: WriteBehavior::None,
             extra_args: Vec::new(),
             enabled: true,
+            per_file: false,
         }
     }
 

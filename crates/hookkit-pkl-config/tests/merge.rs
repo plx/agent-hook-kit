@@ -253,6 +253,19 @@ fn command_timeout_defaults_and_overrides() {
         hookkit_pkl_config::DEFAULT_COMMAND_TIMEOUT_SECONDS
     );
     assert_eq!(
+        defaulted.settings.run_timeout_seconds,
+        hookkit_pkl_config::DEFAULT_RUN_TIMEOUT_SECONDS
+    );
+    // The per-invocation budget must fit inside the 600-second default hook
+    // timeout of Claude Code and Codex, and one command inside the budget.
+    const {
+        assert!(hookkit_pkl_config::DEFAULT_RUN_TIMEOUT_SECONDS < 600);
+        assert!(
+            hookkit_pkl_config::DEFAULT_COMMAND_TIMEOUT_SECONDS
+                <= hookkit_pkl_config::DEFAULT_RUN_TIMEOUT_SECONDS
+        );
+    }
+    assert_eq!(
         defaulted.settings.exclude,
         vec!["**/.git/**", "**/node_modules/**"]
     );
@@ -263,11 +276,13 @@ amends "Config.pkl"
 
 settings {
   commandTimeoutSeconds = 0
+  runTimeoutSeconds = 25
 }
 "#,
     )
     .expect("disabled timeout");
     assert_eq!(disabled.settings.command_timeout_seconds, 0);
+    assert_eq!(disabled.settings.run_timeout_seconds, 25);
 }
 
 #[test]

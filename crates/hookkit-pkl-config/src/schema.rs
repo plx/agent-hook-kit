@@ -76,8 +76,15 @@ pub struct Settings {
     pub missing_tool_policy: MissingToolPolicy,
     /// Deadline in seconds for one external tool command; `0` disables it.
     /// A command that exceeds it is killed with its process group and
-    /// reported as an operational failure.
+    /// reported as an operational failure. The deadline applies to each
+    /// command separately; [`Self::run_timeout_seconds`] bounds their sum.
     pub command_timeout_seconds: u64,
+    /// Budget in seconds for every external tool command of one hook
+    /// invocation together; `0` disables it. Each command's deadline is the
+    /// smaller of `command_timeout_seconds` and the budget left, and a command
+    /// that would start after the budget is spent is reported as an
+    /// operational failure instead of running.
+    pub run_timeout_seconds: u64,
     /// Optional stop-time file-activity reconciliation settings.
     pub file_activity: Option<FileActivitySettings>,
     /// Templates and file groups used to render deferred results.
@@ -95,16 +102,25 @@ impl Default for Settings {
             diagnostics_directory: Some(".agent-hook-kit/post-tool-use".into()),
             missing_tool_policy: MissingToolPolicy::default(),
             command_timeout_seconds: DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            run_timeout_seconds: DEFAULT_RUN_TIMEOUT_SECONDS,
             file_activity: None,
             deferred_reporting: DeferredReporting::default(),
         }
     }
 }
 
-/// Default per-command deadline: below the 600-second default command-hook
-/// timeout of Claude Code and Codex, so a hung tool is killed by the runner
-/// before the harness abandons the hook and orphans the tool.
+/// Default deadline for one external command. It bounds a single hung tool
+/// only: phases, jobs, argument chunks, and tools run one after another, each
+/// with its own deadline, so their sum is bounded by
+/// [`DEFAULT_RUN_TIMEOUT_SECONDS`] instead.
 pub const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 300;
+
+/// Default budget for all external commands of one hook invocation: below the
+/// 600-second default command-hook timeout of Claude Code and Codex, leaving
+/// time to write artifacts and respond before the harness abandons the hook.
+/// Lower it (and `commandTimeoutSeconds`) when the configured hook timeout is
+/// shorter, for example Antigravity's 30-second default.
+pub const DEFAULT_RUN_TIMEOUT_SECONDS: u64 = 540;
 
 /// Field-preserving settings overlay for one Pkl file.
 ///
@@ -138,6 +154,8 @@ pub struct SettingsPatch {
     pub missing_tool_policy: Option<MissingToolPolicy>,
     /// Optional per-command timeout override in seconds.
     pub command_timeout_seconds: Option<u64>,
+    /// Optional per-invocation command budget override in seconds.
+    pub run_timeout_seconds: Option<u64>,
     /// Optional field-preserving file-activity settings overlay.
     pub file_activity: Option<FileActivitySettingsPatch>,
     /// Optional deferred-reporting settings overlay.
@@ -170,6 +188,9 @@ impl SettingsPatch {
         }
         if let Some(command_timeout_seconds) = self.command_timeout_seconds {
             settings.command_timeout_seconds = command_timeout_seconds;
+        }
+        if let Some(run_timeout_seconds) = self.run_timeout_seconds {
+            settings.run_timeout_seconds = run_timeout_seconds;
         }
         if let Some(file_activity) = self.file_activity {
             file_activity.apply_to(settings.file_activity.get_or_insert_with(Default::default));
@@ -216,6 +237,9 @@ pub struct DeferredReporting {
     pub manual_fixes_needed: TemplatePair,
     /// Templates for workflow execution failures.
     pub operational_error: TemplatePair,
+    /// Templates for configured tools whose executable is missing under
+    /// `missingToolPolicy = "user-notice"`; their files were not checked.
+    pub unavailable_tool: TemplatePair,
     /// Aggregate template rendered for the user.
     pub master_user: String,
     /// Aggregate template rendered for the coding agent.
@@ -244,7 +268,11 @@ impl Default for DeferredReporting {
                 user: "{{ counts.operational_errors }} operational formatter/linter error{% if counts.operational_errors != 1 %}s{% endif %}. Details: {{ artifact_paths | join(\", \") }}".into(),
                 agent: "Operational formatter/linter failures remain. Inspect {{ artifact_paths | join(\", \") }} before retrying Stop.".into(),
             },
-            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if counts.unavailable_tools %}{% if rendered_bucket_lists.user | length %}\n{% endif %}{% for tool in unavailable_tools %}{{ tool.message }}{% if not loop.last %}\n{% endif %}{% endfor %}{% endif %}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.user | length or counts.unavailable_tools %}\n{% endif %}File-activity coverage is incomplete for {{ counts.coverage_gaps }} reported gap{% if counts.coverage_gaps != 1 %}s{% endif %}; see {{ run.summary_path }}.{% endif %}".into(),
+            unavailable_tool: TemplatePair {
+                user: "{% for tool in unavailable_tools %}{{ tool.message }}{% if not loop.last %}\n{% endif %}{% endfor %}".into(),
+                agent: String::new(),
+            },
+            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.user | length %}\n{% endif %}File-activity coverage is incomplete for {{ counts.coverage_gaps }} reported gap{% if counts.coverage_gaps != 1 %}s{% endif %}; see {{ run.summary_path }}.{% endif %}".into(),
             master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.agent | length %}\n{% endif %}File-activity coverage is incomplete; inspect the reported gaps in {{ run.summary_path }} before treating the run as exhaustive.{% endif %}".into(),
             render_empty_buckets: false,
         }
@@ -339,6 +367,8 @@ pub struct DeferredReportingPatch {
     pub manual_fixes_needed: Option<TemplatePairPatch>,
     /// Optional operational-error template patch.
     pub operational_error: Option<TemplatePairPatch>,
+    /// Optional unavailable-tool template patch.
+    pub unavailable_tool: Option<TemplatePairPatch>,
     /// Optional aggregate user-facing template replacement.
     pub master_user: Option<String>,
     /// Optional aggregate agent-facing template replacement.
@@ -364,6 +394,9 @@ impl DeferredReportingPatch {
         }
         if let Some(pair) = self.operational_error {
             pair.apply_to(&mut reporting.operational_error);
+        }
+        if let Some(pair) = self.unavailable_tool {
+            pair.apply_to(&mut reporting.unavailable_tool);
         }
         if let Some(master_user) = self.master_user {
             reporting.master_user = master_user;
@@ -495,7 +528,9 @@ impl FileActivitySettingsPatch {
 /// Behavior when file-activity reconciliation reports incomplete coverage.
 ///
 /// A gap is reported once, in the Stop that first observes it; retrying the
-/// same analysis cannot resolve it.
+/// same analysis cannot resolve it. A reconciliation gap that describes a
+/// persistent condition, observed again at every Stop, is reported once per
+/// session.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CoverageGapPolicy {
@@ -526,6 +561,10 @@ pub enum LoweringPolicy {
     /// Drop unsupported intent without adding a warning.
     BestEffort,
     /// Drop unsupported intent and retain a lowering warning.
+    ///
+    /// Under every policy, deferred Stop text that comes only from the
+    /// built-in templates is dropped without a warning or a strict failure
+    /// where the harness has no channel for it.
     #[default]
     BestEffortWithWarnings,
 }
@@ -537,7 +576,10 @@ pub enum MissingToolPolicy {
     /// Emit a user-visible notice and continue.
     #[default]
     UserNotice,
-    /// Treat the missing executable as a runner failure.
+    /// Treat the missing executable as a runner failure: the immediate runner
+    /// stops and reports an error (on exit 0 through `systemMessage` for
+    /// Claude Code and Codex, as a hook error on Antigravity); the Stop runner
+    /// records an operational problem that blocks.
     HardFailure,
     /// Ask the harness to block through its native decision mechanism.
     HarnessBlock,
@@ -735,6 +777,11 @@ pub struct Phase {
     pub enabled: bool,
     /// Literal values expanded by [`ArgToken::ExtraArgs`].
     pub extra_args: Vec<String>,
+    /// Whether the phase runs once for the job's file batch or once per file.
+    /// [`InvocationGranularity::PerFile`] suits tools that treat several file
+    /// arguments as one input stream (for example `jq`); any other value runs
+    /// the batch.
+    pub invocation: InvocationGranularity,
 }
 
 impl Default for Phase {
@@ -747,6 +794,7 @@ impl Default for Phase {
             writes: WriteBehavior::None,
             enabled: true,
             extra_args: Vec::new(),
+            invocation: InvocationGranularity::Batch,
         }
     }
 }

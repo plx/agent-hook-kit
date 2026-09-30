@@ -179,7 +179,7 @@ pub(crate) fn execute_deferred_workflows(
             remedy,
             &command,
             &scheduled.job.workspace_dir,
-            scheduled.settings.command_timeout,
+            &scheduled.settings,
         );
         let after = before.recapture(&command_write_scope(
             remedy.writes,
@@ -356,7 +356,7 @@ fn run_check(scheduled: &ScheduledWorkflow) -> PhaseLog {
         check,
         &command,
         &scheduled.job.workspace_dir,
-        scheduled.settings.command_timeout,
+        &scheduled.settings,
     )
 }
 

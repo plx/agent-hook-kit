@@ -1,3 +1,4 @@
+use super::reporting::BuiltinAudiences;
 use crate::util::unsupported_harness;
 use hookkit_common::TurnCompletionOutput;
 use hookkit_core::{BuiltinHarness, HarnessId, HookkitError};
@@ -83,6 +84,28 @@ impl StopLoweringPlan {
     }
 }
 
+/// [`plan_stop_lowering_with`] for audiences that both come from configured
+/// templates.
+#[cfg(test)]
+pub(crate) fn plan_stop_lowering(
+    harness: &HarnessId,
+    blocked: bool,
+    user: Option<&str>,
+    agent: Option<&str>,
+    fallback_reason: &str,
+    policy: pkl::LoweringPolicy,
+) -> hookkit_core::Result<StopLoweringPlan> {
+    plan_stop_lowering_with(
+        harness,
+        blocked,
+        user,
+        agent,
+        fallback_reason,
+        policy,
+        BuiltinAudiences::default(),
+    )
+}
+
 /// Plan the exact native Stop response for one rendered deferred result.
 ///
 /// A blocked completion always carries a non-empty agent reason: Codex treats
@@ -91,13 +114,18 @@ impl StopLoweringPlan {
 /// would re-enter its loop with no explanation. When the rendered agent
 /// message is empty (for example an empty template), `fallback_reason` is
 /// used and the agent audience is recorded as `synthesized`.
-pub(crate) fn plan_stop_lowering(
+///
+/// An audience rendered only from built-in text (`builtin`) that has no
+/// channel at this Stop is omitted (`omitted-builtin`) under every policy,
+/// without a warning or a strict failure.
+pub(crate) fn plan_stop_lowering_with(
     harness: &HarnessId,
     blocked: bool,
     user: Option<&str>,
     agent: Option<&str>,
     fallback_reason: &str,
     policy: pkl::LoweringPolicy,
+    builtin: BuiltinAudiences,
 ) -> hookkit_core::Result<StopLoweringPlan> {
     let capabilities = capabilities(harness).ok_or_else(|| {
         unsupported_harness(
@@ -126,6 +154,7 @@ pub(crate) fn plan_stop_lowering(
         policy,
         harness,
         blocked,
+        builtin.user,
         &mut native_user,
         &mut unsupported,
         &mut warnings,
@@ -137,6 +166,7 @@ pub(crate) fn plan_stop_lowering(
         policy,
         harness,
         blocked,
+        builtin.agent,
         &mut native_agent,
         &mut unsupported,
         &mut warnings,
@@ -197,6 +227,7 @@ fn lower_audience(
     policy: pkl::LoweringPolicy,
     harness: &HarnessId,
     blocked: bool,
+    builtin: bool,
     native_message: &mut Option<String>,
     unsupported: &mut Vec<&'static str>,
     warnings: &mut Vec<String>,
@@ -212,6 +243,12 @@ fn lower_audience(
         return AudienceLowering {
             status: "emitted",
             native_channel,
+        };
+    }
+    if builtin {
+        return AudienceLowering {
+            status: "omitted-builtin",
+            native_channel: None,
         };
     }
     match policy {
@@ -368,6 +405,65 @@ mod tests {
         let system = json["systemMessage"].as_str().unwrap();
         assert!(system.starts_with("Auto-fixed 1 file: a.rs"));
         assert!(system.contains("omitted agent"));
+    }
+
+    /// The built-in templates render agent text such as "re-read changed
+    /// files" and user text on every harness; where a Stop has no channel for
+    /// it, dropping built-in text is expected, so it neither warns nor fails
+    /// strict lowering.
+    #[test]
+    fn undeliverable_builtin_text_is_omitted_without_warnings_or_strict_failures() {
+        for policy in [
+            pkl::LoweringPolicy::Strict,
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        ] {
+            for harness in [HarnessId::CLAUDE_CODE, HarnessId::CODEX] {
+                let plan = plan_stop_lowering_with(
+                    &harness,
+                    false,
+                    Some("Auto-fixed 1 file: a.rs"),
+                    Some("Auto-fixed 1 file; re-read changed files."),
+                    FALLBACK,
+                    policy,
+                    BuiltinAudiences::ALL,
+                )
+                .unwrap();
+                assert_eq!(plan.metadata.agent.status, "omitted-builtin");
+                assert!(plan.metadata.warnings.is_empty());
+                let json = stdout_json(plan.finish().unwrap());
+                assert_eq!(json["systemMessage"], "Auto-fixed 1 file: a.rs", "{json}");
+            }
+
+            let plan = plan_stop_lowering_with(
+                &HarnessId::ANTIGRAVITY,
+                true,
+                Some("1 file needs manual fixes"),
+                Some("fix a.rs"),
+                FALLBACK,
+                policy,
+                BuiltinAudiences::ALL,
+            )
+            .unwrap();
+            assert_eq!(plan.metadata.user.status, "omitted-builtin");
+            let json = stdout_json(plan.finish().unwrap());
+            assert_eq!(json["reason"], "fix a.rs", "no warning reaches the agent");
+        }
+
+        // Configured text keeps the lowering-policy contract.
+        let configured = plan_stop_lowering_with(
+            &HarnessId::CLAUDE_CODE,
+            false,
+            None,
+            Some("configured agent text"),
+            FALLBACK,
+            pkl::LoweringPolicy::Strict,
+            BuiltinAudiences {
+                user: true,
+                agent: false,
+            },
+        )
+        .unwrap();
+        assert!(configured.metadata.strict_error.is_some());
     }
 
     #[test]

@@ -16,6 +16,10 @@
 //! Error text from Pkl is rewritten so staged paths name the real source
 //! files. Imports that climb above the config's own directory (`../`) resolve
 //! inside the staging directory and are not supported.
+//!
+//! Every `pkl eval` is bounded by [`PKL_EVAL_TIMEOUT`], so a configuration
+//! whose `package://` or `https://` import stalls on the network fails with
+//! [`PklConfigError::PklTimedOut`] instead of hanging the hook.
 
 use crate::error::PklConfigError;
 use crate::schema::{RunnerConfig, RunnerConfigPatch};
@@ -23,9 +27,11 @@ use include_dir::{Dir, DirEntry, include_dir};
 use serde::de::DeserializeOwned;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// Embedded `builtins/` tree containing `Config.pkl`, the `Builtins.pkl`
 /// aggregator, and `tools/<name>.pkl` per-tool spec modules.
@@ -44,6 +50,11 @@ pub const BUILTINS_PKL: &str = include_str!("builtins/Builtins.pkl");
 const STAGED_LAYER_NAME: &str = "hookkit-layer.pkl";
 const AGGREGATOR_NAME: &str = "hookkit-layers.pkl";
 const BUILTIN_ENTRIES: [&str; 3] = ["Config.pkl", "Builtins.pkl", "tools"];
+
+/// Longest one `pkl eval` may run before it is killed. Evaluating the bundled
+/// schema and a project configuration takes well under a second; the bound
+/// only matters when an import waits on a stalled network.
+pub const PKL_EVAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -321,8 +332,20 @@ fn copy_to_staging(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
     })
 }
 
+/// Directory holding `path`; a bare file name lives in the current directory
+/// (`Path::parent` reports it as the empty path, which cannot be listed).
+fn source_directory(path: &Path) -> Option<&Path> {
+    path.parent().map(|parent| {
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
+    })
+}
+
 fn mirror_source_siblings(src: &Path, dst_dir: &Path) -> Result<(), PklConfigError> {
-    let Some(src_dir) = src.parent() else {
+    let Some(src_dir) = source_directory(src) else {
         return Ok(());
     };
     let src_name = src.file_name();
@@ -512,12 +535,27 @@ fn rewrite_staged_paths(stderr: &str, staging: &StagedBuiltins, layers: &[Staged
         let Some(source) = &layer.source else {
             continue;
         };
-        let source_dir = source.parent().unwrap_or(Path::new(""));
+        let source_dir = source_directory(source).unwrap_or(Path::new("."));
         for alias in staging_aliases(&layer.dir) {
             rewritten = rewritten.replace(
                 &format!("{alias}/{STAGED_LAYER_NAME}"),
                 &source.to_string_lossy(),
             );
+            // Each layer directory links the embedded schema modules as
+            // siblings (a real sibling of the same name is never mirrored),
+            // so their frames name the embedded builtins, not a file next to
+            // the user's configuration.
+            rewritten = rewritten.replace(
+                &format!("{alias}/tools/"),
+                "<hookkit embedded builtins>/tools/",
+            );
+            for module in ["Config.pkl", "Builtins.pkl"] {
+                rewritten = replace_path(
+                    &rewritten,
+                    &format!("{alias}/{module}"),
+                    &format!("<hookkit embedded builtins>/{module}"),
+                );
+            }
             rewritten = rewritten.replace(
                 &format!("{alias}/"),
                 &format!("{}/", source_dir.to_string_lossy()),
@@ -552,19 +590,104 @@ fn staging_aliases(dir: &Path) -> Vec<String> {
     aliases
 }
 
-fn run_pkl(path: &Path) -> Result<std::process::Output, PklConfigError> {
-    Command::new("pkl")
-        .args(["eval", "--format", "json"])
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                PklConfigError::PklNotFound
-            } else {
-                PklConfigError::PklExec(e)
+/// Replace each occurrence of the path `from` that is not merely the prefix
+/// of a longer file name (such as a mirrored `Config.pkl.bak`).
+fn replace_path(text: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = rest.find(from) {
+        let end = index + from.len();
+        let continues_name = rest[end..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_alphanumeric() || matches!(next, '.' | '_' | '-'));
+        out.push_str(&rest[..index]);
+        out.push_str(if continues_name { from } else { to });
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn run_pkl(path: &Path) -> Result<Output, PklConfigError> {
+    let mut command = Command::new("pkl");
+    command.args(["eval", "--format", "json"]).arg(path);
+    run_with_deadline(command, PKL_EVAL_TIMEOUT).map_err(|error| match error {
+        DeadlineError::Spawn(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            PklConfigError::PklNotFound
+        }
+        DeadlineError::Spawn(e) | DeadlineError::Wait(e) => PklConfigError::PklExec(e),
+        DeadlineError::TimedOut => PklConfigError::PklTimedOut {
+            timeout: PKL_EVAL_TIMEOUT,
+        },
+    })
+}
+
+enum DeadlineError {
+    Spawn(std::io::Error),
+    Wait(std::io::Error),
+    TimedOut,
+}
+
+/// Run `command` with null stdin and captured output, killing it once
+/// `timeout` elapses. The child stays in the hook's process group, so a
+/// harness that kills that group also stops it.
+fn run_with_deadline(mut command: Command, timeout: Duration) -> Result<Output, DeadlineError> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(DeadlineError::Spawn)?;
+    // Drain both pipes concurrently so a large error report cannot fill a
+    // pipe buffer and stall the child.
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
             }
+            bytes
         })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
+    );
+    let deadline = Instant::now() + timeout;
+    let mut pause = Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(DeadlineError::Wait(error));
+            }
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(DeadlineError::TimedOut);
+        }
+        std::thread::sleep(pause.min(deadline - now));
+        pause = (pause * 2).min(Duration::from_millis(50));
+    };
+    Ok(Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
 }
 
 /// Evaluate one staged module directly and decode its JSON output.
@@ -624,7 +747,11 @@ mod tests {
             dir: layer_dir.clone(),
         }];
         let stderr = format!(
-            "–– Pkl Error ––\nat file://{}/{STAGED_LAYER_NAME} (line 3)\nimported from {}/shared.pkl\n",
+            "–– Pkl Error ––\nat file://{}/{STAGED_LAYER_NAME} (line 3)\nimported from {}/shared.pkl\n\
+             at agent_hook_kit.PostToolUseConfig#Phase.mode (file://{}/Config.pkl, line 176)\n\
+             at agent_hook_kit.builtins.tools.Ruff (file://{}/tools/ruff.pkl, line 9)\n",
+            layer_dir.display(),
+            layer_dir.display(),
             layer_dir.display(),
             layer_dir.display()
         );
@@ -638,6 +765,68 @@ mod tests {
             rewritten.contains("/repo/.agent-hook-kit/shared.pkl"),
             "{rewritten}"
         );
+        // The schema modules linked into each layer are the embedded ones;
+        // no `Config.pkl` or `tools/` exists next to the user's file.
+        assert!(
+            rewritten.contains("file://<hookkit embedded builtins>/Config.pkl, line 176"),
+            "{rewritten}"
+        );
+        assert!(
+            rewritten.contains("file://<hookkit embedded builtins>/tools/ruff.pkl, line 9"),
+            "{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("/repo/.agent-hook-kit/Config.pkl,"),
+            "{rewritten}"
+        );
+        assert_eq!(
+            replace_path("a/Config.pkl.bak a/Config.pkl, x", "a/Config.pkl", "B"),
+            "a/Config.pkl.bak B, x"
+        );
         assert!(!rewritten.contains("hookkit-pkl-stage"), "{rewritten}");
+    }
+
+    #[test]
+    fn bare_file_names_live_in_the_current_directory() {
+        assert_eq!(
+            source_directory(Path::new("hooks.pkl")),
+            Some(Path::new("."))
+        );
+        assert_eq!(
+            source_directory(Path::new("config/hooks.pkl")),
+            Some(Path::new("config"))
+        );
+        // A bare name is staged by listing `.`, not the unlistable "".
+        let staging = stage_builtins().unwrap();
+        let layer_dir = staging.create_layer_dir(0).unwrap();
+        mirror_source_siblings(Path::new("hooks.pkl"), &layer_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hung_evaluations_are_killed_at_the_deadline() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "echo started; sleep 30"]);
+        let started = Instant::now();
+        let error = run_with_deadline(command, Duration::from_millis(200));
+        assert!(matches!(error, Err(DeadlineError::TimedOut)));
+        assert!(started.elapsed() < Duration::from_secs(10));
+
+        let mut command = Command::new("sh");
+        command.args(["-c", "echo out; echo err >&2; exit 3"]);
+        let output = run_with_deadline(command, Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("a quick command completes"));
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"err\n");
+
+        let missing = run_with_deadline(
+            Command::new("/definitely/missing/pkl"),
+            Duration::from_secs(1),
+        );
+        assert!(matches!(
+            missing,
+            Err(DeadlineError::Spawn(error)) if error.kind() == std::io::ErrorKind::NotFound
+        ));
     }
 }

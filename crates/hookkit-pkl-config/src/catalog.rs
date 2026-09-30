@@ -339,13 +339,20 @@ fn audit_tool(spec: &ToolSpec) -> ToolAudit {
             .map(|(id, phase)| format!("{id}: {}", compatibility_scope(spec, phase)))
             .collect()
     };
+    // The runner's compatibility translation invokes a tool with any per-file
+    // phase once per file.
+    let per_file = phases
+        .iter()
+        .any(|(_, phase)| phase.invocation == InvocationGranularity::PerFile);
     ToolAudit {
         mode: "compatibility",
         checks,
         remedies,
         scopes,
-        invocations: vec!["batch".into()],
-        limitation: if mutators.is_empty() {
+        invocations: vec![if per_file { "per-file" } else { "batch" }.into()],
+        limitation: if mutators.is_empty() && per_file {
+            "Read-only checks are compatibility-translated as per-file invocations; real-tool behavior is version-dependent.".into()
+        } else if mutators.is_empty() {
             "Read-only checks are compatibility-translated as batched invocations; real-tool behavior is version-dependent.".into()
         } else if let Some(reason) = &spec.unverified_remedy_fallback {
             format!("Unverified mutator-first fallback: {reason}")

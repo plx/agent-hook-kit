@@ -3,9 +3,9 @@
 
 use crate::convert::{convert_tool_spec, resolve_run_order};
 use crate::deferred::{
-    DeferredLog, DeferredReporter, RenderedBuckets, RenderedMessages, ScheduledWorkflow,
-    StopLoweringMetadata, StopLoweringPlan, TemplateRun, WorkflowExecutionPolicy,
-    execute_deferred_workflows, plan_stop_lowering,
+    BuiltinAudiences, DeferredLog, DeferredReporter, RenderedBuckets, RenderedMessages,
+    ScheduledWorkflow, StopLoweringMetadata, StopLoweringPlan, TemplateRun,
+    WorkflowExecutionPolicy, execute_deferred_workflows, plan_stop_lowering_with,
 };
 use crate::exec::{
     CommandError, ExecutionSettings, FILE_ARGUMENT_BUDGET_BYTES, FileMatcher, PhaseLog,
@@ -14,7 +14,8 @@ use crate::exec::{
 use crate::post_tool::{diagnostics_directory, execution_settings};
 use crate::spec::{InvocationGranularity, ToolSpec, ToolWorkflow, WriteBehavior};
 use crate::stop_guard::{
-    ContinuationSignal, GuardRecord, StopDecision, StopGuardStore, blocking_fingerprint,
+    ContinuationSignal, MAX_CONSECUTIVE_BLOCKS, ReportedGapsRecord, StopDecision, StopGuardStore,
+    blocking_fingerprint,
 };
 use crate::util::{activity_error, invalid_data, normalize_path, state_error};
 use crate::{
@@ -24,8 +25,9 @@ use crate::{
 use hookkit_common::{TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput};
 use hookkit_core::{HarnessId, RuntimeContext, Utf8PathBuf};
 use hookkit_file_activity::{
-    FileActivityEvent, FileActivityStore, FileActivityTarget, PendingFileActivity,
-    ReconciliationOptions, ResolveOptions, VcsFallback, reconcile, resolve_files,
+    FileActivityEvent, FileActivitySource, FileActivityStore, FileActivityTarget,
+    PendingFileActivity, ReconciliationOptions, ResolveOptions, VcsFallback, reconcile,
+    resolve_files,
 };
 use hookkit_pkl_config::schema as pkl;
 use hookkit_pkl_config::{Loaded, PklConfigError};
@@ -37,10 +39,14 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const BATCHED_TOOLS_FAMILY: &str = "agent-hook-kit.batched-tools";
 const SUMMARY_SCHEMA_VERSION: u32 = 2;
+
+/// The native response of one Stop attempt, or the strict lowering failure
+/// the hook reports after an allowed Stop's results were recorded.
+type StopResult = hookkit_core::Result<TurnCompletionOutput>;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,6 +121,9 @@ struct PlannedStateDisposition {
     retry_files: Vec<Utf8PathBuf>,
     retry_targets: Vec<FileActivityTarget>,
     reported_gaps: Vec<String>,
+    /// Persistent reconciliation gaps that an earlier run of this session
+    /// already reported, left out of this run's result and messages.
+    previously_reported_gaps: Vec<String>,
     handled_baseline_files: Vec<Utf8PathBuf>,
 }
 
@@ -153,8 +162,13 @@ struct ActivityResolution {
     /// Targets never attempted because an earlier target exhausted the
     /// traversal budget. Retained for the next Stop.
     skipped_targets: Vec<FileActivityTarget>,
-    /// Message-only gaps from observation or earlier runs. Reported once.
+    /// Message-only gaps from observation, and reconciliation gaps not yet
+    /// reported in this session. Reported once.
     gap_messages: BTreeSet<String>,
+    /// The reconciliation gaps among `gap_messages`, remembered once reported.
+    new_reconciliation_gaps: BTreeSet<String>,
+    /// Reconciliation gaps an earlier run of this session already reported.
+    previously_reported_gaps: BTreeSet<String>,
     truncated: bool,
 }
 
@@ -163,12 +177,15 @@ struct DeferredStateDisposition {
     retry_files: BTreeSet<Utf8PathBuf>,
     retry_targets: Vec<FileActivityTarget>,
     reported_gaps: BTreeSet<String>,
+    new_reconciliation_gaps: BTreeSet<String>,
+    previously_reported_gaps: BTreeSet<String>,
     handled_files: BTreeSet<Utf8PathBuf>,
 }
 
 /// Everything one Stop attempt needs besides the consumed entity view.
 struct TurnCompletionRun<'a, 'ctx> {
     ctx: &'a RuntimeContext<'ctx>,
+    started: Instant,
     roots: &'a [Utf8PathBuf],
     activity_settings: &'a pkl::FileActivitySettings,
     activity_store: &'a FileActivityStore,
@@ -177,17 +194,41 @@ struct TurnCompletionRun<'a, 'ctx> {
     continuation: ContinuationSignal,
 }
 
-/// Workspace roots for one Stop. Claude Code runs hooks in the agent's
-/// current directory, which follows `cd` in its Bash tool, so the stable
-/// `CLAUDE_PROJECT_DIR` comes first; other roots from the input that are not
-/// inside it are kept after it.
+/// Roots of one Stop.
+struct TurnCompletionRoots {
+    /// Reconciliation and resolution roots. The first is the working root,
+    /// from which configuration is discovered.
+    roots: Vec<Utf8PathBuf>,
+    /// Anchor for a relative `--state-dir` or `--config`: `CLAUDE_PROJECT_DIR`
+    /// on Claude Code, where the file-activity observer anchors its state
+    /// too, otherwise the first root.
+    anchor: PathBuf,
+}
+
+/// Roots for one Stop. Claude Code runs hooks in the agent's current
+/// directory, which follows `cd` in its Bash tool, so the session's working
+/// root comes first: the stable `CLAUDE_PROJECT_DIR`, or the linked Git
+/// worktree the session entered (Claude keeps `CLAUDE_PROJECT_DIR` at the
+/// main checkout, whose other files and sibling worktrees belong to other
+/// work). Other roots from the input that are not inside it are kept after
+/// it.
 fn turn_completion_roots(
     environment: &TurnCompletionCommandEnvironment,
     ctx: &RuntimeContext<'_>,
-) -> hookkit_core::Result<Vec<Utf8PathBuf>> {
+) -> hookkit_core::Result<TurnCompletionRoots> {
     let mut roots = Vec::new();
+    let mut anchor = None;
     if let TurnCompletionCommandEnvironment::Claude(environment) = environment {
-        roots.push(environment.project_dir.clone());
+        let project_dir = PathBuf::from(environment.project_dir.as_str());
+        let cwd = ctx
+            .workspace_roots()
+            .first()
+            .map(|root| PathBuf::from(root.as_str()));
+        let working = crate::roots::claude_working_root(&project_dir, cwd.as_deref());
+        roots.push(
+            Utf8PathBuf::from_path_buf(working).unwrap_or_else(|_| environment.project_dir.clone()),
+        );
+        anchor = Some(project_dir);
     }
     for root in ctx.workspace_roots() {
         let canonical = normalize_path(root.as_std_path());
@@ -198,12 +239,35 @@ fn turn_completion_roots(
             roots.push(root.clone());
         }
     }
-    if roots.is_empty() {
+    let Some(first) = roots.first() else {
         return Err(invalid_data(
             "turn-completion input has no workspace root".into(),
         ));
+    };
+    let anchor = anchor.unwrap_or_else(|| PathBuf::from(first.as_str()));
+    Ok(TurnCompletionRoots { roots, anchor })
+}
+
+/// Why an Antigravity Stop ends the execution loop abnormally, if it does.
+///
+/// Antigravity fires Stop for every loop termination, including a step limit
+/// or a system error, and `decision: "continue"` would re-enter the loop the
+/// harness is ending. Those Stops are allowed without running any tool, and
+/// the pending work stays queued for the next normal Stop.
+fn abnormal_termination(input: &TurnCompletionInput) -> Option<String> {
+    let TurnCompletionInput::Antigravity(input) = input else {
+        return None;
+    };
+    if let Some(error) = input.error_message() {
+        return Some(format!("error: {error}"));
     }
-    Ok(roots)
+    match input.termination_reason {
+        hookkit_antigravity::TerminationReason::MaxStepsExceeded
+        | hookkit_antigravity::TerminationReason::Error => {
+            Some(input.termination_reason.to_string())
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn run_turn_completion_input(
@@ -213,9 +277,14 @@ pub(crate) fn run_turn_completion_input(
     config_path: Option<&Path>,
     state_dir: Option<&Path>,
 ) -> hookkit_core::Result<TurnCompletionOutput> {
-    let roots = turn_completion_roots(environment, ctx)?;
+    let started = Instant::now();
+    if abnormal_termination(&turn_completion).is_some() {
+        return allowed_no_op(ctx.harness());
+    }
+    let TurnCompletionRoots { roots, anchor } = turn_completion_roots(environment, ctx)?;
     let cwd = PathBuf::from(roots[0].as_str());
-    let state_root = crate::resolve_state_root(state_dir, Some(&cwd));
+    let state_root = crate::resolve_state_root(state_dir, Some(&anchor));
+    let config_path = config_path.map(|path| crate::anchored_path(path, Some(&anchor)));
     let state = SessionState::ensure(ctx, state_root).map_err(state_error)?;
     let activity_store = FileActivityStore::from_state(state.clone()).map_err(activity_error)?;
     let runner_family = state
@@ -228,7 +297,7 @@ pub(crate) fn run_turn_completion_input(
     let _runner_lock = runner_family
         .exclusive_lock("turn-completion")
         .map_err(state_error)?;
-    let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path);
+    let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path.as_deref());
     let activity_settings = loaded
         .as_ref()
         .ok()
@@ -251,9 +320,19 @@ pub(crate) fn run_turn_completion_input(
         .cloned()
         .collect();
     reconciliation.excluded_roots = excluded_roots.clone();
+    // Linked worktrees below a root belong to other sessions; the heuristic
+    // fallbacks must not turn their edits into this session's candidates.
+    for root in &roots {
+        for worktree in crate::roots::nested_linked_worktrees(root.as_std_path(), &cwd) {
+            if let Ok(worktree) = Utf8PathBuf::from_path_buf(worktree) {
+                reconciliation.excluded_roots.insert(worktree);
+            }
+        }
+    }
     reconcile(&activity_store, reconciliation).map_err(activity_error)?;
     let run = TurnCompletionRun {
         ctx,
+        started,
         roots: &roots,
         activity_settings: &activity_settings,
         activity_store: &activity_store,
@@ -267,7 +346,7 @@ pub(crate) fn run_turn_completion_input(
         .map_err(|error| match error {
             EntityOperationError::State(error) => state_error(error),
             EntityOperationError::Operation(error) => error,
-        })
+        })?
 }
 
 /// Roots excluded from reconciliation and target resolution: the session
@@ -307,18 +386,23 @@ fn run_turn_completion_view(
     run: &TurnCompletionRun<'_, '_>,
     loaded: Result<Loaded, PklConfigError>,
     view: &EntityView<'_, PendingFileActivity>,
-) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+) -> hookkit_core::Result<EntityOutcome<StopResult>> {
     let ctx = run.ctx;
     if view.events().is_empty() {
-        let lowering = plan_stop_lowering(
+        return Ok(EntityOutcome::retain(Ok(allowed_no_op(ctx.harness())?)));
+    }
+    let guard = StopGuardStore::open(run.runner_family).map_err(state_error)?;
+    let reported_gaps = guard.reported_gaps().map_err(state_error)?;
+    if view
+        .events()
+        .iter()
+        .all(|record| reported_reconciliation_gap(record.event(), &reported_gaps).is_some())
+    {
+        // Reconciliation observed only persistent gaps this session already
+        // reported: there is nothing new to check or report.
+        return Ok(EntityOutcome::acknowledge(Ok(allowed_no_op(
             ctx.harness(),
-            false,
-            None,
-            None,
-            "",
-            pkl::LoweringPolicy::BestEffortWithWarnings,
-        )?;
-        return Ok(EntityOutcome::retain(lowering.finish()?));
+        )?)));
     }
     let fallback_project_root = normalize_path(run.roots[0].as_std_path());
 
@@ -338,6 +422,14 @@ fn run_turn_completion_view(
     let skipped_targets = resolved.unattempted_targets;
     let mut unresolved_targets = resolved.unresolved_targets;
     unresolved_targets.retain(|target| !skipped_targets.contains(target));
+    let SourceGaps {
+        observed,
+        reconciliation,
+    } = source_gap_messages(view);
+    let (previously_reported_gaps, new_reconciliation_gaps): (BTreeSet<_>, BTreeSet<_>) =
+        reconciliation
+            .into_iter()
+            .partition(|message| reported_gaps.contains(message));
     let resolution = ActivityResolution {
         not_applicable_files: resolved
             .not_applicable_files
@@ -346,7 +438,12 @@ fn run_turn_completion_view(
             .collect(),
         unresolved_targets,
         skipped_targets,
-        gap_messages: source_gap_messages(view),
+        gap_messages: observed
+            .into_iter()
+            .chain(new_reconciliation_gaps.iter().cloned())
+            .collect(),
+        new_reconciliation_gaps,
+        previously_reported_gaps,
         truncated: resolved.truncated,
     };
     let excluded = run
@@ -373,14 +470,16 @@ fn run_turn_completion_view(
         .runner_family
         .start_run("turn-completion")
         .map_err(state_error)?;
-    let guard = StopGuardStore::open(run.runner_family).map_err(state_error)?;
 
     let loaded = match loaded {
         Ok(loaded) => loaded,
         Err(error) => {
-            // A missing `pkl` is an environment problem the agent cannot
-            // fix: report it and keep the files queued without blocking.
-            let blocks = !matches!(error, PklConfigError::PklNotFound);
+            // An environment problem the agent cannot fix (no usable `pkl`,
+            // an unreadable configuration file, a failed staging directory)
+            // is reported with the files kept queued, without blocking.
+            // Evaluation and decoding errors can come from the agent's own
+            // configuration edits and block.
+            let blocks = !is_environment_failure(&error);
             return commit_deferred_config_failure(
                 run,
                 bundle,
@@ -432,7 +531,7 @@ fn run_turn_completion_view(
             );
         }
     };
-    let execution_settings = Arc::new(execution_settings(settings));
+    let execution_settings = Arc::new(execution_settings(settings, run.started));
     let (plan, planned_tools) = match build_deferred_plan(
         &tools,
         &candidates,
@@ -503,28 +602,21 @@ fn run_turn_completion_view(
 
     let decision = StopDecision::decide(
         blocking_fingerprint(&result, run.activity_settings.coverage_gap_policy),
-        guard.previous_fingerprint().map_err(state_error)?,
+        guard.previous().map_err(state_error)?.as_ref(),
         run.continuation,
     );
     let rendered_messages = with_repeat_note(rendered_messages, &decision);
-    let lowering = plan_stop_lowering(
+    let lowering = plan_stop_lowering_with(
         ctx.harness(),
         decision.blocked,
         rendered_messages.user.as_deref(),
         rendered_messages.agent.as_deref(),
         &fallback_block_reason(&summary_path),
         lowering_policy,
+        rendered_messages.builtin,
     )?;
     let disposition = plan_deferred_state_disposition(&result, &resolution)?;
-    let status = if result.has_operational_problems() {
-        "operational-failure"
-    } else if result.has_manual_fixes() {
-        "issues"
-    } else if !result.uncovered_files.is_empty() && result.files.is_empty() {
-        "not-applicable"
-    } else {
-        "clean"
-    };
+    let status = run_status(&result);
     let summary = build_batch_summary(BatchSummaryParts {
         run: &bundle,
         project_root: &project_root,
@@ -551,8 +643,65 @@ fn run_turn_completion_view(
     )
 }
 
+/// Status recorded in `summary.json`: the most severe condition wins.
+///
+/// - `operational-failure`: a tool or the configuration failed;
+/// - `issues`: some file still needs manual fixes;
+/// - `incomplete`: nothing blocks, but a configured tool was unavailable or
+///   file-activity coverage has gaps, so some files were not checked;
+/// - `not-applicable`: no configured tool applies to any candidate;
+/// - `clean`: every checked file is clean or was auto-fixed.
+fn run_status(result: &DeferredRunResult) -> &'static str {
+    if result.has_operational_problems() {
+        "operational-failure"
+    } else if result.has_manual_fixes() {
+        "issues"
+    } else if !result.unavailable_tools.is_empty() || !result.coverage_gaps.is_empty() {
+        "incomplete"
+    } else if !result.uncovered_files.is_empty() && result.files.is_empty() {
+        "not-applicable"
+    } else {
+        "clean"
+    }
+}
+
+/// The native response of an allowed Stop that reports nothing.
+fn allowed_no_op(harness: &HarnessId) -> hookkit_core::Result<TurnCompletionOutput> {
+    plan_stop_lowering_with(
+        harness,
+        false,
+        None,
+        None,
+        "",
+        pkl::LoweringPolicy::BestEffortWithWarnings,
+        BuiltinAudiences::ALL,
+    )?
+    .finish()
+}
+
+/// Whether a configuration failure is an environment problem the agent
+/// cannot fix, as opposed to an evaluation or decoding error its own edits
+/// may have caused.
+fn is_environment_failure(error: &PklConfigError) -> bool {
+    matches!(
+        error,
+        PklConfigError::PklNotFound
+            | PklConfigError::PklExec(_)
+            | PklConfigError::PklTimedOut { .. }
+            | PklConfigError::ReadIo { .. }
+            | PklConfigError::TempIo { .. }
+    )
+}
+
 /// Commit the summary, produce the native output, then change pending state
-/// and record the loop-guard fingerprint, in that order.
+/// and record the loop-guard fingerprint and newly reported reconciliation
+/// gaps, in that order.
+///
+/// A strict lowering failure fails the hook in both cases, but only a blocked
+/// Stop keeps its sealed window: its block was never delivered. An allowed
+/// Stop ends the turn whether or not the hook fails, so its results are
+/// recorded as for any other allowed Stop; retaining the window would re-run
+/// every tool and report the same message-only gaps at every later Stop.
 fn finish_run(
     run: &TurnCompletionRun<'_, '_>,
     bundle: RunBundle,
@@ -561,14 +710,21 @@ fn finish_run(
     lowering: StopLoweringPlan,
     disposition: DeferredStateDisposition,
     decision: StopDecision,
-) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+) -> hookkit_core::Result<EntityOutcome<StopResult>> {
     let run_id = summary.run.id.clone();
     bundle.commit(&summary).map_err(state_error)?;
-    let output = lowering.finish()?;
+    let output = match lowering.finish() {
+        Err(error) if decision.blocked => return Err(error),
+        output => output,
+    };
+    let new_reconciliation_gaps = disposition.new_reconciliation_gaps.clone();
     apply_deferred_state_disposition(run.activity_store, disposition, run_id.clone())?;
     guard
-        .record(&GuardRecord {
-            fingerprint: decision.fingerprint,
+        .record(&decision.record(run_id.clone()))
+        .map_err(state_error)?;
+    guard
+        .record_reported_gaps(&ReportedGapsRecord {
+            messages: new_reconciliation_gaps.into_iter().collect(),
             run_id,
         })
         .map_err(state_error)?;
@@ -582,15 +738,26 @@ fn fallback_block_reason(summary_path: &Path) -> String {
     )
 }
 
-/// Tell the user why an unchanged repeat no longer blocks.
+/// Tell the user why an unchanged repeat, or a long continuation chain, no
+/// longer blocks.
 fn with_repeat_note(mut messages: RenderedMessages, decision: &StopDecision) -> RenderedMessages {
-    if decision.suppressed_repeat {
-        let note = "hookkit: not blocking Stop again because the same deferred results were already reported and nothing changed; they stay queued for the next Stop.";
-        messages.user = Some(match messages.user.take() {
-            Some(user) if !user.trim().is_empty() => format!("{user}\n{note}"),
-            _ => note.to_owned(),
-        });
-    }
+    let note = if decision.suppressed_repeat {
+        "hookkit: not blocking Stop again because the same deferred results were already reported and nothing changed; they stay queued for the next Stop.".to_owned()
+    } else if decision.continuation_cap_reached {
+        format!(
+            "hookkit: not blocking Stop again after {MAX_CONSECUTIVE_BLOCKS} consecutive blocked attempts; the remaining deferred results stay queued for the next Stop."
+        )
+    } else {
+        return messages;
+    };
+    messages.user = Some(match messages.user.take() {
+        Some(user) if !user.trim().is_empty() => format!("{user}\n{note}"),
+        _ => {
+            // The note alone is runner text, whatever the templates were.
+            messages.builtin.user = true;
+            note
+        }
+    });
     messages
 }
 
@@ -845,7 +1012,9 @@ pub(crate) fn format_deferred_artifact(log: &DeferredLog) -> hookkit_core::Resul
 
 fn artifact_classification(log: &PhaseLog) -> ArtifactClassification {
     match &log.error {
-        Some(CommandError::TimedOut(_)) => return ArtifactClassification::TimedOut,
+        Some(CommandError::TimedOut(_) | CommandError::RunBudgetExhausted(_)) => {
+            return ArtifactClassification::TimedOut;
+        }
         Some(CommandError::NotFound | CommandError::Io(_)) => {
             return ArtifactClassification::SpawnError;
         }
@@ -895,6 +1064,7 @@ fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<Bat
         buckets,
         user,
         agent,
+        builtin: _,
     } = parts.rendered_messages;
     let summary_text = summary_path.to_string_lossy();
     let references_summary = user
@@ -954,10 +1124,23 @@ fn build_batch_summary(parts: BatchSummaryParts<'_>) -> hookkit_core::Result<Bat
         groups: groups.len(),
     };
     let state_disposition = PlannedStateDisposition {
-        source: "acknowledge-sealed-window",
+        // A strict lowering failure of a blocked Stop fails the hook before
+        // pending state changes, so its sealed window is retained for the
+        // next Stop (see `finish_run`).
+        source: if parts.lowering.strict_error.is_some() && parts.lowering.blocked {
+            "retain-sealed-window"
+        } else {
+            "acknowledge-sealed-window"
+        },
         retry_files: parts.disposition.retry_files.iter().cloned().collect(),
         retry_targets: parts.disposition.retry_targets.clone(),
         reported_gaps: parts.disposition.reported_gaps.iter().cloned().collect(),
+        previously_reported_gaps: parts
+            .disposition
+            .previously_reported_gaps
+            .iter()
+            .cloned()
+            .collect(),
         handled_baseline_files: parts.disposition.handled_files.iter().cloned().collect(),
     };
     let (source_entry_count, source_entry_ids) = parts.source;
@@ -1006,6 +1189,7 @@ fn files_with_status(result: &DeferredRunResult, status: FileStatus) -> Vec<Path
 
 fn failure_rendered_messages(summary: &Path, detail: &str) -> RenderedMessages {
     RenderedMessages {
+        builtin: BuiltinAudiences::ALL,
         buckets: RenderedBuckets::default(),
         user: Some(format!(
             "Deferred formatter/linter reporting failed. Details: {}",
@@ -1018,15 +1202,58 @@ fn failure_rendered_messages(summary: &Path, detail: &str) -> RenderedMessages {
     }
 }
 
-fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) -> BTreeSet<String> {
-    view.events()
-        .iter()
-        .filter_map(|record| match record.event() {
-            FileActivityEvent::Gap(gap) => Some(gap.detail.clone()),
-            FileActivityEvent::Retry(retry) if retry.target.is_none() => Some(retry.reason.clone()),
-            FileActivityEvent::Evidence(_) | FileActivityEvent::Retry(_) => None,
-        })
-        .collect()
+/// Gap messages in one sealed window, by where they came from.
+struct SourceGaps {
+    /// Gaps from tool-call observation (or retained gap retries). Each comes
+    /// from one observation and is discharged with the window.
+    observed: BTreeSet<String>,
+    /// Gaps from filesystem-mtime or Git-dirty reconciliation. They describe
+    /// persistent conditions that every later reconciliation observes again.
+    reconciliation: BTreeSet<String>,
+}
+
+fn source_gap_messages(view: &EntityView<'_, PendingFileActivity>) -> SourceGaps {
+    let mut gaps = SourceGaps {
+        observed: BTreeSet::new(),
+        reconciliation: BTreeSet::new(),
+    };
+    for record in view.events() {
+        match record.event() {
+            FileActivityEvent::Gap(gap) if is_reconciliation_source(gap.source) => {
+                gaps.reconciliation.insert(gap.detail.clone());
+            }
+            FileActivityEvent::Gap(gap) => {
+                gaps.observed.insert(gap.detail.clone());
+            }
+            FileActivityEvent::Retry(retry) if retry.target.is_none() => {
+                gaps.observed.insert(retry.reason.clone());
+            }
+            FileActivityEvent::Evidence(_) | FileActivityEvent::Retry(_) => {}
+        }
+    }
+    gaps
+}
+
+fn is_reconciliation_source(source: FileActivitySource) -> bool {
+    matches!(
+        source,
+        FileActivitySource::FilesystemMtime | FileActivitySource::VcsDirty
+    )
+}
+
+/// The message of a reconciliation gap already reported in this session.
+fn reported_reconciliation_gap<'a>(
+    event: &'a FileActivityEvent,
+    reported: &BTreeSet<String>,
+) -> Option<&'a str> {
+    match event {
+        FileActivityEvent::Gap(gap)
+            if is_reconciliation_source(gap.source) && reported.contains(&gap.detail) =>
+        {
+            Some(&gap.detail)
+        }
+        _ => None,
+    }
 }
 
 fn record_activity_resolution(result: &mut DeferredRunResult, resolution: &ActivityResolution) {
@@ -1076,6 +1303,11 @@ fn record_activity_resolution(result: &mut DeferredRunResult, resolution: &Activ
 /// are retried; files of unavailable tools are not (an environment problem
 /// cannot be fixed by the agent), gaps and unresolvable targets are reported
 /// once, and only never-attempted targets are re-queued.
+///
+/// Every deliberately discharged file gets a handled baseline, so the
+/// mtime and Git-dirty fallbacks do not rediscover it while its content is
+/// unchanged: clean, auto-fixed, and deleted files, files no configured tool
+/// covers, and files whose only tool is unavailable.
 fn plan_deferred_state_disposition(
     result: &DeferredRunResult,
     resolution: &ActivityResolution,
@@ -1104,6 +1336,12 @@ fn plan_deferred_state_disposition(
     for path in &resolution.not_applicable_files {
         handled_files.insert(utf8_activity_path(path)?);
     }
+    // Uncovered files include the files of unavailable tools: the missing
+    // tool was reported, and rediscovering unchanged files would repeat the
+    // same notice at every Stop.
+    for path in &result.uncovered_files {
+        handled_files.insert(utf8_activity_path(path)?);
+    }
     handled_files.retain(|path| !retry_files.contains(path));
 
     let mut retry_targets = resolution.skipped_targets.clone();
@@ -1119,6 +1357,8 @@ fn plan_deferred_state_disposition(
         retry_files,
         retry_targets,
         reported_gaps,
+        new_reconciliation_gaps: resolution.new_reconciliation_gaps.clone(),
+        previously_reported_gaps: resolution.previously_reported_gaps.clone(),
         handled_files,
     })
 }
@@ -1253,7 +1493,7 @@ fn commit_deferred_config_failure(
     bundle: RunBundle,
     guard: &StopGuardStore,
     failure: ConfigFailure<'_>,
-) -> hookkit_core::Result<EntityOutcome<TurnCompletionOutput>> {
+) -> hookkit_core::Result<EntityOutcome<StopResult>> {
     let mut result = DeferredRunResult::default();
     record_configuration_failure(
         &bundle,
@@ -1273,17 +1513,18 @@ fn commit_deferred_config_failure(
         .flatten();
     let decision = StopDecision::decide(
         fingerprint,
-        guard.previous_fingerprint().map_err(state_error)?,
+        guard.previous().map_err(state_error)?.as_ref(),
         run.continuation,
     );
     let rendered_messages = with_repeat_note(rendered_messages, &decision);
-    let lowering = plan_stop_lowering(
+    let lowering = plan_stop_lowering_with(
         run.ctx.harness(),
         decision.blocked,
         rendered_messages.user.as_deref(),
         rendered_messages.agent.as_deref(),
         &fallback_block_reason(&summary_path),
         failure.lowering_policy,
+        rendered_messages.builtin,
     )?;
     let summary = build_batch_summary(BatchSummaryParts {
         run: &bundle,
@@ -1340,6 +1581,8 @@ mod tests {
             unresolved_targets: vec![unresolved],
             skipped_targets: vec![skipped.clone()],
             gap_messages: BTreeSet::from(["dynamic shell target".into()]),
+            new_reconciliation_gaps: BTreeSet::new(),
+            previously_reported_gaps: BTreeSet::new(),
             truncated: true,
         };
         record_activity_resolution(&mut result, &resolution);
@@ -1380,18 +1623,106 @@ mod tests {
             affected_files: vec![PathBuf::from("/repo/a.ts")],
             message: "Prettier: `prettier` is unavailable".into(),
         });
+        // The candidate the missing tool would have checked is uncovered.
+        result.record_uncovered("/repo/a.ts");
         let resolution = ActivityResolution {
             not_applicable_files: BTreeSet::new(),
             unresolved_targets: Vec::new(),
             skipped_targets: Vec::new(),
             gap_messages: BTreeSet::new(),
+            new_reconciliation_gaps: BTreeSet::new(),
+            previously_reported_gaps: BTreeSet::new(),
             truncated: false,
         };
         let disposition = plan_deferred_state_disposition(&result, &resolution).unwrap();
         assert!(disposition.retry_files.is_empty());
+        assert_eq!(
+            disposition.handled_files,
+            BTreeSet::from([utf8_activity_path(Path::new("/repo/a.ts")).unwrap()]),
+            "a discharged file gets a baseline so fallbacks do not rediscover it"
+        );
         assert!(
             blocking_fingerprint(&result, pkl::CoverageGapPolicy::Strict).is_none(),
             "a missing tool must not block Stop"
+        );
+        assert_eq!(run_status(&result), "incomplete");
+    }
+
+    #[test]
+    fn summary_status_never_calls_unchecked_work_clean() {
+        let mut result = DeferredRunResult::default();
+        result.record_file(FileAssessment::new("/repo/a.rs", FileStatus::Clean));
+        assert_eq!(run_status(&result), "clean");
+        result.record_coverage_gap(CoverageGap {
+            id: "gap".into(),
+            target: None,
+            message: "dynamic shell target".into(),
+            retained: false,
+        });
+        assert_eq!(run_status(&result), "incomplete");
+
+        let mut uncovered = DeferredRunResult::default();
+        uncovered.record_uncovered("/repo/README.unknown");
+        assert_eq!(run_status(&uncovered), "not-applicable");
+    }
+
+    #[test]
+    fn environment_failures_are_the_ones_the_agent_cannot_fix() {
+        let io = || std::io::Error::other("boom");
+        for error in [
+            PklConfigError::PklNotFound,
+            PklConfigError::PklExec(io()),
+            PklConfigError::PklTimedOut {
+                timeout: Duration::from_secs(1),
+            },
+            PklConfigError::ReadIo {
+                path: PathBuf::from("hooks.pkl"),
+                source: io(),
+            },
+            PklConfigError::TempIo {
+                path: PathBuf::from("/tmp/stage"),
+                source: io(),
+            },
+        ] {
+            assert!(is_environment_failure(&error), "{error}");
+        }
+        let evaluation = PklConfigError::PklEvalFailed {
+            path: PathBuf::from("hooks.pkl"),
+            stderr: "type mismatch".into(),
+        };
+        assert!(!is_environment_failure(&evaluation));
+    }
+
+    #[test]
+    fn only_abnormal_antigravity_terminations_skip_the_run() {
+        let stop = |reason: &str, error: &str| {
+            TurnCompletionInput::Antigravity(
+                serde_json::from_value(serde_json::json!({
+                    "conversationId": "c1",
+                    "workspacePaths": ["/repo"],
+                    "transcriptPath": "/tmp/t.jsonl",
+                    "artifactDirectoryPath": "/tmp/a",
+                    "executionNum": 1,
+                    "terminationReason": reason,
+                    "error": error,
+                    "fullyIdle": true
+                }))
+                .unwrap(),
+            )
+        };
+        assert_eq!(abnormal_termination(&stop("model_stop", "")), None);
+        assert_eq!(abnormal_termination(&stop("agent-finished", "")), None);
+        assert_eq!(
+            abnormal_termination(&stop("max_steps_exceeded", "")).as_deref(),
+            Some("max_steps_exceeded")
+        );
+        assert_eq!(
+            abnormal_termination(&stop("error", "")).as_deref(),
+            Some("error")
+        );
+        assert_eq!(
+            abnormal_termination(&stop("model_stop", "quota exhausted")).as_deref(),
+            Some("error: quota exhausted")
         );
     }
 

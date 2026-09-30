@@ -572,6 +572,9 @@ fn jq_builtin_parses_without_exit_status_mode() {
         ],
     );
     assert_exit_codes(&verify.exit_codes, &[0], &[2, 5], &[]);
+    // jq parses all of its file arguments as one concatenated stream, so a
+    // batch would validate files together instead of independently.
+    assert_eq!(verify.invocation, InvocationGranularity::PerFile);
 
     let valid = temp_file("valid.json", "{\"name\": \"hookkit\"}\n");
     let null = temp_file("null.json", "null\n");
@@ -585,7 +588,42 @@ fn jq_builtin_parses_without_exit_status_mode() {
     assert_eq!(classify(&verify.exit_codes, null_code), "clean");
     let invalid_code = run_verify_phase(&jq, &invalid).unwrap();
     assert_eq!(classify(&verify.exit_codes, invalid_code), "issues");
-    for path in [valid, null, invalid] {
+
+    // Two files that are only valid (or only invalid) when concatenated: a
+    // split object passes a batched `jq empty`, and two scalar documents
+    // without trailing newlines fail it. Each file is judged on its own.
+    let head = temp_file("head.json", "{\"a\":");
+    let tail = temp_file("tail.json", "1}");
+    let first_scalar = temp_file("first.json", "true");
+    let second_scalar = temp_file("second.json", "true");
+    let batched = std::process::Command::new(&jq.executable)
+        .args(["empty"])
+        .arg(&head)
+        .arg(&tail)
+        .output()
+        .unwrap();
+    assert_eq!(
+        classify(&verify.exit_codes, batched.status.code().unwrap()),
+        "clean",
+        "a batch of the two halves hides both parse errors"
+    );
+    for half in [&head, &tail] {
+        let code = run_verify_phase(&jq, half).unwrap();
+        assert_eq!(classify(&verify.exit_codes, code), "issues", "{half:?}");
+    }
+    for scalar in [&first_scalar, &second_scalar] {
+        let code = run_verify_phase(&jq, scalar).unwrap();
+        assert_eq!(classify(&verify.exit_codes, code), "clean", "{scalar:?}");
+    }
+    for path in [
+        valid,
+        null,
+        invalid,
+        head,
+        tail,
+        first_scalar,
+        second_scalar,
+    ] {
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 }

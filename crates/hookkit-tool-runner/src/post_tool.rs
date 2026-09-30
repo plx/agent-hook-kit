@@ -8,14 +8,22 @@
 //! `hookSpecificOutput.additionalContext`, and a `harness-block` decision to
 //! the structured `decision: "block"` response so all three audiences survive
 //! together. Full tool output stays in diagnostics artifacts.
+//!
+//! A failure of the run itself (a `hard-failure` missing tool, or a
+//! configuration that cannot be loaded) is lowered the same way on those two
+//! harnesses: neither delivers a failed PostToolUse hook's stderr to the agent
+//! (Claude shows the user only its first line; Codex drops it and records only
+//! the exit code), so an exit-1 error would lose the failure text and the
+//! feedback of the tools that already ran.
 
 use crate::convert::{convert_tool_spec, resolve_run_order};
 use crate::exec::{
     CommandError, ExecutionSettings, FILE_ARGUMENT_BUDGET_BYTES, FileMatcher, PhaseStatus,
-    ToolContext, ToolJob, build_jobs, format_logs, render_command, resolve_worker_count,
-    run_phase_command, split_jobs_for_argument_budget,
+    RenderedCommand, RunBudget, ToolContext, ToolJob, build_jobs, format_logs, render_command,
+    resolve_worker_count, run_phase_command, split_jobs_for_argument_budget,
 };
 use crate::snapshot::{Snapshot, snapshot_scope};
+use crate::spec::ToolPhase;
 use crate::util::{
     absolute_from, invalid_data, normalize_path, rel_display, slash_path, truncate_chars,
     unsupported_harness,
@@ -34,7 +42,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Claude Code truncates a hook's `systemMessage` at 10,000 characters. The
 /// runner truncates first (for Codex too) so the pointer to the full
@@ -56,10 +64,13 @@ fn discover_modified_files(input: &PostToolUseInput, context: &RuntimeContext<'_
 }
 
 /// Settings shared by every job, derived from the resolved Pkl settings.
-pub(crate) fn execution_settings(settings: &pkl::Settings) -> ExecutionSettings {
+/// `started` is when the hook began, from which the run budget is counted.
+pub(crate) fn execution_settings(settings: &pkl::Settings, started: Instant) -> ExecutionSettings {
     ExecutionSettings {
         command_timeout: (settings.command_timeout_seconds > 0)
             .then(|| Duration::from_secs(settings.command_timeout_seconds)),
+        run_budget: (settings.run_timeout_seconds > 0)
+            .then(|| RunBudget::new(started, Duration::from_secs(settings.run_timeout_seconds))),
         ignored_directory_names: settings
             .file_activity
             .clone()
@@ -73,10 +84,11 @@ pub(crate) fn execution_settings(settings: &pkl::Settings) -> ExecutionSettings 
 /// Run an exact aligned input through the Pkl-driven runner.
 pub(crate) fn run_post_tool_input(
     post_tool: PostToolUseInput,
-    _environment: &PostToolUseCommandEnvironment,
+    environment: &PostToolUseCommandEnvironment,
     ctx: &RuntimeContext<'_>,
     config_path: Option<&Path>,
 ) -> hookkit_core::Result<PostToolUseOutput> {
+    let started = Instant::now();
     let harness = ctx.harness();
     let lowering_warning_artifact = lowering_warning_artifact(&post_tool, ctx);
 
@@ -94,16 +106,30 @@ pub(crate) fn run_post_tool_input(
         );
     }
 
-    let cwd = ctx
-        .workspace_roots()
-        .first()
-        .map(|root| PathBuf::from(root.as_str()))
-        .ok_or_else(|| invalid_data("post-tool-use input has no workspace root".into()))?;
-    let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path)?;
+    let start = discovery_start(environment, ctx, &modified);
+    let config_path = config_path.map(|path| {
+        crate::anchored_path(
+            path,
+            crate::post_tool_project_root(environment, ctx).as_deref(),
+        )
+    });
+    let loaded = match hookkit_pkl_config::discover_and_load(&start, config_path.as_deref()) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            return lower_domain_outcome(
+                harness,
+                RunnerDomainOutcome::OperationalFailure {
+                    message: format!("post-tool-use configuration could not be loaded: {error}"),
+                    output: RunnerPostToolUseOutput::default(),
+                },
+                lowering_warning_artifact.as_ref(),
+            );
+        }
+    };
 
     let project_root = normalize_path(&loaded.project_root);
     let settings = &loaded.config.settings;
-    let execution = execution_settings(settings);
+    let execution = execution_settings(settings, started);
 
     let mut output = RunnerPostToolUseOutput::new(settings.lowering_policy);
     let mut hard_failure: Option<String> = None;
@@ -172,6 +198,54 @@ pub(crate) fn run_post_tool_input(
     lower_domain_outcome(harness, outcome, lowering_warning_artifact.as_ref())
 }
 
+/// Directory from which configuration discovery starts, which also becomes
+/// the project root when no project configuration is found.
+///
+/// On Claude Code this is the session's working root (`CLAUDE_PROJECT_DIR`,
+/// or the linked Git worktree the session entered), exactly as for the Stop
+/// runner, never the `cwd` that follows `cd`. Elsewhere it is the input's
+/// first workspace root. An Antigravity conversation without a workspace
+/// starts from the deepest directory containing every modified file, so
+/// discovery still finds that project's configuration.
+fn discovery_start(
+    environment: &PostToolUseCommandEnvironment,
+    ctx: &RuntimeContext<'_>,
+    modified: &[PathBuf],
+) -> PathBuf {
+    if let PostToolUseCommandEnvironment::Claude(environment) = environment {
+        let cwd = ctx
+            .workspace_roots()
+            .first()
+            .map(|root| PathBuf::from(root.as_str()));
+        return crate::roots::claude_working_root(
+            Path::new(environment.project_dir.as_str()),
+            cwd.as_deref(),
+        );
+    }
+    if let Some(root) = ctx.workspace_roots().first() {
+        return PathBuf::from(root.as_str());
+    }
+    common_parent(modified)
+}
+
+/// Deepest directory containing every path; `modified` is never empty.
+fn common_parent(paths: &[PathBuf]) -> PathBuf {
+    let mut common = paths
+        .first()
+        .and_then(|path| path.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    for path in paths.iter().skip(1) {
+        while !path.starts_with(&common) {
+            match common.parent() {
+                Some(parent) => common = parent.to_path_buf(),
+                None => break,
+            }
+        }
+    }
+    common
+}
+
 /// Accumulated common output produced by the post-tool runner.
 #[derive(Debug, Default)]
 pub(crate) struct RunnerPostToolUseOutput {
@@ -207,6 +281,13 @@ impl RunnerPostToolUseOutput {
 
     fn with_harness_block(mut self, message: impl Into<String>) -> Self {
         self.harness_block = Some(message.into());
+        self
+    }
+
+    /// Put `notice` before every accumulated notice, so a run failure leads
+    /// the user message and survives truncation.
+    fn with_leading_notice(mut self, notice: UserNotice) -> Self {
+        self.notices.insert(0, notice);
         self
     }
 
@@ -282,7 +363,11 @@ pub(crate) enum RunnerDomainOutcome {
         /// Additional notices, feedback, and diagnostics to lower.
         output: RunnerPostToolUseOutput,
     },
-    /// Runner execution failed independently of tool-reported issues.
+    /// Runner execution failed independently of tool-reported issues: a
+    /// `hard-failure` missing tool or an unloadable configuration. Claude Code
+    /// and Codex report it through the exit-0 response (an error notice ahead
+    /// of the accumulated notices and feedback); Antigravity, which has no
+    /// channel, fails the hook.
     OperationalFailure {
         /// Human-readable failure diagnostic.
         message: String,
@@ -481,12 +566,21 @@ pub(crate) fn lower_domain_outcome(
             lowering_warning_artifact,
         ),
         RunnerDomainOutcome::OperationalFailure { message, output } => {
-            let accumulated = output.describe();
-            Err(invalid_data(if accumulated.is_empty() {
-                message
-            } else {
-                format!("{message}\nearlier tool results:\n{accumulated}")
-            }))
+            match BuiltinHarness::from_id(harness) {
+                Some(BuiltinHarness::ClaudeCode | BuiltinHarness::Codex) => lower_report(
+                    harness,
+                    output.with_leading_notice(UserNotice::error(message)),
+                    lowering_warning_artifact,
+                ),
+                _ => {
+                    let accumulated = output.describe();
+                    Err(invalid_data(if accumulated.is_empty() {
+                        message
+                    } else {
+                        format!("{message}\nearlier tool results:\n{accumulated}")
+                    }))
+                }
+            }
         }
     }
 }
@@ -712,57 +806,53 @@ pub(crate) fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcom
             continue;
         }
 
-        let command = render_command(phase, job, context);
-        let log = run_phase_command(
-            phase,
-            &command,
-            &job.workspace_dir,
-            context.settings.command_timeout,
-        );
+        for command in phase_commands(phase, job, context) {
+            let log = run_phase_command(phase, &command, &job.workspace_dir, context.settings);
 
-        if let Some(error) = &log.error {
-            if *error == CommandError::NotFound {
-                return ToolRunOutcome::ToolUnavailable {
-                    phase: phase.id.clone(),
-                    executable: command.program,
-                    install_hint: context.spec.install_hint.clone(),
-                    changed_files: changed_files_since(&before, job, context),
-                };
-            }
-            logs.push(log);
-            return ToolRunOutcome::ToolFailed {
-                phase: phase.id.clone(),
-                exit_code: None,
-                diagnostics: format_logs(&logs),
-                changed_files: changed_files_since(&before, job, context),
-            };
-        }
-
-        match log.classification {
-            Some(PhaseStatus::Clean) => {
-                if phase.is_verifier() && verify_state != Some(IssueState::Issues) {
-                    // Don't downgrade a prior verifier's Issues verdict.
-                    verify_state = Some(IssueState::Clean);
+            if let Some(error) = &log.error {
+                if *error == CommandError::NotFound {
+                    return ToolRunOutcome::ToolUnavailable {
+                        phase: phase.id.clone(),
+                        executable: command.program,
+                        install_hint: context.spec.install_hint.clone(),
+                        changed_files: changed_files_since(&before, job, context),
+                    };
                 }
-            }
-            Some(PhaseStatus::Issues) => {
-                saw_issues = true;
-                if phase.is_verifier() {
-                    verify_state = Some(IssueState::Issues);
-                }
-            }
-            Some(PhaseStatus::Failure) | None => {
                 logs.push(log);
                 return ToolRunOutcome::ToolFailed {
                     phase: phase.id.clone(),
-                    exit_code: logs.last().and_then(|log| log.status),
+                    exit_code: None,
                     diagnostics: format_logs(&logs),
                     changed_files: changed_files_since(&before, job, context),
                 };
             }
-        }
 
-        logs.push(log);
+            match log.classification {
+                Some(PhaseStatus::Clean) => {
+                    if phase.is_verifier() && verify_state != Some(IssueState::Issues) {
+                        // Don't downgrade a prior verifier's Issues verdict.
+                        verify_state = Some(IssueState::Clean);
+                    }
+                }
+                Some(PhaseStatus::Issues) => {
+                    saw_issues = true;
+                    if phase.is_verifier() {
+                        verify_state = Some(IssueState::Issues);
+                    }
+                }
+                Some(PhaseStatus::Failure) | None => {
+                    logs.push(log);
+                    return ToolRunOutcome::ToolFailed {
+                        phase: phase.id.clone(),
+                        exit_code: logs.last().and_then(|log| log.status),
+                        diagnostics: format_logs(&logs),
+                        changed_files: changed_files_since(&before, job, context),
+                    };
+                }
+            }
+
+            logs.push(log);
+        }
     }
 
     let changed_files = changed_files_since(&before, job, context);
@@ -785,6 +875,29 @@ pub(crate) fn run_job(job: &ToolJob, context: &ToolContext<'_>) -> ToolRunOutcom
         diagnostics: format_logs(&logs),
         files: job.files.clone(),
     })
+}
+
+/// The commands one phase runs for `job`: one for the whole file batch, or
+/// one per file for a `per-file` phase.
+fn phase_commands(
+    phase: &ToolPhase,
+    job: &ToolJob,
+    context: &ToolContext<'_>,
+) -> Vec<RenderedCommand> {
+    if !phase.per_file || job.files.len() <= 1 {
+        return vec![render_command(phase, job, context)];
+    }
+    job.files
+        .iter()
+        .map(|file| {
+            let single = ToolJob {
+                workspace_dir: job.workspace_dir.clone(),
+                workspace_indicator: job.workspace_indicator.clone(),
+                files: vec![file.clone()],
+            };
+            render_command(phase, &single, context)
+        })
+        .collect()
 }
 
 fn changed_files_since(
@@ -1205,6 +1318,15 @@ mod tests {
             .with_agent_feedback("ruff reports issues; inspect /repo/.agent-hook-kit/ruff.txt.")
     }
 
+    fn operational_failure() -> RunnerDomainOutcome {
+        RunnerDomainOutcome::OperationalFailure {
+            message: "tool unavailable with missingToolPolicy=hard-failure: eslint".into(),
+            output: RunnerPostToolUseOutput::new(pkl::LoweringPolicy::Strict)
+                .with_user_notice(UserNotice::info("prettier: changed a.ts"))
+                .with_agent_feedback("prettier changed a.ts; re-read changed files"),
+        }
+    }
+
     #[test]
     fn domain_outcomes_keep_clean_and_failure_distinct() {
         assert!(matches!(
@@ -1212,18 +1334,12 @@ mod tests {
                 .unwrap(),
             PostToolUseOutput::Claude(_)
         ));
-        let failure = lower_domain_outcome(
-            &HarnessId::CLAUDE_CODE,
-            RunnerDomainOutcome::OperationalFailure {
-                message: "checker crashed".into(),
-                output: RunnerPostToolUseOutput::default()
-                    .with_agent_feedback("prettier changed a.ts; re-read changed files"),
-            },
-            None,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(failure.contains("checker crashed"), "{failure}");
+        // Antigravity has no channel for the failure: the hook fails, and the
+        // error text keeps what earlier tools reported.
+        let failure = lower_domain_outcome(&HarnessId::ANTIGRAVITY, operational_failure(), None)
+            .unwrap_err()
+            .to_string();
+        assert!(failure.contains("hard-failure: eslint"), "{failure}");
         assert!(
             failure.contains("prettier changed a.ts"),
             "earlier tools' feedback is kept on the failure path: {failure}"
@@ -1233,6 +1349,33 @@ mod tests {
                 .unwrap(),
             PostToolUseOutput::Antigravity(_)
         ));
+    }
+
+    /// Neither harness delivers a failed PostToolUse hook's stderr to the
+    /// agent, and Codex drops it entirely, so the failure and the feedback of
+    /// tools that already ran travel in the exit-0 response.
+    #[test]
+    fn claude_and_codex_report_run_failures_through_the_native_response() {
+        for (stdout, stderr, exit) in [
+            claude_stdout(
+                lower_domain_outcome(&HarnessId::CLAUDE_CODE, operational_failure(), None).unwrap(),
+            ),
+            codex_stdout(
+                lower_domain_outcome(&HarnessId::CODEX, operational_failure(), None).unwrap(),
+            ),
+        ] {
+            assert_eq!(exit, 0);
+            assert!(stderr.is_empty());
+            assert!(stdout.get("decision").is_none(), "{stdout}");
+            assert_eq!(
+                stdout["systemMessage"],
+                "error: tool unavailable with missingToolPolicy=hard-failure: eslint\nprettier: changed a.ts"
+            );
+            assert_eq!(
+                stdout["hookSpecificOutput"]["additionalContext"],
+                "prettier changed a.ts; re-read changed files"
+            );
+        }
     }
 
     #[test]
@@ -1691,6 +1834,56 @@ mod tests {
         assert!(completed.diagnostics.contains("fake checker clean"));
 
         std::fs::remove_dir_all(&root).expect("remove smoke directory");
+    }
+
+    /// A per-file phase (jq reads its file arguments as one concatenated
+    /// stream) runs once for each file, and one bad file is still reported.
+    #[cfg(unix)]
+    #[test]
+    fn per_file_phases_run_once_for_each_file() {
+        let root = std::env::temp_dir().join(format!("hookkit-per-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create per-file directory");
+        let trace = root.join("trace");
+        let fake = fake_executable(
+            &root,
+            "one-at-a-time",
+            &format!(
+                "#!/bin/sh\necho \"$#\" >> '{}'\nif grep -q BAD \"$@\"; then exit 1; fi\nexit 0\n",
+                trace.display()
+            ),
+        );
+        std::fs::write(root.join("good.json"), "{}\n").unwrap();
+        std::fs::write(root.join("bad.json"), "BAD\n").unwrap();
+        let mut phase =
+            ToolPhase::new("verify", PhaseMode::Verify).with_args([CommandArgTemplate::Files]);
+        phase.exit_codes.issues = vec![1];
+        phase.per_file = true;
+        let spec =
+            ToolSpec::new("json", "JSON", fake.to_string_lossy().into_owned()).with_phase(phase);
+        let settings = ExecutionSettings::default();
+        let context = ToolContext {
+            spec: &spec,
+            project_root: &root,
+            global_diagnostics_dir: None,
+            settings: &settings,
+        };
+        let job = ToolJob {
+            workspace_dir: root.clone(),
+            workspace_indicator: None,
+            files: vec![root.join("bad.json"), root.join("good.json")],
+        };
+
+        let ToolRunOutcome::Completed(completed) = run_job(&job, &context) else {
+            panic!("expected a completed per-file run");
+        };
+        assert_eq!(completed.issues, IssueState::Issues);
+        assert_eq!(
+            std::fs::read_to_string(&trace).unwrap(),
+            "1\n1\n",
+            "one invocation per file"
+        );
+        std::fs::remove_dir_all(&root).expect("remove per-file directory");
     }
 
     #[cfg(unix)]

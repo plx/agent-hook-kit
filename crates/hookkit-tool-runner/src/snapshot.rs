@@ -6,6 +6,15 @@
 //! earlier digest for files whose metadata is unchanged and hashes only files
 //! whose metadata moved; comparison is by content, so a tool that rewrites a
 //! file with identical bytes is not reported as having changed it.
+//!
+//! Metadata identity only proves a file unchanged when a later write would
+//! have produced a different timestamp. On filesystems with coarse clocks
+//! (FAT's two seconds; one second on HFS+, ext3, and many network mounts) a
+//! same-length rewrite in the same tick as the earlier hash leaves every stamp
+//! field equal, so a digest is reused only for files whose timestamps lie
+//! more than [`COARSE_TIMESTAMP_WINDOW`] before it was computed. In practice
+//! that re-hashes just the files written moments before the capture, such as
+//! the agent's own edit.
 
 use crate::exec::{FileMatcher, ToolContext, ToolJob};
 use crate::spec::{FileSelection, WriteBehavior};
@@ -13,7 +22,28 @@ use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
+
+/// Coarsest timestamp granularity the digest reuse tolerates: FAT records
+/// modification times in two-second steps.
+const COARSE_TIMESTAMP_WINDOW: Duration = Duration::from_secs(2);
+
+/// Directory names every snapshot walk prunes in addition to
+/// `fileActivity.ignoredDirectoryNames`: version-control metadata, the hook's
+/// own configuration and diagnostics, and the dependency and build output
+/// directories the runner has always skipped. That list tunes Stop
+/// reconciliation and replaces its defaults when set, so without this floor a
+/// layer listing only `dist` would make every workspace-scoped snapshot hash
+/// `.git` and `node_modules`.
+const ALWAYS_PRUNED_DIRECTORY_NAMES: &[&str] = &[
+    ".agent-hook-kit",
+    ".git",
+    ".hg",
+    ".jj",
+    ".svn",
+    "node_modules",
+    "target",
+];
 
 /// Metadata identity used to decide whether a file must be re-hashed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,10 +71,46 @@ impl MetadataStamp {
     }
 }
 
+impl MetadataStamp {
+    /// Whether every timestamp lies more than [`COARSE_TIMESTAMP_WINDOW`]
+    /// before `instant`, so any write after `instant` must change the stamp
+    /// even on a filesystem with coarse timestamps.
+    fn settled_before(&self, instant: SystemTime) -> bool {
+        let Some(limit) = instant.checked_sub(COARSE_TIMESTAMP_WINDOW) else {
+            return false;
+        };
+        let modified = self.modified.is_some_and(|modified| modified < limit);
+        #[cfg(unix)]
+        let changed = unix_time(self.changed).is_none_or(|changed| changed < limit);
+        #[cfg(not(unix))]
+        let changed = true;
+        modified && changed
+    }
+}
+
+/// A `(seconds, nanoseconds)` Unix timestamp; `None` before the epoch.
+#[cfg(unix)]
+fn unix_time((seconds, nanoseconds): (i64, i64)) -> Option<SystemTime> {
+    let seconds = u64::try_from(seconds).ok()?;
+    let nanoseconds = u32::try_from(nanoseconds).unwrap_or(0).min(999_999_999);
+    SystemTime::UNIX_EPOCH.checked_add(Duration::new(seconds, nanoseconds))
+}
+
 #[derive(Debug, Clone)]
 struct FileStamp {
     metadata: MetadataStamp,
     digest: [u8; 32],
+    /// When hashing started; the digest is reused only for files whose
+    /// timestamps had settled by then.
+    hashed_at: SystemTime,
+}
+
+impl FileStamp {
+    /// Whether this digest still describes a file whose metadata is now
+    /// `current`.
+    fn reusable_for(&self, current: &MetadataStamp) -> bool {
+        self.metadata == *current && current.settled_before(self.hashed_at)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -105,11 +171,16 @@ fn stamp(path: &Path, previous: Option<&FileStamp>) -> Option<FileStamp> {
         return None;
     }
     let metadata = MetadataStamp::of(&metadata);
-    if let Some(previous) = previous.filter(|previous| previous.metadata == metadata) {
+    if let Some(previous) = previous.filter(|previous| previous.reusable_for(&metadata)) {
         return Some(previous.clone());
     }
+    let hashed_at = SystemTime::now();
     let digest = digest_file(path)?;
-    Some(FileStamp { metadata, digest })
+    Some(FileStamp {
+        metadata,
+        digest,
+        hashed_at,
+    })
 }
 
 fn digest_file(path: &Path) -> Option<[u8; 32]> {
@@ -201,14 +272,18 @@ pub(crate) fn collect_workspace_files(
 }
 
 /// Regular files below `base`, pruning configured ignored directory names
-/// (`fileActivity.ignoredDirectoryNames`) below the walk root.
+/// (`fileActivity.ignoredDirectoryNames`) and [`ALWAYS_PRUNED_DIRECTORY_NAMES`]
+/// below the walk root.
 fn walk_files(base: &Path, ignored_directory_names: &BTreeSet<String>) -> Vec<PathBuf> {
     walkdir::WalkDir::new(base)
         .into_iter()
         .filter_entry(|entry| {
-            entry.depth() == 0
-                || !entry.file_type().is_dir()
-                || !ignored_directory_names.contains(entry.file_name().to_string_lossy().as_ref())
+            if entry.depth() == 0 || !entry.file_type().is_dir() {
+                return true;
+            }
+            let name = entry.file_name().to_string_lossy();
+            !ignored_directory_names.contains(name.as_ref())
+                && !ALWAYS_PRUNED_DIRECTORY_NAMES.contains(&name.as_ref())
         })
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
@@ -263,6 +338,90 @@ mod tests {
             before.changed_files(&after),
             vec![changed, created, deleted]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// On a filesystem with one- or two-second timestamps, a same-length
+    /// rewrite in the same tick as the earlier hash leaves every stamp field
+    /// equal; only a digest taken after the timestamps settled is reusable.
+    #[test]
+    fn digests_are_reused_only_for_settled_timestamps() {
+        let now = SystemTime::now();
+        let metadata = |age: Duration| MetadataStamp {
+            len: 5,
+            modified: Some(now - age),
+            #[cfg(unix)]
+            changed: {
+                let since_epoch = (now - age).duration_since(SystemTime::UNIX_EPOCH).unwrap();
+                (
+                    i64::try_from(since_epoch.as_secs()).unwrap(),
+                    i64::from(since_epoch.subsec_nanos()),
+                )
+            },
+            #[cfg(unix)]
+            inode: (1, 2),
+        };
+        let stamp = |age: Duration| FileStamp {
+            metadata: metadata(age),
+            digest: [0; 32],
+            hashed_at: now,
+        };
+
+        // Written moments before the hash: a rewrite in the same coarse tick
+        // could keep the stamp, so the file is hashed again.
+        let fresh = stamp(Duration::from_millis(500));
+        assert!(!fresh.reusable_for(&metadata(Duration::from_millis(500))));
+        // Settled long before the hash: any later write moves a timestamp.
+        let settled = stamp(Duration::from_secs(10));
+        assert!(settled.reusable_for(&metadata(Duration::from_secs(10))));
+        // Metadata that moved is never reused.
+        assert!(!settled.reusable_for(&metadata(Duration::from_secs(9))));
+        // A timestamp from a clock ahead of ours is never trusted.
+        let future = FileStamp {
+            metadata: MetadataStamp {
+                modified: Some(now + Duration::from_secs(60)),
+                ..metadata(Duration::from_secs(10))
+            },
+            ..stamp(Duration::from_secs(10))
+        };
+        assert!(!future.reusable_for(&future.metadata.clone()));
+    }
+
+    #[test]
+    fn freshly_written_files_are_rehashed_even_with_unchanged_metadata() {
+        let root = temp_root("fresh");
+        let file = root.join("a.txt");
+        std::fs::write(&file, "aaaa\n").unwrap();
+        let scope = BTreeSet::from([file.clone()]);
+        let before = Snapshot::capture(&scope);
+        // Forge the coarse-clock case: the stamp is identical but the recorded
+        // digest no longer matches the bytes on disk.
+        let mut forged = Snapshot::default();
+        let mut stamp = before.files[&file].clone().unwrap();
+        stamp.digest = [7; 32];
+        forged.files.insert(file.clone(), Some(stamp));
+        let after = forged.recapture(&scope);
+        assert_eq!(forged.changed_files(&after), vec![file]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn walks_always_prune_metadata_and_dependency_directories() {
+        let root = temp_root("always-prune");
+        for relative in [
+            "src/a.rs",
+            ".git/objects/ab",
+            "node_modules/pkg/index.js",
+            "target/debug/out",
+            "nested/.agent-hook-kit/log.txt",
+        ] {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        }
+        // A customized list (here only `dist`) keeps the fixed floor.
+        let ignored = BTreeSet::from(["dist".to_owned()]);
+        assert_eq!(walk_files(&root, &ignored), vec![root.join("src/a.rs")]);
         std::fs::remove_dir_all(root).unwrap();
     }
 

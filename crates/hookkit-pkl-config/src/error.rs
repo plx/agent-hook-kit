@@ -22,6 +22,16 @@ pub enum PklConfigError {
     /// The `pkl` process could not be spawned or waited on.
     PklExec(#[source] std::io::Error),
 
+    #[error(
+        "pkl eval did not finish within {} seconds and was stopped (a configuration import may be waiting on the network)",
+        timeout.as_secs()
+    )]
+    /// `pkl eval` exceeded [`crate::eval::PKL_EVAL_TIMEOUT`] and was killed.
+    PklTimedOut {
+        /// The deadline that was exceeded.
+        timeout: std::time::Duration,
+    },
+
     #[error("pkl eval failed for {path}:\n{stderr}", path = path.display())]
     /// Pkl evaluated the source unsuccessfully.
     PklEvalFailed {

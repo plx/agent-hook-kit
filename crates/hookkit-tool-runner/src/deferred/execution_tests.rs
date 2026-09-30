@@ -175,6 +175,7 @@ fn command(
         writes,
         extra_args: Vec::new(),
         enabled: true,
+        per_file: false,
     }
 }
 
@@ -330,6 +331,7 @@ fn shell_comparator_uses_configured_tool_and_preserves_source_during_check() {
         writes: WriteBehavior::None,
         extra_args: Vec::new(),
         enabled: true,
+        per_file: false,
     };
     let remedy = ToolPhase {
         id: "format.remedy".into(),
@@ -345,6 +347,7 @@ fn shell_comparator_uses_configured_tool_and_preserves_source_during_check() {
         writes: WriteBehavior::TargetFiles,
         extra_args: Vec::new(),
         enabled: true,
+        per_file: false,
     };
     let plan = [ScheduledWorkflow {
         tool_index: 0,

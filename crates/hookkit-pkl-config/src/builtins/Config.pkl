@@ -26,7 +26,10 @@ class Settings {
   /// `**/.git/**` and `**/node_modules/**` when set.
   exclude: Listing<String>?
 
-  /// How to handle optional common-output intents the harness cannot represent.
+  /// How to handle configured messages the harness cannot represent: fail the
+  /// hook (`strict`), drop them (`best-effort`), or drop them with a warning
+  /// where one can be delivered (`best-effort-with-warnings`, the default).
+  /// Built-in default Stop text without a channel is always dropped silently.
   loweringPolicy: ("strict" | "best-effort" | "best-effort-with-warnings")?
 
   /// Directory for the immediate runner's full diagnostic artifacts. Relative
@@ -35,17 +38,32 @@ class Settings {
   /// to session state instead and never treats this directory as a candidate.
   diagnosticsDirectory: String?
 
-  /// What to do when a configured tool executable is missing. At Stop,
-  /// `user-notice` reports the tool to the user without blocking or
-  /// re-queueing its files; the other policies block completion.
+  /// What to do when a configured tool executable is missing. After a tool
+  /// call, `user-notice` warns and runs the remaining tools, `hard-failure`
+  /// stops the run and reports an error (through `systemMessage` on Claude
+  /// Code and Codex, as a hook error on Antigravity), and `harness-block`
+  /// blocks with the notice as the reason. At Stop, `user-notice` reports the
+  /// tool to the user without blocking or re-queueing its files; the other
+  /// policies block completion. Default: "user-notice".
   missingToolPolicy: ("user-notice" | "hard-failure" | "harness-block")?
 
   /// Deadline in seconds for each external tool command; 0 disables it.
   /// A command that runs longer is killed together with its process group
-  /// and reported as an operational failure. Default: 300, below the
-  /// 600-second default hook timeout of Claude Code and Codex. Set it below
-  /// the hook timeout you configure (Antigravity defaults to 30 seconds).
+  /// and reported as an operational failure. It bounds one command only:
+  /// phases, jobs, and tools run one after another, each with its own
+  /// deadline, and runTimeoutSeconds bounds their sum. Tools never outlive
+  /// the hook: if the harness kills the hook first, their process groups are
+  /// killed too. Default: 300.
   commandTimeoutSeconds: UInt?
+
+  /// Budget in seconds for all external tool commands of one hook invocation
+  /// together; 0 disables it. Each command gets the smaller of
+  /// commandTimeoutSeconds and the budget left, and a command that would
+  /// start after the budget is spent is reported as an operational failure
+  /// instead of running. Default: 540, below the 600-second default hook
+  /// timeout of Claude Code and Codex. Set it below the hook timeout you
+  /// configure (Antigravity defaults to 30 seconds).
+  runTimeoutSeconds: UInt?
 
   /// Optional stop-time file-activity fallback overrides. Omit to use the
   /// runtime defaults represented by FileActivity.
@@ -70,12 +88,27 @@ class FileGroup {
 /// A patch over the built-in deferred reporting contract. Empty strings
 /// intentionally suppress that audience. Set merge.resetDeferredReporting to
 /// restore all defaults before applying this patch.
+///
+/// Every bucket pair renders against the whole run: `counts`, `files`,
+/// `clean_files`, `auto_fixed_files`, `manual_fix_files`, `groups`,
+/// `operational_problems`, `coverage_gaps`, `unavailable_tools`, `artifacts`,
+/// and `run` (`id`, `summary_path`, ...). The master templates also receive
+/// `rendered_buckets` and `rendered_bucket_lists` (`user` and `agent`: the
+/// non-empty bucket texts in bucket order). Built-in default text that a
+/// harness cannot deliver at a Stop (for example agent text on an allowed
+/// Stop) is omitted without a warning or a strict failure; configured text
+/// follows `settings.loweringPolicy`.
 class DeferredReporting {
   groups: Listing<FileGroup>?
   clean: TemplatePair?
   autoFixed: TemplatePair?
   manualFixesNeeded: TemplatePair?
   operationalError: TemplatePair?
+  /// Rendered when a configured tool's executable is missing under
+  /// `missingToolPolicy = "user-notice"`; `unavailable_tools` lists each
+  /// tool's `message`, `toolId`, `toolName`, `executable`, `installHint`, and
+  /// `affectedFiles`.
+  unavailableTool: TemplatePair?
   masterUser: String?
   masterAgent: String?
   renderEmptyBuckets: Boolean?
@@ -104,13 +137,17 @@ class FileActivity {
   /// Default: 100000.
   maxEntries: UInt?
 
-  /// Gaps are reported once, in the Stop that first observes them. Best
-  /// effort reports them without blocking; strict also blocks that Stop.
-  /// Default: "best-effort".
+  /// Gaps are reported once, in the Stop that first observes them; a gap that
+  /// reconciliation observes again at every Stop (an unreadable directory, a
+  /// scan that hit maxEntries, a root that is not a Git repository) is
+  /// reported once per session. Best effort reports gaps without blocking;
+  /// strict also blocks that Stop. Default: "best-effort".
   coverageGapPolicy: ("best-effort" | "strict")?
 
   /// Directory basenames pruned from reconciliation, target resolution, and
-  /// snapshot walks. Replaces the whole default list when set:
+  /// snapshot walks. Snapshot walks always also prune ".agent-hook-kit",
+  /// ".git", ".hg", ".jj", ".svn", "node_modules", and "target". Replaces the
+  /// whole default list when set:
   /// ".agent-hook-kit", ".context", ".direnv", ".git", ".gradle", ".hg",
   /// ".mypy_cache", ".next", ".nox", ".nuxt", ".parcel-cache", ".pytest_cache",
   /// ".ruff_cache", ".svelte-kit", ".svn", ".terraform", ".tox", ".turbo",
@@ -182,6 +219,12 @@ class Phase {
   writes: "none" | "target-files" | "matching-globs" | "workspace" = "none"
   enabled: Boolean = true
   extraArgs: Listing<String> = new Listing<String> {}
+  /// `batch` passes every selected file of a job to one invocation;
+  /// `per-file` runs the phase once for each file, for tools that read
+  /// several file arguments as one input stream (jq parses its files as one
+  /// concatenated JSON stream). The Stop-time compatibility translation of a
+  /// tool with any per-file phase also invokes it per file.
+  invocation: "batch" | "per-file" = "batch"
 }
 
 /// One command in a deferred check/remedy workflow.

@@ -1745,21 +1745,12 @@ fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
             let summary = only_summary(&state_dir);
             if harness == "antigravity" {
                 // Antigravity injects Stop `reason` only with "continue", so an
-                // allowed stop has no channel at all: the omission warnings
-                // are recorded in the summary only.
+                // allowed stop has no channel at all. The default user text is
+                // built-in, so dropping it is expected and warns nobody.
                 assert_eq!(response, serde_json::json!({"decision": "stop"}));
                 let lowering = &summary["renderedMessages"]["lowering"];
-                assert_eq!(lowering["warningsDelivered"], false);
-                assert!(
-                    lowering["warnings"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|warning| warning
-                            .as_str()
-                            .unwrap()
-                            .contains("omitted user deferred Stop message"))
-                );
+                assert_eq!(lowering["user"]["status"], "omitted-builtin");
+                assert!(lowering["warnings"].as_array().unwrap().is_empty());
             } else {
                 assert!(response.get("decision").is_none());
                 // Claude's Stop `additionalContext` continues the turn, so an
@@ -1777,9 +1768,16 @@ fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
                 }
                 if expected_auto == 1 {
                     assert!(user.contains("Auto-fixed 1 file"));
+                    // The default "re-read changed files" agent text is
+                    // built-in: it has no channel on an allowed stop and is
+                    // dropped without an omission warning.
                     assert!(
-                        user.contains("omitted agent deferred Stop message"),
+                        !user.contains("hookkit: omitted"),
                         "{harness}/{case}: {user:?}"
+                    );
+                    assert_eq!(
+                        summary["renderedMessages"]["lowering"]["agent"]["status"],
+                        "omitted-builtin"
                     );
                 }
             }
@@ -1887,12 +1885,16 @@ fn turn_completion_blocked_manual_and_operational_matrix_is_native() {
 fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
     require_pkl!();
 
+    // Lowering policies govern configured text; built-in default text without
+    // a channel is always omitted silently.
+    let configured_agent = r#"    autoFixed = new TemplatePair { agent = "Auto-fixed {{ counts.auto_fixed }}; re-read changed files." }"#;
     let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
         "codex",
         "turn-completion-strict-unrepresentable",
         &[("src/dirty.py", "import os  # unused_import\n")],
     );
     add_runner_setting(&project, r#"loweringPolicy = "strict""#);
+    add_deferred_reporting_config(&project, configured_agent);
     let strict = run_deferred_case("codex", &project, &state_arg);
     assert!(!strict.status.success());
     assert!(
@@ -1905,7 +1907,16 @@ fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
         "unrepresentable"
     );
     assert!(summary["renderedMessages"]["lowering"]["strictError"].is_string());
-    assert!(session_journal_len(&state_dir, "codex", "codex-ruff-test") >= 1);
+    // The allowed stop ends the turn despite the failure, so its results are
+    // recorded instead of re-running (and failing) at every later Stop.
+    assert_eq!(
+        summary["stateDisposition"]["source"],
+        "acknowledge-sealed-window"
+    );
+    assert_eq!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
+        0
+    );
 
     let (project, state_dir, state_arg) = prepare_deferred_ruff_case(
         "codex",
@@ -1913,6 +1924,7 @@ fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
         &[("src/dirty.py", "import os  # unused_import\n")],
     );
     add_runner_setting(&project, r#"loweringPolicy = "best-effort""#);
+    add_deferred_reporting_config(&project, configured_agent);
     let best_effort = run_deferred_case("codex", &project, &state_arg);
     assert!(best_effort.status.success());
     let response: serde_json::Value = serde_json::from_slice(&best_effort.stdout).unwrap();
@@ -2012,12 +2024,10 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     let user = system_message(&response);
     assert!(user.contains("Auto-fixed 1 file: src/dirty.py"), "{user:?}");
     // An allowed Claude stop has no agent channel: `additionalContext` would
-    // continue the turn. The omission is reported to the user instead.
+    // continue the turn. The default agent text is built-in, so it is dropped
+    // without an omission warning.
     assert!(response.get("hookSpecificOutput").is_none(), "{response}");
-    assert!(
-        user.contains("omitted agent deferred Stop message"),
-        "{user:?}"
-    );
+    assert!(!user.contains("hookkit: omitted"), "{user:?}");
     let rewritten = std::fs::read_to_string(file).unwrap();
     assert!(rewritten.contains("formatted"));
     assert!(!rewritten.contains("unused_import"));
@@ -3791,7 +3801,7 @@ fn post_tool_use_codex_emits_posttool_agent_context() {
 }
 
 #[test]
-fn post_tool_use_hard_failure_policy_fails_the_hook() {
+fn post_tool_use_hard_failure_policy_reports_an_error() {
     require_pkl!();
     let project = temp_project("ruff-hard-failure");
     let config_dir = project.join(".agent-hook-kit");
@@ -3819,15 +3829,39 @@ run = new Listing { "ruff" }
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("dirty.py"), "print('needs_format')\n").unwrap();
 
+    // Neither Claude Code nor Codex delivers a failed PostToolUse hook's
+    // stderr to the agent (Claude shows the user its first line; Codex drops
+    // it), so the error leads an exit-0 `systemMessage` there.
+    for harness in ["claude", "codex"] {
+        let output = run_example(
+            "post-tool-use-agent-hook",
+            &post_tool_use_fixture(harness, &project, "src/dirty.py"),
+            &[&format!("--{harness}")],
+        );
+        assert!(
+            output.status.success(),
+            "{harness}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty(), "{harness}");
+        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(stdout.get("decision").is_none(), "{harness}: {stdout}");
+        assert!(
+            system_message(&stdout)
+                .starts_with("error: tool unavailable with missingToolPolicy=hard-failure"),
+            "{harness}: {stdout}"
+        );
+    }
+
+    // Antigravity has no channel for it, so the hook fails.
     let output = run_example(
         "post-tool-use-agent-hook",
-        &post_tool_use_fixture("claude", &project, "src/dirty.py"),
-        &["--claude"],
+        &post_tool_use_fixture("antigravity", &project, "src/dirty.py"),
+        &["--antigravity"],
     );
-
     assert!(
         !output.status.success(),
-        "hard-failure should fail the hook"
+        "hard-failure should fail the Antigravity hook"
     );
     assert!(output.stdout.is_empty(), "stdout must stay protocol-safe");
     // The runtime's out-of-band diagnostics sink stays disabled (no separate

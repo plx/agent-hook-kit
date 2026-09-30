@@ -9,7 +9,10 @@
 //! - an allowed Claude Stop never emits `hookSpecificOutput.additionalContext`
 //!   (which would continue the conversation);
 //! - an unchanged repeat does not block again inside one continuation loop;
-//! - coverage gaps and missing tools do not re-block every later Stop.
+//! - coverage gaps and missing tools do not re-block every later Stop, even
+//!   when reconciliation observes the same condition again at every Stop;
+//! - a Claude session inside a linked worktree never checks files of the
+//!   main checkout's other worktrees.
 //!
 //! The tests require `pkl` on `PATH` and skip otherwise.
 
@@ -249,12 +252,18 @@ run = new Listing {{ "check" }}
     }
 
     fn run(&self, binary: &str, input: &Value) -> std::process::Output {
+        self.run_in(binary, input, &self.root)
+    }
+
+    /// Run a hook binary from `cwd`; on Claude, `CLAUDE_PROJECT_DIR` stays
+    /// at the project root.
+    fn run_in(&self, binary: &str, input: &Value, cwd: &Path) -> std::process::Output {
         let mut command = Command::new(binary);
         command
             .arg(format!("--{}", self.harness))
             .arg("--state-dir")
             .arg(&self.state)
-            .current_dir(&self.root)
+            .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -666,6 +675,13 @@ run = new Listing {{ "fix" }}
     assert!(!is_blocked("claude", &stop), "{stop}");
     let message = stop["systemMessage"].as_str().unwrap();
     assert!(message.contains("Auto-fixed 1 file"), "{message}");
+    // The built-in "re-read changed files" agent text has no channel on an
+    // allowed Stop; dropping it is expected, not worth a warning.
+    assert!(!message.contains("omitted agent"), "{message}");
+    assert_eq!(
+        project.latest_summary()["renderedMessages"]["lowering"]["agent"]["status"],
+        "omitted-builtin"
+    );
     assert_eq!(
         std::fs::read_to_string(project.root.join("a.txt")).unwrap(),
         "CLEAN\n"
@@ -713,4 +729,326 @@ fn large_candidate_sets_are_chunked_below_the_argument_limit() {
     let invocations = project.checker_invocations();
     assert!(invocations.len() > 1, "{invocations:?}");
     assert_eq!(invocations.iter().sum::<usize>(), files.len());
+}
+
+fn git_available() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Restores a directory's permissions when dropped, so cleanup can remove it.
+struct Unreadable(PathBuf);
+
+impl Unreadable {
+    fn new(path: PathBuf) -> Self {
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for Unreadable {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// Reconciliation observes a persistent condition (here a directory the
+/// mtime walker cannot read, such as a Docker volume) again at every Stop.
+/// It is reported once per session: later Stops neither re-report nor
+/// re-block it, and do not write a run bundle for it.
+#[test]
+fn persistent_reconciliation_gaps_are_reported_once_per_session() {
+    require_pkl!();
+    for harness in HARNESSES {
+        let mut project = Project::new("persistent-gap", harness);
+        // The mtime scan would otherwise find the checker's own trace file.
+        project.trace = project.root.join(".agent-hook-kit/trace.log");
+        project.configure(
+            &project.checker(),
+            r#"  fileActivity { coverageGapPolicy = "strict" }"#,
+        );
+        let unreadable = Unreadable::new(project.root.join("pgdata"));
+        if std::fs::read_dir(&unreadable.0).is_ok() {
+            eprintln!("skipping test: mode 000 directories are readable (running as root?)");
+            return;
+        }
+        project.write("a.txt", "CLEAN\n");
+        project.observe(&project.post_tool_write("a.txt"));
+
+        let first = project.stop_hook(false);
+        assert!(
+            is_blocked(harness, &first),
+            "{harness}: strict blocks the Stop that first reports the gap: {first}"
+        );
+        let summary = project.latest_summary();
+        let gaps = summary["result"]["coverageGaps"].to_string();
+        assert!(gaps.contains("pgdata"), "{harness}: {gaps}");
+        assert_eq!(summary["status"], "incomplete", "{harness}: {summary}");
+
+        for stop_hook_active in [true, false, false] {
+            let later = project.stop_hook(stop_hook_active);
+            assert!(
+                !is_blocked(harness, &later),
+                "{harness}: a reported persistent gap must not block again: {later}"
+            );
+            if harness != "antigravity" {
+                assert!(
+                    !later
+                        .get("systemMessage")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .contains("coverage is incomplete"),
+                    "{harness}: the gap is not re-reported: {later}"
+                );
+            }
+        }
+        assert_eq!(
+            project.summaries().len(),
+            1,
+            "{harness}: later Stops found nothing new to run"
+        );
+        assert_eq!(project.checker_invocations(), vec![1], "{harness}");
+    }
+}
+
+/// Git-dirty reconciliation re-adds every dirty path without a matching
+/// handled baseline, so files deliberately discharged unchecked (those of a
+/// missing tool, and those no tool covers) need baselines too.
+#[test]
+fn git_dirty_reconciliation_does_not_rediscover_files_of_a_missing_tool() {
+    require_pkl!();
+    if !git_available() {
+        assert!(!pkl_required(), "CI must provide git for this test");
+        eprintln!("skipping test: git not on PATH");
+        return;
+    }
+    for harness in HARNESSES {
+        let project = Project::new("git-dirty-missing", harness);
+        project.configure(
+            &project.root.join("bin/definitely-missing"),
+            r#"  fileActivity { filesystemMtime = false; vcs = "git-dirty" }"#,
+        );
+        let init = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project.root)
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "{init:?}");
+        project.write("a.txt", "MANUAL\n");
+        project.write("notes.unknown", "no tool covers this\n");
+        project.observe(&project.post_tool_write("a.txt"));
+
+        let first = project.stop_hook(false);
+        assert!(!is_blocked(harness, &first), "{harness}: {first}");
+        let summary = project.latest_summary();
+        assert_eq!(summary["counts"]["unavailableTools"], 1, "{harness}");
+        assert_eq!(summary["status"], "incomplete", "{harness}: {summary}");
+        let baselines = summary["stateDisposition"]["handledBaselineFiles"].to_string();
+        assert!(
+            baselines.contains("a.txt") && baselines.contains("notes.unknown"),
+            "{harness}: discharged files get baselines: {baselines}"
+        );
+
+        for stop_hook_active in [false, true] {
+            let later = project.stop_hook(stop_hook_active);
+            assert!(!is_blocked(harness, &later), "{harness}: {later}");
+            if harness != "antigravity" {
+                assert!(
+                    !later
+                        .get("systemMessage")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .contains("definitely-missing"),
+                    "{harness}: the missing tool is not re-reported: {later}"
+                );
+            }
+        }
+        assert_eq!(project.summaries().len(), 1, "{harness}");
+
+        // A later edit is still checked (and reported) again.
+        project.write("a.txt", "MANUAL again\n");
+        let edited = project.stop_hook(false);
+        assert!(!is_blocked(harness, &edited), "{harness}: {edited}");
+        assert_eq!(project.summaries().len(), 2, "{harness}");
+    }
+}
+
+/// Lay out a linked Git worktree at `worktree` of the main checkout at
+/// `main`, the way `git worktree add` records it.
+fn add_linked_worktree(main: &Path, name: &str, worktree: &Path) {
+    let admin = main.join(".git/worktrees").join(name);
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(worktree).unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", worktree.join(".git").display()),
+    )
+    .unwrap();
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+}
+
+/// Claude keeps `CLAUDE_PROJECT_DIR` at the main checkout after a session
+/// enters a worktree under `.claude/worktrees/`, while `cwd` follows it. The
+/// Stop runner works in the session's worktree: another session's edits in a
+/// sibling worktree, or in the main checkout, are never checked or rewritten
+/// on this session's behalf.
+#[test]
+fn claude_worktree_sessions_check_only_their_own_worktree() {
+    require_pkl!();
+    let project = Project::new("worktree", "claude");
+    std::fs::create_dir_all(project.root.join(".git")).unwrap();
+    let mine = project.root.join(".claude/worktrees/mine");
+    let other = project.root.join(".claude/worktrees/other");
+    add_linked_worktree(&project.root, "mine", &mine);
+    add_linked_worktree(&project.root, "other", &other);
+    // Each checkout has its own copy of the configuration.
+    project.configure(&project.checker(), "");
+    std::fs::create_dir_all(mine.join(".agent-hook-kit")).unwrap();
+    std::fs::copy(
+        project.root.join(".agent-hook-kit/post-tool-use.pkl"),
+        mine.join(".agent-hook-kit/post-tool-use.pkl"),
+    )
+    .unwrap();
+
+    let write = json!({
+        "session_id": project.session(),
+        "transcript_path": "/tmp/e2e-transcript.jsonl",
+        "cwd": mine.to_string_lossy(),
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": mine.join("a.txt").to_string_lossy(), "content": "x"},
+        "tool_use_id": "write-mine",
+        "tool_response": {"filePath": mine.join("a.txt").to_string_lossy()}
+    });
+    project.write(".claude/worktrees/mine/a.txt", "CLEAN\n");
+    let observed = project.run_in(
+        env!("CARGO_BIN_EXE_file-activity-agent-hook"),
+        &write,
+        &mine,
+    );
+    assert!(
+        observed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&observed.stderr)
+    );
+    // Other work in progress during this session.
+    project.write(".claude/worktrees/other/b.txt", "MANUAL\n");
+    project.write("main.txt", "MANUAL\n");
+
+    let stop = json!({
+        "session_id": project.session(),
+        "transcript_path": "/tmp/e2e-transcript.jsonl",
+        "cwd": mine.to_string_lossy(),
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "done"
+    });
+    let output = project.run_in(
+        env!("CARGO_BIN_EXE_turn-completion-agent-hook"),
+        &stop,
+        &mine,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        !is_blocked("claude", &stdout),
+        "another session's files must not block this one: {stdout}"
+    );
+    let summary = project.latest_summary();
+    let candidates = summary["candidateFiles"].to_string();
+    assert!(candidates.contains("mine/a.txt"), "{candidates}");
+    assert!(
+        !candidates.contains("b.txt") && !candidates.contains("main.txt"),
+        "{candidates}"
+    );
+    assert_eq!(
+        summary["run"]["projectRoot"].as_str().unwrap(),
+        mine.to_string_lossy()
+    );
+}
+
+/// With `loweringPolicy = "strict"`, configured agent text on an allowed
+/// Stop fails the hook, but the Stop still ends the turn, so its results are
+/// recorded and not re-run at every later Stop. A blocked Stop whose block
+/// could not be lowered keeps its work pending instead.
+#[test]
+fn strict_lowering_failures_keep_only_undelivered_blocks_pending() {
+    require_pkl!();
+    let allowed = Project::new("strict-allowed", "claude");
+    allowed.configure(
+        &allowed.checker(),
+        r#"  loweringPolicy = "strict"
+  fileActivity { filesystemMtime = false }
+  deferredReporting = new DeferredReporting {
+    clean = new TemplatePair { agent = "{{ counts.clean }} clean file(s)" }
+  }"#,
+    );
+    allowed.write("a.txt", "CLEAN\n");
+    allowed.observe(&allowed.post_tool_write("a.txt"));
+    let failed = allowed.run(
+        env!("CARGO_BIN_EXE_turn-completion-agent-hook"),
+        &allowed.stop(false),
+    );
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("strict deferred Stop lowering"),
+        "{}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
+    let summary = allowed.latest_summary();
+    assert_eq!(
+        summary["stateDisposition"]["source"],
+        "acknowledge-sealed-window"
+    );
+    let later = allowed.stop_hook(false);
+    assert!(!is_blocked("claude", &later), "{later}");
+    assert_eq!(allowed.summaries().len(), 1, "nothing was left pending");
+    assert_eq!(allowed.checker_invocations(), vec![1]);
+
+    // Antigravity has no user channel even when blocked: configured user text
+    // cannot be lowered, so the undelivered block stays pending.
+    let blocked = Project::new("strict-blocked", "antigravity");
+    blocked.configure(
+        &blocked.checker(),
+        r#"  loweringPolicy = "strict"
+  fileActivity { filesystemMtime = false }
+  deferredReporting = new DeferredReporting {
+    manualFixesNeeded = new TemplatePair { user = "fix {{ counts.manual_fixes_needed }}" }
+  }"#,
+    );
+    blocked.write("a.txt", "MANUAL\n");
+    blocked.observe(&blocked.post_tool_write("a.txt"));
+    let failed = blocked.run(
+        env!("CARGO_BIN_EXE_turn-completion-agent-hook"),
+        &blocked.stop(false),
+    );
+    assert_eq!(failed.status.code(), Some(1));
+    assert_eq!(
+        blocked.latest_summary()["stateDisposition"]["source"],
+        "retain-sealed-window"
+    );
+    let retried = blocked.run(
+        env!("CARGO_BIN_EXE_turn-completion-agent-hook"),
+        &blocked.stop(false),
+    );
+    assert_eq!(retried.status.code(), Some(1));
+    assert_eq!(
+        blocked.checker_invocations(),
+        vec![1, 1],
+        "the window was kept"
+    );
 }

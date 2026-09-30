@@ -12,7 +12,9 @@
 //!
 //! - `cli` parses the four bundled binaries' arguments;
 //! - `convert` resolves the Pkl schema into crate-private `spec` types;
-//! - `exec` partitions files into jobs and runs bounded subprocesses;
+//! - `exec` partitions files into jobs and runs bounded subprocesses whose
+//!   process groups cannot outlive the hook;
+//! - `roots` selects the working root (including Claude Code worktrees);
 //! - `snapshot` attributes writes to one command by content digest;
 //! - `post_tool` is the immediate PostToolUse runner and its native lowering;
 //! - `turn_completion`, `stop_guard`, and `deferred` implement the Stop runner.
@@ -22,6 +24,7 @@ mod convert;
 mod deferred;
 mod exec;
 mod post_tool;
+mod roots;
 mod snapshot;
 mod spec;
 mod stop_guard;
@@ -245,20 +248,25 @@ fn post_tool_project_root(
 
 /// Resolve a `--state-dir` value into a state root.
 ///
-/// Relative paths are anchored at the harness project root rather than the
-/// hook process's current directory: Claude Code runs hooks in the agent's
-/// current directory, which follows `cd` in its Bash tool, so a cwd-relative
-/// state directory would split one session's state across directories. Without
-/// an anchor the path is left to the process's current directory. `None`
-/// selects the default temporary state root.
+/// Relative paths are anchored at the harness project root (see
+/// [`anchored_path`]). `None` selects the default temporary state root.
 pub(crate) fn resolve_state_root(state_dir: Option<&Path>, anchor: Option<&Path>) -> StateRoot {
     match state_dir {
         None => StateRoot::default(),
-        Some(path) if path.is_absolute() => StateRoot::new(path),
-        Some(path) => match anchor.filter(|anchor| anchor.is_absolute()) {
-            Some(anchor) => StateRoot::new(anchor.join(path)),
-            None => StateRoot::new(path),
-        },
+        Some(path) => StateRoot::new(anchored_path(path, anchor)),
+    }
+}
+
+/// Resolve a relative `--state-dir` or `--config` path against the harness
+/// project root rather than the hook process's current directory: Claude Code
+/// runs hooks in the agent's current directory, which follows `cd` in its
+/// Bash tool, so a cwd-relative path would name a different file after the
+/// agent changes directory. Absolute paths are kept, and without an absolute
+/// anchor the path is left to the process's current directory.
+pub(crate) fn anchored_path(path: &Path, anchor: Option<&Path>) -> PathBuf {
+    match anchor.filter(|anchor| anchor.is_absolute() && !path.is_absolute()) {
+        Some(anchor) => anchor.join(path),
+        None => path.to_path_buf(),
     }
 }
 
@@ -292,6 +300,27 @@ mod tests {
         assert_eq!(
             resolve_state_root(None, Some(project)).path(),
             StateRoot::default().path()
+        );
+    }
+
+    #[test]
+    fn relative_config_paths_resolve_against_the_project_root_not_the_cwd() {
+        let project = Path::new("/work/project");
+        assert_eq!(
+            anchored_path(Path::new("hooks.pkl"), Some(project)),
+            Path::new("/work/project/hooks.pkl")
+        );
+        assert_eq!(
+            anchored_path(Path::new("/etc/hooks.pkl"), Some(project)),
+            Path::new("/etc/hooks.pkl")
+        );
+        assert_eq!(
+            anchored_path(Path::new("hooks.pkl"), Some(Path::new("relative"))),
+            Path::new("hooks.pkl")
+        );
+        assert_eq!(
+            anchored_path(Path::new("hooks.pkl"), None),
+            Path::new("hooks.pkl")
         );
     }
 }

@@ -82,6 +82,12 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
         .rev()
         .find(|phase| phase.enabled && phase.is_verifier())
         .cloned();
+    // A tool with any per-file phase cannot be trusted with a file batch.
+    let invocation = if phases.iter().any(|phase| phase.enabled && phase.per_file) {
+        InvocationGranularity::PerFile
+    } else {
+        InvocationGranularity::Batch
+    };
     let mut workflows = phases
         .iter()
         .filter(|phase| phase.enabled && !phase.is_verifier())
@@ -94,7 +100,7 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
             } else {
                 CheckScope::TargetFiles
             },
-            invocation: InvocationGranularity::Batch,
+            invocation,
             compatibility_translation: true,
             enabled: true,
         })
@@ -114,7 +120,7 @@ fn convert_workflows(spec: &pkl::ToolSpec, phases: &[ToolPhase]) -> Vec<ToolWork
                     } else {
                         CheckScope::TargetFiles
                     },
-                    invocation: InvocationGranularity::Batch,
+                    invocation,
                     compatibility_translation: true,
                     enabled: true,
                 }),
@@ -158,6 +164,9 @@ fn convert_workflow_command(
         writes: command.writes,
         extra_args: command.extra_args.clone(),
         enabled: true,
+        // Deferred workflows divide files into jobs by their own
+        // `invocation`, so each command already sees the right files.
+        per_file: false,
     }
 }
 
@@ -213,6 +222,7 @@ fn convert_phase((id, phase): (String, &pkl::Phase)) -> ToolPhase {
         writes: phase.writes,
         extra_args: phase.extra_args.clone(),
         enabled: phase.enabled,
+        per_file: phase.invocation == InvocationGranularity::PerFile,
     }
 }
 
@@ -275,5 +285,30 @@ mod tests {
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
         assert_eq!(order, ["format", "autofix", "organize-imports", "verify"]);
+    }
+
+    #[test]
+    fn per_file_phases_make_the_stop_translation_per_file() {
+        let spec = |invocation| pkl::ToolSpec {
+            phases: BTreeMap::from([(
+                "verify".to_owned(),
+                pkl::Phase {
+                    mode: PhaseMode::Verify,
+                    argv: vec![pkl::ArgvElement::Token(pkl::ArgToken::Files)],
+                    invocation,
+                    ..pkl::Phase::default()
+                },
+            )]),
+            ..pkl::ToolSpec::default()
+        };
+        let per_file = convert_tool_spec(&spec(InvocationGranularity::PerFile), &[]);
+        assert!(per_file.phases[0].per_file);
+        assert_eq!(
+            per_file.workflows[0].invocation,
+            InvocationGranularity::PerFile
+        );
+        let batch = convert_tool_spec(&spec(InvocationGranularity::Batch), &[]);
+        assert!(!batch.phases[0].per_file);
+        assert_eq!(batch.workflows[0].invocation, InvocationGranularity::Batch);
     }
 }
