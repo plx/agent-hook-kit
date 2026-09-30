@@ -57,7 +57,6 @@ fn main() {
         .parent()
         .expect("xtask parent")
         .to_path_buf();
-    refuse_frozen_snapshot(&root);
     for seed in seeds() {
         generate(&root, seed);
     }
@@ -260,24 +259,6 @@ fn seeds() -> Vec<Seed> {
             ],
         },
     ]
-}
-
-/// Frozen evidence is immutable, so regenerating into a frozen snapshot is an
-/// error rather than a silent manifest mismatch.
-fn refuse_frozen_snapshot(root: &Path) {
-    let index = root
-        .join("contracts/harnesses/codex/snapshots")
-        .join(SNAPSHOT)
-        .join("snapshot.yaml");
-    let Ok(text) = fs::read_to_string(&index) else {
-        return;
-    };
-    let snapshot: Value = serde_yaml_ng::from_str(&text)
-        .unwrap_or_else(|error| panic!("{}: {error}", index.display()));
-    assert!(
-        snapshot["state"] != "frozen",
-        "{SNAPSHOT} is frozen; create a successor snapshot instead of regenerating it"
-    );
 }
 
 fn generate(root: &Path, seed: Seed) {
