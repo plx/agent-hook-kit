@@ -52,7 +52,8 @@ pub struct SessionStartCli {
 /// CLI options for the quiet post-tool file-activity observer.
 #[derive(Debug, Clone)]
 pub struct FileActivityCli {
-    /// Harness whose native post-tool event is read from standard input.
+    /// Harness whose native post-tool event (on Claude Code, `PostToolUse` or
+    /// `PostToolUseFailure`) is read from standard input.
     pub harness: HarnessId,
     /// Session-state directory override, resolved like
     /// [`TurnCompletionCli::state_dir`].

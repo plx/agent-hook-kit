@@ -98,11 +98,19 @@ present. Both policies retain the unresolved evidence for a later attempt.
 budgeted), so a directly observed file is never dropped. Scoped resolution then
 stops at `maxEntries`; the scope being walked and every later scope remain
 unresolved targets, plus an explicit coverage gap, rather than silently
-dropping the unwalked tail. A scope whose root no longer exists (for example
+dropping the unwalked tail. `ResolvedFileActivity` names the scope whose walk
+ran out (`exhausted_target`) separately from the scopes never attempted
+(`unattempted_targets`, always the tail of `unresolved_targets`), so a caller
+can retry only the scopes a later attempt can make progress on. A scope whose
+root no longer exists (for example
 after `rm -rf dist`), or lies in an ignored or excluded directory, has nothing
 left to check and resolves as empty instead of being retained forever. Exact
 files inside an excluded root or an ignored directory are reported as not
-applicable rather than processed.
+applicable rather than processed. `DEFAULT_IGNORED_DIRECTORY_NAMES` (VCS
+metadata, `.context`, `.agent-hook-kit`, and common dependency, virtual
+environment, cache, and build-output directories) is the default for both
+option types and matches the Pkl `fileActivity.ignoredDirectoryNames` default
+used by the bundled runners.
 
 Reconciliation may still stat/hash a fallback candidate once to compare its
 current fingerprint with the handled baseline. When the digest matches, it does
@@ -110,8 +118,9 @@ not append pending work or spawn configured tools. Direct observations bypass
 that suppression by design, even when bytes happen to match an old baseline.
 
 The shipped producer is `file-activity-agent-hook` from
-`hookkit-tool-runner`. Bind it to Claude/Codex/Antigravity PostToolUse and give
-it the same `--state-dir` as `turn-completion-agent-hook`
+`hookkit-tool-runner`. Bind it to Claude/Codex/Antigravity PostToolUse (and,
+on Claude Code, also to `PostToolUseFailure`) and give it the same
+`--state-dir` as `turn-completion-agent-hook`
 and, where supported, `session-start-state-agent-hook`. The older
 `session-modified-file-tracker` example is only a compatibility wrapper around
 that library-owned observer.
@@ -121,7 +130,9 @@ files and then exits non-zero) only through `PostToolUseFailure`, which carries
 the same `tool_name` and `tool_input`. Library consumers can observe it with
 `observe_claude_post_tool_failure`, or with `observe_tool_call` for any borrowed
 native input; without that binding such writes are recovered only by the mtime
-fallback.
+fallback. An Antigravity `PostToolUse` payload without `toolCall` (the IDE
+reference shape) and a relative Antigravity path without any workspace root
+are recorded as coverage gaps rather than as "nothing written".
 
 Documented harness built-ins are analyzed from exact argument contracts in
 `hookkit-tool-access`: Claude `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, Codex

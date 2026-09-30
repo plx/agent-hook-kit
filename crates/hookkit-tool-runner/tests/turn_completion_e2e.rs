@@ -416,6 +416,58 @@ fn is_blocked(harness: &str, stdout: &Value) -> bool {
 }
 
 #[test]
+fn claude_post_tool_use_failure_writes_reach_the_stop_runner() {
+    require_pkl!();
+    let project = Project::new("post-tool-failure", "claude");
+    project.configure(
+        &project.checker(),
+        r#"  fileActivity { filesystemMtime = false }"#,
+    );
+    // The command wrote the file before its failing test step exited 1, so
+    // Claude reports it only through PostToolUseFailure.
+    project.write("notes/failing.txt", "MANUAL\n");
+    let failure = json!({
+        "session_id": project.session(),
+        "transcript_path": "/tmp/e2e-transcript.jsonl",
+        "cwd": project.root.to_string_lossy(),
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": {"command": "printf MANUAL > notes/failing.txt && false"},
+        "tool_use_id": "failed-bash",
+        "error": "Exit code 1"
+    });
+    let output = project.run(env!("CARGO_BIN_EXE_file-activity-agent-hook"), &failure);
+    assert!(
+        output.status.success(),
+        "observer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The observer stays quiet: the PostToolUseFailure no-op is an empty object.
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        json!({}),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let stop = project.stop_hook(false);
+    assert!(is_blocked("claude", &stop), "{stop}");
+    assert_eq!(project.checker_invocations(), vec![1]);
+
+    // The observer rejects Claude events that carry no completed tool call.
+    let other = project.run(
+        env!("CARGO_BIN_EXE_file-activity-agent-hook"),
+        &project.stop(false),
+    );
+    assert_eq!(other.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&other.stderr).contains("PostToolUseFailure"),
+        "{}",
+        String::from_utf8_lossy(&other.stderr)
+    );
+}
+
+#[test]
 fn unchanged_manual_issues_block_once_per_continuation_loop() {
     require_pkl!();
     for harness in HARNESSES {

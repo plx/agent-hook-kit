@@ -4103,13 +4103,17 @@ fn parse_github_tree(url: &str) -> Option<GitHubTree<'_>> {
         })
 }
 
-/// Render the upstream inputs of every registry-selected snapshot for
+/// Render the upstream inputs of every registry-selected snapshot, and of the
+/// registry-selected command-environment supplement, for
 /// `scripts/check-upstream-contract-drift.sh`.
 ///
 /// Each row holds tab-separated fields, with `-` for an absent value:
 /// harness, snapshot, source ID, reproducibility, URL, pinned revision,
 /// recorded content SHA-256, Git clone URL, upstream path, and the vendored
-/// directory relative to the workspace root.
+/// directory relative to the workspace root. Supplement rows use
+/// [`SUPPLEMENT_SOURCE_GROUP`] as the harness and the supplement ID as the
+/// snapshot, so documentation pages that only the supplement cites (such as
+/// the Claude Code environment-variable reference) are drift-checked too.
 fn render_upstream_sources(root: &Path) -> Result<String> {
     let catalog = root.join("contracts");
     let registry: Registry = read_yaml(&catalog.join("registry.yaml"))?;
@@ -4123,70 +4127,132 @@ fn render_upstream_sources(root: &Path) -> Result<String> {
         let snapshot: Snapshot = read_yaml(&snapshot_dir.join(SNAPSHOT_METADATA_FILE))?;
         let sources: Sources = read_yaml(&safe_join(&snapshot_dir, &snapshot.sources_file)?)?;
         for source in &sources.sources {
-            let tree = parse_github_tree(&source.url);
-            let mismatch = tree
-                .as_ref()
-                .zip(source.revision.as_deref())
-                .filter(|(tree, revision)| tree.revision != *revision);
-            if let Some((tree, revision)) = mismatch {
-                return Err(format!(
-                    "{}: source {} URL names revision {} but records {revision}",
-                    snapshot_dir.display(),
-                    source.id,
-                    tree.revision
-                ));
-            }
-            let vendored = match (&tree, source.reproducibility.as_deref()) {
-                (Some(tree), Some("vendored")) => {
-                    let leaf = tree.path.rsplit('/').next().unwrap_or(tree.path);
-                    let relative = format!("contracts/vendor/{harness}/{}/{leaf}", tree.revision);
-                    if !safe_join(root, &relative)?
-                        .join("MANIFEST.sha256")
-                        .is_file()
-                    {
-                        return Err(format!(
-                            "{}: vendored source {} has no manifest under {relative}",
-                            snapshot_dir.display(),
-                            source.id
-                        ));
-                    }
-                    Some(relative)
-                }
-                _ => None,
-            };
-            let clone_url = tree.as_ref().map(GitHubTree::clone_url);
-            // Only a Git tree's revision can be fetched. Other sources may
-            // record a free-form revision label, such as a documentation
-            // site's build ETag, which the drift check never uses.
-            let revision = tree.as_ref().and(source.revision.as_deref());
-            let fields = [
+            render_source_row(
+                &mut output,
+                root,
+                &snapshot_dir,
+                [harness.as_str(), selected.current.as_str()],
                 Some(harness.as_str()),
-                Some(selected.current.as_str()),
-                Some(source.id.as_str()),
-                source.reproducibility.as_deref(),
-                Some(source.url.as_str()),
-                revision,
-                source.content_sha256.as_deref(),
-                clone_url.as_deref(),
-                tree.as_ref().map(|tree| tree.path),
-                vendored.as_deref(),
-            ];
-            let mut row = Vec::with_capacity(fields.len());
-            for field in fields {
-                let field = field.unwrap_or("-");
-                if field.is_empty() || field.contains(char::is_whitespace) {
-                    return Err(format!(
-                        "{}: source {} has an empty or whitespace-bearing field {field:?}",
-                        snapshot_dir.display(),
-                        source.id
-                    ));
-                }
-                row.push(field);
-            }
-            writeln!(&mut output, "{}", row.join("\t")).expect("writing to String cannot fail");
+                source,
+            )?;
         }
     }
+
+    let supplement_id = &registry.supplements.command_environments;
+    let supplement_dir = safe_join(
+        &catalog.join("supplements/command-environments"),
+        Path::new(supplement_id),
+    )?;
+    let supplement: CommandEnvironmentSupplement =
+        read_yaml(&supplement_dir.join("supplement.yaml"))?;
+    let sources: Sources = read_yaml(&safe_join(&supplement_dir, &supplement.sources_file)?)?;
+    for source in &sources.sources {
+        // A vendored supplement source is stored under the one harness that
+        // cites it.
+        let mut citing = supplement
+            .harnesses
+            .iter()
+            .filter(|(_, harness)| harness.sources.contains(&source.id))
+            .map(|(harness, _)| harness.as_str());
+        let vendor_harness = match (citing.next(), citing.next()) {
+            (Some(harness), None) => Some(harness),
+            _ => None,
+        };
+        render_source_row(
+            &mut output,
+            root,
+            &supplement_dir,
+            [SUPPLEMENT_SOURCE_GROUP, supplement_id.as_str()],
+            vendor_harness,
+            source,
+        )?;
+    }
     Ok(output)
+}
+
+/// Harness column of the upstream-source rows for the registry-selected
+/// command-environment supplement.
+const SUPPLEMENT_SOURCE_GROUP: &str = "command-environments";
+
+/// Appends one upstream-source row; `identity` is the harness and snapshot
+/// columns, and `vendor_harness` locates a vendored source's evidence.
+fn render_source_row(
+    output: &mut String,
+    root: &Path,
+    directory: &Path,
+    identity: [&str; 2],
+    vendor_harness: Option<&str>,
+    source: &Source,
+) -> Result<()> {
+    let tree = parse_github_tree(&source.url);
+    let mismatch = tree
+        .as_ref()
+        .zip(source.revision.as_deref())
+        .filter(|(tree, revision)| tree.revision != *revision);
+    if let Some((tree, revision)) = mismatch {
+        return Err(format!(
+            "{}: source {} URL names revision {} but records {revision}",
+            directory.display(),
+            source.id,
+            tree.revision
+        ));
+    }
+    let vendored = match (&tree, source.reproducibility.as_deref()) {
+        (Some(tree), Some("vendored")) => {
+            let harness = vendor_harness.ok_or_else(|| {
+                format!(
+                    "{}: vendored source {} is not cited by exactly one harness",
+                    directory.display(),
+                    source.id
+                )
+            })?;
+            let leaf = tree.path.rsplit('/').next().unwrap_or(tree.path);
+            let relative = format!("contracts/vendor/{harness}/{}/{leaf}", tree.revision);
+            if !safe_join(root, &relative)?
+                .join("MANIFEST.sha256")
+                .is_file()
+            {
+                return Err(format!(
+                    "{}: vendored source {} has no manifest under {relative}",
+                    directory.display(),
+                    source.id
+                ));
+            }
+            Some(relative)
+        }
+        _ => None,
+    };
+    let clone_url = tree.as_ref().map(GitHubTree::clone_url);
+    // Only a Git tree's revision can be fetched. Other sources may
+    // record a free-form revision label, such as a documentation
+    // site's build ETag, which the drift check never uses.
+    let revision = tree.as_ref().and(source.revision.as_deref());
+    let fields = [
+        Some(identity[0]),
+        Some(identity[1]),
+        Some(source.id.as_str()),
+        source.reproducibility.as_deref(),
+        Some(source.url.as_str()),
+        revision,
+        source.content_sha256.as_deref(),
+        clone_url.as_deref(),
+        tree.as_ref().map(|tree| tree.path),
+        vendored.as_deref(),
+    ];
+    let mut row = Vec::with_capacity(fields.len());
+    for field in fields {
+        let field = field.unwrap_or("-");
+        if field.is_empty() || field.contains(char::is_whitespace) {
+            return Err(format!(
+                "{}: source {} has an empty or whitespace-bearing field {field:?}",
+                directory.display(),
+                source.id
+            ));
+        }
+        row.push(field);
+    }
+    writeln!(output, "{}", row.join("\t")).expect("writing to String cannot fail");
+    Ok(())
 }
 
 fn read_yaml<T: DeserializeOwned>(path: &Path) -> Result<T> {
@@ -5065,6 +5131,33 @@ mod tests {
                 "{harness} has no selected source row"
             );
         }
+        // Every source of the selected command-environment supplement is
+        // drift-checked, including pages no event snapshot cites.
+        let supplement_id = &registry.supplements.command_environments;
+        let supplement_dir = root
+            .join("contracts/supplements/command-environments")
+            .join(supplement_id);
+        let supplement: CommandEnvironmentSupplement =
+            read_yaml(&supplement_dir.join("supplement.yaml")).expect("supplement parses");
+        let sources: Sources = read_yaml(&supplement_dir.join(&supplement.sources_file))
+            .expect("supplement sources parse");
+        for source in &sources.sources {
+            let row = rows
+                .iter()
+                .find(|row| {
+                    row[0] == SUPPLEMENT_SOURCE_GROUP
+                        && row[1] == supplement_id.as_str()
+                        && row[2] == source.id
+                })
+                .unwrap_or_else(|| panic!("supplement source {} has no row", source.id));
+            assert_eq!(row[4], source.url);
+            assert_eq!(row[6], source.content_sha256.as_deref().unwrap_or("-"));
+        }
+        assert!(
+            rows.iter().any(|row| row[0] == SUPPLEMENT_SOURCE_GROUP
+                && row[4] == "https://code.claude.com/docs/en/env-vars.md"),
+            "the environment-variable reference is drift-checked"
+        );
         let vendored = rows
             .iter()
             .find(|row| row[3] == "vendored")

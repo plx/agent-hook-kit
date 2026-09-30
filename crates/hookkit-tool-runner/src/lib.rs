@@ -42,7 +42,10 @@ pub use deferred::{
 
 use hookkit_common::{PostToolUseCommandEnvironment, PostToolUseOutput};
 use hookkit_core::{HarnessId, RuntimeContext};
-use hookkit_file_activity::{FileActivityStore, observe_post_tool as observe_file_activity};
+use hookkit_file_activity::{
+    ActivityReport, FileActivityStore, observe_claude_post_tool_failure,
+    observe_post_tool as observe_file_activity, observe_tool_call,
+};
 use hookkit_session_state::{SessionState, StateRoot};
 use std::path::{Path, PathBuf};
 use util::{activity_error, invalid_data, sha256_hex, state_error};
@@ -58,30 +61,87 @@ pub fn run_runner(cli: Cli) -> std::process::ExitCode {
 }
 
 /// Run the bundled quiet PostToolUse file-activity observer.
+///
+/// On Claude Code the observer also accepts `PostToolUseFailure`, which
+/// Claude sends instead of `PostToolUse` when a tool call fails: a Bash
+/// command that edits files and then exits non-zero has still written them.
+/// Bind the same command to both Claude events.
 pub fn run_file_activity_observer(cli: FileActivityCli) -> std::process::ExitCode {
+    if cli.harness == HarnessId::CLAUDE_CODE {
+        return run_claude_file_activity_observer(cli.state_dir);
+    }
     hookkit_runtime::aligned::run_aligned_event::<hookkit_runtime::aligned::PostToolUse, _>(
         cli.harness,
         move |input, environment, ctx| {
             let report = observe_file_activity(&input, ctx);
             let anchor = post_tool_project_root(environment, ctx);
-            let state_root = resolve_state_root(cli.state_dir.as_deref(), anchor.as_deref());
-            let store = FileActivityStore::ensure(ctx, state_root).map_err(activity_error)?;
-            store
-                .append_report(&observation_key(ctx), &report)
-                .map_err(activity_error)?;
+            record_file_activity(ctx, cli.state_dir.as_deref(), anchor.as_deref(), &report)?;
             post_tool_no_op(ctx.harness())
         },
     )
 }
 
-/// Compact, repeatable journal key for one PostToolUse observation.
+/// Claude Code arm of [`run_file_activity_observer`]: `PostToolUse` and
+/// `PostToolUseFailure` carry the same originating tool call.
+fn run_claude_file_activity_observer(state_dir: Option<PathBuf>) -> std::process::ExitCode {
+    use hookkit_claude::protocol::{AnyCommandOutput, AnyInput};
+
+    hookkit_runtime::selected::run_harness::<hookkit_claude::protocol::ClaudeCode, _>(
+        None,
+        move |input, environment, ctx| {
+            let (report, output) = match &input {
+                AnyInput::PostToolUse(input) => (
+                    observe_tool_call(input, ctx),
+                    AnyCommandOutput::from(hookkit_claude::protocol::PostToolUseOutput::no_op()),
+                ),
+                AnyInput::Catalog(input) if ctx.event().name() == "PostToolUseFailure" => (
+                    observe_claude_post_tool_failure(input, ctx),
+                    AnyCommandOutput::from(
+                        hookkit_claude::catalog::PostToolUseFailureOutput::no_op(),
+                    ),
+                ),
+                _ => {
+                    return Err(hookkit_core::HookkitError::handler(format!(
+                        "file-activity observer handles Claude Code PostToolUse and PostToolUseFailure, not {}",
+                        ctx.event().name()
+                    )));
+                }
+            };
+            let anchor = PathBuf::from(environment.project_dir.as_str());
+            record_file_activity(ctx, state_dir.as_deref(), Some(&anchor), &report)?;
+            Ok(output)
+        },
+    )
+}
+
+/// Appends one observation to the pending file-activity journal under the
+/// state root that `state_dir` and the project `anchor` select.
+fn record_file_activity(
+    ctx: &RuntimeContext<'_>,
+    state_dir: Option<&Path>,
+    anchor: Option<&Path>,
+    report: &ActivityReport,
+) -> hookkit_core::Result<()> {
+    let state_root = resolve_state_root(state_dir, anchor);
+    let store = FileActivityStore::ensure(ctx, state_root).map_err(activity_error)?;
+    store
+        .append_report(&observation_key(ctx), report)
+        .map_err(activity_error)
+}
+
+/// Compact, repeatable journal key for one post-tool observation.
 ///
 /// The raw hook input can carry whole file contents and command output, and
 /// the pending journal persists keys verbatim in every record, so only the
-/// tool-call id and a digest of the input are used.
+/// event family, the tool-call id, and a digest of the input are used.
 fn observation_key(ctx: &RuntimeContext<'_>) -> String {
+    let family = if ctx.event().name() == "PostToolUseFailure" {
+        "post-tool-use-failure"
+    } else {
+        "post-tool-use"
+    };
     format!(
-        "post-tool-use\0{}\0{}",
+        "{family}\0{}\0{}",
         ctx.tool_call_id()
             .map(ToString::to_string)
             .unwrap_or_default(),
@@ -199,6 +259,14 @@ pub(crate) fn resolve_state_root(state_dir: Option<&Path>, anchor: Option<&Path>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pkl_and_library_defaults_ignore_the_same_directories() {
+        assert_eq!(
+            hookkit_pkl_config::DEFAULT_IGNORED_DIRECTORY_NAMES,
+            hookkit_file_activity::DEFAULT_IGNORED_DIRECTORY_NAMES
+        );
+    }
 
     #[test]
     fn relative_state_dirs_resolve_against_the_project_root_not_the_cwd() {

@@ -98,8 +98,7 @@ pub(crate) fn run_post_tool_input(
         .first()
         .map(|root| PathBuf::from(root.as_str()))
         .ok_or_else(|| invalid_data("post-tool-use input has no workspace root".into()))?;
-    let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path)
-        .map_err(|e| invalid_data(e.to_string()))?;
+    let loaded = hookkit_pkl_config::discover_and_load(&cwd, config_path)?;
 
     let project_root = normalize_path(&loaded.project_root);
     let settings = &loaded.config.settings;
@@ -293,7 +292,8 @@ pub(crate) enum RunnerDomainOutcome {
 
 #[derive(Debug)]
 pub(crate) struct LoweringWarningArtifact {
-    directory: PathBuf,
+    /// The event's artifact directory, or why it cannot be used.
+    directory: Result<PathBuf, String>,
     key: ArtifactKey,
 }
 
@@ -304,7 +304,10 @@ fn lowering_warning_artifact(
     let PostToolUseInput::Antigravity(input) = input else {
         return None;
     };
-    let directory = PathBuf::from(ctx.artifact_directory()?.as_str());
+    let directory = antigravity_artifact_directory(
+        ctx.artifact_directory()?.as_str(),
+        dirs::home_dir().as_deref(),
+    );
     Some(LoweringWarningArtifact {
         directory,
         key: runner_artifact_key(
@@ -312,6 +315,33 @@ fn lowering_warning_artifact(
             format!("post-tool-use-step-{}-lowering-warning", input.step_idx),
         ),
     })
+}
+
+/// Resolve Antigravity's `artifactDirectoryPath` to an absolute directory.
+///
+/// The official payload examples show a literal `~/.gemini/...` path, so a
+/// leading `~` (alone or followed by `/`) is expanded against `home`. Any other
+/// relative path, including `~user/...`, is refused rather than created
+/// relative to the hook's current directory.
+fn antigravity_artifact_directory(raw: &str, home: Option<&Path>) -> Result<PathBuf, String> {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    let rest = if raw == "~" {
+        Some("")
+    } else {
+        raw.strip_prefix("~/")
+    };
+    match (rest, home) {
+        (Some(rest), Some(home)) if home.is_absolute() => {
+            Ok(hookkit_core::normalize_path(home.join(rest)))
+        }
+        (Some(_), _) => Err(format!(
+            "artifactDirectoryPath `{raw}` starts with `~`, but the home directory is unknown"
+        )),
+        (None, _) => Err(format!("artifactDirectoryPath `{raw}` is not absolute")),
+    }
 }
 
 #[derive(Serialize)]
@@ -368,6 +398,11 @@ fn record_antigravity_lowering_warning(
                 .into(),
         )
     })?;
+    let directory = target.directory.as_ref().map_err(|reason| {
+        invalid_data(format!(
+            "cannot record Antigravity PostToolUse lowering loss: {reason}"
+        ))
+    })?;
     let diagnostics = output
         .diagnostics
         .iter()
@@ -409,10 +444,10 @@ fn record_antigravity_lowering_warning(
         },
     };
     let value = serde_json::to_value(record)?;
-    let manager = ArtifactManager::new(&target.directory).map_err(|error| {
+    let manager = ArtifactManager::new(directory).map_err(|error| {
         invalid_data(format!(
             "cannot create Antigravity lowering-warning artifact directory {}: {error}",
-            target.directory.display()
+            directory.display()
         ))
     })?;
     manager
@@ -420,7 +455,7 @@ fn record_antigravity_lowering_warning(
         .map_err(|error| {
             invalid_data(format!(
                 "cannot write Antigravity lowering-warning artifact in {}: {error}",
-                target.directory.display()
+                directory.display()
             ))
         })
 }
@@ -1035,7 +1070,8 @@ fn render_template(
 
 /// Resolve the directory that receives immediate-runner diagnostics:
 /// the tool's own `diagnostics.directory`, else `settings.diagnosticsDirectory`
-/// (both relative to the project root), else `$TMPDIR/hookkit-artifacts`.
+/// (both relative to the project root), else the per-user
+/// [`ArtifactManager::default_temp_dir`].
 pub(crate) fn diagnostics_directory(
     tool_directory: Option<&str>,
     global_directory: Option<&str>,
@@ -1043,7 +1079,25 @@ pub(crate) fn diagnostics_directory(
 ) -> PathBuf {
     match tool_directory.or(global_directory) {
         Some(dir) => absolute_from(Path::new(dir), project_root),
-        None => std::env::temp_dir().join("hookkit-artifacts"),
+        None => ArtifactManager::default_temp_dir(),
+    }
+}
+
+/// The artifact manager for [`diagnostics_directory`]. Without a configured
+/// directory it is [`ArtifactManager::in_temp_dir`], which refuses a shared
+/// temporary directory another user created first.
+fn diagnostics_manager(
+    tool_directory: Option<&str>,
+    global_directory: Option<&str>,
+    project_root: &Path,
+) -> std::io::Result<ArtifactManager> {
+    match tool_directory.or(global_directory) {
+        Some(_) => ArtifactManager::new(diagnostics_directory(
+            tool_directory,
+            global_directory,
+            project_root,
+        )),
+        None => ArtifactManager::in_temp_dir(),
     }
 }
 
@@ -1053,12 +1107,11 @@ fn write_diagnostics(
     context: &ToolContext<'_>,
     ctx: &RuntimeContext<'_>,
 ) -> hookkit_core::Result<PathBuf> {
-    let base_dir = diagnostics_directory(
+    let manager = diagnostics_manager(
         context.spec.diagnostics_directory.as_deref(),
         context.global_diagnostics_dir,
         context.project_root,
-    );
-    let manager = ArtifactManager::new(base_dir)?;
+    )?;
     manager
         .write_text(
             &runner_artifact_key(ctx, format!("{}-{label}", context.spec.id)),
@@ -1308,7 +1361,7 @@ mod tests {
     fn antigravity_warning_lowering_records_full_loss_and_preserves_exact_stdout() {
         let directory = unique_test_directory("antigravity-lowering-warning");
         let target = LoweringWarningArtifact {
-            directory: directory.clone(),
+            directory: Ok(directory.clone()),
             key: ArtifactKey::new("conversation-7", "post-tool-use-step-3-lowering-warning"),
         };
         let diagnostic_artifact =
@@ -1368,10 +1421,80 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_artifact_directories_expand_home_and_refuse_relative_paths() {
+        let home = Path::new("/home/agent");
+        assert_eq!(
+            antigravity_artifact_directory("/tmp/artifacts", Some(home)),
+            Ok(PathBuf::from("/tmp/artifacts"))
+        );
+        // The official examples use a literal `~/` prefix.
+        assert_eq!(
+            antigravity_artifact_directory("~/.gemini/antigravity/brain/c1", Some(home)),
+            Ok(PathBuf::from("/home/agent/.gemini/antigravity/brain/c1"))
+        );
+        assert_eq!(
+            antigravity_artifact_directory("~", Some(home)),
+            Ok(PathBuf::from("/home/agent"))
+        );
+        for (raw, home) in [
+            ("~/.gemini/brain", None),
+            ("~/.gemini/brain", Some(Path::new("relative-home"))),
+            ("~other/.gemini/brain", Some(home)),
+            ("brain/c1", Some(home)),
+            ("", Some(home)),
+        ] {
+            assert!(
+                antigravity_artifact_directory(raw, home).is_err(),
+                "{raw:?} with {home:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn antigravity_warning_lowering_refuses_an_unusable_artifact_directory() {
+        let target = LoweringWarningArtifact {
+            directory: antigravity_artifact_directory("brain/c1", None),
+            key: ArtifactKey::new("conversation-10", "post-tool-use-step-6-lowering-warning"),
+        };
+        let warning = RunnerPostToolUseOutput::new(pkl::LoweringPolicy::BestEffortWithWarnings)
+            .with_agent_feedback("this must be retained");
+        let error = lower_report(&HarnessId::ANTIGRAVITY, warning, Some(&target)).unwrap_err();
+        assert!(error.to_string().contains("not absolute"), "{error}");
+        assert!(!Path::new("brain").exists());
+    }
+
+    #[test]
+    fn diagnostics_fall_back_to_the_per_user_artifact_directory() {
+        let project = Path::new("/work/project");
+        assert_eq!(
+            diagnostics_directory(None, None, project),
+            ArtifactManager::default_temp_dir()
+        );
+        #[cfg(unix)]
+        assert_ne!(
+            diagnostics_directory(None, None, project),
+            std::env::temp_dir().join("hookkit-artifacts"),
+            "the shared, predictable directory must not be the default on Unix"
+        );
+        assert_eq!(
+            diagnostics_directory(Some("tool"), Some("global"), project),
+            project.join("tool")
+        );
+        assert_eq!(
+            diagnostics_directory(None, Some("global"), project),
+            project.join("global")
+        );
+        assert_eq!(
+            diagnostics_manager(None, None, project).unwrap().base_dir(),
+            ArtifactManager::default_temp_dir()
+        );
+    }
+
+    #[test]
     fn antigravity_best_effort_omits_unavailable_messages_without_a_record() {
         let directory = unique_test_directory("antigravity-lowering-best-effort");
         let target = LoweringWarningArtifact {
-            directory: directory.clone(),
+            directory: Ok(directory.clone()),
             key: ArtifactKey::new("conversation-8", "post-tool-use-step-4-lowering-warning"),
         };
         let best_effort = RunnerPostToolUseOutput::new(pkl::LoweringPolicy::BestEffort)
@@ -1397,7 +1520,7 @@ mod tests {
     fn antigravity_warning_lowering_never_overwrites_a_reused_step_key() {
         let directory = unique_test_directory("antigravity-lowering-collision");
         let target = LoweringWarningArtifact {
-            directory: directory.clone(),
+            directory: Ok(directory.clone()),
             key: ArtifactKey::new("conversation-8", "post-tool-use-step-0-lowering-warning"),
         };
         let lower = |feedback: &str| {
@@ -1447,7 +1570,7 @@ mod tests {
         let not_a_directory = directory.join("regular-file");
         std::fs::write(&not_a_directory, "occupied").unwrap();
         let target = LoweringWarningArtifact {
-            directory: not_a_directory,
+            directory: Ok(not_a_directory),
             key: ArtifactKey::new("conversation-9", "post-tool-use-step-5-lowering-warning"),
         };
         let warning = RunnerPostToolUseOutput::new(pkl::LoweringPolicy::BestEffortWithWarnings)

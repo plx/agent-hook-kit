@@ -26,6 +26,7 @@ path = "src/bin/file-activity-agent-hook.rs"
 [dependencies]
 camino = { workspace = true }
 clap = { workspace = true }
+dirs = { workspace = true }
 globset = { workspace = true }
 hookkit-common = { workspace = true }
 hookkit-core = { workspace = true }

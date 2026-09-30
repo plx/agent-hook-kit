@@ -83,6 +83,12 @@ pub enum PathBase {
     /// The call targets another execution environment (for example a Codex
     /// patch `*** Environment ID:` header) whose filesystem is not observable.
     UnknownEnvironment,
+    /// A shell expression beginning with `~`, which the shell expands against
+    /// `$HOME`. It is resolved only when the analyzer was given a home
+    /// directory (see [`crate::ToolAccessAnalyzer::with_home`]); otherwise
+    /// only the raw `~/...` text is retained. Unlike [`Self::UnexpandedHome`],
+    /// the expansion rule is the shell's, not a tool's.
+    Home,
 }
 
 impl PathBase {
@@ -603,7 +609,23 @@ fn write_shell_gap(
             formatter.write_str("native working directory is missing")
         }
         Reason::UnsupportedRedirection => formatter.write_str("redirection is unsupported"),
+        Reason::UnsupportedShellDialect { dialect } => write!(
+            formatter,
+            "the command runs under the {} shell, which Bash analysis cannot model",
+            dialect_name(*dialect)
+        ),
         _ => formatter.write_str("unknown shell-analysis gap"),
+    }
+}
+
+fn dialect_name(dialect: hookkit_shell::ShellDialect) -> &'static str {
+    use hookkit_shell::ShellDialect;
+
+    match dialect {
+        ShellDialect::Bash => "Bash",
+        ShellDialect::Zsh => "zsh",
+        ShellDialect::PowerShell => "PowerShell",
+        _ => "unidentified",
     }
 }
 

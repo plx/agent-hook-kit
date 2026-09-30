@@ -20,9 +20,15 @@ and negative fixtures, exact stream checksums/framing, immutable snapshots, and
 catalog/status consistency. The conformance executable checks that each native
 crate implements the registry-selected snapshot, parses every positive input
 fixture with the native parser, requires every negative input fixture to be
-rejected (except one that only closes a harness-sent enumeration, which the
-native crates deliberately read as an `Unknown` value), runs every declared Rust
-process case, and reconciles the machine-generated implementation registry.
+rejected, runs every declared Rust process case, and reconciles the
+machine-generated implementation registry. The only exceptions to rejection
+are the `(contract, pointer)` pairs in `OPEN_VALUE_SET_NEGATIVES`
+(`crates/hookkit-conformance/src/lib.rs`): negatives that only close a
+harness-sent value set (an `enum`, or a `const` on a field other than the
+`/hook_event_name` discriminator) that the native crate deliberately reads as
+an `Unknown` value. Those negatives must be *accepted*, which locks in the
+forward compatibility, and every allowlist entry must match such a fixture in
+the selected snapshot.
 Workspace tests also compare production identification metadata and
 command-environment selectors with the selected catalog snapshots and
 supplement, and check that the repository `fixtures/` inputs decode and its

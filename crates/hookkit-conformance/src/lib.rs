@@ -83,16 +83,20 @@ pub fn verified_descriptors() -> Result<Vec<NativeEventDescriptor>, String> {
 ///
 /// Every positive fixture (not only the `representative` one) must parse, so
 /// a relaxed or optional field the harness may omit cannot silently become
-/// required. Every negative fixture must be rejected, except negatives that
-/// only close a harness-sent value set: an `enum`, or a `const` on any pointer
-/// other than the `/hook_event_name` discriminator. Every native crate parses
-/// harness-sent values it does not know into an `Unknown(String)` arm, so a
-/// newer harness release cannot turn a hook into a fail-open parse error.
+/// required. Every negative fixture must be rejected, except the negatives in
+/// [`OPEN_VALUE_SET_NEGATIVES`], which only close a harness-sent value set
+/// that the native crate deliberately reads into an `Unknown(String)` arm:
+/// those must be *accepted*, which locks in that forward compatibility. Every
+/// allowlist entry must match such a negative.
 pub fn verify_all_inputs() -> Result<BTreeSet<&'static str>, String> {
     let mut verified = BTreeSet::new();
+    let mut open_value_sets = BTreeSet::new();
     macro_rules! verify {
         ($($event:ty),+ $(,)?) => {
-            $(verified.insert(verify_inputs::<$event>()?);)+
+            $(verified.insert(verify_inputs::<$event>(
+                OPEN_VALUE_SET_NEGATIVES,
+                &mut open_value_sets,
+            )?);)+
         };
     }
     {
@@ -155,8 +159,32 @@ pub fn verify_all_inputs() -> Result<BTreeSet<&'static str>, String> {
         use hookkit_antigravity::*;
         verify!(PreInvocation, PostInvocation, PreToolUse, PostToolUse, Stop);
     }
+    if let Some((contract, pointer)) = OPEN_VALUE_SET_NEGATIVES
+        .iter()
+        .find(|entry| !open_value_sets.contains(*entry))
+    {
+        return Err(format!(
+            "{contract} has no enum or const negative input fixture at {pointer}; remove it from OPEN_VALUE_SET_NEGATIVES"
+        ));
+    }
     Ok(verified)
 }
+
+/// Negative input fixtures, as `(contract, JSON Pointer)`, that only close a
+/// harness-sent value set the native crate parses into an `Unknown(String)`
+/// arm, so a value a newer harness release sends cannot fail the hook.
+///
+/// Conformance requires the native parser to *accept* each of these
+/// negatives. Each entry must name an `enum`, or a `const` on a pointer other
+/// than the `/hook_event_name` discriminator; every other negative, including
+/// a value-set negative missing from this list, must be rejected. The
+/// contracts name their snapshot, so each snapshot update reviews the list.
+pub const OPEN_VALUE_SET_NEGATIVES: &[(&str, &str)] = &[
+    // `SessionEnd.reason` reads into `SessionEndReason::Unknown`.
+    ("codex/commit-ff6aec9-r1/SessionEnd", "/reason"),
+    // `SessionStart.source` reads into `SessionStartSource::Unknown`.
+    ("codex/commit-ff6aec9-r1/SessionStart", "/source"),
+];
 
 /// Executes every declared process conformance case and returns their
 /// identities.
@@ -981,8 +1009,13 @@ fn verify_case<E: EventSpec>(
 }
 
 /// Checks every input fixture of `E` against its native parser and returns
-/// the contract that was checked.
-fn verify_inputs<E: EventSpec>() -> Result<&'static str, String> {
+/// the contract that was checked. Negatives in `allowlist` must be open
+/// value-set negatives the parser accepts; each one checked is added to
+/// `open_value_sets`.
+fn verify_inputs<E: EventSpec>(
+    allowlist: &[(&'static str, &'static str)],
+    open_value_sets: &mut BTreeSet<(&'static str, &'static str)>,
+) -> Result<&'static str, String> {
     let fixture = event_fixtures::<E>()?;
     let positives = fixture_list(&fixture, "positive", E::CONTRACT.as_str())?;
     for positive in positives {
@@ -999,28 +1032,44 @@ fn verify_inputs<E: EventSpec>() -> Result<&'static str, String> {
     let negatives = fixture_list(&fixture, "negative", E::CONTRACT.as_str())?;
     for negative in negatives {
         let id = fixture_id(negative, E::CONTRACT.as_str())?;
-        if closes_open_value_set(negative) {
+        let pointer = negative["expected_pointer"].as_str();
+        let exemption = allowlist.iter().find(|(contract, allowed)| {
+            *contract == E::CONTRACT.as_str() && Some(*allowed) == pointer
+        });
+        let Some(exemption) = exemption else {
+            if E::parse(&invocation(&negative["value"])?).is_ok() {
+                return Err(format!(
+                    "{} negative input fixture {id} was accepted by the native parser",
+                    E::CONTRACT
+                ));
+            }
             continue;
-        }
-        if E::parse(&invocation(&negative["value"])?).is_ok() {
+        };
+        if !closes_value_set(negative) {
             return Err(format!(
-                "{} negative input fixture {id} was accepted by the native parser",
-                E::CONTRACT
+                "{} negative input fixture {id} at {} is not an enum or const negative, so it cannot be an open value set",
+                E::CONTRACT,
+                exemption.1
             ));
         }
+        // The native crate reads values it does not know into an
+        // `Unknown(String)` arm; the forward-compatible parse must succeed.
+        let input = E::parse(&invocation(&negative["value"])?).map_err(|error| {
+            format!(
+                "{} negative input fixture {id} closes the open value set at {}, but the native parser rejected it: {error}",
+                E::CONTRACT,
+                exemption.1
+            )
+        })?;
+        let _ = E::context(&input);
+        open_value_sets.insert(*exemption);
     }
     Ok(E::CONTRACT.as_str())
 }
 
-/// Reports whether a negative fixture only closes a harness-sent value set.
-///
-/// The snapshot schemas close enumerations such as a session `source` or end
-/// `reason`, but every native crate deliberately parses values it does not
-/// know into an `Unknown(String)` arm, so a newer harness release cannot turn
-/// a hook into a fail-open parse error. Such a negative (`enum`, or `const`
-/// on any pointer other than the `/hook_event_name` discriminator) is
-/// therefore not required to be rejected. Every other negative is.
-fn closes_open_value_set(negative: &serde_yaml_ng::Value) -> bool {
+/// Reports whether a negative fixture closes a value set: an `enum`, or a
+/// `const` on any pointer other than the `/hook_event_name` discriminator.
+fn closes_value_set(negative: &serde_yaml_ng::Value) -> bool {
     match negative["expected_keyword"].as_str() {
         Some("enum") => true,
         Some("const") => negative["expected_pointer"].as_str() != Some("/hook_event_name"),
@@ -1218,4 +1267,41 @@ fn workspace_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("crate lives under workspace/crates")
         .to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hookkit_codex::catalog::SessionStart;
+
+    #[test]
+    fn open_value_set_negatives_are_accepted_only_when_allowlisted() {
+        let contract = SessionStart::CONTRACT.as_str();
+        let mut used = BTreeSet::new();
+        verify_inputs::<SessionStart>(OPEN_VALUE_SET_NEGATIVES, &mut used).unwrap();
+        assert_eq!(used, BTreeSet::from([(contract, "/source")]));
+
+        // The Codex parser reads an unknown `source` into `Unknown`, so the
+        // negative is accepted and fails conformance unless allowlisted.
+        let error = verify_inputs::<SessionStart>(&[], &mut BTreeSet::new()).unwrap_err();
+        assert!(
+            error.contains("unknown-source") && error.contains("was accepted"),
+            "{error}"
+        );
+
+        // Only an enum or non-discriminator const negative can be exempted.
+        let error =
+            verify_inputs::<SessionStart>(&[(contract, "")], &mut BTreeSet::new()).unwrap_err();
+        assert!(error.contains("not an enum or const negative"), "{error}");
+        let error =
+            verify_inputs::<SessionStart>(&[(contract, "/hook_event_name")], &mut BTreeSet::new())
+                .unwrap_err();
+        assert!(error.contains("not an enum or const negative"), "{error}");
+    }
+
+    #[test]
+    fn every_open_value_set_negative_matches_a_selected_fixture() {
+        // `verify_all_inputs` fails on an allowlist entry no fixture used.
+        verify_all_inputs().unwrap();
+    }
 }

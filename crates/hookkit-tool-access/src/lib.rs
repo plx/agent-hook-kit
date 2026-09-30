@@ -30,11 +30,12 @@ pub use resolver::{
 pub use structured::{StructuredFieldAnalyzer, StructuredFieldConfigError};
 
 use hookkit_common::{PostToolUseInput, PreToolUseInput};
+use hookkit_core::Utf8PathBuf;
 use hookkit_shell::{
     BashAnalyzer, FileAccessAnalyzer, FileAccessCandidate as ShellCandidate,
     FileAccessCertainty as ShellCertainty, FileAccessKind as ShellIntent, FileInferenceContext,
     FileTarget as ShellTarget, FileTargetScope as ShellScope, PathBase as ShellPathBase,
-    ShellToolCallMatch, ShellToolProfile,
+    ShellCwdOrigin, ShellToolCallMatch, ShellToolProfile,
 };
 
 /// Stateless structured, patch, and shell access analyzer.
@@ -51,6 +52,7 @@ pub struct ToolAccessAnalyzer {
     structured: StructuredFieldAnalyzer,
     shell_profiles: Vec<ShellToolProfile>,
     builtin_tools: bool,
+    home: Option<Utf8PathBuf>,
 }
 
 impl Default for ToolAccessAnalyzer {
@@ -80,6 +82,7 @@ impl ToolAccessAnalyzer {
             structured,
             shell_profiles: Vec::new(),
             builtin_tools: true,
+            home: None,
         }
     }
 
@@ -88,6 +91,21 @@ impl ToolAccessAnalyzer {
     /// analyzed by the structured-field heuristics alone.
     pub fn with_builtin_tools(mut self, enabled: bool) -> Self {
         self.builtin_tools = enabled;
+        self
+    }
+
+    /// Sets the home directory against which shell `~` paths resolve and
+    /// returns the analyzer.
+    ///
+    /// The shell expands a leading `~` to `$HOME` at run time. Without a
+    /// home directory (the default), such a path is still reported, with
+    /// its raw `~/...` text and [`PathBase::Home`], but is not resolved. A
+    /// hook process usually inherits the harness's `$HOME`, so passing it
+    /// here is a reasonable choice; the analyzer never reads it implicitly.
+    /// Structured tool arguments that begin with `~` are unaffected, because
+    /// their expansion is up to the tool.
+    pub fn with_home(mut self, home: Option<Utf8PathBuf>) -> Self {
+        self.home = home;
         self
     }
 
@@ -251,8 +269,11 @@ impl ToolAccessAnalyzer {
             .workspace_roots
             .first()
             .map(hookkit_core::Utf8PathBuf::as_path);
-        let inference =
-            FileInferenceContext::new(shell_call.cwd).with_workspace_root(workspace_root);
+        // The effective cwd includes a relative Codex `workdir` or
+        // Antigravity `Cwd` joined onto the fallback directory.
+        let inference = FileInferenceContext::for_call(shell_call)
+            .with_workspace_root(workspace_root)
+            .with_home(self.home.as_deref());
         let shell_report = self.shell.infer(&analysis, inference);
         let relative_base = shell_relative_base(tool_call, shell_call);
         let mut report = ToolAccessReport::default();
@@ -270,7 +291,7 @@ impl ToolAccessAnalyzer {
             patch::analyze_shell_patches(
                 analysis,
                 shell_call.command,
-                shell_call.cwd,
+                shell_call.effective_cwd(),
                 relative_base,
                 &mut report,
             );
@@ -291,22 +312,22 @@ impl ToolAccessAnalyzer {
 /// Labels shell paths resolved relative to the shell's working directory.
 ///
 /// A cwd read from the tool's own arguments (such as Antigravity
-/// `run_command.Cwd`) is the invocation directory. When the profile fell back
-/// to the call's directory, the call's [`ToolCallRef::cwd_base`] applies, so
-/// a Codex `Bash` payload, whose unobservable `workdir` may differ from the
-/// reported turn directory, yields [`PathBase::SessionCwd`].
+/// `run_command.Cwd` or a Codex `workdir`, absolute or joined onto the hook
+/// directory) is the invocation directory. A fallback the profile marks as
+/// unverified ([`ShellCwdOrigin::UnverifiedFallback`], as for Codex `Bash`,
+/// whose payload omits the `workdir` that can move the command) yields
+/// [`PathBase::SessionCwd`]. Any other fallback takes the call's
+/// [`ToolCallRef::cwd_base`].
 fn shell_relative_base(
     tool_call: &ToolCallRef<'_>,
     shell_call: &hookkit_shell::ShellToolCallRef<'_>,
 ) -> PathBase {
-    match (shell_call.cwd, tool_call.cwd) {
-        // The profile's fallback lends the call's own cwd, so identity (not
-        // equality) distinguishes it from an equal explicit cwd argument.
-        (Some(shell), Some(call)) if std::ptr::eq(shell.as_str(), call.as_str()) => {
-            tool_call.cwd_base
+    match shell_call.cwd_origin {
+        ShellCwdOrigin::ToolInput | ShellCwdOrigin::ToolInputRelativeToFallback => {
+            PathBase::InvocationCwd
         }
-        (Some(_), _) => PathBase::InvocationCwd,
-        (None, _) => tool_call.cwd_base,
+        ShellCwdOrigin::UnverifiedFallback => PathBase::SessionCwd,
+        _ => tool_call.cwd_base,
     }
 }
 
@@ -325,6 +346,7 @@ fn map_shell_candidate(
                     ShellPathBase::UnknownAfterDirectoryChange => {
                         PathBase::UnknownAfterDirectoryChange
                     }
+                    ShellPathBase::Home => PathBase::Home,
                     _ => return None,
                 },
             },

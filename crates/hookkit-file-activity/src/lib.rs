@@ -1722,6 +1722,7 @@ impl ResolveOptions {
 
 /// Existing files materialized from a pending activity window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ResolvedFileActivity {
     /// Deterministic set of existing regular files.
     pub files: BTreeSet<Utf8PathBuf>,
@@ -1729,13 +1730,24 @@ pub struct ResolvedFileActivity {
     /// non-file paths (for example after a deletion), and files inside an
     /// excluded root or an ignored directory.
     pub not_applicable_files: BTreeSet<Utf8PathBuf>,
-    /// Scoped targets that may still contain unchecked files: each target
-    /// whose traversal hit a failure such as an I/O error, and, once the
-    /// entry budget is exhausted, the target being walked plus every scoped
-    /// target after it. A scope whose root no longer exists, or lies in an
-    /// ignored or excluded directory, has nothing left to check and is not
-    /// retained.
+    /// Scoped targets that may still contain unchecked files, in resolution
+    /// order: each target whose traversal hit a failure such as an I/O error,
+    /// and, once the entry budget is exhausted, the target being walked
+    /// ([`Self::exhausted_target`]) followed by every scoped target never
+    /// attempted ([`Self::unattempted_targets`]), so the unattempted targets
+    /// are always this list's suffix. A scope whose root no longer exists, or
+    /// lies in an ignored or excluded directory, has nothing left to check
+    /// and is not retained.
     pub unresolved_targets: Vec<FileActivityTarget>,
+    /// The scoped target whose walk exhausted the budget partway through, or
+    /// `None` when resolution was not truncated or the budget ran out
+    /// exactly between two targets. Retrying it with the same budget would
+    /// stop at the same point.
+    pub exhausted_target: Option<FileActivityTarget>,
+    /// Scoped targets never attempted because the budget ran out before
+    /// them, in resolution order. Unlike [`Self::exhausted_target`], each
+    /// can make progress on a later attempt.
+    pub unattempted_targets: Vec<FileActivityTarget>,
     /// Directory entries charged to the shared traversal budget.
     pub scanned_entries: usize,
     /// Whether resolution stopped at `ResolveOptions::max_entries`.
@@ -1746,10 +1758,14 @@ pub struct ResolvedFileActivity {
 ///
 /// Exact targets are resolved first; these probes are cheap and do not
 /// consume the traversal-entry budget, so budget exhaustion can never drop a
-/// directly observed file. Scoped targets are then walked in order without
-/// following directory symlinks. Invalid glob syntax is returned as an error;
-/// other target-local traversal failures retain the target in
-/// [`ResolvedFileActivity::unresolved_targets`].
+/// directly observed file. Scoped targets are then walked in
+/// [`PendingFileActivity::targets`] order without following directory
+/// symlinks. Invalid glob syntax is returned as an error; other target-local
+/// traversal failures retain the target in
+/// [`ResolvedFileActivity::unresolved_targets`]. When the budget runs out,
+/// the target being walked is reported as
+/// [`ResolvedFileActivity::exhausted_target`] and every later scoped target
+/// as [`ResolvedFileActivity::unattempted_targets`].
 pub fn resolve_files(
     activity: &PendingFileActivity,
     options: &ResolveOptions,
@@ -1808,9 +1824,13 @@ pub fn resolve_files(
         let remaining = options.max_entries.saturating_sub(resolved.scanned_entries);
         if remaining == 0 {
             resolved.truncated = true;
+            resolved.unattempted_targets = scoped[index..]
+                .iter()
+                .map(|target| (*target).clone())
+                .collect();
             resolved
                 .unresolved_targets
-                .extend(scoped[index..].iter().map(|target| (*target).clone()));
+                .extend(resolved.unattempted_targets.iter().cloned());
             break;
         }
         let mut resolution_options = TargetResolutionOptions::new(roots.clone());
@@ -1840,9 +1860,15 @@ pub fn resolve_files(
             // The walk stopped partway through this target: retain it and
             // every later scope rather than silently dropping the tail.
             resolved.truncated = true;
+            resolved.exhausted_target = Some((*target).clone());
+            resolved.unattempted_targets = scoped[index + 1..]
+                .iter()
+                .map(|target| (*target).clone())
+                .collect();
+            resolved.unresolved_targets.push((*target).clone());
             resolved
                 .unresolved_targets
-                .extend(scoped[index..].iter().map(|target| (*target).clone()));
+                .extend(resolved.unattempted_targets.iter().cloned());
             break;
         }
         if materialized
@@ -1913,37 +1939,47 @@ fn activity_target_to_access(target: &FileActivityTarget) -> AccessTarget {
     }
 }
 
-/// Directory names pruned by default: VCS metadata, HookKit's `.context`,
-/// and common dependency, virtual-environment, cache, and build-tool output
-/// directories that agents rarely edit and that would dominate a scan.
+/// Directory basenames pruned by default from reconciliation and target
+/// resolution ([`ReconciliationOptions::new`] and [`ResolveOptions::new`]):
+/// version-control metadata, HookKit's `.context` state and
+/// `.agent-hook-kit` configuration and diagnostics, and common dependency,
+/// virtual-environment, cache, and build-tool output directories that agents
+/// rarely edit and that would dominate a scan.
+///
+/// `hookkit-pkl-config` uses the same names as its default
+/// `fileActivity.ignoredDirectoryNames`, so the bundled runners and direct
+/// library callers prune the same directories.
+pub const DEFAULT_IGNORED_DIRECTORY_NAMES: &[&str] = &[
+    ".agent-hook-kit",
+    ".context",
+    ".direnv",
+    ".git",
+    ".gradle",
+    ".hg",
+    ".mypy_cache",
+    ".next",
+    ".nox",
+    ".nuxt",
+    ".parcel-cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svelte-kit",
+    ".svn",
+    ".terraform",
+    ".tox",
+    ".turbo",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+    "venv",
+];
+
 fn default_ignored_directory_names() -> BTreeSet<String> {
-    [
-        ".context",
-        ".direnv",
-        ".git",
-        ".gradle",
-        ".hg",
-        ".mypy_cache",
-        ".next",
-        ".nox",
-        ".nuxt",
-        ".parcel-cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".svelte-kit",
-        ".svn",
-        ".terraform",
-        ".tox",
-        ".turbo",
-        ".venv",
-        "__pycache__",
-        "node_modules",
-        "target",
-        "venv",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
+    DEFAULT_IGNORED_DIRECTORY_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect()
 }
 
 fn utf8_path(path: &Path) -> Result<Utf8PathBuf> {
@@ -2058,6 +2094,53 @@ mod tests {
         assert!(evidence.iter().any(|item| {
             item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/lib.rs"))
         }));
+    }
+
+    #[test]
+    fn antigravity_post_tool_use_without_a_tool_call_records_a_gap() {
+        // The `ide-reference-example` fixture of antigravity/docs-2026-09-29-r1:
+        // the documented IDE payload omits `toolCall`, so which files the tool
+        // wrote is unknown and must not be reported as "nothing written".
+        let input = PostToolUseInput::Antigravity(
+            serde_json::from_value(serde_json::json!({
+                "stepIdx": 5,
+                "error": "exit status 1",
+                "conversationId": "ec33ebf9-0cba-4100-8142-c61503f6c587",
+                "workspacePaths": ["/workspace/project"],
+                "transcriptPath": "~/.gemini/antigravity-ide/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl",
+                "artifactDirectoryPath": "~/.gemini/antigravity-ide/brain/ec33ebf9-0cba-4100-8142-c61503f6c587"
+            }))
+            .unwrap(),
+        );
+        let report = analyze_activity(&input);
+        assert_eq!(report.evidence().count(), 0);
+        let gaps = report.gaps().collect::<Vec<_>>();
+        assert_eq!(gaps.len(), 1, "{report:?}");
+        assert!(
+            gaps[0].detail.contains("originating tool call"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn antigravity_relative_writes_without_a_workspace_are_gaps() {
+        let input = PostToolUseInput::Antigravity(
+            serde_json::from_value(serde_json::json!({
+                "conversationId": "conversation",
+                "workspacePaths": [],
+                "transcriptPath": "/tmp/transcript.jsonl",
+                "artifactDirectoryPath": "/tmp/artifacts",
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {"CommandLine": "printf x > src/generated.txt"}
+                },
+                "stepIdx": 2
+            }))
+            .unwrap(),
+        );
+        let report = analyze_activity(&input);
+        assert_eq!(report.evidence().count(), 0, "{report:?}");
+        assert!(report.gaps().next().is_some(), "{report:?}");
     }
 
     #[test]
@@ -2311,8 +2394,68 @@ mod tests {
         let resolved = resolve_files(&activity, &options).unwrap();
         assert!(resolved.truncated);
         assert!(resolved.files.contains(&exact));
-        assert_eq!(resolved.unresolved_targets, vec![a_scope, b_scope]);
+        assert_eq!(
+            resolved.unresolved_targets,
+            vec![a_scope.clone(), b_scope.clone()]
+        );
+        // Only the scope the budget never reached can progress on a retry.
+        assert_eq!(resolved.exhausted_target, Some(a_scope));
+        assert_eq!(resolved.unattempted_targets, vec![b_scope]);
         std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn budget_exhausted_between_targets_leaves_no_exhausted_target() {
+        let project = temporary_directory("resolve-boundary");
+        for scope in ["a_scope", "b_scope", "c_scope"] {
+            std::fs::create_dir_all(project.join(scope)).unwrap();
+            std::fs::write(project.join(scope).join("f"), "x").unwrap();
+        }
+        let a_scope = scoped(project.join("a_scope"), FileActivityScope::Descendants);
+        let b_scope = scoped(project.join("b_scope"), FileActivityScope::Descendants);
+        let c_scope = scoped(project.join("c_scope"), FileActivityScope::Descendants);
+        let activity = pending_with([a_scope, b_scope.clone(), c_scope.clone()]);
+        let mut options = ResolveOptions::new(vec![utf8(project.clone())]);
+        // Walking `a_scope` visits its root and one file, which uses the
+        // whole budget without cutting that walk short.
+        options.max_entries = 2;
+
+        let resolved = resolve_files(&activity, &options).unwrap();
+        assert!(resolved.truncated);
+        assert!(resolved.files.contains(&utf8(project.join("a_scope/f"))));
+        assert_eq!(resolved.exhausted_target, None);
+        assert_eq!(
+            resolved.unattempted_targets,
+            vec![b_scope.clone(), c_scope.clone()]
+        );
+        assert_eq!(resolved.unresolved_targets, vec![b_scope, c_scope]);
+
+        let complete =
+            resolve_files(&activity, &ResolveOptions::new(vec![utf8(project.clone())])).unwrap();
+        assert!(!complete.truncated);
+        assert_eq!(complete.exhausted_target, None);
+        assert!(complete.unattempted_targets.is_empty());
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn default_ignored_directories_cover_caches_and_hook_configuration() {
+        let names = default_ignored_directory_names();
+        for name in [
+            ".agent-hook-kit",
+            ".git",
+            ".venv",
+            "venv",
+            "__pycache__",
+            "node_modules",
+        ] {
+            assert!(names.contains(name), "{name}");
+        }
+        assert_eq!(names.len(), DEFAULT_IGNORED_DIRECTORY_NAMES.len());
+        assert_eq!(
+            ResolveOptions::new(Vec::new()).ignored_directory_names,
+            names
+        );
     }
 
     #[test]

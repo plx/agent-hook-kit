@@ -2,8 +2,9 @@ use hookkit_common::{PostToolUseInput, PreToolUseInput};
 use hookkit_core::{EventId, HarnessId, Utf8Path, Utf8PathBuf};
 use hookkit_tool_access::{
     AccessCertainty, AccessIntent, AccessProvenance, AccessSource, AccessTarget, JsonRef,
-    PatchOperation, StructuredFieldAnalyzer, StructuredFieldMatch, TargetResolutionOptions,
-    ToolAccessAnalyzer, ToolAccessGapReason, ToolCallRef, ToolPhase, resolve_targets,
+    PatchOperation, PathBase, StructuredFieldAnalyzer, StructuredFieldMatch,
+    TargetResolutionOptions, ToolAccessAnalyzer, ToolAccessGapReason, ToolCallRef, ToolPhase,
+    resolve_targets,
 };
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -456,4 +457,187 @@ fn antigravity_post_tool_analyzes_the_originating_call() {
                     if expression.resolved.as_deref() == Some(Utf8Path::new("/repo/src/generated.txt"))
             )
     }));
+}
+
+/// Resolved path, base, and certainty of every shell-patch candidate.
+fn shell_patch_targets(
+    report: &hookkit_tool_access::ToolAccessReport,
+) -> Vec<(Option<&str>, PathBase, AccessCertainty)> {
+    report
+        .candidates
+        .iter()
+        .filter(|candidate| matches!(candidate.provenance, AccessProvenance::ShellPatch { .. }))
+        .map(|candidate| match &candidate.target {
+            AccessTarget::Path { expression, .. } => (
+                expression.resolved.as_deref().map(Utf8Path::as_str),
+                expression.base,
+                candidate.certainty,
+            ),
+            other => panic!("unexpected target {other:?}"),
+        })
+        .collect()
+}
+
+fn has_gap(
+    report: &hookkit_tool_access::ToolAccessReport,
+    predicate: impl Fn(&ToolAccessGapReason) -> bool,
+) -> bool {
+    report.gaps.iter().any(|gap| predicate(&gap.reason))
+}
+
+fn directory_change_gap(reason: &ToolAccessGapReason) -> bool {
+    matches!(
+        reason,
+        ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged { .. }
+    )
+}
+
+fn missing_heredoc_gap(reason: &ToolAccessGapReason) -> bool {
+    matches!(
+        reason,
+        ToolAccessGapReason::MissingShellPatchHereDocument { .. }
+    )
+}
+
+#[test]
+fn codex_cd_and_apply_patch_resolves_against_the_literal_directory() {
+    const PATCH: &str = "<<'PATCH'\n*** Begin Patch\n*** Add File: src/new.rs\n+fn main() {}\n*** End Patch\nPATCH\n";
+    let cases = [
+        // Codex intercepts this form and applies the patch in cwd/<dir>.
+        (
+            format!("cd crates/core && apply_patch {PATCH}"),
+            "/repo/crates/core/src/new.rs",
+            PathBase::SessionCwd,
+        ),
+        (
+            format!("cd a && cd ../b && apply_patch {PATCH}"),
+            "/repo/b/src/new.rs",
+            PathBase::SessionCwd,
+        ),
+        (
+            format!("cd -- a && \\\n  apply_patch {PATCH}"),
+            "/repo/a/src/new.rs",
+            PathBase::SessionCwd,
+        ),
+        // An absolute operand is exact however the hook cwd is labeled.
+        (
+            format!("cd /work/other && apply_patch {PATCH}"),
+            "/work/other/src/new.rs",
+            PathBase::InvocationCwd,
+        ),
+        // Statement-level here-documents reach the enclosed command.
+        (
+            format!("(cd crates/core && apply_patch) {PATCH}"),
+            "/repo/crates/core/src/new.rs",
+            PathBase::SessionCwd,
+        ),
+        (
+            format!("{{ apply_patch; }} {PATCH}"),
+            "/repo/src/new.rs",
+            PathBase::SessionCwd,
+        ),
+    ];
+    for (command, resolved, base) in cases {
+        let report =
+            ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(&command, "/repo"));
+        assert_eq!(
+            shell_patch_targets(&report),
+            vec![(Some(resolved), base, AccessCertainty::Direct)],
+            "{command}: {report:#?}"
+        );
+        assert!(
+            !has_gap(&report, directory_change_gap),
+            "{command}: {report:#?}"
+        );
+        assert!(
+            !has_gap(&report, missing_heredoc_gap),
+            "{command}: {report:#?}"
+        );
+    }
+}
+
+#[test]
+fn uncertain_shell_patch_directories_and_inputs_stay_uncertain() {
+    const PATCH: &str =
+        "<<'PATCH'\n*** Begin Patch\n*** Add File: new.rs\n+x\n*** End Patch\nPATCH\n";
+    // A non-literal `cd` operand cannot be resolved: heuristic and a gap.
+    for command in [
+        format!("cd \"$TARGET\" && apply_patch {PATCH}"),
+        format!("cd ~/project && apply_patch {PATCH}"),
+        format!("cd && apply_patch {PATCH}"),
+        format!("cd - && apply_patch {PATCH}"),
+    ] {
+        let report =
+            ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(&command, "/repo"));
+        assert_eq!(
+            shell_patch_targets(&report),
+            vec![(
+                None,
+                PathBase::UnknownAfterDirectoryChange,
+                AccessCertainty::Heuristic
+            )],
+            "{command}: {report:#?}"
+        );
+        assert!(
+            has_gap(&report, directory_change_gap),
+            "{command}: {report:#?}"
+        );
+    }
+
+    // Other directory changes keep direct but unresolved evidence.
+    for command in [
+        format!("cd a; apply_patch {PATCH}"),
+        format!("pushd a && apply_patch {PATCH}"),
+        format!("(cd a) && apply_patch {PATCH}"),
+        format!("cd \"$B\"; cd c && apply_patch {PATCH}"),
+    ] {
+        let report =
+            ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(&command, "/repo"));
+        assert_eq!(
+            shell_patch_targets(&report),
+            vec![(
+                None,
+                PathBase::UnknownAfterDirectoryChange,
+                AccessCertainty::Direct
+            )],
+            "{command}: {report:#?}"
+        );
+        assert!(
+            has_gap(&report, directory_change_gap),
+            "{command}: {report:#?}"
+        );
+    }
+
+    // Another command of the group may consume the here-document first.
+    let shared = ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(
+        &format!("{{ cat; apply_patch; }} {PATCH}"),
+        "/repo",
+    ));
+    assert_eq!(
+        shell_patch_targets(&shared),
+        vec![(
+            Some("/repo/new.rs"),
+            PathBase::SessionCwd,
+            AccessCertainty::Heuristic
+        )],
+        "{shared:#?}"
+    );
+
+    // A command's own input redirection or a pipe takes precedence over the
+    // statement's here-document.
+    for command in [
+        format!("{{ apply_patch < patch.txt; }} {PATCH}"),
+        format!("{{ printf x | apply_patch; }} {PATCH}"),
+    ] {
+        let report =
+            ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(&command, "/repo"));
+        assert!(
+            shell_patch_targets(&report).is_empty(),
+            "{command}: {report:#?}"
+        );
+        assert!(
+            has_gap(&report, missing_heredoc_gap),
+            "{command}: {report:#?}"
+        );
+    }
 }

@@ -7,4 +7,4 @@ harnesses:
   codex:
     current: commit-ff6aec9-r1
 supplements:
-  command_environments: command-environments-2026-09-29-r1
+  command_environments: command-environments-2026-09-30-r1

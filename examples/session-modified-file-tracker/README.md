@@ -12,7 +12,10 @@ file-activity-agent-hook --antigravity
 
 The example keeps `--harness=claude|codex|antigravity` and
 `--state-dir=PATH` compatible, while the shipped binary accepts those aliases
-as well.
+as well. A usage error prints its diagnostic and exits 1 (a non-blocking hook
+error), so a misconfigured command line is visible instead of failing
+silently. On Claude Code, bind the command to `PostToolUseFailure` as well as
+`PostToolUse`: a failed Bash call may still have written files.
 
 The hook uses `hookkit-file-activity` to read the documented arguments of each
 harness's built-in file tools (for example Claude `Write`/`Edit`, Antigravity

@@ -49,12 +49,18 @@ or agent messages or a block. Strict lowering rejects those messages and
 best-effort omits them. Best-effort-with-warnings writes a versioned,
 collision-safe JSON loss record beneath the event's exact
 `artifactDirectoryPath`, then uses successful protocol stderr to point to that
-record while preserving exact `{}` stdout. Failure to persist the record fails
-the hook instead of silently dropping it.
+record while preserving exact `{}` stdout. The official payload examples show
+that path with a literal `~/` prefix, so a leading `~` is expanded against the
+hook's home directory; any other relative path is refused rather than created
+below the hook's current directory. Failure to persist the record fails the
+hook instead of silently dropping it.
 
 The immediate runner analyzes the tool call before evaluating any Pkl: a call
 that wrote no existing file returns the native no-op without staging or
-running `pkl`.
+running `pkl`. Full tool output goes to the tool's `diagnostics.directory` or
+`settings.diagnosticsDirectory`; without either (only possible when settings
+are built in Rust) it goes to the per-user `ArtifactManager::in_temp_dir`
+directory, never a shared, predictable temporary directory.
 
 ## Configuration
 
@@ -112,8 +118,13 @@ but obtains candidate files from the `hookkit-file-activity` pending entity
 maintained by the bundled `file-activity-agent-hook`. That quiet aligned
 PostToolUse observer delegates structured, patch, and shell analysis to
 `hookkit-file-activity::observe_post_tool` and the shared tool-access layer, and
-keys each journal record by the tool-call id and a digest of the input rather
-than the raw input. The immediate runner uses the same observation path for
+keys each journal record by the event family, the tool-call id, and a digest of
+the input rather than the raw input. On Claude Code the same binary also
+accepts `PostToolUseFailure` (through
+`hookkit-file-activity::observe_claude_post_tool_failure`), because Claude
+reports a failed call only there even when it wrote files, for example
+`sed -i ... && pytest` with failing tests; bind it to both events. Any other
+Claude event is a non-blocking hook error. The immediate runner uses the same observation path for
 exact file candidates instead of maintaining a second open-payload walker.
 Before taking the entity view, it reconciles workspace mtimes from the prior
 durable cursor, using current-session start metadata only as the first lower
@@ -183,9 +194,10 @@ target that cannot be materialized is summarized in the Stop that first sees it
 and discharged with the source window, because retrying the same analysis
 cannot resolve it. The default `best-effort` policy reports gaps without
 blocking; `strict` also blocks that one Stop. Recursive target expansion is
-bounded by `fileActivity.maxEntries`; the target that exhausts the budget is
-reported once, and only targets that were never attempted are re-queued for
-the next Stop. Batch/workspace findings are conservatively attributed to all
+bounded by `fileActivity.maxEntries`; the target that exhausts the budget
+(`ResolvedFileActivity::exhausted_target`) is reported once, and only the
+targets that were never attempted (`ResolvedFileActivity::unattempted_targets`)
+are re-queued for the next Stop. Batch/workspace findings are conservatively attributed to all
 job candidates, while byte snapshots preserve exact files actually changed by
 remedies.
 

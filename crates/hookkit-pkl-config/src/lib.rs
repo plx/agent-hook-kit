@@ -110,7 +110,6 @@ pub fn load_explicit(path: &Path, cwd: &Path) -> Result<Loaded, PklConfigError> 
 pub fn builtin_specs() -> Result<BTreeMap<String, ToolSpec>, PklConfigError> {
     let staging = staged_builtins_dir()?;
     let specs = eval::run_pkl_eval::<BTreeMap<String, ToolSpec>>(&staging.builtins_path())?;
-    validate_builtin_catalog(&specs)
-        .map_err(|error| PklConfigError::CatalogValidation(error.to_string()))?;
+    validate_builtin_catalog(&specs).map_err(PklConfigError::CatalogValidation)?;
     Ok(specs)
 }

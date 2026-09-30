@@ -99,7 +99,7 @@ pub fn evaluate_pkl_source_patch(source: &str) -> Result<RunnerConfigPatch, PklC
     let target = layer_dir.join(STAGED_LAYER_NAME);
     std::fs::write(&target, source).map_err(|e| PklConfigError::TempIo {
         path: target.clone(),
-        error: e.to_string(),
+        source: e,
     })?;
     let layers = [StagedLayer {
         source: None,
@@ -195,14 +195,17 @@ fn create_private_temp_dir(prefix: &str) -> Result<PathBuf, PklConfigError> {
             Err(error) => {
                 return Err(PklConfigError::TempIo {
                     path,
-                    error: error.to_string(),
+                    source: error,
                 });
             }
         }
     }
     Err(PklConfigError::TempIo {
         path: base,
-        error: "could not create a unique staging directory".into(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not create a unique staging directory",
+        ),
     })
 }
 
@@ -211,7 +214,7 @@ fn create_private_temp_dir(prefix: &str) -> Result<PathBuf, PklConfigError> {
 fn create_private_dir(path: &Path) -> Result<(), PklConfigError> {
     create_private_dir_io(path).map_err(|e| PklConfigError::TempIo {
         path: path.to_path_buf(),
-        error: e.to_string(),
+        source: e,
     })
 }
 
@@ -232,7 +235,7 @@ fn write_embedded_dir(dir: &Dir<'_>, target: &Path) -> Result<(), PklConfigError
                 let dst = target.join(file.path());
                 std::fs::write(&dst, file.contents()).map_err(|e| PklConfigError::TempIo {
                     path: dst,
-                    error: e.to_string(),
+                    source: e,
                 })?;
             }
             DirEntry::Dir(subdir) => {
@@ -250,7 +253,10 @@ fn write_embedded_dir(dir: &Dir<'_>, target: &Path) -> Result<(), PklConfigError
 /// file, so parallel contributors don't conflict on `Builtins.pkl`.
 fn overwrite_builtins_aggregator(dir: &Path) -> Result<(), PklConfigError> {
     let tools_dir = BUILTINS_DIR.get_dir("tools").ok_or_else(|| {
-        PklConfigError::PklExec("embedded builtins missing tools/ subdirectory".to_string())
+        PklConfigError::PklExec(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "embedded builtins missing tools/ subdirectory",
+        ))
     })?;
 
     let mut tool_files: Vec<&str> = tools_dir
@@ -284,7 +290,7 @@ fn overwrite_builtins_aggregator(dir: &Path) -> Result<(), PklConfigError> {
     let target = dir.join("Builtins.pkl");
     std::fs::write(&target, out).map_err(|e| PklConfigError::TempIo {
         path: target,
-        error: e.to_string(),
+        source: e,
     })
 }
 
@@ -307,11 +313,11 @@ fn snake_to_camel(snake: &str) -> String {
 fn copy_to_staging(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
     let bytes = std::fs::read(src).map_err(|e| PklConfigError::ReadIo {
         path: src.to_path_buf(),
-        error: e.to_string(),
+        source: e,
     })?;
     std::fs::write(dst, bytes).map_err(|e| PklConfigError::TempIo {
         path: dst.to_path_buf(),
-        error: e.to_string(),
+        source: e,
     })
 }
 
@@ -322,13 +328,13 @@ fn mirror_source_siblings(src: &Path, dst_dir: &Path) -> Result<(), PklConfigErr
     let src_name = src.file_name();
     let entries = std::fs::read_dir(src_dir).map_err(|e| PklConfigError::ReadIo {
         path: src_dir.to_path_buf(),
-        error: e.to_string(),
+        source: e,
     })?;
 
     for entry in entries {
         let entry = entry.map_err(|e| PklConfigError::ReadIo {
             path: src_dir.to_path_buf(),
-            error: e.to_string(),
+            source: e,
         })?;
         let name = entry.file_name();
         if Some(name.as_os_str()) == src_name
@@ -364,21 +370,21 @@ fn mirror_path(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
 fn copy_path(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
     let metadata = std::fs::metadata(src).map_err(|e| PklConfigError::ReadIo {
         path: src.to_path_buf(),
-        error: e.to_string(),
+        source: e,
     })?;
 
     if metadata.is_dir() {
         std::fs::create_dir_all(dst).map_err(|e| PklConfigError::TempIo {
             path: dst.to_path_buf(),
-            error: e.to_string(),
+            source: e,
         })?;
         for entry in std::fs::read_dir(src).map_err(|e| PklConfigError::ReadIo {
             path: src.to_path_buf(),
-            error: e.to_string(),
+            source: e,
         })? {
             let entry = entry.map_err(|e| PklConfigError::ReadIo {
                 path: src.to_path_buf(),
-                error: e.to_string(),
+                source: e,
             })?;
             copy_path(&entry.path(), &dst.join(entry.file_name()))?;
         }
@@ -387,7 +393,7 @@ fn copy_path(src: &Path, dst: &Path) -> Result<(), PklConfigError> {
 
     std::fs::copy(src, dst).map_err(|e| PklConfigError::TempIo {
         path: dst.to_path_buf(),
-        error: e.to_string(),
+        source: e,
     })?;
     Ok(())
 }
@@ -440,7 +446,7 @@ fn evaluate_layers(
     let aggregator_path = staging.root.join(AGGREGATOR_NAME);
     std::fs::write(&aggregator_path, aggregator).map_err(|e| PklConfigError::TempIo {
         path: aggregator_path.clone(),
-        error: e.to_string(),
+        source: e,
     })?;
 
     let output = run_pkl(&aggregator_path)?;
@@ -457,17 +463,14 @@ fn evaluate_layers(
     let aggregated = serde_json::from_str::<AggregatedLayers>(&stdout).map_err(|e| {
         PklConfigError::JsonDecode {
             path: layers[0].reported_path(),
-            error: e.to_string(),
+            source: e,
         }
     })?;
     if aggregated.layers.len() != layers.len() {
-        return Err(PklConfigError::JsonDecode {
+        return Err(PklConfigError::LayerCountMismatch {
             path: layers[0].reported_path(),
-            error: format!(
-                "expected {} evaluated layers, got {}",
-                layers.len(),
-                aggregated.layers.len()
-            ),
+            expected: layers.len(),
+            actual: aggregated.layers.len(),
         });
     }
     aggregated
@@ -478,7 +481,7 @@ fn evaluate_layers(
             serde_json::from_value::<RunnerConfigPatch>(value).map_err(|e| {
                 PklConfigError::JsonDecode {
                     path: layer.reported_path(),
-                    error: e.to_string(),
+                    source: e,
                 }
             })
         })
@@ -559,7 +562,7 @@ fn run_pkl(path: &Path) -> Result<std::process::Output, PklConfigError> {
             if e.kind() == std::io::ErrorKind::NotFound {
                 PklConfigError::PklNotFound
             } else {
-                PklConfigError::PklExec(e.to_string())
+                PklConfigError::PklExec(e)
             }
         })
 }
@@ -580,7 +583,7 @@ where
     let stdout = String::from_utf8_lossy(&output.stdout);
     serde_json::from_str::<T>(&stdout).map_err(|e| PklConfigError::JsonDecode {
         path: path.to_path_buf(),
-        error: e.to_string(),
+        source: e,
     })
 }
 

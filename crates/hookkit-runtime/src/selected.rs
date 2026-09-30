@@ -643,6 +643,60 @@ mod tests {
             serde_json::json!({"decision": "block", "reason": "Opus is not approved."})
         );
 
+        // Claude Code PostModelSwitch, added in docs-2026-09-29-r1: an
+        // automatic fallback, which has no requested model.
+        let post_model_switch = serde_json::to_vec(&serde_json::json!({
+            "session_id": "session-1",
+            "transcript_path": "/tmp/claude-transcript.jsonl",
+            "cwd": "/workspace",
+            "hook_event_name": "PostModelSwitch",
+            "from_model": "claude-opus-5",
+            "to_model": "claude-sonnet-5",
+            "requested_model": null,
+            "source": "auto",
+            "context_tokens": 0,
+            "prompt_cache_warm": false,
+            "cache_ttl": "5m",
+            "estimated_cache_write_usd": 0,
+            "pricing": "catalog"
+        }))
+        .unwrap();
+        let emission = execute_harness::<hookkit_claude::protocol::ClaudeCode, _>(
+            post_model_switch,
+            None,
+            &claude_variables,
+            |input, _environment, context| {
+                assert_eq!(
+                    context.event(),
+                    &EventId::builtin(HarnessId::CLAUDE_CODE, "PostModelSwitch")
+                );
+                assert_eq!(
+                    context.provenance(),
+                    ResolutionProvenance::DefinitiveDiscriminator
+                );
+                let hookkit_claude::protocol::AnyInput::PostModelSwitch(input) = input else {
+                    panic!("resolved the wrong Claude Code event")
+                };
+                assert_eq!(input.to_model, "claude-sonnet-5");
+                Ok(hookkit_claude::protocol::AnyCommandOutput::PostModelSwitch(
+                    hookkit_claude::events::PostModelSwitchOutput::with_context(
+                        "On Sonnet, keep diffs small.",
+                    ),
+                ))
+            },
+        )
+        .unwrap();
+        assert_eq!(emission.exit_code(), 0);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(emission.stdout()).unwrap(),
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostModelSwitch",
+                    "additionalContext": "On Sonnet, keep diffs small."
+                }
+            })
+        );
+
         // Codex Interrupt, added in commit-ff6aec9-r1.
         let interrupt = serde_json::to_vec(&serde_json::json!({
             "session_id": "session-123",

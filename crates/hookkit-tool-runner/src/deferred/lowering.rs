@@ -274,12 +274,11 @@ fn build_native_output(
                 None => native,
             }))
         }
-        "antigravity" => Ok(TurnCompletionOutput::Antigravity(
-            hookkit_antigravity::StopOutput {
-                decision: if blocked { "continue" } else { "stop" }.into(),
-                reason: if blocked { Some(reason()?) } else { None },
-            },
-        )),
+        "antigravity" => Ok(TurnCompletionOutput::Antigravity(if blocked {
+            hookkit_antigravity::StopOutput::continue_with(reason()?)
+        } else {
+            hookkit_antigravity::StopOutput::allow_stop()
+        })),
         _ => Err(invalid_data(format!(
             "turn-completion runner does not support {harness}"
         ))),

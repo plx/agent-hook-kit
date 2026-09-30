@@ -12,10 +12,11 @@
 //! | `CLAUDE_ENV_FILE` | [`ENVIRONMENT_FILE_EVENTS`] only | optional path |
 //! | `CLAUDE_EFFORT` | when the model supports effort | optional; compared with the input `effort.level` |
 //! | `TRACEPARENT` | when trace context propagates | optional, may be empty |
-//! | `CLAUDE_PID` | every event, Claude Code v2.1.214 or later | optional positive integer |
+//! | `CLAUDE_PID` | every event, Claude Code v2.1.214 or later | optional positive decimal integer; anything else is ignored |
 //! | `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_REMOTE_SESSION_ID` | cloud sessions | the marker `true` requires the id |
 //! | `CLAUDE_CODE_BRIDGE_SESSION_ID` | local sessions with Remote Control | optional |
-//! | `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` | sessions with an inbox socket | optional; the token only with the socket |
+//! | `CLAUDE_CODE_MESSAGING_SOCKET` | sessions that bind an inbox socket, Claude Code v2.1.224 or later | optional path |
+//! | `CLAUDE_CODE_MESSAGING_TOKEN` | exported alongside the socket, Claude Code v2.1.228 or later | optional; read only when the socket is present |
 //! | `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA`, `CLAUDE_PLUGIN_OPTION_*` | plugin hooks | the complete pair, then its options |
 //!
 //! Hook processes inherit the parent environment, so a variable can be
@@ -23,13 +24,16 @@
 //! Claude Code session started from another session's shell, or a value the
 //! user exported). Parsing therefore fails only on state Claude Code itself
 //! would never produce for a hook: a missing or wrong baseline variable, a
-//! cloud-session marker without its session id, an empty value in a complete
-//! plugin pair or an empty plugin option name, and a malformed `CLAUDE_PID`.
-//! Other optional state that is empty or incomplete is treated as absent: an
-//! empty `CLAUDE_ENV_FILE`, `CLAUDE_EFFORT`, bridge id, or messaging
-//! variable, a `CLAUDE_CODE_REMOTE` other than `true`, a lone plugin
-//! variable, plugin options without the plugin pair, and a messaging token
-//! without a socket.
+//! cloud-session marker without its session id, and an empty value in a
+//! complete plugin pair or an empty plugin option name. Other optional state
+//! that is empty, incomplete, or malformed is treated as absent: an empty
+//! `CLAUDE_ENV_FILE`, `CLAUDE_EFFORT`, bridge id, or messaging variable, a
+//! `CLAUDE_CODE_REMOTE` other than `true`, a lone plugin variable, plugin
+//! options without the plugin pair, a messaging token without a socket, and a
+//! `CLAUDE_PID` that is not a positive decimal process id (Claude Code v2.1.214
+//! and later always export a valid one, so any other value was inherited). A
+//! non-UTF-8 `CLAUDE_PID` is likewise skipped when the environment is
+//! captured, with a warning in the runtime's diagnostics sink.
 
 use hookkit_core::{
     CommandEnvironmentSpec, EnvironmentVariables, EventId, HarnessId, HookkitError, NativeContext,
@@ -211,7 +215,9 @@ pub struct ClaudeCommandEnvironment {
     /// Optional W3C trace context supplied by Claude.
     pub traceparent: Option<String>,
     /// Claude Code's own process ID from `CLAUDE_PID`, set for every hook
-    /// command since Claude Code v2.1.214. `None` on older releases.
+    /// command since Claude Code v2.1.214. `None` on older releases, and when
+    /// the variable is not a positive decimal process id (inherited ambient
+    /// state, since Claude Code never exports such a value).
     pub claude_pid: Option<u32>,
     /// Cross-session messaging socket and token, present only in sessions
     /// that bind an inbox socket. Boxed because it is rarely present, which
@@ -222,9 +228,9 @@ pub struct ClaudeCommandEnvironment {
 impl ClaudeCommandEnvironment {
     /// Parses Claude's declared hook variables for `event`.
     ///
-    /// Fixed marker values, the cloud-session pair, a complete plugin pair,
-    /// and `CLAUDE_PID` are validated; see the module documentation for how
-    /// partial optional state is treated.
+    /// Fixed marker values, the cloud-session pair, and a complete plugin
+    /// pair are validated; see the module documentation for how partial or
+    /// malformed optional state is treated.
     pub fn from_map(
         event: &EventId,
         variables: &EnvironmentVariables,
@@ -279,6 +285,9 @@ impl CommandEnvironmentSpec for ClaudeCommandEnvironment {
         "CLAUDE_CODE_MESSAGING_TOKEN",
     ];
     const VARIABLE_PREFIXES: &'static [&'static str] = &["CLAUDE_PLUGIN_OPTION_"];
+    /// A malformed `CLAUDE_PID` is inherited state that must not disable the
+    /// hook, so a non-UTF-8 value is skipped like one that is not a pid.
+    const LENIENT_VARIABLE_NAMES: &'static [&'static str] = &["CLAUDE_PID"];
 
     fn from_variables(
         event: &EventId,
@@ -370,9 +379,9 @@ impl CommandEnvironmentSpec for ClaudeCommandEnvironment {
             value => ClaudeEffort::Unknown(value.to_owned()),
         });
 
-        let claude_pid = non_empty(variables, "CLAUDE_PID")
-            .map(|value| parse_pid(event, value))
-            .transpose()?;
+        // Claude Code exports its own pid as a positive decimal integer; any
+        // other value is inherited ambient state and is ignored.
+        let claude_pid = variables.get("CLAUDE_PID").and_then(parse_pid);
 
         // Claude Code exports the socket when it binds one and the token
         // alongside it (v2.1.228+). A token without a socket, or an empty
@@ -418,14 +427,13 @@ fn non_empty<'a>(variables: &'a EnvironmentVariables, name: &str) -> Option<&'a 
     variables.get(name).filter(|value| !value.is_empty())
 }
 
-fn parse_pid(event: &EventId, value: &str) -> hookkit_core::Result<u32> {
-    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(invalid(event, "CLAUDE_PID must be a decimal process id"));
+/// Parses a positive decimal process id: ASCII digits only (no sign or
+/// whitespace), non-zero, and within `u32`.
+fn parse_pid(value: &str) -> Option<u32> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
     }
-    match value.parse::<u32>() {
-        Ok(pid) if pid > 0 => Ok(pid),
-        _ => Err(invalid(event, "CLAUDE_PID must be a positive process id")),
-    }
+    value.parse::<u32>().ok().filter(|pid| *pid > 0)
 }
 
 fn required<'a>(
@@ -682,22 +690,47 @@ mod tests {
             parse("PreModelSwitch", &variables).unwrap().claude_pid,
             Some(4242)
         );
+        variables.insert("CLAUDE_PID", "4294967295");
+        assert_eq!(
+            parse("Stop", &variables).unwrap().claude_pid,
+            Some(u32::MAX)
+        );
 
         let mut empty = baseline();
         empty.insert("CLAUDE_PID", "");
         assert_eq!(parse("Stop", &empty).unwrap().claude_pid, None);
+    }
 
-        for invalid in ["0", "-1", "+7", "abc", "4294967296", " 12"] {
+    #[test]
+    fn malformed_claude_pid_is_ignored_as_inherited_state() {
+        // Claude Code never exports these, so they were inherited and must
+        // not fail every hook.
+        for malformed in [
+            "0",
+            "00",
+            "-1",
+            "+7",
+            "abc",
+            "12abc",
+            "4294967296",
+            "99999999999999999999",
+            " 12",
+            "12 ",
+            "1_000",
+            "\u{0661}",
+        ] {
             let mut variables = baseline();
-            variables.insert("CLAUDE_PID", invalid);
-            assert!(
-                matches!(
-                    parse("Stop", &variables),
-                    Err(HookkitError::InvalidHookEnvironment { .. })
-                ),
-                "{invalid:?} should be rejected"
-            );
+            variables.insert("CLAUDE_PID", malformed);
+            for event_name in ["Stop", "SessionStart", "PostModelSwitch"] {
+                let environment = parse(event_name, &variables)
+                    .unwrap_or_else(|error| panic!("{malformed:?} on {event_name}: {error}"));
+                assert_eq!(environment.claude_pid, None, "{malformed:?}");
+            }
         }
+        assert!(
+            <ClaudeCommandEnvironment as CommandEnvironmentSpec>::LENIENT_VARIABLE_NAMES
+                .contains(&"CLAUDE_PID")
+        );
     }
 
     #[test]

@@ -668,3 +668,256 @@ fn typed_native_inputs_are_analyzed_without_an_aligned_clone() {
         analyzer.analyze_post_tool(&post)
     );
 }
+
+#[test]
+fn shell_tool_working_directories_resolve_against_the_effective_cwd() {
+    // A relative Codex `workdir` is joined onto the hook cwd and is the
+    // command's own directory, for shell inference and shell patches alike.
+    let codex = analyze(&codex_pre(
+        "Bash",
+        serde_json::json!({
+            "command": "rm -rf build && apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: new.rs\n+x\n*** End Patch\nEOF\n",
+            "workdir": "crates/core"
+        }),
+    ));
+    let targets = codex
+        .candidates
+        .iter()
+        .map(|candidate| {
+            let (_, resolved, _, base) = path_of(candidate);
+            (resolved.map(Utf8Path::as_str), base)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        targets,
+        vec![
+            (Some("/repo/crates/core/build"), PathBase::InvocationCwd),
+            (Some("/repo/crates/core/new.rs"), PathBase::InvocationCwd),
+        ],
+        "{codex:#?}"
+    );
+    assert!(codex.is_complete(), "{codex:#?}");
+
+    // A relative Antigravity `Cwd` is joined onto the first workspace root.
+    let antigravity = analyze(&antigravity_pre(
+        "run_command",
+        serde_json::json!({"CommandLine": "rm -rf build", "Cwd": "packages/app"}),
+    ));
+    assert_eq!(
+        path_of(&antigravity.candidates[0]),
+        (
+            "build",
+            Some(Utf8Path::new("/repo/packages/app/build")),
+            AccessScope::ExactOrDescendants,
+            PathBase::InvocationCwd
+        )
+    );
+    assert!(antigravity.is_complete(), "{antigravity:#?}");
+}
+
+#[test]
+fn codex_shell_fallback_cwd_is_unverified_for_custom_profiles_too() {
+    // A custom profile whose fallback directory is only a default labels
+    // relative paths as session-relative, like the bundled Codex profile.
+    let profile = hookkit_shell::ShellToolProfile::new("project_shell", "/command")
+        .unwrap()
+        .with_unverified_fallback_cwd();
+    let input = serde_json::json!({"command": "rm generated.txt"});
+    let call = ToolCallRef::new(
+        EventId::builtin(HarnessId::CLAUDE_CODE, "PreToolUse"),
+        ToolPhase::Pre,
+        "project_shell",
+        JsonRef::Value(&input),
+        Some(Utf8Path::new("/repo")),
+        vec![Utf8PathBuf::from("/repo")],
+    );
+    let report = ToolAccessAnalyzer::default()
+        .with_shell_profile(profile)
+        .analyze_call(&call);
+    assert_eq!(
+        path_of(&report.candidates[0]).1,
+        Some(Utf8Path::new("/repo/generated.txt"))
+    );
+    assert_eq!(path_of(&report.candidates[0]).3, PathBase::SessionCwd);
+}
+
+#[test]
+fn shell_home_paths_are_candidates_resolved_only_with_a_known_home() {
+    let input = claude_pre(
+        "Bash",
+        serde_json::json!({"command": "cat ~/.ssh/id_ed25519 > ~/leak.txt"}),
+    );
+    let unresolved = analyze(&input);
+    let mut targets = unresolved
+        .candidates
+        .iter()
+        .map(|candidate| {
+            let (raw, resolved, _, base) = path_of(candidate);
+            (raw, resolved, base, candidate.intent == AccessIntent::Read)
+        })
+        .collect::<Vec<_>>();
+    targets.sort_by_key(|target| target.0);
+    assert_eq!(
+        targets,
+        vec![
+            ("~/.ssh/id_ed25519", None, PathBase::Home, true),
+            ("~/leak.txt", None, PathBase::Home, false),
+        ],
+        "{unresolved:#?}"
+    );
+    // The candidates are recovered evidence, not an unknown evidence arm.
+    assert!(
+        !unresolved
+            .gaps
+            .iter()
+            .any(|gap| matches!(gap.reason, ToolAccessGapReason::UnsupportedShellEvidence)),
+        "{unresolved:#?}"
+    );
+
+    let resolved = ToolAccessAnalyzer::default()
+        .with_home(Some(Utf8PathBuf::from("/home/me")))
+        .analyze_pre_tool(&input);
+    let mut paths = resolved
+        .candidates
+        .iter()
+        .map(|candidate| path_of(candidate).1)
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(
+        paths,
+        vec![
+            Some(Utf8Path::new("/home/me/.ssh/id_ed25519")),
+            Some(Utf8Path::new("/home/me/leak.txt")),
+        ]
+    );
+    // The shell's own `$HOME` may still differ, so the dependence stays a gap.
+    assert!(!resolved.is_complete(), "{resolved:#?}");
+}
+
+#[test]
+fn unsupported_shell_dialect_gaps_name_the_dialect() {
+    let profile = hookkit_shell::ShellToolProfile::new("pwsh", "/command")
+        .unwrap()
+        .with_dialect(hookkit_shell::ShellDialect::PowerShell);
+    let input = serde_json::json!({"command": "Remove-Item secrets.txt"});
+    let call = ToolCallRef::new(
+        EventId::builtin(HarnessId::CODEX, "PreToolUse"),
+        ToolPhase::Pre,
+        "pwsh",
+        JsonRef::Value(&input),
+        Some(Utf8Path::new("/repo")),
+        vec![Utf8PathBuf::from("/repo")],
+    );
+    let report = ToolAccessAnalyzer::default()
+        .with_shell_profile(profile)
+        .analyze_call(&call);
+    let rendered = report
+        .gaps
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert!(
+        rendered.iter().any(|gap| gap.contains("PowerShell")),
+        "{rendered:?}"
+    );
+    assert!(
+        !rendered
+            .iter()
+            .any(|gap| gap.contains("unknown shell-analysis gap")),
+        "{rendered:?}"
+    );
+}
+
+#[test]
+fn antigravity_post_tool_use_without_a_tool_call_is_a_gap() {
+    let value = contract_fixture(
+        "antigravity/snapshots/docs-2026-09-29-r1/events/post-tool-use",
+        "ide-reference-example",
+    );
+    assert!(value.get("toolCall").is_none());
+    let input = PostToolUseInput::Antigravity(serde_json::from_value(value).unwrap());
+
+    assert!(matches!(
+        hookkit_tool_access::observe_post_tool(&input),
+        ToolCallObservation::Gap(_)
+    ));
+    let report = ToolAccessAnalyzer::default().analyze_post_tool(&input);
+    assert!(report.candidates.is_empty());
+    assert!(!report.is_complete());
+    assert!(
+        report
+            .gaps
+            .iter()
+            .any(|gap| matches!(gap.reason, ToolAccessGapReason::MissingToolCall)),
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn antigravity_relative_paths_without_a_workspace_are_gaps() {
+    fn without_workspace(tool_name: &str, args: serde_json::Value) -> ToolAccessReport {
+        analyze(&PreToolUseInput::Antigravity(
+            serde_json::from_value(serde_json::json!({
+                "conversationId": "conversation",
+                "workspacePaths": [],
+                "transcriptPath": "/tmp/transcript.jsonl",
+                "artifactDirectoryPath": "/tmp/artifacts",
+                "toolCall": {"name": tool_name, "args": args},
+                "stepIdx": 1
+            }))
+            .unwrap(),
+        ))
+    }
+    let missing_cwd = |report: &ToolAccessReport| {
+        report.gaps.iter().any(|gap| match &gap.reason {
+            ToolAccessGapReason::MissingWorkingDirectory { .. } => true,
+            ToolAccessGapReason::ShellUnresolved(unresolved) => matches!(
+                unresolved.reason,
+                hookkit_shell::UnresolvedFileAccessReason::MissingWorkingDirectory
+            ),
+            _ => false,
+        })
+    };
+
+    let structured = without_workspace(
+        "write_to_file",
+        serde_json::json!({"TargetFile": "src/.env", "CodeContent": "x"}),
+    );
+    assert_eq!(
+        path_of(&structured.candidates[0]),
+        (
+            "src/.env",
+            None,
+            AccessScope::Exact,
+            PathBase::MissingWorkingDirectory
+        )
+    );
+    assert!(missing_cwd(&structured), "{structured:#?}");
+
+    for args in [
+        serde_json::json!({"CommandLine": "rm -rf build"}),
+        serde_json::json!({"CommandLine": "rm -rf build", "Cwd": "packages/app"}),
+    ] {
+        let shell = without_workspace("run_command", args.clone());
+        assert!(
+            shell
+                .candidates
+                .iter()
+                .all(|candidate| path_of(candidate).1.is_none()),
+            "{args}: {shell:#?}"
+        );
+        assert!(missing_cwd(&shell), "{args}: {shell:#?}");
+        assert!(!shell.is_complete(), "{args}: {shell:#?}");
+    }
+
+    // An absolute path still resolves without a workspace.
+    let absolute = without_workspace(
+        "run_command",
+        serde_json::json!({"CommandLine": "rm -rf /repo/build"}),
+    );
+    assert_eq!(
+        path_of(&absolute.candidates[0]).1,
+        Some(Utf8Path::new("/repo/build"))
+    );
+    assert!(absolute.is_complete(), "{absolute:#?}");
+}

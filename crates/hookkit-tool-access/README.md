@@ -97,13 +97,27 @@ field pointers. Literal, statically delimited shell `apply_patch` (or
 shell source spans and patch-operation provenance. In an unquoted heredoc whose
 hunks contain `$`, header paths free of shell syntax are still recovered, since
 Codex applies the body verbatim; dynamic header paths, partial Bash analysis,
-and cwd uncertainty remain typed gaps.
+and cwd uncertainty remain typed gaps. A here-document on an enclosing
+statement also feeds the command, as in `(cd dir && apply_patch) <<'EOF'` and
+`{ apply_patch; } <<'EOF'`. The Codex-intercepted `cd <dir> && apply_patch`
+form (including a `cd a && cd b && ...` chain) resolves paths against the
+working directory joined with each literal `cd` operand; a non-literal operand
+leaves them unresolved, `Heuristic`, and paired with a
+`ShellPatchWorkingDirectoryMayHaveChanged` gap.
 
 Relative paths carry the basis they were resolved against. `InvocationCwd`
-means the tool's own working directory. `SessionCwd` means only the hook's
-session directory was observable: Codex `Bash` payloads omit the `workdir`
-argument that can move the command elsewhere, and Antigravity structured tools
-are resolved against the first workspace root.
+means the tool's own working directory, including a Codex `workdir` or an
+Antigravity `Cwd` argument (a relative one is joined onto the hook's
+directory). `SessionCwd` means only the hook's session directory was
+observable: Codex `Bash` payloads omit the `workdir` argument that can move the
+command elsewhere (`ShellCwdOrigin::UnverifiedFallback`), and Antigravity
+structured tools are resolved against the first workspace root. A shell path
+beginning with `~` is kept as a `Home` candidate with its raw `~/...` text; it
+is resolved only when the analyzer is built with `with_home`, and its
+dependence on the shell's `$HOME` stays a gap either way. Without a working
+directory (for example an Antigravity payload with empty `workspacePaths`),
+relative paths are reported with a missing-working-directory gap rather than
+dropped.
 
 ## Bounded target materialization
 

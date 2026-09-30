@@ -332,25 +332,19 @@ fn run_turn_completion_view(
         .collect();
     resolve_options.excluded_roots = run.excluded_roots.clone();
     let resolved = resolve_files(view.state(), &resolve_options).map_err(activity_error)?;
-    let skipped_targets = if resolved.truncated {
-        let exhausted = resolved.unresolved_targets.last();
-        view.state()
-            .targets()
-            .iter()
-            .skip_while(|target| Some(*target) != exhausted)
-            .skip(1)
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // Scopes the budget never reached are retried on the next Stop; every
+    // other unresolved scope, including the one whose walk ran out of
+    // budget (it would stop at the same point again), is reported once.
+    let skipped_targets = resolved.unattempted_targets;
+    let mut unresolved_targets = resolved.unresolved_targets;
+    unresolved_targets.retain(|target| !skipped_targets.contains(target));
     let resolution = ActivityResolution {
         not_applicable_files: resolved
             .not_applicable_files
             .into_iter()
             .map(|path| normalize_path(path.as_std_path()))
             .collect(),
-        unresolved_targets: resolved.unresolved_targets,
+        unresolved_targets,
         skipped_targets,
         gap_messages: source_gap_messages(view),
         truncated: resolved.truncated,

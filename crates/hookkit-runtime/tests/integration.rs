@@ -1494,6 +1494,24 @@ fn file_activity_agent_hook_records_all_supported_posttool_paths() {
 }
 
 #[test]
+fn session_modified_file_tracker_reports_usage_errors() {
+    // A misconfigured command line must be visible, not a silent exit 1, and
+    // must never use the harness-blocking exit 2.
+    let output = run_example(
+        "session-modified-file-tracker",
+        b"{}",
+        &["--harness=codex", "--no-such-flag"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--no-such-flag") && stderr.contains("file-activity-agent-hook"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn file_activity_observer_persists_shared_writer_patch_shell_and_gap_analysis_quietly() {
     let project = temp_project("file-activity-shared-analysis");
     let state_dir = project.join("state");
@@ -2720,19 +2738,14 @@ fn turn_completion_per_file_batch_isolates_one_operational_failure() {
 }
 
 /// A scope the traversal budget never reached must be retried on the next
-/// Stop; otherwise the activity it covers is silently lost.
+/// Stop; otherwise the activity it covers is silently lost. The scope whose
+/// walk ran out of budget is reported once instead, because retrying it with
+/// the same budget would stop at the same point.
 ///
-/// Ignored because the Phase 1 runner and file-activity changes disagree:
-/// `resolve_files` now lists the exhausted scope *and every later scope* in
-/// `unresolved_targets`, while `turn_completion::run_turn_completion_view`
-/// still assumes the last unresolved target is the one that exhausted the
-/// budget and retries only the targets after it. The result is that no scope
-/// is ever retried after the budget runs out (`retryTargets` is empty and
-/// `second` is only reported as a gap). The runner (or `ResolvedFiles`, by
-/// reporting the exhausted target) must be fixed; this test asserts the
-/// intended behavior.
+/// `resolve_files` lists the exhausted scope and every later scope in
+/// `unresolved_targets`; the runner retries exactly
+/// `ResolvedFileActivity::unattempted_targets`.
 #[test]
-#[ignore = "runner bug: scopes never attempted after the traversal budget are reported once and dropped instead of retried (see doc comment)"]
 fn turn_completion_retains_scopes_never_attempted_after_the_traversal_budget() {
     require_pkl!();
     let project = temp_project("turn-completion-budget-tail");
@@ -2768,12 +2781,23 @@ fn turn_completion_retains_scopes_never_attempted_after_the_traversal_budget() {
         String::from_utf8_lossy(&stopped.stderr)
     );
     let summary = only_summary(&state_dir);
+    let first = project.join("first").to_string_lossy().into_owned();
     let second = project.join("second").to_string_lossy().into_owned();
     let retry_targets = summary["stateDisposition"]["retryTargets"].to_string();
     assert!(
         retry_targets.contains(&second),
         "the scope the budget never reached must be retried on the next Stop: {}",
         summary["stateDisposition"]
+    );
+    assert!(
+        !retry_targets.contains(&first),
+        "the scope that exhausted the budget is reported, not retried: {}",
+        summary["stateDisposition"]
+    );
+    let reported_gaps = summary["stateDisposition"]["reportedGaps"].to_string();
+    assert!(
+        reported_gaps.contains(&first) && !reported_gaps.contains(&second),
+        "only the exhausted scope is reported as unmaterialized: {reported_gaps}"
     );
 }
 

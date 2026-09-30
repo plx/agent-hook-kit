@@ -67,8 +67,10 @@ pub struct Settings {
     pub lowering_policy: LoweringPolicy,
     /// Directory for the immediate runner's full tool diagnostics, relative to
     /// the project root. `None` (only reachable by constructing settings in
-    /// Rust) falls back to `$TMPDIR/hookkit-artifacts`; it does not disable
-    /// diagnostics files.
+    /// Rust) falls back to the per-user artifact directory under the system
+    /// temporary directory (`hookkit-artifacts-<uid>` on Unix, see
+    /// `hookkit_runtime::artifacts::ArtifactManager::default_temp_dir`); it
+    /// does not disable diagnostics files.
     pub diagnostics_directory: Option<String>,
     /// Behavior when a configured executable cannot be found.
     pub missing_tool_policy: MissingToolPolicy,
@@ -410,24 +412,38 @@ impl Default for FileActivitySettings {
 }
 
 /// Directory basenames pruned by default from reconciliation, target
-/// resolution, and snapshot walks: version-control metadata, dependency and
-/// tool caches that are never agent-authored source, and `.agent-hook-kit`,
-/// which holds the hook's own configuration and diagnostics artifacts.
+/// resolution, and snapshot walks: version-control metadata, dependency,
+/// virtual-environment, cache, and build-tool output directories that are
+/// never agent-authored source, and `.agent-hook-kit`, which holds the hook's
+/// own configuration and diagnostics artifacts.
+///
+/// This is the same list as `hookkit_file_activity::DEFAULT_IGNORED_DIRECTORY_NAMES`,
+/// so direct library callers and the bundled runners prune the same
+/// directories; the runner's tests keep the two in sync.
 pub const DEFAULT_IGNORED_DIRECTORY_NAMES: &[&str] = &[
     ".agent-hook-kit",
     ".context",
+    ".direnv",
     ".git",
+    ".gradle",
     ".hg",
     ".mypy_cache",
     ".next",
+    ".nox",
+    ".nuxt",
+    ".parcel-cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".svelte-kit",
     ".svn",
+    ".terraform",
+    ".tox",
     ".turbo",
     ".venv",
     "__pycache__",
     "node_modules",
     "target",
+    "venv",
 ];
 
 /// Field-preserving overlay for [`FileActivitySettings`].

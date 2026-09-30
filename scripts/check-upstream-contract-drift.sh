@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Discover upstream drift in the registry-selected contract snapshots without
-# mutating anything (see contracts/MAINTENANCE.md).
+# Discover upstream drift in the registry-selected contract snapshots and
+# command-environment supplement without mutating anything (see
+# contracts/MAINTENANCE.md).
 #
-# Every input comes from the selected snapshots' sources.yaml files through
-# `cargo xtask contracts upstream-sources`; this script names no revision, URL,
-# or hash of its own. For each selected source:
+# Every input comes from the selected snapshots' and supplement's sources.yaml
+# files through `cargo xtask contracts upstream-sources`; this script names no
+# revision, URL, or hash of its own. Supplement rows are labeled
+# `command-environments/<supplement-id>/<source-id>`. For each selected source:
 #
 # - a vendored Git tree is fetched at its pinned revision and compared with the
 #   vendored MANIFEST.sha256 (evidence integrity), then fetched at the
@@ -150,7 +152,7 @@ check_content_hash() {
 }
 
 sources="$(cd "$repo_root" && cargo xtask contracts upstream-sources)" \
-  || fail "cannot read the registry-selected snapshot sources"
+  || fail "cannot read the registry-selected snapshot and supplement sources"
 [[ -n "$sources" ]] || fail "the registry-selected snapshots list no sources"
 
 printf 'Upstream contract drift report (non-mutating; see contracts/MAINTENANCE.md)\n'

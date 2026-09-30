@@ -4,8 +4,11 @@ use crate::{
     AccessTarget, PatchOperation, PathBase, PathExpression, ToolAccessGapReason, ToolAccessReport,
     ToolCallRef,
 };
-use hookkit_core::{HarnessId, Utf8Path};
-use hookkit_shell::{BashAnalysis, RedirectionKind, SourceSpan};
+use hookkit_core::{HarnessId, Utf8Path, Utf8PathBuf, normalize_utf8_path};
+use hookkit_shell::{
+    BashAnalysis, CommandOccurrence, ExecutionContext, Redirection, RedirectionKind,
+    RedirectionOperator, SourceSpan,
+};
 
 const BEGIN_PATCH: &str = "*** Begin Patch";
 const END_PATCH: &str = "*** End Patch";
@@ -26,6 +29,8 @@ struct PatchContext<'a> {
     evidence: PatchEvidence<'a>,
     /// Whether header paths may contain unexpanded shell syntax.
     dynamic_body: bool,
+    /// Certainty recorded on every recovered path.
+    certainty: AccessCertainty,
 }
 
 impl PatchContext<'_> {
@@ -65,6 +70,7 @@ pub(crate) fn analyze_patch(call: &ToolCallRef<'_>, report: &mut ToolAccessRepor
             base: call.cwd_base,
             evidence: PatchEvidence::Structured,
             dynamic_body: false,
+            certainty: AccessCertainty::Direct,
         },
         report,
     );
@@ -76,6 +82,23 @@ pub(crate) fn analyze_patch(call: &ToolCallRef<'_>, report: &mut ToolAccessRepor
 /// unquoted here-document only `$`, `` ` ``, and `\` are special, so header
 /// paths free of those characters are recovered even when other lines of
 /// the body are dynamic.
+///
+/// The body is the command's own here-document or, when the command has no
+/// standard-input redirection of its own and does not read a pipe, one
+/// attached to the innermost enclosing statement that redirects standard
+/// input, as in `(cd dir && apply_patch) <<'EOF'` or
+/// `{ apply_patch; } <<'EOF'`. A statement's here-document is only
+/// [`AccessCertainty::Heuristic`] evidence when another command of the
+/// statement (other than `cd`) runs first and may consume the input.
+///
+/// Paths resolve against `cwd` unless a directory change precedes the
+/// command. The Codex-intercepted `cd <dir> && apply_patch` form, including
+/// a chain of `cd` commands joined by `&&` inside a subshell or not,
+/// resolves against `cwd` joined with each literal `cd` operand. A
+/// non-literal operand leaves the paths unresolved and
+/// [`AccessCertainty::Heuristic`], and any other directory change leaves
+/// them unresolved; both also record
+/// [`ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged`].
 pub(crate) fn analyze_shell_patches(
     analysis: &BashAnalysis,
     source: &str,
@@ -86,35 +109,19 @@ pub(crate) fn analyze_shell_patches(
     let directory_changes = analysis
         .commands
         .iter()
-        .filter(|command| {
-            matches!(
-                command
-                    .name
-                    .as_ref()
-                    .and_then(|name| name.literal.as_deref()),
-                Some("cd" | "pushd" | "popd")
-            )
-        })
-        .map(|command| command.span.start_byte)
+        .enumerate()
+        .filter(|(_, command)| matches!(literal_name(command), Some("cd" | "pushd" | "popd")))
+        .map(|(index, _)| index)
         .collect::<Vec<_>>();
 
     for (command_index, command) in analysis.commands.iter().enumerate() {
-        let Some(name) = command
-            .name
-            .as_ref()
-            .and_then(|name| name.literal.as_deref())
-        else {
+        let Some(name) = literal_name(command) else {
             continue;
         };
         if !is_shell_patch_command(name) {
             continue;
         }
-        let heredocs = command
-            .redirections
-            .iter()
-            .filter(|redirection| redirection.kind == RedirectionKind::HereDocument)
-            .collect::<Vec<_>>();
-        if heredocs.is_empty() {
+        let Some(input) = patch_input(analysis, command_index) else {
             report.push_gap(
                 AccessSource::Shell,
                 ToolAccessGapReason::MissingShellPatchHereDocument {
@@ -122,11 +129,39 @@ pub(crate) fn analyze_shell_patches(
                 },
             );
             continue;
-        }
-        let cwd_may_have_changed = directory_changes
-            .iter()
-            .any(|offset| *offset < command.span.start_byte);
-        for redirection in heredocs {
+        };
+        let directory = patch_directory(
+            analysis,
+            source,
+            command_index,
+            &directory_changes,
+            cwd,
+            base,
+        );
+        let (patch_cwd, patch_base, certainty) = match &directory {
+            PatchDirectory::Unchanged => (cwd, base, AccessCertainty::Direct),
+            PatchDirectory::Changed { cwd, base } => {
+                (cwd.as_deref(), *base, AccessCertainty::Direct)
+            }
+            PatchDirectory::Dynamic => (
+                None,
+                PathBase::UnknownAfterDirectoryChange,
+                AccessCertainty::Heuristic,
+            ),
+            PatchDirectory::Unknown => (
+                None,
+                PathBase::UnknownAfterDirectoryChange,
+                AccessCertainty::Direct,
+            ),
+        };
+        let certainty = if input.shared {
+            AccessCertainty::Heuristic
+        } else {
+            certainty
+        };
+        let cwd_may_have_changed =
+            matches!(directory, PatchDirectory::Dynamic | PatchDirectory::Unknown);
+        for redirection in input.heredocs {
             let Some(heredoc) = &redirection.here_document else {
                 report.push_gap(
                     AccessSource::Shell,
@@ -175,12 +210,8 @@ pub(crate) fn analyze_shell_patches(
                 payload,
                 "<shell-heredoc>",
                 PatchContext {
-                    cwd,
-                    base: if cwd_may_have_changed {
-                        PathBase::UnknownAfterDirectoryChange
-                    } else {
-                        base
-                    },
+                    cwd: patch_cwd,
+                    base: patch_base,
                     evidence: PatchEvidence::Shell {
                         command_index,
                         command_span: command.span,
@@ -188,6 +219,7 @@ pub(crate) fn analyze_shell_patches(
                         delimiter,
                     },
                     dynamic_body,
+                    certainty,
                 },
                 report,
             );
@@ -196,6 +228,171 @@ pub(crate) fn analyze_shell_patches(
             }
         }
     }
+}
+
+fn literal_name(command: &CommandOccurrence) -> Option<&str> {
+    command
+        .name
+        .as_ref()
+        .and_then(|name| name.literal.as_deref())
+}
+
+/// Here-documents that may supply a shell patch command's standard input.
+struct PatchInput<'a> {
+    heredocs: Vec<&'a Redirection>,
+    /// The here-documents belong to an enclosing statement in which another
+    /// command runs first and may consume the input.
+    shared: bool,
+}
+
+/// Finds the here-documents feeding `command_index`: its own, or, when it
+/// has no standard-input redirection and does not read a pipe, those of the
+/// innermost enclosing statement that redirects standard input.
+fn patch_input(analysis: &BashAnalysis, command_index: usize) -> Option<PatchInput<'_>> {
+    let command = &analysis.commands[command_index];
+    let own = here_documents(&command.redirections);
+    if !own.is_empty() {
+        return Some(PatchInput {
+            heredocs: own,
+            shared: false,
+        });
+    }
+    if command.redirections.iter().any(redirects_standard_input)
+        || command.context.contains(&ExecutionContext::PipelineInput)
+    {
+        return None;
+    }
+    let statement = analysis
+        .statement_redirections
+        .iter()
+        .filter(|statement| statement.commands.contains(&command_index))
+        .filter(|statement| statement.redirections.iter().any(redirects_standard_input))
+        .min_by_key(|statement| statement.commands.len())?;
+    let heredocs = here_documents(&statement.redirections);
+    if heredocs.is_empty() {
+        return None;
+    }
+    let shared = (statement.commands.start..command_index)
+        .any(|index| literal_name(&analysis.commands[index]) != Some("cd"));
+    Some(PatchInput { heredocs, shared })
+}
+
+fn here_documents(redirections: &[Redirection]) -> Vec<&Redirection> {
+    redirections
+        .iter()
+        .filter(|redirection| redirection.kind == RedirectionKind::HereDocument)
+        .collect()
+}
+
+/// Whether a redirection replaces standard input (descriptor 0).
+fn redirects_standard_input(redirection: &Redirection) -> bool {
+    let reads_input = matches!(
+        redirection.kind,
+        RedirectionKind::HereDocument | RedirectionKind::HereString
+    ) || matches!(
+        redirection.operator,
+        Some(RedirectionOperator::Input | RedirectionOperator::DuplicateInput)
+    );
+    reads_input && matches!(redirection.descriptor.as_deref(), None | Some("0"))
+}
+
+/// Working directory of a shell patch command relative to the invocation.
+#[derive(Debug)]
+enum PatchDirectory {
+    /// No directory change precedes the command.
+    Unchanged,
+    /// Only a `cd <literal> && ...` chain precedes the command; `cwd` is the
+    /// directory it enters, when that can be resolved.
+    Changed {
+        cwd: Option<Utf8PathBuf>,
+        base: PathBase,
+    },
+    /// A `cd` chain with a non-literal operand precedes the command.
+    Dynamic,
+    /// Some other directory change precedes the command.
+    Unknown,
+}
+
+fn patch_directory(
+    analysis: &BashAnalysis,
+    source: &str,
+    command_index: usize,
+    directory_changes: &[usize],
+    cwd: Option<&Utf8Path>,
+    base: PathBase,
+) -> PatchDirectory {
+    let start = analysis.commands[command_index].span.start_byte;
+    let earlier = directory_changes
+        .iter()
+        .copied()
+        .filter(|index| analysis.commands[*index].span.start_byte < start)
+        .collect::<Vec<_>>();
+    if earlier.is_empty() {
+        return PatchDirectory::Unchanged;
+    }
+    // Walk back through the `cd <dir> &&` links immediately preceding the
+    // command; every earlier directory change must be one of them.
+    let mut chain = Vec::new();
+    let mut next = command_index;
+    while let Some(previous) = next.checked_sub(1) {
+        let command = &analysis.commands[previous];
+        if literal_name(command) != Some("cd")
+            || !joined_by_and(source, command, &analysis.commands[next])
+        {
+            break;
+        }
+        chain.push(previous);
+        next = previous;
+    }
+    if chain.is_empty() || earlier.iter().any(|index| !chain.contains(index)) {
+        return PatchDirectory::Unknown;
+    }
+    let mut directory = cwd.map(Utf8Path::to_path_buf);
+    let mut base = base;
+    for index in chain.into_iter().rev() {
+        let Some(operand) = literal_cd_operand(&analysis.commands[index]) else {
+            return PatchDirectory::Dynamic;
+        };
+        let operand = Utf8Path::new(operand);
+        if operand.is_absolute() {
+            // An absolute operand is the directory the patch applies in,
+            // however uncertain the invocation directory was.
+            directory = Some(normalize_utf8_path(operand));
+            base = PathBase::InvocationCwd;
+        } else {
+            directory = directory.map(|directory| normalize_utf8_path(directory.join(operand)));
+        }
+    }
+    PatchDirectory::Changed {
+        cwd: directory,
+        base,
+    }
+}
+
+/// Whether only `&&` (with whitespace or line continuations) separates two
+/// commands, so `next` runs only after `previous` entered its directory.
+fn joined_by_and(source: &str, previous: &CommandOccurrence, next: &CommandOccurrence) -> bool {
+    source
+        .get(previous.span.end_byte..next.span.start_byte)
+        .is_some_and(|between| between.replace("\\\n", " ").trim() == "&&")
+}
+
+/// The single literal directory operand of `cd`, excluding options, `cd -`,
+/// and a bare `cd` (which enters `$HOME`). `CDPATH` is not modeled: Codex
+/// resolves an intercepted `cd` operand against the turn directory itself.
+fn literal_cd_operand(command: &CommandOccurrence) -> Option<&str> {
+    let mut arguments = command.arguments.iter();
+    let mut operand = arguments.next()?;
+    if operand.literal.as_deref() == Some("--") {
+        operand = arguments.next()?;
+    }
+    if arguments.next().is_some() {
+        return None;
+    }
+    operand
+        .literal
+        .as_deref()
+        .filter(|operand| !operand.is_empty() && !operand.starts_with('-'))
 }
 
 fn is_shell_patch_command(name: &str) -> bool {
@@ -613,7 +810,7 @@ impl<'a> Parser<'a, '_> {
                 scope: AccessScope::Exact,
             },
             intent,
-            certainty: AccessCertainty::Direct,
+            certainty: self.context.certainty,
             provenance: match self.context.evidence {
                 PatchEvidence::Structured => AccessProvenance::Patch {
                     payload_pointer: self.payload_pointer.to_owned(),

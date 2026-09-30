@@ -108,10 +108,11 @@ class FileActivity {
   coverageGapPolicy: ("best-effort" | "strict")?
 
   /// Directory basenames pruned from reconciliation, target resolution, and
-  /// snapshot walks. Replaces the whole default list when set: ".agent-hook-kit",
-  /// ".context", ".git", ".hg", ".mypy_cache", ".next", ".pytest_cache",
-  /// ".ruff_cache", ".svn", ".turbo", ".venv", "__pycache__", "node_modules",
-  /// and "target".
+  /// snapshot walks. Replaces the whole default list when set:
+  /// ".agent-hook-kit", ".context", ".direnv", ".git", ".gradle", ".hg",
+  /// ".mypy_cache", ".next", ".nox", ".nuxt", ".parcel-cache", ".pytest_cache",
+  /// ".ruff_cache", ".svelte-kit", ".svn", ".terraform", ".tox", ".turbo",
+  /// ".venv", "__pycache__", "node_modules", "target", and "venv".
   ignoredDirectoryNames: Listing<String>?
 }
 
