@@ -150,12 +150,7 @@ impl PreToolUseOutput {
     pub fn allow(harness: &HarnessId) -> hookkit_core::Result<Self> {
         match harness.as_str() {
             "claude-code" => Ok(Self::Claude(
-                hookkit_claude::catalog::PreToolUseOutput::decide(
-                    hookkit_claude::catalog::PreToolPermissionDecision::Allow,
-                    None,
-                    None,
-                    None,
-                ),
+                hookkit_claude::catalog::PreToolUseOutput::allow(),
             )),
             "codex" => Ok(Self::Codex(
                 hookkit_codex::protocol::PreToolUseOutput::no_op(),
@@ -174,12 +169,7 @@ impl PreToolUseOutput {
         let reason = reason.into();
         match harness.as_str() {
             "claude-code" => Ok(Self::Claude(
-                hookkit_claude::catalog::PreToolUseOutput::decide(
-                    hookkit_claude::catalog::PreToolPermissionDecision::Deny,
-                    Some(reason),
-                    None,
-                    None,
-                ),
+                hookkit_claude::catalog::PreToolUseOutput::deny(reason),
             )),
             "codex" => Ok(Self::Codex(
                 hookkit_codex::protocol::PreToolUseOutput::deny(reason),
@@ -204,14 +194,9 @@ impl PreToolUseOutput {
         updated_input: serde_json::Map<String, serde_json::Value>,
     ) -> hookkit_core::Result<Self> {
         match harness.as_str() {
-            "claude-code" => Ok(Self::Claude(
-                hookkit_claude::catalog::PreToolUseOutput::decide(
-                    hookkit_claude::catalog::PreToolPermissionDecision::Allow,
-                    None,
-                    Some(updated_input),
-                    None,
-                ),
-            )),
+            "claude-code" => hookkit_claude::catalog::PreToolUseOutput::allow()
+                .with_updated_input(updated_input)
+                .map(Self::Claude),
             "codex" => Ok(Self::Codex(
                 hookkit_codex::protocol::PreToolUseOutput::rewrite(updated_input),
             )),
@@ -509,6 +494,8 @@ macro_rules! claude_codex_alignment {
         $(#[$input_meta])*
         #[derive(Debug, Clone)]
         #[non_exhaustive]
+        // Claude's typed inputs are larger than Codex's catalog envelopes.
+        #[allow(clippy::large_enum_variant)]
         pub enum $input {
             /// Claude Code's complete native input.
             Claude($claude_input),
@@ -613,11 +600,7 @@ impl PermissionRequestOutput {
     pub fn allow(harness: &HarnessId) -> hookkit_core::Result<Self> {
         match harness.as_str() {
             "claude-code" => Ok(Self::Claude(
-                hookkit_claude::catalog::PermissionRequestOutput::decide(
-                    hookkit_claude::catalog::PermissionRequestBehavior::Allow,
-                    None,
-                    None,
-                ),
+                hookkit_claude::catalog::PermissionRequestOutput::allow(),
             )),
             "codex" => Ok(Self::Codex(
                 hookkit_codex::catalog::PermissionRequestOutput::allow(),
@@ -631,11 +614,7 @@ impl PermissionRequestOutput {
         let reason = reason.into();
         match harness.as_str() {
             "claude-code" => Ok(Self::Claude(
-                hookkit_claude::catalog::PermissionRequestOutput::decide(
-                    hookkit_claude::catalog::PermissionRequestBehavior::Deny,
-                    Some(reason),
-                    None,
-                ),
+                hookkit_claude::catalog::PermissionRequestOutput::deny(reason),
             )),
             "codex" => Ok(Self::Codex(
                 hookkit_codex::catalog::PermissionRequestOutput::deny(reason),
@@ -752,6 +731,10 @@ impl PostCompactOutput {
     ) -> hookkit_core::Result<Self> {
         let message = message.into();
         match harness.as_str() {
+            // Claude Code discards PostCompact `systemMessage`
+            // (claude-code/docs-2026-09-29-r1); the aligned semantics are
+            // revisited when that snapshot is selected.
+            #[allow(deprecated)]
             "claude-code" => Ok(Self::Claude(
                 hookkit_claude::catalog::PostCompactOutput::with_system_message(message),
             )),
@@ -829,13 +812,7 @@ impl SessionStartInput {
     /// Returns the native session-start source as its wire spelling.
     pub fn source(&self) -> Option<&str> {
         match self {
-            Self::Claude(input) => Some(match input.source {
-                hookkit_claude::protocol::SessionSource::Startup => "startup",
-                hookkit_claude::protocol::SessionSource::Resume => "resume",
-                hookkit_claude::protocol::SessionSource::Fork => "fork",
-                hookkit_claude::protocol::SessionSource::Clear => "clear",
-                hookkit_claude::protocol::SessionSource::Compact => "compact",
-            }),
+            Self::Claude(input) => Some(input.source.as_str()),
             Self::Codex(input) => input.field("source").and_then(serde_json::Value::as_str),
         }
     }

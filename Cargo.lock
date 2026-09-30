@@ -533,11 +533,14 @@ dependencies = [
 name = "hookkit-claude"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "camino",
  "hookkit-core",
+ "jsonschema",
  "proptest",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
 ]
 
 [[package]]

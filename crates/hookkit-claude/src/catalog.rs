@@ -1,55 +1,262 @@
 //! Command-runtime implementations for the Claude events that share the
 //! standard hook envelope.
+//!
+//! Every input here is a [`CatalogInput`]; every output type follows the
+//! crate's output builder conventions (see the [crate] documentation).
 
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSpec, HarnessId, NativeContext, ProcessEmission,
-    RawInvocation, SessionId, ToolCallId,
+    RawInvocation, SessionId, ToolCallId, Utf8PathBuf,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-use crate::{ClaudeCommandEnvironment, protocol::SNAPSHOT_ID};
+use crate::ClaudeCommandEnvironment;
+use crate::protocol::{SNAPSHOT_ID, contract_id, require_event};
+use crate::values::{
+    CompactTrigger, Effort, McpServer, NotificationType, PermissionMode, SessionEndReason,
+    StopFailureError,
+};
 
-/// Lossless shared input envelope for the command events in this module.
+/// Shared input envelope for the command events in this module.
 ///
-/// Event-specific fields remain available through [`Self::field`] while the
-/// fields common to every Claude command hook are strongly typed.
+/// The fields common to every Claude command hook are strongly typed. Every
+/// other top-level field is retained verbatim in a map that
+/// [`Self::field`] and [`Self::fields`] expose, and the typed accessors below
+/// read from that map, so nothing an event sends is dropped. Re-serializing
+/// the input omits absent optional fields; numbers keep their JSON value but
+/// not necessarily their original spelling.
+///
+/// The exact parser that produced an input fixes its [`Self::event_id`].
+/// Parsers check that every required event field is present with its
+/// documented JSON type. Typed accessors return `None` when the field is
+/// absent or has a different type; accessors documented for particular
+/// events also return `None` for every other event, so a field such as
+/// `reason` is never read with the wrong meaning. Prefer them to
+/// [`Self::field`], where a misspelled name silently yields `None`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogInput {
     /// Native session identifier.
     pub session_id: String,
     /// Path to the native conversation transcript.
-    pub transcript_path: hookkit_core::Utf8PathBuf,
+    pub transcript_path: Utf8PathBuf,
     /// Current workspace directory.
-    pub cwd: hookkit_core::Utf8PathBuf,
-    /// Authoritative native event discriminator.
+    pub cwd: Utf8PathBuf,
+    /// Authoritative native event discriminator as sent on the wire.
     pub hook_event_name: String,
     /// Optional nested effort setting.
-    #[serde(default)]
-    pub effort: Option<crate::protocol::Effort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
     /// Permission policy active for the event.
-    #[serde(default)]
-    pub permission_mode: Option<crate::protocol::PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<PermissionMode>,
     /// Prompt identifier associated with the current turn.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_id: Option<String>,
+    /// Session scratchpad directory; absent when the session has none
+    /// (Claude Code v2.1.257 or later).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scratchpad_dir: Option<Utf8PathBuf>,
     #[serde(flatten)]
-    fields: BTreeMap<String, serde_json::Value>,
+    fields: BTreeMap<String, Value>,
+    #[serde(skip)]
+    event: Option<&'static str>,
 }
 
 impl CatalogInput {
     /// Returns one event-specific or unknown top-level field.
-    pub fn field(&self, name: &str) -> Option<&serde_json::Value> {
+    pub fn field(&self, name: &str) -> Option<&Value> {
         self.fields.get(name)
     }
 
     /// Returns all event-specific and unknown top-level fields.
-    pub fn fields(&self) -> &BTreeMap<String, serde_json::Value> {
+    pub fn fields(&self) -> &BTreeMap<String, Value> {
         &self.fields
     }
 
-    pub(crate) fn event_id(&self) -> EventId {
-        catalog_event_id(&self.hook_event_name)
+    /// Returns the exact event this input was parsed for.
+    ///
+    /// For an input produced by an exact parser this is that parser's event,
+    /// even if [`Self::hook_event_name`] is later modified. For an input
+    /// deserialized directly, the identity is derived from
+    /// `hook_event_name`; a name outside the Claude catalog yields a dynamic
+    /// event id carrying that name.
+    pub fn event_id(&self) -> EventId {
+        match self
+            .event
+            .or_else(|| catalog_event_name(&self.hook_event_name))
+        {
+            Some(name) => EventId::builtin(HarnessId::CLAUDE_CODE, name),
+            None => EventId::new(HarnessId::CLAUDE_CODE, self.hook_event_name.clone())
+                .unwrap_or_else(|_| EventId::builtin(HarnessId::CLAUDE_CODE, "unnamed")),
+        }
+    }
+
+    fn event_name(&self) -> &str {
+        self.event.unwrap_or(&self.hook_event_name)
+    }
+
+    fn string(&self, name: &str) -> Option<&str> {
+        self.fields.get(name).and_then(Value::as_str)
+    }
+
+    fn scoped_string(&self, events: &[&str], name: &str) -> Option<&str> {
+        events
+            .contains(&self.event_name())
+            .then(|| self.string(name))
+            .flatten()
+    }
+
+    /// Subagent identifier, when the event ran on behalf of a subagent.
+    /// Always present on `SubagentStart` and `SubagentStop`.
+    pub fn agent_id(&self) -> Option<&str> {
+        self.string("agent_id")
+    }
+
+    /// Subagent type. Always present on `SubagentStart` and `SubagentStop`;
+    /// may be empty on `SubagentStop` for internal agents.
+    pub fn agent_type(&self) -> Option<&str> {
+        self.string("agent_type")
+    }
+
+    /// Harness-native tool name. Present on `PreToolUse`,
+    /// `PermissionRequest`, `PostToolUseFailure`, and `PermissionDenied`.
+    pub fn tool_name(&self) -> Option<&str> {
+        self.string("tool_name")
+    }
+
+    /// Tool arguments in their native JSON shape. Present on the same events
+    /// as [`Self::tool_name`].
+    pub fn tool_input(&self) -> Option<&Value> {
+        self.fields.get("tool_input")
+    }
+
+    /// Native tool-call identifier. Present on `PreToolUse`,
+    /// `PostToolUseFailure`, and `PermissionDenied`; `PermissionRequest`
+    /// does not carry one.
+    pub fn tool_use_id(&self) -> Option<&str> {
+        self.string("tool_use_id")
+    }
+
+    /// MCP server that owns the tool, for MCP tools on Claude Code v2.1.274
+    /// or later. `None` when absent or malformed.
+    pub fn mcp_server(&self) -> Option<McpServer> {
+        self.fields
+            .get("mcp_server")
+            .and_then(|value| McpServer::deserialize(value).ok())
+    }
+
+    /// Prompt text for `UserPromptSubmit` and `UserPromptExpansion`.
+    pub fn prompt(&self) -> Option<&str> {
+        self.scoped_string(&["UserPromptSubmit", "UserPromptExpansion"], "prompt")
+    }
+
+    /// Whether a Stop hook already continued this turn, for `Stop` and
+    /// `SubagentStop`.
+    pub fn stop_hook_active(&self) -> Option<bool> {
+        ["Stop", "SubagentStop"]
+            .contains(&self.event_name())
+            .then(|| self.fields.get("stop_hook_active").and_then(Value::as_bool))
+            .flatten()
+    }
+
+    /// Final assistant text for `Stop`, `SubagentStop`, and `StopFailure`.
+    ///
+    /// Optional: the Agent SDK types it optional, and a subagent that hands
+    /// back through `SubagentHandback` sends only closing text, if any.
+    pub fn last_assistant_message(&self) -> Option<&str> {
+        self.scoped_string(
+            &["Stop", "SubagentStop", "StopFailure"],
+            "last_assistant_message",
+        )
+    }
+
+    /// Path to the subagent transcript, for `SubagentStop`.
+    pub fn agent_transcript_path(&self) -> Option<&str> {
+        self.scoped_string(&["SubagentStop"], "agent_transcript_path")
+    }
+
+    /// Reason the session ended, for `SessionEnd`.
+    pub fn session_end_reason(&self) -> Option<SessionEndReason> {
+        self.scoped_string(&["SessionEnd"], "reason")
+            .map(SessionEndReason::from)
+    }
+
+    /// Notification text, for `Notification`.
+    pub fn notification_message(&self) -> Option<&str> {
+        self.scoped_string(&["Notification"], "message")
+    }
+
+    /// Notification kind, for `Notification`.
+    pub fn notification_type(&self) -> Option<NotificationType> {
+        self.scoped_string(&["Notification"], "notification_type")
+            .map(NotificationType::from)
+    }
+
+    /// Optional notification title, for `Notification`.
+    pub fn notification_title(&self) -> Option<&str> {
+        self.scoped_string(&["Notification"], "title")
+    }
+
+    /// API failure that ended the turn, for `StopFailure`.
+    pub fn stop_failure_error(&self) -> Option<StopFailureError> {
+        self.scoped_string(&["StopFailure"], "error")
+            .map(StopFailureError::from)
+    }
+
+    /// Optional failure detail string, for `StopFailure`.
+    pub fn stop_failure_details(&self) -> Option<&str> {
+        self.scoped_string(&["StopFailure"], "error_details")
+    }
+
+    /// What triggered compaction, for `PreCompact` and `PostCompact`.
+    pub fn compact_trigger(&self) -> Option<CompactTrigger> {
+        self.scoped_string(&["PreCompact", "PostCompact"], "trigger")
+            .map(CompactTrigger::from)
+    }
+
+    /// Instructions passed to a manual `/compact`, for `PreCompact`.
+    ///
+    /// `None` for automatic compaction and for a bare `/compact`, where
+    /// Claude Code sends `null`.
+    pub fn custom_instructions(&self) -> Option<&str> {
+        self.scoped_string(&["PreCompact"], "custom_instructions")
+    }
+
+    /// Generated conversation summary, for `PostCompact`.
+    pub fn compact_summary(&self) -> Option<&str> {
+        self.scoped_string(&["PostCompact"], "compact_summary")
+    }
+
+    /// Error text reported by the failed tool, for `PostToolUseFailure`.
+    pub fn tool_error(&self) -> Option<&str> {
+        self.scoped_string(&["PostToolUseFailure"], "error")
+    }
+
+    /// Whether the failure reached Claude Code as an abort, for
+    /// `PostToolUseFailure`.
+    pub fn is_interrupt(&self) -> Option<bool> {
+        (self.event_name() == "PostToolUseFailure")
+            .then(|| self.fields.get("is_interrupt").and_then(Value::as_bool))
+            .flatten()
+    }
+
+    /// Denial reason, for `PermissionDenied`.
+    pub fn permission_denied_reason(&self) -> Option<&str> {
+        self.scoped_string(&["PermissionDenied"], "reason")
+    }
+
+    /// Tool calls in the completed batch, for `PostToolBatch`.
+    pub fn tool_calls(&self) -> Option<&[Value]> {
+        (self.event_name() == "PostToolBatch")
+            .then(|| {
+                self.fields
+                    .get("tool_calls")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+            })
+            .flatten()
     }
 
     pub(crate) fn context(&self) -> NativeContext {
@@ -57,11 +264,7 @@ impl CatalogInput {
             workspace_roots: vec![self.cwd.clone()],
             session_id: SessionId::new(&self.session_id).ok(),
             transcript_path: Some(self.transcript_path.clone()),
-            tool_call_id: self
-                .fields
-                .get("tool_use_id")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|id| ToolCallId::new(id).ok()),
+            tool_call_id: self.tool_use_id().and_then(|id| ToolCallId::new(id).ok()),
             ..NativeContext::default()
         }
     }
@@ -78,46 +281,154 @@ impl CatalogInput {
     }
 }
 
-fn catalog_event_id(event: &str) -> EventId {
-    let event = match event {
-        "ConfigChange" => "ConfigChange",
-        "CwdChanged" => "CwdChanged",
-        "DirectoryAdded" => "DirectoryAdded",
-        "Elicitation" => "Elicitation",
-        "ElicitationResult" => "ElicitationResult",
-        "FileChanged" => "FileChanged",
-        "InstructionsLoaded" => "InstructionsLoaded",
-        "MessageDisplay" => "MessageDisplay",
-        "Notification" => "Notification",
-        "PermissionDenied" => "PermissionDenied",
-        "PermissionRequest" => "PermissionRequest",
-        "PostCompact" => "PostCompact",
-        "PostToolBatch" => "PostToolBatch",
-        "PostToolUseFailure" => "PostToolUseFailure",
-        "PreCompact" => "PreCompact",
-        "PreToolUse" => "PreToolUse",
-        "SessionEnd" => "SessionEnd",
-        "Setup" => "Setup",
-        "Stop" => "Stop",
-        "StopFailure" => "StopFailure",
-        "SubagentStart" => "SubagentStart",
-        "SubagentStop" => "SubagentStop",
-        "TaskCompleted" => "TaskCompleted",
-        "TaskCreated" => "TaskCreated",
-        "TeammateIdle" => "TeammateIdle",
-        "UserPromptExpansion" => "UserPromptExpansion",
-        "UserPromptSubmit" => "UserPromptSubmit",
-        "WorktreeRemove" => "WorktreeRemove",
-        _ => unreachable!("catalog inputs are created only by exact event parsers"),
-    };
-    EventId::builtin(HarnessId::CLAUDE_CODE, event)
+const CATALOG_EVENTS: &[&str] = &[
+    "ConfigChange",
+    "CwdChanged",
+    "DirectoryAdded",
+    "Elicitation",
+    "ElicitationResult",
+    "FileChanged",
+    "InstructionsLoaded",
+    "MessageDisplay",
+    "Notification",
+    "PermissionDenied",
+    "PermissionRequest",
+    "PostCompact",
+    "PostToolBatch",
+    "PostToolUseFailure",
+    "PreCompact",
+    "PreToolUse",
+    "SessionEnd",
+    "Setup",
+    "Stop",
+    "StopFailure",
+    "SubagentStart",
+    "SubagentStop",
+    "TaskCompleted",
+    "TaskCreated",
+    "TeammateIdle",
+    "UserPromptExpansion",
+    "UserPromptSubmit",
+    "WorktreeRemove",
+];
+
+fn catalog_event_name(event: &str) -> Option<&'static str> {
+    CATALOG_EVENTS.iter().copied().find(|name| *name == event)
+}
+
+/// JSON type a required input field must have.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum FieldKind {
+    Any,
+    String,
+    Bool,
+    Array,
+    NullableString,
+}
+
+impl FieldKind {
+    fn accepts(self, value: &Value) -> bool {
+        match self {
+            Self::Any => true,
+            Self::String => value.is_string(),
+            Self::Bool => value.is_boolean(),
+            Self::Array => value.is_array(),
+            Self::NullableString => value.is_string() || value.is_null(),
+        }
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Any => "any JSON value",
+            Self::String => "a string",
+            Self::Bool => "a boolean",
+            Self::Array => "an array",
+            Self::NullableString => "a string or null",
+        }
+    }
+}
+
+pub(crate) fn require_fields(
+    invocation: &RawInvocation,
+    event: &'static str,
+    required: &[(&str, FieldKind)],
+) -> hookkit_core::Result<()> {
+    for (field, kind) in required {
+        let invalid = |message: String| hookkit_core::HookkitError::InvalidInputForHint {
+            event: EventId::builtin(HarnessId::CLAUDE_CODE, event),
+            message,
+        };
+        match invocation.json().get(field) {
+            None => return Err(invalid(format!("missing required field {field}"))),
+            Some(value) if !kind.accepts(value) => {
+                return Err(invalid(format!(
+                    "field {field} must be {}",
+                    kind.describe()
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn parse(
+    invocation: &RawInvocation,
+    event: &'static str,
+    required: &[(&str, FieldKind)],
+) -> hookkit_core::Result<CatalogInput> {
+    require_event(invocation, event)?;
+    require_fields(invocation, event, required)?;
+    let mut input = CatalogInput::deserialize(invocation.json())?;
+    input.event = Some(event);
+    Ok(input)
+}
+
+/// Reports whether Claude Code parses `text` as JSON rather than plain text.
+///
+/// Since Claude Code v2.1.248, stdout whose trimmed form starts with `{` and
+/// ends with `}` is parsed as a JSON response; when that fails the text is
+/// dropped and a hook error is reported instead of adding context.
+pub(crate) fn parsed_as_json(text: &str) -> bool {
+    let trimmed = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    trimmed.starts_with('{') && trimmed.ends_with('}')
 }
 
 #[derive(Debug, Clone)]
 enum Outcome {
-    Json(serde_json::Value),
+    /// Exit 0 with a JSON object on stdout.
+    Json(Map<String, Value>),
+    /// Exit 0 with plain-text stdout.
     Text(String),
-    BlockingError(String),
+    /// Exit 0 with empty stdout.
+    Empty,
+    /// Exit 2 with a JSON object on stdout and required stderr.
+    BlockingJson {
+        value: Map<String, Value>,
+        stderr: String,
+    },
+    /// Nonzero exit with stderr and empty stdout.
+    Stderr {
+        message: String,
+        exit_code: u8,
+        required: bool,
+    },
+}
+
+/// Builds `{"hookSpecificOutput": {"hookEventName": <event>, ..fields}}`.
+fn hook_specific_object<E: EventSpec>(
+    fields: impl IntoIterator<Item = (&'static str, Value)>,
+) -> Map<String, Value> {
+    let mut specific = Map::new();
+    specific.insert("hookEventName".into(), E::EVENT.name().into());
+    specific.extend(
+        fields
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value)),
+    );
+    let mut object = Map::new();
+    object.insert("hookSpecificOutput".into(), Value::Object(specific));
+    object
 }
 
 #[derive(Debug, Clone)]
@@ -126,197 +437,240 @@ enum Outcome {
 /// Public event-specific output types are the intended constructors. This type
 /// exists so dynamic harness dispatch can retain the exact event arm.
 pub struct CatalogOutput {
-    event: &'static str,
+    event: EventId,
+    contract: ContractId,
     outcome: Outcome,
 }
 
 impl CatalogOutput {
-    fn json(event: &'static str, value: serde_json::Value) -> Self {
+    fn new<E: EventSpec>(outcome: Outcome) -> Self {
         Self {
-            event,
-            outcome: Outcome::Json(value),
+            event: E::EVENT,
+            contract: E::CONTRACT,
+            outcome,
         }
     }
 
-    fn text(event: &'static str, value: impl Into<String>) -> Self {
-        Self {
-            event,
-            outcome: Outcome::Text(value.into()),
+    pub(crate) fn json<E: EventSpec>(value: Map<String, Value>) -> Self {
+        Self::new::<E>(Outcome::Json(value))
+    }
+
+    pub(crate) fn empty_object<E: EventSpec>() -> Self {
+        Self::json::<E>(Map::new())
+    }
+
+    pub(crate) fn empty<E: EventSpec>() -> Self {
+        Self::new::<E>(Outcome::Empty)
+    }
+
+    /// A JSON object holding exactly `fields` at the top level.
+    pub(crate) fn top_level<E: EventSpec>(
+        fields: impl IntoIterator<Item = (&'static str, Value)>,
+    ) -> Self {
+        Self::json::<E>(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value))
+                .collect(),
+        )
+    }
+
+    /// A JSON object whose `hookSpecificOutput` holds the event's
+    /// discriminator and `fields`.
+    pub(crate) fn hook_specific<E: EventSpec>(
+        fields: impl IntoIterator<Item = (&'static str, Value)>,
+    ) -> Self {
+        Self::json::<E>(hook_specific_object::<E>(fields))
+    }
+
+    /// [`Self::hook_specific`] printed while exiting 2 with required
+    /// `stderr`.
+    pub(crate) fn hook_specific_with_stderr<E: EventSpec>(
+        fields: impl IntoIterator<Item = (&'static str, Value)>,
+        stderr: String,
+    ) -> Self {
+        Self::new::<E>(Outcome::BlockingJson {
+            value: hook_specific_object::<E>(fields),
+            stderr,
+        })
+    }
+
+    /// A JSON object with a top-level `decision: "block"` and `reason`.
+    pub(crate) fn block<E: EventSpec>(reason: String) -> Self {
+        Self::top_level::<E>([("decision", "block".into()), ("reason", reason.into())])
+    }
+
+    /// Plain-text context, re-routed to `additionalContext` JSON when Claude
+    /// Code would parse the text as JSON and drop it.
+    pub(crate) fn text_context<E: EventSpec>(text: String) -> Self {
+        if parsed_as_json(&text) {
+            Self::hook_specific::<E>([("additionalContext", text.into())])
+        } else {
+            Self::new::<E>(Outcome::Text(text))
         }
     }
 
-    fn blocking(event: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            event,
-            outcome: Outcome::BlockingError(message.into()),
+    pub(crate) fn blocking<E: EventSpec>(message: impl Into<String>) -> Self {
+        Self::new::<E>(Outcome::Stderr {
+            message: message.into(),
+            exit_code: 2,
+            required: true,
+        })
+    }
+
+    pub(crate) fn nonblocking<E: EventSpec>(message: impl Into<String>) -> Self {
+        Self::new::<E>(Outcome::Stderr {
+            message: message.into(),
+            exit_code: 1,
+            required: true,
+        })
+    }
+
+    pub(crate) fn failure<E: EventSpec>(
+        message: impl Into<String>,
+        exit_code: u8,
+    ) -> hookkit_core::Result<Self> {
+        if exit_code == 0 {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "failure exit code must be nonzero",
+            ));
+        }
+        Ok(Self::new::<E>(Outcome::Stderr {
+            message: message.into(),
+            exit_code,
+            required: false,
+        }))
+    }
+
+    fn object_mut(&mut self) -> hookkit_core::Result<&mut Map<String, Value>> {
+        match &mut self.outcome {
+            Outcome::Json(value) => Ok(value),
+            _ => Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "structured fields cannot be added to text, empty, or exit-code output",
+            )),
         }
     }
 
-    fn with_top_level(
+    fn object(&self) -> Option<&Map<String, Value>> {
+        match &self.outcome {
+            Outcome::Json(value) | Outcome::BlockingJson { value, .. } => Some(value),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn with_top_level(
         mut self,
         name: &'static str,
-        value: serde_json::Value,
+        value: Value,
     ) -> hookkit_core::Result<Self> {
-        let Outcome::Json(output) = &mut self.outcome else {
-            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "structured fields cannot be added to text or blocking output",
-            ));
-        };
-        output
-            .as_object_mut()
-            .ok_or(hookkit_core::HookkitError::InvalidProcessEmission(
-                "structured command output must be a JSON object",
-            ))?
-            .insert(name.into(), value);
+        self.object_mut()?.insert(name.into(), value);
         Ok(self)
     }
 
-    fn with_permission_decision_field(
-        mut self,
-        name: &'static str,
-        value: serde_json::Value,
-    ) -> hookkit_core::Result<Self> {
-        let Outcome::Json(output) = &mut self.outcome else {
-            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "permission decision fields require structured output",
-            ));
-        };
-        output
-            .get_mut("hookSpecificOutput")
-            .and_then(|specific| specific.get_mut("decision"))
-            .and_then(serde_json::Value::as_object_mut)
-            .ok_or(hookkit_core::HookkitError::InvalidProcessEmission(
-                "permission decision fields require an existing decision",
-            ))?
-            .insert(name.into(), value);
-        Ok(self)
-    }
-
-    fn with_hook_specific_field(
-        mut self,
-        name: &'static str,
-        value: serde_json::Value,
-    ) -> hookkit_core::Result<Self> {
-        let Outcome::Json(output) = &mut self.outcome else {
-            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "hook-specific fields require structured output",
-            ));
-        };
-        let output =
-            output
-                .as_object_mut()
-                .ok_or(hookkit_core::HookkitError::InvalidProcessEmission(
-                    "structured command output must be a JSON object",
-                ))?;
-        let specific = output
+    pub(crate) fn specific_mut(&mut self) -> hookkit_core::Result<&mut Map<String, Value>> {
+        let event = self.event.name().to_owned();
+        self.object_mut()?
             .entry("hookSpecificOutput")
-            .or_insert_with(|| serde_json::json!({"hookEventName": self.event}))
+            .or_insert_with(|| serde_json::json!({ "hookEventName": event }))
             .as_object_mut()
             .ok_or(hookkit_core::HookkitError::InvalidProcessEmission(
                 "hookSpecificOutput must be a JSON object",
-            ))?;
-        specific.insert(name.into(), value);
+            ))
+    }
+
+    pub(crate) fn with_specific(
+        mut self,
+        name: &'static str,
+        value: Value,
+    ) -> hookkit_core::Result<Self> {
+        self.specific_mut()?.insert(name.into(), value);
         Ok(self)
     }
 
+    pub(crate) fn specific_field(&self, name: &str) -> Option<&Value> {
+        self.object()?.get("hookSpecificOutput")?.get(name)
+    }
+
+    pub(crate) fn with_block(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
+        self.object_mut()?;
+        self.insert_block(reason.into());
+        Ok(self)
+    }
+
+    /// Adds `decision: "block"` and `reason` to a JSON outcome; a no-op for
+    /// any other outcome.
+    pub(crate) fn insert_block(&mut self, reason: String) {
+        if let Outcome::Json(value) = &mut self.outcome {
+            value.insert("decision".into(), "block".into());
+            value.insert("reason".into(), reason.into());
+        }
+    }
+
+    pub(crate) fn into_blocking(self, stderr: impl Into<String>) -> hookkit_core::Result<Self> {
+        let Outcome::Json(value) = self.outcome else {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "only a structured JSON response can exit 2 with stdout",
+            ));
+        };
+        Ok(Self {
+            outcome: Outcome::BlockingJson {
+                value,
+                stderr: stderr.into(),
+            },
+            ..self
+        })
+    }
+
     pub(crate) fn event_id(&self) -> EventId {
-        EventId::builtin(HarnessId::CLAUDE_CODE, self.event)
+        self.event.clone()
     }
 
     pub(crate) fn emit(self) -> hookkit_core::Result<ProcessEmission> {
-        let contract = ContractId::builtin(match self.event {
-            "ConfigChange" => "claude-code/docs-2026-08-05-r1/ConfigChange",
-            "CwdChanged" => "claude-code/docs-2026-08-05-r1/CwdChanged",
-            "DirectoryAdded" => "claude-code/docs-2026-08-05-r1/DirectoryAdded",
-            "Elicitation" => "claude-code/docs-2026-08-05-r1/Elicitation",
-            "ElicitationResult" => "claude-code/docs-2026-08-05-r1/ElicitationResult",
-            "FileChanged" => "claude-code/docs-2026-08-05-r1/FileChanged",
-            "InstructionsLoaded" => "claude-code/docs-2026-08-05-r1/InstructionsLoaded",
-            "MessageDisplay" => "claude-code/docs-2026-08-05-r1/MessageDisplay",
-            "Notification" => "claude-code/docs-2026-08-05-r1/Notification",
-            "PermissionDenied" => "claude-code/docs-2026-08-05-r1/PermissionDenied",
-            "PermissionRequest" => "claude-code/docs-2026-08-05-r1/PermissionRequest",
-            "PostCompact" => "claude-code/docs-2026-08-05-r1/PostCompact",
-            "PostToolBatch" => "claude-code/docs-2026-08-05-r1/PostToolBatch",
-            "PostToolUseFailure" => "claude-code/docs-2026-08-05-r1/PostToolUseFailure",
-            "PreCompact" => "claude-code/docs-2026-08-05-r1/PreCompact",
-            "PreToolUse" => "claude-code/docs-2026-08-05-r1/PreToolUse",
-            "SessionEnd" => "claude-code/docs-2026-08-05-r1/SessionEnd",
-            "Setup" => "claude-code/docs-2026-08-05-r1/Setup",
-            "Stop" => "claude-code/docs-2026-08-05-r1/Stop",
-            "StopFailure" => "claude-code/docs-2026-08-05-r1/StopFailure",
-            "SubagentStart" => "claude-code/docs-2026-08-05-r1/SubagentStart",
-            "SubagentStop" => "claude-code/docs-2026-08-05-r1/SubagentStop",
-            "TaskCompleted" => "claude-code/docs-2026-08-05-r1/TaskCompleted",
-            "TaskCreated" => "claude-code/docs-2026-08-05-r1/TaskCreated",
-            "TeammateIdle" => "claude-code/docs-2026-08-05-r1/TeammateIdle",
-            "UserPromptExpansion" => "claude-code/docs-2026-08-05-r1/UserPromptExpansion",
-            "UserPromptSubmit" => "claude-code/docs-2026-08-05-r1/UserPromptSubmit",
-            "WorktreeRemove" => "claude-code/docs-2026-08-05-r1/WorktreeRemove",
-            _ => unreachable!("catalog output constructors fix the event"),
-        });
+        let contract = self.contract;
         match self.outcome {
             Outcome::Json(value) => ProcessEmission::command_json(contract, &value),
             Outcome::Text(value) => Ok(ProcessEmission::command_text(contract, value)),
-            Outcome::BlockingError(message) => {
-                ProcessEmission::command_required_stderr(contract, message, 2)
+            Outcome::Empty => Ok(ProcessEmission::command_empty(contract)),
+            Outcome::BlockingJson { value, stderr } => {
+                if stderr.is_empty() {
+                    return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                        "protocol outcome requires non-empty stderr",
+                    ));
+                }
+                Ok(ProcessEmission::command_unchecked(
+                    contract,
+                    serde_json::to_vec(&value)?,
+                    stderr.into_bytes(),
+                    2,
+                ))
             }
+            Outcome::Stderr {
+                message,
+                exit_code,
+                required: true,
+            } => ProcessEmission::command_required_stderr(contract, message, exit_code),
+            Outcome::Stderr {
+                message,
+                exit_code,
+                required: false,
+            } => ProcessEmission::command_stderr(contract, message, exit_code),
         }
     }
 }
 
-fn parse(
-    invocation: &RawInvocation,
-    event: &'static str,
-    required_fields: &[&str],
-) -> hookkit_core::Result<CatalogInput> {
-    super::protocol::require_event(invocation, event)?;
-    for field in required_fields {
-        if invocation.json().get(field).is_none() {
-            return Err(hookkit_core::HookkitError::InvalidInputForHint {
-                event: EventId::builtin(HarnessId::CLAUDE_CODE, event),
-                message: format!("missing required field {field}"),
-            });
-        }
-    }
-    serde_json::from_value(invocation.json().clone()).map_err(Into::into)
-}
-
-fn specific(event: &'static str, fields: serde_json::Value) -> serde_json::Value {
-    let mut fields = fields.as_object().cloned().unwrap_or_default();
-    fields.insert("hookEventName".into(), event.into());
-    serde_json::json!({"hookSpecificOutput": fields})
-}
-
-fn context(event: &'static str, value: impl Into<String>) -> serde_json::Value {
-    specific(
-        event,
-        serde_json::json!({"additionalContext": value.into()}),
-    )
-}
-
-fn block(reason: impl Into<String>) -> serde_json::Value {
-    serde_json::json!({"decision": "block", "reason": reason.into()})
-}
-
-fn block_with_context(
-    event: &'static str,
-    reason: impl Into<String>,
-    additional_context: impl Into<String>,
-) -> serde_json::Value {
-    let mut value = block(reason);
-    value.as_object_mut().expect("object").insert(
-        "hookSpecificOutput".into(),
-        serde_json::json!({
-            "hookEventName": event,
-            "additionalContext": additional_context.into(),
-        }),
-    );
-    value
+macro_rules! output_type {
+    ($output:ident, $name:literal) => {
+        #[derive(Debug, Clone)]
+        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
+        pub struct $output(CatalogOutput);
+    };
 }
 
 macro_rules! event_spec {
-    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
+    (
+        $event:ident, $output:ident, $name:literal, $category:ident,
+        [$($required:literal : $kind:ident),* $(,)?]
+    ) => {
         #[doc = concat!("Native Claude Code `", $name, "` command contract.")]
         pub enum $event {}
 
@@ -328,13 +682,10 @@ macro_rules! event_spec {
             const SNAPSHOT: hookkit_core::SnapshotId = SNAPSHOT_ID;
             const EVENT: EventId = EventId::builtin(HarnessId::CLAUDE_CODE, $name);
             const CATEGORY: EventCategory = EventCategory::$category;
-            const CONTRACT: ContractId = ContractId::builtin(concat!(
-                "claude-code/docs-2026-08-05-r1/",
-                $name
-            ));
+            const CONTRACT: ContractId = contract_id!($name);
 
             fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
-                parse(invocation, $name, &[$($required),*])
+                parse(invocation, $name, &[$(($required, FieldKind::$kind)),*])
             }
 
             fn emit(output: Self::CommandOutput) -> hookkit_core::Result<ProcessEmission> {
@@ -367,643 +718,991 @@ macro_rules! event_spec {
     };
 }
 
-macro_rules! universal_output_methods {
-    ($output:ident) => {
+/// Generates the always-available `no_op` constructor.
+macro_rules! no_op {
+    ($event:ident, $output:ident) => {
         impl $output {
-            /// Sets Claude's universal top-level `continue` control.
-            pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("continue", continue_session.into())
-                    .map(Self)
+            /// Creates an empty structured response (`{}`).
+            pub fn no_op() -> Self {
+                Self($crate::catalog::CatalogOutput::empty_object::<$event>())
+            }
+        }
+    };
+}
+pub(crate) use no_op;
+
+/// Generates universal-field builders Claude Code honors for the event.
+macro_rules! universal_builders {
+    ($output:ident: $($field:ident),* $(,)?) => {
+        impl $output {
+            $(universal_builders!(@active $field);)*
+        }
+    };
+    (@active continue_session) => {
+        /// Sets Claude's universal top-level `continue` control. `false`
+        /// stops Claude after the hook runs, taking precedence over
+        /// event-specific decisions.
+        pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("continue", continue_session.into())
+                .map(Self)
+        }
+    };
+    (@active stop_reason) => {
+        /// Sets the universal top-level `stopReason`, shown to the user when
+        /// `continue` is `false`. It stays in the conversation, so Claude sees
+        /// it if the conversation continues.
+        pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("stopReason", reason.into().into())
+                .map(Self)
+        }
+    };
+    (@active system_message) => {
+        /// Sets the universal top-level `systemMessage`, a warning shown to
+        /// the user.
+        pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("systemMessage", message.into().into())
+                .map(Self)
+        }
+    };
+    (@active terminal_sequence) => {
+        /// Requests emission of an allowlisted terminal notification
+        /// sequence (OSC 0/1/2/9/99/777 or BEL). Claude Code writes it only in
+        /// an interactive session with its interface on screen.
+        pub fn with_terminal_sequence(
+            self,
+            sequence: impl Into<String>,
+        ) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("terminalSequence", sequence.into().into())
+                .map(Self)
+        }
+    };
+}
+pub(crate) use universal_builders;
+
+/// Generates deprecated builders for universal fields Claude Code discards
+/// on the event. They still emit the field, which the output schema accepts.
+macro_rules! discarded_builders {
+    ($event:ident, $output:ident: $($field:ident),* $(,)?) => {
+        impl $output {
+            $(discarded_builders!(@discarded $event, $field);)*
+        }
+    };
+    (@discarded $event:ident, continue_session) => {
+        /// Sets the universal `continue` field, which Claude Code discards
+        /// for this event.
+        #[deprecated(note = "Claude Code discards `continue` for this event (claude-code/docs-2026-09-29-r1)")]
+        pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("continue", continue_session.into())
+                .map(Self)
+        }
+    };
+    (@discarded $event:ident, stop_reason) => {
+        /// Sets the universal `stopReason` field, which has no effect because
+        /// Claude Code discards `continue` for this event.
+        #[deprecated(note = "Claude Code discards `continue` and `stopReason` for this event (claude-code/docs-2026-09-29-r1)")]
+        pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("stopReason", reason.into().into())
+                .map(Self)
+        }
+    };
+    (@discarded $event:ident, system_message) => {
+        /// Sets the universal `systemMessage` field, which Claude Code
+        /// discards for this event.
+        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-09-29-r1)")]
+        pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("systemMessage", message.into().into())
+                .map(Self)
+        }
+    };
+    (@discarded $event:ident, terminal_sequence) => {
+        /// Sets the universal `terminalSequence` field, which Claude Code
+        /// ignores for this event.
+        #[deprecated(note = "Claude Code ignores this event's JSON output, including `terminalSequence` (claude-code/docs-2026-09-29-r1)")]
+        pub fn with_terminal_sequence(
+            self,
+            sequence: impl Into<String>,
+        ) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("terminalSequence", sequence.into().into())
+                .map(Self)
+        }
+    };
+    (@discarded $event:ident, suppress_output) => {
+        /// Sets the universal `suppressOutput` field. Claude Code accepts it
+        /// but ignores it on every event: a successful hook's stdout is never
+        /// shown in the transcript.
+        #[deprecated(note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-29-r1)")]
+        pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("suppressOutput", suppress.into())
+                .map(Self)
+        }
+    };
+    (@discarded $event:ident, system_message_constructor) => {
+        /// Creates a response carrying only a `systemMessage`, which Claude
+        /// Code discards for this event.
+        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-09-29-r1); use `no_op`")]
+        pub fn with_system_message(message: impl Into<String>) -> Self {
+            Self($crate::catalog::CatalogOutput::top_level::<$event>([(
+                "systemMessage",
+                message.into().into(),
+            )]))
+        }
+    };
+}
+
+/// Generates the `with_context` constructor and the chainable
+/// `with_additional_context` builder.
+macro_rules! context_builders {
+    ($event:ident, $output:ident, $where_:literal) => {
+        impl $output {
+            #[doc = concat!(
+                        "Creates a structured response that adds `additionalContext` for Claude ",
+                        $where_, "."
+                    )]
+            pub fn with_context(additional_context: impl Into<String>) -> Self {
+                Self($crate::catalog::CatalogOutput::hook_specific::<$event>([(
+                    "additionalContext",
+                    additional_context.into().into(),
+                )]))
             }
 
-            /// Sets the universal top-level stop reason.
-            pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("stopReason", reason.into().into())
-                    .map(Self)
-            }
-
-            /// Sets whether Claude suppresses the hook's ordinary output.
-            pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("suppressOutput", suppress.into())
-                    .map(Self)
-            }
-
-            /// Sets a universal top-level system message.
-            pub fn with_system_message(
+            /// Sets `hookSpecificOutput.additionalContext` on a structured
+            /// response, replacing any earlier value.
+            pub fn with_additional_context(
                 self,
-                message: impl Into<String>,
+                additional_context: impl Into<String>,
             ) -> hookkit_core::Result<Self> {
                 self.0
-                    .with_top_level("systemMessage", message.into().into())
-                    .map(Self)
-            }
-
-            /// Requests emission of an allowlisted terminal notification sequence.
-            pub fn with_terminal_sequence(
-                self,
-                sequence: impl Into<String>,
-            ) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("terminalSequence", sequence.into().into())
+                    .with_specific("additionalContext", additional_context.into().into())
                     .map(Self)
             }
         }
     };
 }
+pub(crate) use context_builders;
 
-macro_rules! system_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
-        #[derive(Debug, Clone)]
-        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
-        pub struct $output(CatalogOutput);
-
+/// Generates the plain-text context constructor with Claude's JSON guard.
+macro_rules! text_context {
+    ($event:ident, $output:ident) => {
         impl $output {
-            /// Creates an empty structured response.
-            pub fn no_op() -> Self {
-                Self(CatalogOutput::json($name, serde_json::json!({})))
+            /// Creates a successful plain-text context response.
+            ///
+            /// Claude Code v2.1.248 and later parse stdout whose trimmed text
+            /// starts with `{` and ends with `}` as JSON and drop it when it is
+            /// not a valid response. Such text is therefore emitted as
+            /// structured `additionalContext` instead, so the context always
+            /// reaches Claude. Other text is written verbatim, without a
+            /// trailing newline.
+            pub fn text_context(context: impl Into<String>) -> Self {
+                Self($crate::catalog::CatalogOutput::text_context::<$event>(
+                    context.into(),
+                ))
             }
+        }
+    };
+}
+pub(crate) use text_context;
 
-            /// Creates a response containing a top-level system message.
-            pub fn with_system_message(message: impl Into<String>) -> Self {
-                Self(CatalogOutput::json(
-                    $name,
-                    serde_json::json!({"systemMessage": message.into()}),
+/// Generates top-level `decision: "block"` constructors and builders.
+macro_rules! block_builders {
+    ($event:ident, $output:ident, $effect:literal) => {
+        impl $output {
+            #[doc = concat!("Creates a top-level `decision: \"block\"` response. ", $effect)]
+            pub fn block(reason: impl Into<String>) -> Self {
+                Self($crate::catalog::CatalogOutput::block::<$event>(
+                    reason.into(),
                 ))
             }
 
-            /// Sets Claude's universal top-level `continue` control.
-            pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("continue", continue_session.into())
-                    .map(Self)
-            }
-
-            /// Sets the universal top-level stop reason.
-            pub fn with_stop_reason(
-                self,
-                reason: impl Into<String>,
-            ) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("stopReason", reason.into().into())
-                    .map(Self)
-            }
-
-            /// Sets whether Claude suppresses the hook's ordinary output.
-            pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("suppressOutput", suppress.into())
-                    .map(Self)
-            }
-
-            /// Requests emission of an allowlisted terminal notification sequence.
-            pub fn with_terminal_sequence(
-                self,
-                sequence: impl Into<String>,
-            ) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("terminalSequence", sequence.into().into())
-                    .map(Self)
+            /// Adds a top-level `decision: "block"` and `reason` to a
+            /// structured response, replacing any earlier reason.
+            pub fn with_block(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
+                self.0.with_block(reason).map(Self)
             }
         }
-
-        event_spec!($event, $output, $name, $category, [$($required),*]);
     };
 }
+pub(crate) use block_builders;
 
-macro_rules! context_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
-        #[derive(Debug, Clone)]
-        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
-        pub struct $output(CatalogOutput);
-
+/// Generates the combined block-and-context constructor.
+macro_rules! block_with_context {
+    ($event:ident, $output:ident) => {
         impl $output {
-            /// Creates an empty structured response.
-            pub fn no_op() -> Self {
-                Self(CatalogOutput::json($name, serde_json::json!({})))
-            }
-
-            /// Creates a structured response that appends agent context.
-            pub fn with_context(additional_context: impl Into<String>) -> Self {
-                Self(CatalogOutput::json($name, context($name, additional_context)))
-            }
-
-            /// Sets the top-level `continue` control.
-            pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("continue", continue_session.into())
-                    .map(Self)
-            }
-
-            /// Sets the top-level stop reason on a structured response.
-            pub fn with_stop_reason(
-                self,
-                reason: impl Into<String>,
-            ) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("stopReason", reason.into().into())
-                    .map(Self)
-            }
-
-            /// Sets whether Claude suppresses ordinary hook output.
-            pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("suppressOutput", suppress.into())
-                    .map(Self)
-            }
-
-            /// Sets a top-level system message on a structured response.
-            pub fn with_system_message(
-                self,
-                message: impl Into<String>,
-            ) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("systemMessage", message.into().into())
-                    .map(Self)
-            }
-
-            /// Requests emission of an allowlisted terminal notification sequence.
-            pub fn with_terminal_sequence(
-                self,
-                sequence: impl Into<String>,
-            ) -> hookkit_core::Result<Self> {
-                self.0
-                    .with_top_level("terminalSequence", sequence.into().into())
-                    .map(Self)
-            }
-        }
-
-        event_spec!($event, $output, $name, $category, [$($required),*]);
-    };
-}
-
-macro_rules! blocking_context_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
-        context_event!($event, $output, $name, $category, [$($required),*]);
-
-        impl $output {
-            /// Creates a structured block response.
-            pub fn block(reason: impl Into<String>) -> Self {
-                Self(CatalogOutput::json($name, block(reason)))
-            }
-
-            /// Blocks while also appending context for the agent.
+            /// Blocks with `reason` while also adding `additionalContext` for
+            /// Claude. Equivalent to `with_context(additional_context)`
+            /// followed by `with_block(reason)`.
             pub fn block_with_context(
                 reason: impl Into<String>,
                 additional_context: impl Into<String>,
             ) -> Self {
-                Self(CatalogOutput::json(
-                    $name,
-                    block_with_context($name, reason, additional_context),
+                let mut output = $crate::catalog::CatalogOutput::hook_specific::<$event>([(
+                    "additionalContext",
+                    additional_context.into().into(),
+                )]);
+                output.insert_block(reason.into());
+                Self(output)
+            }
+        }
+    };
+}
+
+/// Generates the code-2 constructor and the structured exit-2 builder.
+macro_rules! blocking_error {
+    ($event:ident, $output:ident, $effect:literal) => {
+        impl $output {
+            #[doc = concat!(
+                        "Creates a code-2 blocking response with required, non-empty stderr. ",
+                        $effect
+                    )]
+            pub fn blocking_error(message: impl Into<String>) -> Self {
+                Self($crate::catalog::CatalogOutput::blocking::<$event>(message))
+            }
+        }
+    };
+}
+pub(crate) use blocking_error;
+
+/// Generates `into_blocking_error` for events whose exit 2 blocks while
+/// Claude Code still reads JSON stdout.
+macro_rules! into_blocking_error {
+    ($output:ident) => {
+        impl $output {
+            /// Emits this structured response on stdout while exiting 2 with
+            /// `message` on stderr.
+            ///
+            /// Claude Code still blocks, reads the JSON fields, and uses a JSON
+            /// blocking `reason` as the message when the JSON makes one. If
+            /// the JSON fails validation the block stands and `message` is the
+            /// reason, so this is the fail-closed form of a structured block.
+            /// `message` must be non-empty. No field can be added afterwards.
+            pub fn into_blocking_error(
+                self,
+                message: impl Into<String>,
+            ) -> hookkit_core::Result<Self> {
+                self.0.into_blocking(message).map(Self)
+            }
+        }
+    };
+}
+pub(crate) use into_blocking_error;
+
+/// Generates `into_feedback_error` for events whose exit 2 only shows stderr
+/// to Claude while Claude Code still reads JSON stdout.
+macro_rules! into_feedback_error {
+    ($output:ident) => {
+        impl $output {
+            /// Emits this structured response on stdout while exiting 2 with
+            /// `message` on stderr.
+            ///
+            /// Claude Code reads JSON on every exit code, so the structured
+            /// fields still apply, and it shows `message` to Claude as
+            /// feedback. Nothing is blocked. `message` must be non-empty. No
+            /// field can be added afterwards.
+            pub fn into_feedback_error(
+                self,
+                message: impl Into<String>,
+            ) -> hookkit_core::Result<Self> {
+                self.0.into_blocking(message).map(Self)
+            }
+        }
+    };
+}
+
+/// Generates the exit-1 user-notice constructor.
+macro_rules! nonblocking_error {
+    ($event:ident, $output:ident) => {
+        impl $output {
+            /// Reports a non-blocking hook error: exits 1 with required stderr,
+            /// which Claude Code shows the user as a `<hook> hook error`
+            /// notice. The action proceeds and Claude does not see the text.
+            pub fn nonblocking_error(message: impl Into<String>) -> Self {
+                Self($crate::catalog::CatalogOutput::nonblocking::<$event>(
+                    message,
                 ))
             }
-
-            /// Creates a code-2 blocking response with required stderr text.
-            pub fn blocking_error(message: impl Into<String>) -> Self {
-                Self(CatalogOutput::blocking($name, message))
-            }
         }
     };
 }
+pub(crate) use nonblocking_error;
 
-macro_rules! blocking_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
-        #[derive(Debug, Clone)]
-        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
-        pub struct $output(CatalogOutput);
-
+/// Generates the terminal-sequence constructor for output-discarding events.
+macro_rules! terminal_sequence_constructor {
+    ($event:ident, $output:ident) => {
         impl $output {
-            /// Creates an empty structured response.
-            pub fn no_op() -> Self {
-                Self(CatalogOutput::json($name, serde_json::json!({})))
-            }
-
-            /// Creates a structured block response.
-            pub fn block(reason: impl Into<String>) -> Self {
-                Self(CatalogOutput::json($name, block(reason)))
-            }
-
-            /// Creates a code-2 blocking response with required stderr text.
-            pub fn blocking_error(message: impl Into<String>) -> Self {
-                Self(CatalogOutput::blocking($name, message))
+            /// Creates a response carrying only `terminalSequence`, the one
+            /// output field this event honors.
+            pub fn terminal_sequence(sequence: impl Into<String>) -> Self {
+                Self($crate::catalog::CatalogOutput::top_level::<$event>([(
+                    "terminalSequence",
+                    sequence.into().into(),
+                )]))
             }
         }
-
-        universal_output_methods!($output);
-        event_spec!($event, $output, $name, $category, [$($required),*]);
     };
 }
 
-macro_rules! exit2_event {
-    ($event:ident, $output:ident, $name:literal, $category:ident, [$($required:literal),* $(,)?]) => {
-        #[derive(Debug, Clone)]
-        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
-        pub struct $output(CatalogOutput);
-
+/// Generates the `system_message` constructor for events that deliver it.
+macro_rules! system_message_constructor {
+    ($event:ident, $output:ident, $delivery:literal) => {
         impl $output {
-            /// Creates an empty structured response.
-            pub fn no_op() -> Self {
-                Self(CatalogOutput::json($name, serde_json::json!({})))
+            #[doc = concat!("Creates a response carrying a top-level `systemMessage`. ", $delivery)]
+            pub fn system_message(message: impl Into<String>) -> Self {
+                Self($crate::catalog::CatalogOutput::top_level::<$event>([(
+                    "systemMessage",
+                    message.into().into(),
+                )]))
             }
 
-            /// Creates a code-2 blocking response with required stderr text.
-            pub fn blocking_error(message: impl Into<String>) -> Self {
-                Self(CatalogOutput::blocking($name, message))
+            /// Creates a response carrying a top-level `systemMessage`.
+            ///
+            /// This associated function predates the builder convention; a
+            /// later release turns `with_system_message` into a `self`
+            /// builder like the other events'.
+            #[deprecated(note = "renamed to `system_message`; the `with_` prefix is reserved for builders that take `self`")]
+            pub fn with_system_message(message: impl Into<String>) -> Self {
+                Self::system_message(message)
             }
         }
-
-        universal_output_methods!($output);
-        event_spec!($event, $output, $name, $category, [$($required),*]);
     };
 }
 
-system_event!(
-    CwdChanged,
-    CwdChangedOutput,
-    "CwdChanged",
-    Context,
-    ["old_cwd", "new_cwd"]
-);
-system_event!(
-    DirectoryAdded,
-    DirectoryAddedOutput,
-    "DirectoryAdded",
-    Context,
-    ["directory", "source"]
-);
-system_event!(
-    FileChanged,
-    FileChangedOutput,
-    "FileChanged",
-    Context,
-    ["file_path", "event"]
-);
-system_event!(
+fn watch_paths_value(
+    paths: Vec<Utf8PathBuf>,
+    message: &'static str,
+) -> hookkit_core::Result<Value> {
+    if paths.iter().any(|path| !path.is_absolute()) {
+        return Err(hookkit_core::HookkitError::InvalidProcessEmission(message));
+    }
+    Ok(Value::Array(
+        paths
+            .into_iter()
+            .map(|path| Value::String(path.into_string()))
+            .collect(),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Output-discarding events: Setup, InstructionsLoaded, Notification,
+// StopFailure, SessionEnd, PostCompact.
+// ---------------------------------------------------------------------------
+
+output_type!(SetupOutput, "Setup");
+event_spec!(Setup, SetupOutput, "Setup", Session, ["trigger": String]);
+no_op!(Setup, SetupOutput);
+discarded_builders!(Setup, SetupOutput: continue_session, stop_reason, system_message, terminal_sequence, suppress_output);
+
+impl SetupOutput {
+    /// Creates an empty response. Claude Code discards every Setup output
+    /// field, including `additionalContext`, so this emits `{}`.
+    #[deprecated(
+        note = "Claude Code discards Setup output, including `additionalContext` (claude-code/docs-2026-09-29-r1); this now emits `{}`, use `no_op`"
+    )]
+    pub fn with_context(additional_context: impl Into<String>) -> Self {
+        let _ = additional_context.into();
+        Self::no_op()
+    }
+}
+
+output_type!(InstructionsLoadedOutput, "InstructionsLoaded");
+event_spec!(
     InstructionsLoaded,
     InstructionsLoadedOutput,
     "InstructionsLoaded",
     Context,
-    ["file_path", "memory_type", "load_reason"]
+    ["file_path": String, "memory_type": String, "load_reason": String]
 );
-system_event!(
+no_op!(InstructionsLoaded, InstructionsLoadedOutput);
+terminal_sequence_constructor!(InstructionsLoaded, InstructionsLoadedOutput);
+universal_builders!(InstructionsLoadedOutput: terminal_sequence);
+discarded_builders!(InstructionsLoaded, InstructionsLoadedOutput: system_message_constructor, continue_session, stop_reason, suppress_output);
+
+output_type!(NotificationOutput, "Notification");
+event_spec!(
     Notification,
     NotificationOutput,
     "Notification",
     Other,
-    ["message", "notification_type"]
+    ["message": String, "notification_type": String]
 );
-system_event!(
+no_op!(Notification, NotificationOutput);
+terminal_sequence_constructor!(Notification, NotificationOutput);
+universal_builders!(NotificationOutput: terminal_sequence);
+discarded_builders!(Notification, NotificationOutput: system_message_constructor, continue_session, stop_reason, suppress_output);
+
+output_type!(StopFailureOutput, "StopFailure");
+event_spec!(StopFailure, StopFailureOutput, "StopFailure", Agent, ["error": String]);
+no_op!(StopFailure, StopFailureOutput);
+terminal_sequence_constructor!(StopFailure, StopFailureOutput);
+universal_builders!(StopFailureOutput: terminal_sequence);
+discarded_builders!(StopFailure, StopFailureOutput: system_message_constructor, continue_session, stop_reason, suppress_output);
+
+output_type!(SessionEndOutput, "SessionEnd");
+event_spec!(SessionEnd, SessionEndOutput, "SessionEnd", Session, ["reason": String]);
+no_op!(SessionEnd, SessionEndOutput);
+terminal_sequence_constructor!(SessionEnd, SessionEndOutput);
+universal_builders!(SessionEndOutput: terminal_sequence);
+nonblocking_error!(SessionEnd, SessionEndOutput);
+discarded_builders!(SessionEnd, SessionEndOutput: system_message_constructor, continue_session, stop_reason, suppress_output);
+
+output_type!(PostCompactOutput, "PostCompact");
+event_spec!(
     PostCompact,
     PostCompactOutput,
     "PostCompact",
     Context,
-    ["trigger", "compact_summary"]
+    ["trigger": String, "compact_summary": String]
 );
-system_event!(
-    SessionEnd,
-    SessionEndOutput,
-    "SessionEnd",
-    Session,
-    ["reason"]
+no_op!(PostCompact, PostCompactOutput);
+terminal_sequence_constructor!(PostCompact, PostCompactOutput);
+universal_builders!(PostCompactOutput: terminal_sequence);
+nonblocking_error!(PostCompact, PostCompactOutput);
+discarded_builders!(PostCompact, PostCompactOutput: system_message_constructor, continue_session, stop_reason, suppress_output);
+
+// ---------------------------------------------------------------------------
+// Workspace events: CwdChanged, FileChanged, DirectoryAdded, WorktreeRemove.
+// ---------------------------------------------------------------------------
+
+output_type!(CwdChangedOutput, "CwdChanged");
+event_spec!(
+    CwdChanged,
+    CwdChangedOutput,
+    "CwdChanged",
+    Context,
+    ["old_cwd": String, "new_cwd": String]
 );
-system_event!(
-    StopFailure,
-    StopFailureOutput,
-    "StopFailure",
-    Agent,
-    ["error"]
+no_op!(CwdChanged, CwdChangedOutput);
+system_message_constructor!(
+    CwdChanged,
+    CwdChangedOutput,
+    "Interactive sessions show it as a brief terminal notification; it does not reach the SDK message stream."
 );
-system_event!(
-    WorktreeRemove,
-    WorktreeRemoveOutput,
-    "WorktreeRemove",
-    Worktree,
-    ["worktree_path"]
-);
+universal_builders!(CwdChangedOutput: terminal_sequence);
+nonblocking_error!(CwdChanged, CwdChangedOutput);
+discarded_builders!(CwdChanged, CwdChangedOutput: continue_session, stop_reason, suppress_output);
 
 impl CwdChangedOutput {
     /// Replaces the dynamic watched-path list after the directory change.
     ///
-    /// An empty list clears dynamically registered paths. Matcher-configured
-    /// paths remain active in Claude Code.
-    pub fn with_watch_paths(
-        self,
-        paths: Vec<hookkit_core::Utf8PathBuf>,
-    ) -> hookkit_core::Result<Self> {
-        if paths.iter().any(|path| !path.is_absolute()) {
-            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "CwdChanged watch paths must be absolute",
-            ));
-        }
-        self.0
-            .with_hook_specific_field(
-                "watchPaths",
-                serde_json::to_value(paths).expect("UTF-8 paths are serializable"),
-            )
-            .map(Self)
+    /// Every path must be absolute. An empty list clears dynamically
+    /// registered paths; matcher-configured paths remain active.
+    pub fn with_watch_paths(self, paths: Vec<Utf8PathBuf>) -> hookkit_core::Result<Self> {
+        let paths = watch_paths_value(paths, "CwdChanged watch paths must be absolute")?;
+        self.0.with_specific("watchPaths", paths).map(Self)
     }
 }
+
+output_type!(FileChangedOutput, "FileChanged");
+event_spec!(
+    FileChanged,
+    FileChangedOutput,
+    "FileChanged",
+    Context,
+    ["file_path": String, "event": String]
+);
+no_op!(FileChanged, FileChangedOutput);
+system_message_constructor!(
+    FileChanged,
+    FileChangedOutput,
+    "Interactive sessions show it as a brief terminal notification; it does not reach the SDK message stream."
+);
+universal_builders!(FileChangedOutput: terminal_sequence);
+nonblocking_error!(FileChanged, FileChangedOutput);
+discarded_builders!(FileChanged, FileChangedOutput: continue_session, stop_reason, suppress_output);
 
 impl FileChangedOutput {
     /// Replaces the dynamic watched-path list after the file change.
     ///
-    /// An empty list clears dynamically registered paths. Matcher-configured
-    /// paths remain active in Claude Code.
-    pub fn with_watch_paths(
-        self,
-        paths: Vec<hookkit_core::Utf8PathBuf>,
-    ) -> hookkit_core::Result<Self> {
-        if paths.iter().any(|path| !path.is_absolute()) {
-            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "FileChanged watch paths must be absolute",
-            ));
-        }
-        self.0
-            .with_hook_specific_field(
-                "watchPaths",
-                serde_json::to_value(paths).expect("UTF-8 paths are serializable"),
-            )
-            .map(Self)
+    /// Every path must be absolute. An empty list clears dynamically
+    /// registered paths; matcher-configured paths remain active.
+    pub fn with_watch_paths(self, paths: Vec<Utf8PathBuf>) -> hookkit_core::Result<Self> {
+        let paths = watch_paths_value(paths, "FileChanged watch paths must be absolute")?;
+        self.0.with_specific("watchPaths", paths).map(Self)
     }
 }
 
-blocking_event!(
-    ConfigChange,
-    ConfigChangeOutput,
-    "ConfigChange",
+output_type!(DirectoryAddedOutput, "DirectoryAdded");
+event_spec!(
+    DirectoryAdded,
+    DirectoryAddedOutput,
+    "DirectoryAdded",
     Context,
-    ["source"]
+    ["directory": String, "source": String]
 );
-blocking_context_event!(
-    PostToolBatch,
-    PostToolBatchOutput,
-    "PostToolBatch",
-    Tool,
-    ["tool_calls"]
+no_op!(DirectoryAdded, DirectoryAddedOutput);
+system_message_constructor!(
+    DirectoryAdded,
+    DirectoryAddedOutput,
+    "Claude Code delivers it to Claude as context for `slash_command` additions and writes it only to the debug log for `register_repo_root`."
 );
-context_event!(
-    PostToolUseFailure,
-    PostToolUseFailureOutput,
-    "PostToolUseFailure",
-    Tool,
-    ["tool_name", "tool_input", "tool_use_id", "error"]
+universal_builders!(DirectoryAddedOutput: terminal_sequence);
+discarded_builders!(DirectoryAdded, DirectoryAddedOutput: continue_session, stop_reason, suppress_output);
+
+output_type!(WorktreeRemoveOutput, "WorktreeRemove");
+event_spec!(
+    WorktreeRemove,
+    WorktreeRemoveOutput,
+    "WorktreeRemove",
+    Worktree,
+    ["worktree_path": String]
 );
+discarded_builders!(WorktreeRemove, WorktreeRemoveOutput: system_message_constructor, continue_session, stop_reason, terminal_sequence, suppress_output);
 
-impl PostToolUseFailureOutput {
-    /// Creates a structured block-style feedback response.
-    pub fn block(reason: impl Into<String>) -> Self {
-        Self(CatalogOutput::json("PostToolUseFailure", block(reason)))
-    }
-
-    /// Adds block-style feedback and appends context for the agent.
-    pub fn block_with_context(
-        reason: impl Into<String>,
-        additional_context: impl Into<String>,
-    ) -> Self {
-        Self(CatalogOutput::json(
-            "PostToolUseFailure",
-            block_with_context("PostToolUseFailure", reason, additional_context),
-        ))
-    }
-
-    /// Creates a code-2 feedback response with required stderr text.
+impl WorktreeRemoveOutput {
+    /// Reports that the worktree was removed: exits 0 with empty stdout.
     ///
-    /// The tool has already failed, so Claude Code shows the feedback to
-    /// Claude without blocking or rolling back an action.
-    pub fn feedback_error(message: impl Into<String>) -> Self {
-        Self(CatalogOutput::blocking("PostToolUseFailure", message))
+    /// Claude Code reads only the exit code and nothing else from the hook,
+    /// so the hook itself must have deleted the directory.
+    pub fn removed() -> Self {
+        Self(CatalogOutput::empty::<WorktreeRemove>())
+    }
+
+    /// Reports a failed removal: exits with nonzero `exit_code` and writes
+    /// `message`, which may be empty, to stderr.
+    ///
+    /// Claude Code fails the removal when `worktree_path` still exists
+    /// afterwards, leaving the worktree on disk with no git fallback, and
+    /// writes the stderr to its debug log. Any nonzero exit, including the
+    /// HookKit runtime's exit-1 error path, has this effect.
+    pub fn failed(message: impl Into<String>, exit_code: u8) -> hookkit_core::Result<Self> {
+        CatalogOutput::failure::<WorktreeRemove>(message, exit_code).map(Self)
+    }
+
+    /// Creates an exit-0 response with `{}` on stdout, which Claude Code
+    /// ignores; the worktree counts as removed.
+    #[deprecated(
+        note = "WorktreeRemove has no JSON output (claude-code/docs-2026-09-29-r1); use `removed`"
+    )]
+    pub fn no_op() -> Self {
+        Self(CatalogOutput::empty_object::<WorktreeRemove>())
     }
 }
-blocking_event!(
-    PreCompact,
-    PreCompactOutput,
-    "PreCompact",
-    Context,
-    ["trigger", "custom_instructions"]
-);
-context_event!(Setup, SetupOutput, "Setup", Session, ["trigger"]);
-blocking_context_event!(
-    Stop,
-    StopOutput,
-    "Stop",
-    Agent,
-    ["stop_hook_active", "last_assistant_message"]
-);
-context_event!(
+
+// ---------------------------------------------------------------------------
+// Context events: SubagentStart, MessageDisplay, PermissionDenied.
+// ---------------------------------------------------------------------------
+
+output_type!(SubagentStartOutput, "SubagentStart");
+event_spec!(
     SubagentStart,
     SubagentStartOutput,
     "SubagentStart",
     Agent,
-    ["agent_id", "agent_type"]
+    ["agent_id": String, "agent_type": String]
 );
-blocking_context_event!(
-    SubagentStop,
-    SubagentStopOutput,
-    "SubagentStop",
-    Agent,
-    [
-        "stop_hook_active",
-        "agent_id",
-        "agent_type",
-        "agent_transcript_path",
-        "last_assistant_message"
-    ]
+no_op!(SubagentStart, SubagentStartOutput);
+context_builders!(
+    SubagentStart,
+    SubagentStartOutput,
+    "at the start of the subagent's conversation"
 );
-exit2_event!(
-    TaskCompleted,
-    TaskCompletedOutput,
-    "TaskCompleted",
-    Agent,
-    ["task_id", "task_subject"]
-);
-exit2_event!(
-    TaskCreated,
-    TaskCreatedOutput,
-    "TaskCreated",
-    Agent,
-    ["task_id", "task_subject"]
-);
-exit2_event!(
-    TeammateIdle,
-    TeammateIdleOutput,
-    "TeammateIdle",
-    Agent,
-    ["teammate_name", "team_name"]
-);
+nonblocking_error!(SubagentStart, SubagentStartOutput);
+universal_builders!(SubagentStartOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(SubagentStart, SubagentStartOutput: suppress_output);
 
-#[derive(Debug, Clone)]
-/// Native response from a Claude Code elicitation command hook.
-pub struct ElicitationOutput(CatalogOutput);
-
-impl ElicitationOutput {
-    /// Creates an empty structured response.
-    pub fn no_op() -> Self {
-        Self(CatalogOutput::json("Elicitation", serde_json::json!({})))
-    }
-
-    /// Accepts the elicitation with native response content.
-    pub fn accept(content: serde_json::Map<String, serde_json::Value>) -> Self {
-        Self(CatalogOutput::json(
-            "Elicitation",
-            specific(
-                "Elicitation",
-                serde_json::json!({"action": "accept", "content": content}),
-            ),
-        ))
-    }
-
-    /// Declines the elicitation.
-    pub fn decline() -> Self {
-        Self(CatalogOutput::json(
-            "Elicitation",
-            specific("Elicitation", serde_json::json!({"action": "decline"})),
-        ))
-    }
-
-    /// Cancels the elicitation.
-    pub fn cancel() -> Self {
-        Self(CatalogOutput::json(
-            "Elicitation",
-            specific("Elicitation", serde_json::json!({"action": "cancel"})),
-        ))
-    }
-
-    /// Creates a code-2 blocking response with required stderr text.
-    pub fn blocking_error(message: impl Into<String>) -> Self {
-        Self(CatalogOutput::blocking("Elicitation", message))
-    }
-}
-event_spec!(
-    Elicitation,
-    ElicitationOutput,
-    "Elicitation",
-    Other,
-    ["mcp_server_name", "message"]
-);
-universal_output_methods!(ElicitationOutput);
-
-#[derive(Debug, Clone)]
-/// Native response from a Claude Code elicitation-result command hook.
-pub struct ElicitationResultOutput(CatalogOutput);
-
-impl ElicitationResultOutput {
-    /// Creates an empty structured response.
-    pub fn no_op() -> Self {
-        Self(CatalogOutput::json(
-            "ElicitationResult",
-            serde_json::json!({}),
-        ))
-    }
-
-    /// Replaces the result with accepted native content.
-    pub fn accept(content: serde_json::Map<String, serde_json::Value>) -> Self {
-        Self(CatalogOutput::json(
-            "ElicitationResult",
-            specific(
-                "ElicitationResult",
-                serde_json::json!({"action": "accept", "content": content}),
-            ),
-        ))
-    }
-
-    /// Replaces the result with a decline action.
-    pub fn decline() -> Self {
-        Self(CatalogOutput::json(
-            "ElicitationResult",
-            specific(
-                "ElicitationResult",
-                serde_json::json!({"action": "decline"}),
-            ),
-        ))
-    }
-
-    /// Replaces the result with a cancellation action.
-    pub fn cancel() -> Self {
-        Self(CatalogOutput::json(
-            "ElicitationResult",
-            specific("ElicitationResult", serde_json::json!({"action": "cancel"})),
-        ))
-    }
-
-    /// Creates a code-2 blocking response with required stderr text.
-    pub fn blocking_error(message: impl Into<String>) -> Self {
-        Self(CatalogOutput::blocking("ElicitationResult", message))
-    }
-}
-event_spec!(
-    ElicitationResult,
-    ElicitationResultOutput,
-    "ElicitationResult",
-    Other,
-    ["mcp_server_name", "action"]
-);
-universal_output_methods!(ElicitationResultOutput);
-
-#[derive(Debug, Clone)]
-/// Native response from a Claude Code message-display command hook.
-pub struct MessageDisplayOutput(CatalogOutput);
-
-impl MessageDisplayOutput {
-    /// Creates an empty structured response.
-    pub fn no_op() -> Self {
-        Self(CatalogOutput::json("MessageDisplay", serde_json::json!({})))
-    }
-
-    /// Replaces the content displayed for the streamed message.
-    pub fn display(content: impl Into<String>) -> Self {
-        Self(CatalogOutput::json(
-            "MessageDisplay",
-            specific(
-                "MessageDisplay",
-                serde_json::json!({"displayContent": content.into()}),
-            ),
-        ))
-    }
-}
+output_type!(MessageDisplayOutput, "MessageDisplay");
 event_spec!(
     MessageDisplay,
     MessageDisplayOutput,
     "MessageDisplay",
     Other,
-    ["turn_id", "message_id", "index", "final", "delta"]
+    [
+        "turn_id": String,
+        "message_id": String,
+        "index": Any,
+        "final": Bool,
+        "delta": String,
+    ]
 );
-universal_output_methods!(MessageDisplayOutput);
+no_op!(MessageDisplay, MessageDisplayOutput);
+universal_builders!(MessageDisplayOutput: terminal_sequence);
+discarded_builders!(MessageDisplay, MessageDisplayOutput: continue_session, stop_reason, system_message, suppress_output);
 
-#[derive(Debug, Clone)]
-/// Native response from a Claude Code permission-denied command hook.
-pub struct PermissionDeniedOutput(CatalogOutput);
-
-impl PermissionDeniedOutput {
-    /// Creates an empty structured response.
-    pub fn no_op() -> Self {
-        Self(CatalogOutput::json(
-            "PermissionDenied",
-            serde_json::json!({}),
-        ))
-    }
-
-    /// Chooses whether Claude retries the denied tool operation.
-    pub fn retry(retry: bool) -> Self {
-        Self(CatalogOutput::json(
-            "PermissionDenied",
-            specific("PermissionDenied", serde_json::json!({"retry": retry})),
-        ))
+impl MessageDisplayOutput {
+    /// Replaces the text rendered on screen for this batch of the streamed
+    /// message. The transcript and what Claude sees keep the original text.
+    pub fn display(content: impl Into<String>) -> Self {
+        Self(CatalogOutput::hook_specific::<MessageDisplay>([(
+            "displayContent",
+            content.into().into(),
+        )]))
     }
 }
+
+output_type!(PermissionDeniedOutput, "PermissionDenied");
 event_spec!(
     PermissionDenied,
     PermissionDeniedOutput,
     "PermissionDenied",
     Tool,
-    ["tool_name", "tool_input", "tool_use_id", "reason"]
+    [
+        "tool_name": String,
+        "tool_input": Any,
+        "tool_use_id": String,
+        "reason": String,
+    ]
 );
-universal_output_methods!(PermissionDeniedOutput);
+no_op!(PermissionDenied, PermissionDeniedOutput);
+universal_builders!(PermissionDeniedOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(PermissionDenied, PermissionDeniedOutput: suppress_output);
+
+impl PermissionDeniedOutput {
+    /// Chooses whether to tell the model it may retry the denied call.
+    /// Claude Code ignores `retry: true` for no-verdict denials.
+    pub fn retry(retry: bool) -> Self {
+        Self(CatalogOutput::hook_specific::<PermissionDenied>([(
+            "retry",
+            retry.into(),
+        )]))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blocking decision events.
+// ---------------------------------------------------------------------------
+
+output_type!(ConfigChangeOutput, "ConfigChange");
+event_spec!(ConfigChange, ConfigChangeOutput, "ConfigChange", Context, ["source": String]);
+no_op!(ConfigChange, ConfigChangeOutput);
+block_builders!(
+    ConfigChange,
+    ConfigChangeOutput,
+    "The change does not take effect (except `policy_settings`); Claude Code never shows `reason`."
+);
+blocking_error!(
+    ConfigChange,
+    ConfigChangeOutput,
+    "Blocks the change (except `policy_settings`); stderr goes only to the debug log."
+);
+into_blocking_error!(ConfigChangeOutput);
+nonblocking_error!(ConfigChange, ConfigChangeOutput);
+universal_builders!(ConfigChangeOutput: terminal_sequence);
+discarded_builders!(ConfigChange, ConfigChangeOutput: continue_session, stop_reason, system_message, suppress_output);
+
+output_type!(PreCompactOutput, "PreCompact");
+event_spec!(
+    PreCompact,
+    PreCompactOutput,
+    "PreCompact",
+    Context,
+    ["trigger": String, "custom_instructions": NullableString]
+);
+no_op!(PreCompact, PreCompactOutput);
+block_builders!(
+    PreCompact,
+    PreCompactOutput,
+    "Compaction is skipped or, when recovering from a context-limit error, the request fails."
+);
+blocking_error!(
+    PreCompact,
+    PreCompactOutput,
+    "Blocks compaction; for a manual `/compact` the stderr is shown to the user."
+);
+into_blocking_error!(PreCompactOutput);
+nonblocking_error!(PreCompact, PreCompactOutput);
+universal_builders!(PreCompactOutput: terminal_sequence);
+discarded_builders!(PreCompact, PreCompactOutput: continue_session, stop_reason, system_message, suppress_output);
+
+output_type!(PostToolBatchOutput, "PostToolBatch");
+event_spec!(PostToolBatch, PostToolBatchOutput, "PostToolBatch", Tool, ["tool_calls": Array]);
+no_op!(PostToolBatch, PostToolBatchOutput);
+context_builders!(
+    PostToolBatch,
+    PostToolBatchOutput,
+    "next to the batch's tool results"
+);
+block_builders!(
+    PostToolBatch,
+    PostToolBatchOutput,
+    "Stops the agentic loop before the next model call; the reason is shown as a transcript warning that Claude sees if the conversation continues."
+);
+block_with_context!(PostToolBatch, PostToolBatchOutput);
+blocking_error!(
+    PostToolBatch,
+    PostToolBatchOutput,
+    "Stops the agentic loop; stderr is shown to the user and stays in the conversation."
+);
+into_blocking_error!(PostToolBatchOutput);
+nonblocking_error!(PostToolBatch, PostToolBatchOutput);
+universal_builders!(PostToolBatchOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(PostToolBatch, PostToolBatchOutput: suppress_output);
+
+output_type!(PostToolUseFailureOutput, "PostToolUseFailure");
+event_spec!(
+    PostToolUseFailure,
+    PostToolUseFailureOutput,
+    "PostToolUseFailure",
+    Tool,
+    [
+        "tool_name": String,
+        "tool_input": Any,
+        "tool_use_id": String,
+        "error": String,
+    ]
+);
+no_op!(PostToolUseFailure, PostToolUseFailureOutput);
+context_builders!(
+    PostToolUseFailure,
+    PostToolUseFailureOutput,
+    "next to the failed tool result"
+);
+block_builders!(
+    PostToolUseFailure,
+    PostToolUseFailureOutput,
+    "The tool already failed, so this adds `reason` as feedback for Claude."
+);
+block_with_context!(PostToolUseFailure, PostToolUseFailureOutput);
+nonblocking_error!(PostToolUseFailure, PostToolUseFailureOutput);
+universal_builders!(PostToolUseFailureOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(PostToolUseFailure, PostToolUseFailureOutput: suppress_output);
+
+into_feedback_error!(PostToolUseFailureOutput);
+
+impl PostToolUseFailureOutput {
+    /// Creates a code-2 feedback response with required stderr text.
+    ///
+    /// The tool has already failed, so Claude Code shows the feedback to
+    /// Claude without blocking or rolling back an action.
+    pub fn feedback_error(message: impl Into<String>) -> Self {
+        Self(CatalogOutput::blocking::<PostToolUseFailure>(message))
+    }
+}
+
+output_type!(StopOutput, "Stop");
+event_spec!(Stop, StopOutput, "Stop", Agent, ["stop_hook_active": Bool]);
+no_op!(Stop, StopOutput);
+context_builders!(
+    Stop,
+    StopOutput,
+    "at the end of the turn without blocking the stop"
+);
+block_builders!(
+    Stop,
+    StopOutput,
+    "Prevents Claude from stopping; `reason` tells Claude why the conversation continues."
+);
+block_with_context!(Stop, StopOutput);
+blocking_error!(
+    Stop,
+    StopOutput,
+    "Prevents Claude from stopping; stderr is shown to Claude."
+);
+into_blocking_error!(StopOutput);
+nonblocking_error!(Stop, StopOutput);
+universal_builders!(StopOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(Stop, StopOutput: suppress_output);
+
+output_type!(SubagentStopOutput, "SubagentStop");
+event_spec!(
+    SubagentStop,
+    SubagentStopOutput,
+    "SubagentStop",
+    Agent,
+    [
+        "stop_hook_active": Bool,
+        "agent_id": String,
+        "agent_type": String,
+        "agent_transcript_path": String,
+    ]
+);
+no_op!(SubagentStop, SubagentStopOutput);
+context_builders!(
+    SubagentStop,
+    SubagentStopOutput,
+    "at the end of the subagent's turn without blocking the stop"
+);
+block_builders!(
+    SubagentStop,
+    SubagentStopOutput,
+    "Prevents the subagent from stopping; `reason` tells it why."
+);
+block_with_context!(SubagentStop, SubagentStopOutput);
+blocking_error!(
+    SubagentStop,
+    SubagentStopOutput,
+    "Prevents the subagent from stopping; stderr is shown to the subagent."
+);
+into_blocking_error!(SubagentStopOutput);
+nonblocking_error!(SubagentStop, SubagentStopOutput);
+universal_builders!(SubagentStopOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(SubagentStop, SubagentStopOutput: suppress_output);
+
+output_type!(TaskCreatedOutput, "TaskCreated");
+event_spec!(
+    TaskCreated,
+    TaskCreatedOutput,
+    "TaskCreated",
+    Agent,
+    ["task_id": String, "task_subject": String]
+);
+no_op!(TaskCreated, TaskCreatedOutput);
+block_builders!(
+    TaskCreated,
+    TaskCreatedOutput,
+    "Deletes the task and returns `reason` to Claude as the TaskCreate tool error."
+);
+blocking_error!(
+    TaskCreated,
+    TaskCreatedOutput,
+    "Rolls back the task creation; stderr is returned to Claude."
+);
+into_blocking_error!(TaskCreatedOutput);
+nonblocking_error!(TaskCreated, TaskCreatedOutput);
+universal_builders!(TaskCreatedOutput: system_message, terminal_sequence);
+discarded_builders!(TaskCreated, TaskCreatedOutput: continue_session, stop_reason, suppress_output);
+
+output_type!(TaskCompletedOutput, "TaskCompleted");
+event_spec!(
+    TaskCompleted,
+    TaskCompletedOutput,
+    "TaskCompleted",
+    Agent,
+    ["task_id": String, "task_subject": String]
+);
+no_op!(TaskCompleted, TaskCompletedOutput);
+blocking_error!(
+    TaskCompleted,
+    TaskCompletedOutput,
+    "Prevents the task from being marked completed; stderr is shown to Claude."
+);
+into_blocking_error!(TaskCompletedOutput);
+nonblocking_error!(TaskCompleted, TaskCompletedOutput);
+universal_builders!(TaskCompletedOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(TaskCompleted, TaskCompletedOutput: suppress_output);
+
+output_type!(TeammateIdleOutput, "TeammateIdle");
+event_spec!(
+    TeammateIdle,
+    TeammateIdleOutput,
+    "TeammateIdle",
+    Agent,
+    ["teammate_name": String, "team_name": String]
+);
+no_op!(TeammateIdle, TeammateIdleOutput);
+blocking_error!(
+    TeammateIdle,
+    TeammateIdleOutput,
+    "Prevents the teammate from going idle; stderr is shown to the teammate."
+);
+into_blocking_error!(TeammateIdleOutput);
+nonblocking_error!(TeammateIdle, TeammateIdleOutput);
+universal_builders!(TeammateIdleOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(TeammateIdle, TeammateIdleOutput: suppress_output);
+
+// ---------------------------------------------------------------------------
+// Elicitation events.
+// ---------------------------------------------------------------------------
+
+macro_rules! elicitation_actions {
+    ($event:ident, $output:ident, $subject:literal) => {
+        impl $output {
+            #[doc = concat!(
+                                "Accepts ", $subject, " with form field values in `content`."
+                            )]
+            pub fn accept(content: Map<String, Value>) -> Self {
+                Self($crate::catalog::CatalogOutput::hook_specific::<$event>([
+                    ("action", "accept".into()),
+                    ("content", content.into()),
+                ]))
+            }
+
+            #[doc = concat!(
+                                "Accepts ", $subject, " without `content`, as for a URL-mode ",
+                                "elicitation, which has no form fields."
+                            )]
+            pub fn accept_without_content() -> Self {
+                Self($crate::catalog::CatalogOutput::hook_specific::<$event>([(
+                    "action",
+                    "accept".into(),
+                )]))
+            }
+
+            #[doc = concat!("Declines ", $subject, ".")]
+            pub fn decline() -> Self {
+                Self($crate::catalog::CatalogOutput::hook_specific::<$event>([(
+                    "action",
+                    "decline".into(),
+                )]))
+            }
+
+            #[doc = concat!("Cancels ", $subject, ".")]
+            pub fn cancel() -> Self {
+                Self($crate::catalog::CatalogOutput::hook_specific::<$event>([(
+                    "action",
+                    "cancel".into(),
+                )]))
+            }
+        }
+    };
+}
+
+output_type!(ElicitationOutput, "Elicitation");
+event_spec!(
+    Elicitation,
+    ElicitationOutput,
+    "Elicitation",
+    Other,
+    ["mcp_server_name": String, "message": String]
+);
+no_op!(Elicitation, ElicitationOutput);
+elicitation_actions!(Elicitation, ElicitationOutput, "the elicitation");
+block_builders!(
+    Elicitation,
+    ElicitationOutput,
+    "Declines the elicitation (Claude Code v2.1.284 changelog; the hooks reference does not yet document it, and where `reason` is shown is unknown)."
+);
+blocking_error!(
+    Elicitation,
+    ElicitationOutput,
+    "Denies the elicitation; stderr is shown nowhere."
+);
+nonblocking_error!(Elicitation, ElicitationOutput);
+universal_builders!(ElicitationOutput: terminal_sequence);
+discarded_builders!(Elicitation, ElicitationOutput: continue_session, stop_reason, system_message, suppress_output);
+
+output_type!(ElicitationResultOutput, "ElicitationResult");
+event_spec!(
+    ElicitationResult,
+    ElicitationResultOutput,
+    "ElicitationResult",
+    Other,
+    ["mcp_server_name": String, "action": String]
+);
+no_op!(ElicitationResult, ElicitationResultOutput);
+elicitation_actions!(
+    ElicitationResult,
+    ElicitationResultOutput,
+    "the response in place of the user's result"
+);
+block_builders!(
+    ElicitationResult,
+    ElicitationResultOutput,
+    "Declines the response (Claude Code v2.1.284 changelog; the hooks reference does not yet document it, and where `reason` is shown is unknown)."
+);
+blocking_error!(
+    ElicitationResult,
+    ElicitationResultOutput,
+    "Changes the effective action to decline; stderr is shown nowhere."
+);
+nonblocking_error!(ElicitationResult, ElicitationResultOutput);
+universal_builders!(ElicitationResultOutput: terminal_sequence);
+discarded_builders!(ElicitationResult, ElicitationResultOutput: continue_session, stop_reason, system_message, suppress_output);
+
+// ---------------------------------------------------------------------------
+// Permission events.
+// ---------------------------------------------------------------------------
 
 /// Behavior returned for a Claude permission request.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum PermissionRequestBehavior {
     /// Allow the requested operation.
     Allow,
@@ -1011,121 +1710,189 @@ pub enum PermissionRequestBehavior {
     Deny,
 }
 
-#[derive(Debug, Clone)]
-/// Native response from a Claude Code permission-request command hook.
-pub struct PermissionRequestOutput(CatalogOutput);
-
-impl PermissionRequestOutput {
-    /// Creates an empty structured response.
-    pub fn no_op() -> Self {
-        Self(CatalogOutput::json(
-            "PermissionRequest",
-            serde_json::json!({}),
-        ))
-    }
-
-    /// Creates a permission decision.
-    ///
-    /// `message` and `interrupt` are emitted only when supplied. No semantic
-    /// relationship between those optional fields and `behavior` is imposed.
-    pub fn decide(
-        behavior: PermissionRequestBehavior,
-        message: Option<String>,
-        interrupt: Option<bool>,
-    ) -> Self {
-        let mut decision = serde_json::Map::new();
-        decision.insert(
-            "behavior".into(),
-            serde_json::to_value(behavior).expect("enum serialization cannot fail"),
-        );
-        if let Some(message) = message {
-            decision.insert("message".into(), message.into());
+impl PermissionRequestBehavior {
+    /// Returns the native wire spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
         }
-        if let Some(interrupt) = interrupt {
-            decision.insert("interrupt".into(), interrupt.into());
-        }
-        Self(CatalogOutput::json(
-            "PermissionRequest",
-            specific(
-                "PermissionRequest",
-                serde_json::json!({"decision": decision}),
-            ),
-        ))
-    }
-
-    /// Creates a code-2 blocking response with required stderr text.
-    pub fn blocking_error(message: impl Into<String>) -> Self {
-        Self(CatalogOutput::blocking("PermissionRequest", message))
-    }
-
-    /// Sets the top-level `continue` control.
-    pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("continue", continue_session.into())
-            .map(Self)
-    }
-
-    /// Sets the top-level stop reason on a structured response.
-    pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("stopReason", reason.into().into())
-            .map(Self)
-    }
-
-    /// Sets whether Claude suppresses ordinary hook output.
-    pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("suppressOutput", suppress.into())
-            .map(Self)
-    }
-
-    /// Sets a top-level system message on a structured response.
-    pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("systemMessage", message.into().into())
-            .map(Self)
-    }
-
-    /// Requests emission of an allowlisted terminal notification sequence.
-    pub fn with_terminal_sequence(self, sequence: impl Into<String>) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("terminalSequence", sequence.into().into())
-            .map(Self)
-    }
-
-    /// Adds a replacement tool input to an existing permission decision.
-    ///
-    /// Returns an error when called on [`Self::no_op`] or a blocking outcome,
-    /// because those responses do not contain a decision object.
-    pub fn with_updated_input(self, input: serde_json::Value) -> hookkit_core::Result<Self> {
-        self.0
-            .with_permission_decision_field("updatedInput", input)
-            .map(Self)
-    }
-
-    /// Adds replacement permission rules to an existing decision.
-    pub fn with_updated_permissions(
-        self,
-        permissions: Vec<serde_json::Value>,
-    ) -> hookkit_core::Result<Self> {
-        self.0
-            .with_permission_decision_field("updatedPermissions", permissions.into())
-            .map(Self)
     }
 }
+
+output_type!(PermissionRequestOutput, "PermissionRequest");
 event_spec!(
     PermissionRequest,
     PermissionRequestOutput,
     "PermissionRequest",
     Tool,
-    ["tool_name", "tool_input"]
+    ["tool_name": String, "tool_input": Any]
 );
+no_op!(PermissionRequest, PermissionRequestOutput);
+nonblocking_error!(PermissionRequest, PermissionRequestOutput);
+universal_builders!(PermissionRequestOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(PermissionRequest, PermissionRequestOutput: suppress_output);
+
+impl PermissionRequestOutput {
+    fn with_decision(
+        behavior: PermissionRequestBehavior,
+        fields: impl IntoIterator<Item = (&'static str, Value)>,
+    ) -> Map<String, Value> {
+        let mut decision = Map::new();
+        decision.insert("behavior".into(), behavior.as_str().into());
+        decision.extend(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value)),
+        );
+        decision
+    }
+
+    fn from_decision(decision: Map<String, Value>) -> Self {
+        Self(CatalogOutput::hook_specific::<PermissionRequest>([(
+            "decision",
+            decision.into(),
+        )]))
+    }
+
+    /// Grants the permission. Deny and ask rules are still evaluated, so
+    /// this does not override a matching deny rule.
+    ///
+    /// Refine it with [`Self::with_updated_input`] and
+    /// [`Self::with_updated_permissions`].
+    pub fn allow() -> Self {
+        Self::from_decision(Self::with_decision(PermissionRequestBehavior::Allow, []))
+    }
+
+    /// Denies the permission; `message` tells Claude why.
+    ///
+    /// Claude Code applies a decision object on every exit code, so this is
+    /// the only way to deny: exit 2 alone leaves the permission flow
+    /// unchanged. Refine it with [`Self::with_interrupt`].
+    pub fn deny(message: impl Into<String>) -> Self {
+        Self::from_decision(Self::with_decision(
+            PermissionRequestBehavior::Deny,
+            [("message", message.into().into())],
+        ))
+    }
+
+    /// Creates a permission decision with optional associated fields.
+    ///
+    /// `message` and `interrupt` are emitted only when supplied, whatever the
+    /// behavior.
+    #[deprecated(
+        note = "use `allow()` or `deny(message)` with `with_interrupt`; Claude Code ignores `message` and `interrupt` on allow"
+    )]
+    pub fn decide(
+        behavior: PermissionRequestBehavior,
+        message: Option<String>,
+        interrupt: Option<bool>,
+    ) -> Self {
+        let message = message.map(|message| ("message", Value::from(message)));
+        let interrupt = interrupt.map(|interrupt| ("interrupt", Value::from(interrupt)));
+        Self::from_decision(Self::with_decision(
+            behavior,
+            message.into_iter().chain(interrupt),
+        ))
+    }
+
+    /// Denies the permission with `message` while exiting 2 with `message`
+    /// on stderr.
+    ///
+    /// Claude Code no longer honors exit 2 for this event: without a
+    /// decision object the permission flow proceeds unchanged and stderr is
+    /// discarded. This shim therefore also prints the equivalent
+    /// [`Self::deny`] decision, which Claude Code applies on every exit code,
+    /// so the request is denied on releases with either behavior.
+    /// `message` must be non-empty.
+    #[deprecated(
+        note = "Claude Code ignores exit 2 on PermissionRequest and discards its stderr (claude-code/docs-2026-09-29-r1); use `deny(message)`"
+    )]
+    pub fn blocking_error(message: impl Into<String>) -> Self {
+        let message = message.into();
+        let decision = Self::with_decision(
+            PermissionRequestBehavior::Deny,
+            [("message", message.clone().into())],
+        );
+        Self(
+            CatalogOutput::hook_specific_with_stderr::<PermissionRequest>(
+                [("decision", decision.into())],
+                message,
+            ),
+        )
+    }
+
+    fn behavior(&self) -> Option<&str> {
+        self.0
+            .specific_field("decision")
+            .and_then(|decision| decision.get("behavior"))
+            .and_then(Value::as_str)
+    }
+
+    fn with_decision_field(
+        mut self,
+        name: &'static str,
+        value: Value,
+    ) -> hookkit_core::Result<Self> {
+        self.0
+            .specific_mut()?
+            .get_mut("decision")
+            .and_then(Value::as_object_mut)
+            .ok_or(hookkit_core::HookkitError::InvalidProcessEmission(
+                "permission decision fields require an existing decision",
+            ))?
+            .insert(name.into(), value);
+        Ok(self)
+    }
+
+    fn require_behavior(
+        &self,
+        expected: PermissionRequestBehavior,
+        message: &'static str,
+    ) -> hookkit_core::Result<()> {
+        if self.behavior() == Some(expected.as_str()) {
+            Ok(())
+        } else {
+            Err(hookkit_core::HookkitError::InvalidProcessEmission(message))
+        }
+    }
+
+    /// Replaces the tool input on an `allow` decision. The object replaces
+    /// the whole input and is re-evaluated against deny and ask rules.
+    pub fn with_updated_input(self, input: Map<String, Value>) -> hookkit_core::Result<Self> {
+        self.require_behavior(
+            PermissionRequestBehavior::Allow,
+            "updatedInput applies only to an allow decision",
+        )?;
+        self.with_decision_field("updatedInput", input.into())
+    }
+
+    /// Applies permission update entries on an `allow` decision.
+    pub fn with_updated_permissions(self, permissions: Vec<Value>) -> hookkit_core::Result<Self> {
+        self.require_behavior(
+            PermissionRequestBehavior::Allow,
+            "updatedPermissions applies only to an allow decision",
+        )?;
+        self.with_decision_field("updatedPermissions", permissions.into())
+    }
+
+    /// Sets whether a `deny` decision also stops Claude.
+    pub fn with_interrupt(self, interrupt: bool) -> hookkit_core::Result<Self> {
+        self.require_behavior(
+            PermissionRequestBehavior::Deny,
+            "interrupt applies only to a deny decision",
+        )?;
+        self.with_decision_field("interrupt", interrupt.into())
+    }
+}
 
 /// Permission decision returned by a Claude pre-tool hook.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum PreToolPermissionDecision {
-    /// Allow the pending tool call.
+    /// Skip the permission prompt. Claude Code auto-approves the call,
+    /// except for actions no mode auto-approves.
     Allow,
     /// Deny the pending tool call.
     Deny,
@@ -1135,372 +1902,365 @@ pub enum PreToolPermissionDecision {
     Defer,
 }
 
-#[derive(Debug, Clone)]
-/// Native response from a Claude Code pre-tool command hook.
-pub struct PreToolUseOutput(CatalogOutput);
-
-impl PreToolUseOutput {
-    /// Creates an empty structured response.
-    pub fn no_op() -> Self {
-        Self(CatalogOutput::json("PreToolUse", serde_json::json!({})))
-    }
-
-    /// Creates a pre-tool permission decision with optional associated fields.
-    pub fn decide(
-        decision: PreToolPermissionDecision,
-        reason: Option<String>,
-        updated_input: Option<serde_json::Map<String, serde_json::Value>>,
-        additional_context: Option<String>,
-    ) -> Self {
-        let mut fields = serde_json::Map::new();
-        fields.insert(
-            "permissionDecision".into(),
-            serde_json::to_value(decision).expect("enum serialization cannot fail"),
-        );
-        if let Some(reason) = reason {
-            fields.insert("permissionDecisionReason".into(), reason.into());
+impl PreToolPermissionDecision {
+    /// Returns the native wire spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+            Self::Defer => "defer",
         }
-        if let Some(updated_input) = updated_input {
-            fields.insert("updatedInput".into(), updated_input.into());
-        }
-        if let Some(context) = additional_context {
-            fields.insert("additionalContext".into(), context.into());
-        }
-        Self(CatalogOutput::json(
-            "PreToolUse",
-            specific("PreToolUse", fields.into()),
-        ))
-    }
-
-    /// Creates a code-2 blocking response with required stderr text.
-    pub fn blocking_error(message: impl Into<String>) -> Self {
-        Self(CatalogOutput::blocking("PreToolUse", message))
-    }
-
-    /// Sets the top-level `continue` control.
-    pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("continue", continue_session.into())
-            .map(Self)
-    }
-
-    /// Sets the top-level stop reason on a structured response.
-    pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("stopReason", reason.into().into())
-            .map(Self)
-    }
-
-    /// Sets whether Claude suppresses ordinary hook output.
-    pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("suppressOutput", suppress.into())
-            .map(Self)
-    }
-
-    /// Sets a top-level system message on a structured response.
-    pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("systemMessage", message.into().into())
-            .map(Self)
-    }
-
-    /// Requests emission of an allowlisted terminal notification sequence.
-    pub fn with_terminal_sequence(self, sequence: impl Into<String>) -> hookkit_core::Result<Self> {
-        self.0
-            .with_top_level("terminalSequence", sequence.into().into())
-            .map(Self)
     }
 }
+
+output_type!(PreToolUseOutput, "PreToolUse");
 event_spec!(
     PreToolUse,
     PreToolUseOutput,
     "PreToolUse",
     Tool,
-    ["tool_name", "tool_input", "tool_use_id"]
+    ["tool_name": String, "tool_input": Any, "tool_use_id": String]
 );
-
-macro_rules! prompt_event {
-    ($event:ident, $output:ident, $name:literal, [$($required:literal),* $(,)?]) => {
-        #[derive(Debug, Clone)]
-        #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
-        pub struct $output(CatalogOutput);
-
-        impl $output {
-            /// Creates an empty structured response.
-            pub fn no_op() -> Self {
-                Self(CatalogOutput::json($name, serde_json::json!({})))
-            }
-
-            /// Creates a structured response that appends agent context.
-            pub fn with_context(additional_context: impl Into<String>) -> Self {
-                Self(CatalogOutput::json(
-                    $name,
-                    context($name, additional_context),
-                ))
-            }
-
-            /// Creates a successful plain-text context response.
-            pub fn text_context(context: impl Into<String>) -> Self {
-                Self(CatalogOutput::text($name, context))
-            }
-
-            /// Creates a code-2 blocking response with required stderr text.
-            pub fn blocking_error(message: impl Into<String>) -> Self {
-                Self(CatalogOutput::blocking($name, message))
-            }
-        }
-
-        event_spec!($event, $output, $name, Prompt, [$($required),*]);
-        universal_output_methods!($output);
-    };
-}
-
-prompt_event!(
-    UserPromptExpansion,
-    UserPromptExpansionOutput,
-    "UserPromptExpansion",
-    [
-        "expansion_type",
-        "command_name",
-        "command_args",
-        "command_source",
-        "prompt"
-    ]
+no_op!(PreToolUse, PreToolUseOutput);
+blocking_error!(
+    PreToolUse,
+    PreToolUseOutput,
+    "Blocks the tool call; stderr is shown to Claude. No JSON decision can override it."
 );
-prompt_event!(
-    UserPromptSubmit,
-    UserPromptSubmitOutput,
-    "UserPromptSubmit",
-    ["prompt"]
-);
+into_blocking_error!(PreToolUseOutput);
+nonblocking_error!(PreToolUse, PreToolUseOutput);
+universal_builders!(PreToolUseOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(PreToolUse, PreToolUseOutput: suppress_output);
 
-impl UserPromptExpansionOutput {
-    /// Blocks the expanded prompt while appending context for the agent.
-    pub fn block_with_context(
-        reason: impl Into<String>,
-        additional_context: impl Into<String>,
-    ) -> Self {
-        Self(CatalogOutput::json(
-            "UserPromptExpansion",
-            block_with_context("UserPromptExpansion", reason, additional_context),
+impl PreToolUseOutput {
+    fn with_decision(decision: PreToolPermissionDecision, reason: Option<String>) -> Self {
+        let reason = reason.map(|reason| ("permissionDecisionReason", Value::from(reason)));
+        Self(CatalogOutput::hook_specific::<PreToolUse>(
+            std::iter::once(("permissionDecision", decision.as_str().into())).chain(reason),
         ))
+    }
+
+    /// Adds `additionalContext` for Claude without making a permission
+    /// decision, so the normal permission flow applies.
+    ///
+    /// Prefer this over [`Self::allow`] for context-only hooks: `allow`
+    /// skips the permission prompt and auto-approves the call. Refine it
+    /// with [`Self::with_updated_input`] to rewrite the call without deciding.
+    pub fn with_context(additional_context: impl Into<String>) -> Self {
+        Self(CatalogOutput::hook_specific::<PreToolUse>([(
+            "additionalContext",
+            additional_context.into().into(),
+        )]))
+    }
+
+    /// Skips the permission prompt and auto-approves the call, except for
+    /// actions no permission mode auto-approves and for `AskUserQuestion` and
+    /// `ExitPlanMode`, which also need [`Self::with_updated_input`]. Deny and
+    /// ask rules are still evaluated.
+    ///
+    /// A hook that only wants to add context or rewrite input should not
+    /// choose `allow`; use [`Self::with_context`] or [`Self::no_op`] instead.
+    pub fn allow() -> Self {
+        Self::with_decision(PreToolPermissionDecision::Allow, None)
+    }
+
+    /// Denies the tool call; `reason` is shown to Claude.
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self::with_decision(PreToolPermissionDecision::Deny, Some(reason.into()))
+    }
+
+    /// Asks the user to confirm the call; `reason` is shown to the user but
+    /// not to Claude. In auto mode this still forces a permission prompt.
+    pub fn ask(reason: impl Into<String>) -> Self {
+        Self::with_decision(PreToolPermissionDecision::Ask, Some(reason.into()))
+    }
+
+    /// Pauses a non-interactive tool call so an integration can resume it
+    /// later. Claude Code ignores `updatedInput` and `additionalContext` with
+    /// this decision, so the corresponding builders reject it.
+    pub fn defer() -> Self {
+        Self::with_decision(PreToolPermissionDecision::Defer, None)
+    }
+
+    /// Creates a pre-tool permission decision with optional associated fields.
+    ///
+    /// No relationship between the decision and the optional fields is
+    /// enforced.
+    #[deprecated(
+        note = "use `allow`, `deny`, `ask`, `defer`, or `with_context`, then `with_updated_input` and `with_additional_context`"
+    )]
+    pub fn decide(
+        decision: PreToolPermissionDecision,
+        reason: Option<String>,
+        updated_input: Option<Map<String, Value>>,
+        additional_context: Option<String>,
+    ) -> Self {
+        let fields = [
+            Some(("permissionDecision", Value::from(decision.as_str()))),
+            reason.map(|reason| ("permissionDecisionReason", Value::from(reason))),
+            updated_input.map(|input| ("updatedInput", Value::from(input))),
+            additional_context.map(|context| ("additionalContext", Value::from(context))),
+        ];
+        Self(CatalogOutput::hook_specific::<PreToolUse>(
+            fields.into_iter().flatten(),
+        ))
+    }
+
+    fn decision(&self) -> Option<&str> {
+        self.0
+            .specific_field("permissionDecision")
+            .and_then(Value::as_str)
+    }
+
+    /// Sets `permissionDecisionReason` on an existing decision. For `allow`
+    /// and `defer` Claude Code writes it only to the debug log.
+    pub fn with_decision_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
+        if self.decision().is_none() {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "permissionDecisionReason requires a permission decision",
+            ));
+        }
+        self.0
+            .with_specific("permissionDecisionReason", reason.into().into())
+            .map(Self)
+    }
+
+    /// Replaces the whole tool input before execution. Permission rules are
+    /// evaluated against the returned input. Combine with [`Self::allow`] to
+    /// auto-approve, with [`Self::ask`] to show it to the user, or with no
+    /// decision to leave the permission flow unchanged. Rejected for `deny`
+    /// and `defer`, where Claude Code ignores it.
+    pub fn with_updated_input(self, input: Map<String, Value>) -> hookkit_core::Result<Self> {
+        if matches!(self.decision(), Some("deny" | "defer")) {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "updatedInput is ignored for deny and defer decisions",
+            ));
+        }
+        self.0.with_specific("updatedInput", input.into()).map(Self)
+    }
+
+    /// Adds `additionalContext` for Claude next to the tool result. Rejected
+    /// for `defer`, where Claude Code ignores it.
+    pub fn with_additional_context(
+        self,
+        additional_context: impl Into<String>,
+    ) -> hookkit_core::Result<Self> {
+        if self.decision() == Some("defer") {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "additionalContext is ignored for a defer decision",
+            ));
+        }
+        self.0
+            .with_specific("additionalContext", additional_context.into().into())
+            .map(Self)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Prompt events.
+// ---------------------------------------------------------------------------
+
+output_type!(UserPromptExpansionOutput, "UserPromptExpansion");
+event_spec!(
+    UserPromptExpansion,
+    UserPromptExpansionOutput,
+    "UserPromptExpansion",
+    Prompt,
+    [
+        "expansion_type": String,
+        "command_name": String,
+        "command_args": String,
+        "command_source": String,
+        "prompt": String,
+    ]
+);
+no_op!(UserPromptExpansion, UserPromptExpansionOutput);
+context_builders!(
+    UserPromptExpansion,
+    UserPromptExpansionOutput,
+    "alongside the expanded prompt"
+);
+text_context!(UserPromptExpansion, UserPromptExpansionOutput);
+block_builders!(
+    UserPromptExpansion,
+    UserPromptExpansionOutput,
+    "Prevents the command from expanding; `reason` is shown to the user."
+);
+block_with_context!(UserPromptExpansion, UserPromptExpansionOutput);
+blocking_error!(
+    UserPromptExpansion,
+    UserPromptExpansionOutput,
+    "Blocks the expansion; stderr is shown to the user."
+);
+into_blocking_error!(UserPromptExpansionOutput);
+nonblocking_error!(UserPromptExpansion, UserPromptExpansionOutput);
+universal_builders!(UserPromptExpansionOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(UserPromptExpansion, UserPromptExpansionOutput: suppress_output);
+
+output_type!(UserPromptSubmitOutput, "UserPromptSubmit");
+event_spec!(UserPromptSubmit, UserPromptSubmitOutput, "UserPromptSubmit", Prompt, ["prompt": String]);
+no_op!(UserPromptSubmit, UserPromptSubmitOutput);
+context_builders!(
+    UserPromptSubmit,
+    UserPromptSubmitOutput,
+    "alongside the submitted prompt"
+);
+text_context!(UserPromptSubmit, UserPromptSubmitOutput);
+block_builders!(
+    UserPromptSubmit,
+    UserPromptSubmitOutput,
+    "Prevents the prompt from being processed and erases it; `reason` is shown to the user and not added to context."
+);
+blocking_error!(
+    UserPromptSubmit,
+    UserPromptSubmitOutput,
+    "Blocks and erases the prompt; stderr is shown to the user and not added to Claude's context."
+);
+into_blocking_error!(UserPromptSubmitOutput);
+nonblocking_error!(UserPromptSubmit, UserPromptSubmitOutput);
+universal_builders!(UserPromptSubmitOutput: continue_session, stop_reason, system_message, terminal_sequence);
+discarded_builders!(UserPromptSubmit, UserPromptSubmitOutput: suppress_output);
+
 impl UserPromptSubmitOutput {
-    /// Blocks the submitted prompt while appending context and optional prompt
-    /// presentation controls.
+    /// Sets `hookSpecificOutput.sessionTitle`, with the same effect as
+    /// `/rename`. It does not block the prompt.
+    pub fn with_session_title(self, title: impl Into<String>) -> hookkit_core::Result<Self> {
+        self.0
+            .with_specific("sessionTitle", title.into().into())
+            .map(Self)
+    }
+
+    /// Sets `suppressOriginalPrompt`, which omits the original prompt text
+    /// from the block message shown to the user. The pinned reference
+    /// describes it only together with `decision: "block"`.
+    pub fn with_suppress_original_prompt(self, suppress: bool) -> hookkit_core::Result<Self> {
+        self.0
+            .with_specific("suppressOriginalPrompt", suppress.into())
+            .map(Self)
+    }
+
+    /// Blocks the submitted prompt while appending context and optional
+    /// prompt presentation controls.
+    #[deprecated(
+        note = "use `block(reason)` with `with_additional_context`, `with_session_title`, and `with_suppress_original_prompt`"
+    )]
     pub fn block_with_context(
         reason: impl Into<String>,
         additional_context: impl Into<String>,
         session_title: Option<String>,
         suppress_original_prompt: Option<bool>,
     ) -> Self {
-        let mut value = block_with_context("UserPromptSubmit", reason, additional_context);
-        let fields = value["hookSpecificOutput"]
-            .as_object_mut()
-            .expect("specific output is an object");
-        if let Some(title) = session_title {
-            fields.insert("sessionTitle".into(), title.into());
-        }
-        if let Some(suppress) = suppress_original_prompt {
-            fields.insert("suppressOriginalPrompt".into(), suppress.into());
-        }
-        Self(CatalogOutput::json("UserPromptSubmit", value))
+        let fields = [
+            Some(("additionalContext", Value::from(additional_context.into()))),
+            session_title.map(|title| ("sessionTitle", Value::from(title))),
+            suppress_original_prompt
+                .map(|suppress| ("suppressOriginalPrompt", Value::from(suppress))),
+        ];
+        let mut output =
+            CatalogOutput::hook_specific::<UserPromptSubmit>(fields.into_iter().flatten());
+        output.insert_block(reason.into());
+        Self(output)
     }
 }
 
 /// Returns every native command implementation defined in this catalog module.
+///
+/// Each descriptor names the snapshot process fixtures a typed constructor
+/// reproduces exactly: the exit code and stderr byte for byte, and stdout
+/// byte for byte or, for JSON, as an equal value with the same framing.
+/// Fixtures that show malformed or discouraged output (invalid JSON, JSON
+/// with a failing exit other than 2, exit 2 with invalid stdout, output that
+/// Claude Code ignores) are not declared.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
+    use hookkit_core::NativeEventDescriptor as D;
+    const EXIT_2: &[&str] = &[
+        "command-structured",
+        "command-exit-2",
+        "command-exit-2-structured",
+        "command-nonzero-unstructured",
+    ];
+    const TEXT_CONTEXT: &[&str] = &[
+        "command-structured",
+        "command-text",
+        "command-text-open-brace",
+        "command-exit-2",
+        "command-exit-2-structured",
+        "command-nonzero-unstructured",
+    ];
+    const WATCH: &[&str] = &["command-structured", "command-nonzero-unstructured"];
+    const ELICITATION: &[&str] = &[
+        "command-structured",
+        "command-decision-block",
+        "command-exit-2",
+        "command-nonzero-unstructured",
+    ];
+    const DISCARDED_WITH_NOTICE: &[&str] = &["command-structured", "command-nonzero"];
     vec![
-        hookkit_core::NativeEventDescriptor::command::<ConfigChange>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<CwdChanged>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<DirectoryAdded>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<Elicitation>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<ElicitationResult>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<FileChanged>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<InstructionsLoaded>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<MessageDisplay>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<Notification>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<PermissionDenied>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<PermissionRequest>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<PostCompact>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<PostToolBatch>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<PostToolUseFailure>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<PreCompact>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<PreToolUse>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<SessionEnd>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<Setup>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<Stop>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<StopFailure>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<SubagentStart>(&["command-structured"]),
-        hookkit_core::NativeEventDescriptor::command::<SubagentStop>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<TaskCompleted>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<TaskCreated>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<TeammateIdle>(&[
-            "command-structured",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<UserPromptExpansion>(&[
-            "command-structured",
-            "command-text",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<UserPromptSubmit>(&[
-            "command-structured",
-            "command-text",
-            "command-exit-2",
-        ]),
-        hookkit_core::NativeEventDescriptor::command::<WorktreeRemove>(&["command-structured"]),
+        D::command::<ConfigChange>(EXIT_2),
+        D::command::<CwdChanged>(WATCH),
+        D::command::<DirectoryAdded>(&["command-structured"]),
+        D::command::<Elicitation>(ELICITATION),
+        D::command::<ElicitationResult>(ELICITATION),
+        D::command::<FileChanged>(WATCH),
+        D::command::<InstructionsLoaded>(&["command-structured"]),
+        D::command::<MessageDisplay>(&["command-structured"]),
+        D::command::<Notification>(&["command-structured"]),
+        D::command::<PermissionDenied>(&["command-structured"]),
+        D::command::<PermissionRequest>(&["command-structured", "command-nonzero-unstructured"]),
+        D::command::<PostCompact>(DISCARDED_WITH_NOTICE),
+        D::command::<PostToolBatch>(EXIT_2),
+        D::command::<PostToolUseFailure>(EXIT_2),
+        D::command::<PreCompact>(EXIT_2),
+        D::command::<PreToolUse>(EXIT_2),
+        D::command::<SessionEnd>(DISCARDED_WITH_NOTICE),
+        D::command::<Setup>(&["command-structured"]),
+        D::command::<Stop>(EXIT_2),
+        D::command::<StopFailure>(&["command-structured", "command-terminal-sequence"]),
+        D::command::<SubagentStart>(&["command-structured", "command-nonzero-unstructured"]),
+        D::command::<SubagentStop>(EXIT_2),
+        D::command::<TaskCompleted>(EXIT_2),
+        D::command::<TaskCreated>(EXIT_2),
+        D::command::<TeammateIdle>(EXIT_2),
+        D::command::<UserPromptExpansion>(TEXT_CONTEXT),
+        D::command::<UserPromptSubmit>(TEXT_CONTEXT),
+        D::command::<WorktreeRemove>(&["command-removed", "command-failed", "command-exit-2"]),
     ]
 }
 
 /// Returns definitive discriminator metadata for catalog-module events.
 pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescriptor> {
+    use hookkit_core::IdentificationDescriptor as D;
+    const POINTER: &str = "/hook_event_name";
     vec![
-        hookkit_core::IdentificationDescriptor::definitive::<ConfigChange>(
-            "/hook_event_name",
-            "ConfigChange",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<CwdChanged>(
-            "/hook_event_name",
-            "CwdChanged",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<DirectoryAdded>(
-            "/hook_event_name",
-            "DirectoryAdded",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<Elicitation>(
-            "/hook_event_name",
-            "Elicitation",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<ElicitationResult>(
-            "/hook_event_name",
-            "ElicitationResult",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<FileChanged>(
-            "/hook_event_name",
-            "FileChanged",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<InstructionsLoaded>(
-            "/hook_event_name",
-            "InstructionsLoaded",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<MessageDisplay>(
-            "/hook_event_name",
-            "MessageDisplay",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<Notification>(
-            "/hook_event_name",
-            "Notification",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<PermissionDenied>(
-            "/hook_event_name",
-            "PermissionDenied",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<PermissionRequest>(
-            "/hook_event_name",
-            "PermissionRequest",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<PostCompact>(
-            "/hook_event_name",
-            "PostCompact",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<PostToolBatch>(
-            "/hook_event_name",
-            "PostToolBatch",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<PostToolUseFailure>(
-            "/hook_event_name",
-            "PostToolUseFailure",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<PreCompact>(
-            "/hook_event_name",
-            "PreCompact",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<PreToolUse>(
-            "/hook_event_name",
-            "PreToolUse",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<SessionEnd>(
-            "/hook_event_name",
-            "SessionEnd",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<Setup>("/hook_event_name", "Setup"),
-        hookkit_core::IdentificationDescriptor::definitive::<Stop>("/hook_event_name", "Stop"),
-        hookkit_core::IdentificationDescriptor::definitive::<StopFailure>(
-            "/hook_event_name",
-            "StopFailure",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<SubagentStart>(
-            "/hook_event_name",
-            "SubagentStart",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<SubagentStop>(
-            "/hook_event_name",
-            "SubagentStop",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<TaskCompleted>(
-            "/hook_event_name",
-            "TaskCompleted",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<TaskCreated>(
-            "/hook_event_name",
-            "TaskCreated",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<TeammateIdle>(
-            "/hook_event_name",
-            "TeammateIdle",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<UserPromptExpansion>(
-            "/hook_event_name",
-            "UserPromptExpansion",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<UserPromptSubmit>(
-            "/hook_event_name",
-            "UserPromptSubmit",
-        ),
-        hookkit_core::IdentificationDescriptor::definitive::<WorktreeRemove>(
-            "/hook_event_name",
-            "WorktreeRemove",
-        ),
+        D::definitive::<ConfigChange>(POINTER, "ConfigChange"),
+        D::definitive::<CwdChanged>(POINTER, "CwdChanged"),
+        D::definitive::<DirectoryAdded>(POINTER, "DirectoryAdded"),
+        D::definitive::<Elicitation>(POINTER, "Elicitation"),
+        D::definitive::<ElicitationResult>(POINTER, "ElicitationResult"),
+        D::definitive::<FileChanged>(POINTER, "FileChanged"),
+        D::definitive::<InstructionsLoaded>(POINTER, "InstructionsLoaded"),
+        D::definitive::<MessageDisplay>(POINTER, "MessageDisplay"),
+        D::definitive::<Notification>(POINTER, "Notification"),
+        D::definitive::<PermissionDenied>(POINTER, "PermissionDenied"),
+        D::definitive::<PermissionRequest>(POINTER, "PermissionRequest"),
+        D::definitive::<PostCompact>(POINTER, "PostCompact"),
+        D::definitive::<PostToolBatch>(POINTER, "PostToolBatch"),
+        D::definitive::<PostToolUseFailure>(POINTER, "PostToolUseFailure"),
+        D::definitive::<PreCompact>(POINTER, "PreCompact"),
+        D::definitive::<PreToolUse>(POINTER, "PreToolUse"),
+        D::definitive::<SessionEnd>(POINTER, "SessionEnd"),
+        D::definitive::<Setup>(POINTER, "Setup"),
+        D::definitive::<Stop>(POINTER, "Stop"),
+        D::definitive::<StopFailure>(POINTER, "StopFailure"),
+        D::definitive::<SubagentStart>(POINTER, "SubagentStart"),
+        D::definitive::<SubagentStop>(POINTER, "SubagentStop"),
+        D::definitive::<TaskCompleted>(POINTER, "TaskCompleted"),
+        D::definitive::<TaskCreated>(POINTER, "TaskCreated"),
+        D::definitive::<TeammateIdle>(POINTER, "TeammateIdle"),
+        D::definitive::<UserPromptExpansion>(POINTER, "UserPromptExpansion"),
+        D::definitive::<UserPromptSubmit>(POINTER, "UserPromptSubmit"),
+        D::definitive::<WorktreeRemove>(POINTER, "WorktreeRemove"),
     ]
 }
 
@@ -1547,25 +2307,54 @@ pub fn decode(event: &EventId, raw: &RawInvocation) -> hookkit_core::Result<Opti
 mod tests {
     use super::*;
 
+    fn raw(value: Value) -> RawInvocation {
+        RawInvocation::parse(serde_json::to_vec(&value).unwrap()).unwrap()
+    }
+
+    fn envelope(event: &str, fields: Value) -> Value {
+        let mut value = serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/tmp/t",
+            "cwd": "/repo",
+            "hook_event_name": event,
+        });
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        value
+    }
+
+    fn stdout_json(emission: &ProcessEmission) -> Value {
+        serde_json::from_slice(emission.stdout()).unwrap()
+    }
+
+    fn pre_tool_use() -> Value {
+        envelope(
+            "PreToolUse",
+            serde_json::json!({
+                "tool_name": "Bash",
+                "tool_input": {"command": "cargo test"},
+                "tool_use_id": "toolu_1",
+            }),
+        )
+    }
+
     #[test]
     fn catalog_input_retains_event_specific_and_future_fields() {
-        let raw = RawInvocation::parse(
-            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"ConfigChange","source":"skills","file_path":"/repo/CLAUDE.md","future":true}"#.to_vec(),
-        )
-        .unwrap();
-        let input = ConfigChange::parse(&raw).unwrap();
+        let value = envelope(
+            "ConfigChange",
+            serde_json::json!({"source": "skills", "file_path": "/repo/CLAUDE.md", "future": true}),
+        );
+        let input = ConfigChange::parse(&raw(value.clone())).unwrap();
         assert_eq!(input.field("source"), Some(&serde_json::json!("skills")));
         assert_eq!(input.field("future"), Some(&serde_json::json!(true)));
+        assert_eq!(serde_json::to_value(&input).unwrap(), value);
     }
 
     #[test]
     fn catalog_context_retains_tool_use_id() {
-        let raw = RawInvocation::parse(
-            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"},"tool_use_id":"toolu_1"}"#.to_vec(),
-        )
-        .unwrap();
-        let input = PreToolUse::parse(&raw).unwrap();
-
+        let input = PreToolUse::parse(&raw(pre_tool_use())).unwrap();
         assert_eq!(
             input
                 .context()
@@ -1574,121 +2363,472 @@ mod tests {
                 .map(ToolCallId::as_str),
             Some("toolu_1")
         );
+        assert_eq!(input.tool_name(), Some("Bash"));
+        assert_eq!(input.tool_input().unwrap()["command"], "cargo test");
+        assert_eq!(input.tool_use_id(), Some("toolu_1"));
+        assert!(input.mcp_server().is_none());
     }
 
     #[test]
-    fn catalog_parser_rejects_missing_new_cwd() {
-        let raw = RawInvocation::parse(
-            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"CwdChanged","old_cwd":"/repo"}"#.to_vec(),
-        )
-        .unwrap();
-
+    fn catalog_parser_reports_missing_and_mistyped_required_fields() {
+        let missing = envelope("CwdChanged", serde_json::json!({"old_cwd": "/repo"}));
         assert!(matches!(
-            CwdChanged::parse(&raw),
+            CwdChanged::parse(&raw(missing)),
             Err(hookkit_core::HookkitError::InvalidInputForHint { message, .. })
                 if message == "missing required field new_cwd"
+        ));
+        let mistyped = envelope("Stop", serde_json::json!({"stop_hook_active": "yes"}));
+        assert!(matches!(
+            Stop::parse(&raw(mistyped)),
+            Err(hookkit_core::HookkitError::InvalidInputForHint { message, .. })
+                if message == "field stop_hook_active must be a boolean"
         ));
     }
 
     #[test]
     fn directory_added_is_decoded_with_current_fields() {
-        let raw = RawInvocation::parse(
-            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"DirectoryAdded","directory":"/other","source":"slash_command"}"#.to_vec(),
+        let value = envelope(
+            "DirectoryAdded",
+            serde_json::json!({"directory": "/other", "source": "slash_command"}),
+        );
+        let input = DirectoryAdded::parse(&raw(value)).unwrap();
+        assert_eq!(input.field("directory"), Some(&serde_json::json!("/other")));
+    }
+
+    #[test]
+    fn optional_and_nullable_catalog_fields_may_be_absent_or_null() {
+        let permission = envelope(
+            "PermissionRequest",
+            serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}),
+        );
+        let input = PermissionRequest::parse(&raw(permission)).unwrap();
+        assert_eq!(input.tool_use_id(), None);
+
+        let task = envelope(
+            "TaskCreated",
+            serde_json::json!({"task_id": "1", "task_subject": "Test"}),
+        );
+        TaskCreated::parse(&raw(task)).unwrap();
+
+        let elicitation = envelope(
+            "Elicitation",
+            serde_json::json!({"mcp_server_name": "forms", "message": "Choose"}),
+        );
+        Elicitation::parse(&raw(elicitation)).unwrap();
+
+        let stop = envelope("Stop", serde_json::json!({"stop_hook_active": false}));
+        let input = Stop::parse(&raw(stop)).unwrap();
+        assert_eq!(input.stop_hook_active(), Some(false));
+        assert_eq!(input.last_assistant_message(), None);
+
+        let compact = envelope(
+            "PreCompact",
+            serde_json::json!({"trigger": "auto", "custom_instructions": null}),
+        );
+        let input = PreCompact::parse(&raw(compact)).unwrap();
+        assert_eq!(input.custom_instructions(), None);
+        assert_eq!(input.compact_trigger(), Some(CompactTrigger::Auto));
+
+        let missing = envelope("PreCompact", serde_json::json!({"trigger": "auto"}));
+        assert!(PreCompact::parse(&raw(missing)).is_err());
+
+        let subagent = envelope(
+            "SubagentStop",
+            serde_json::json!({
+                "stop_hook_active": false,
+                "agent_id": "a",
+                "agent_type": "",
+                "agent_transcript_path": "/tmp/a.jsonl",
+            }),
+        );
+        let input = SubagentStop::parse(&raw(subagent)).unwrap();
+        assert_eq!(input.agent_type(), Some(""));
+        assert_eq!(input.agent_transcript_path(), Some("/tmp/a.jsonl"));
+    }
+
+    #[test]
+    fn harness_sent_enum_values_outside_the_snapshot_still_parse() {
+        let mut value = pre_tool_use();
+        value["permission_mode"] = "newMode".into();
+        value["effort"] = serde_json::json!({"level": "ultra"});
+        value["mcp_server"] = serde_json::json!({"name": "db", "source": "registry"});
+        let input = PreToolUse::parse(&raw(value)).unwrap();
+        assert_eq!(input.permission_mode.as_ref().unwrap().as_str(), "newMode");
+        assert!(!input.effort.as_ref().unwrap().level.is_documented());
+        let server = input.mcp_server().unwrap();
+        assert_eq!(server.name, "db");
+        assert!(!server.source.is_sdk());
+
+        let end = envelope("SessionEnd", serde_json::json!({"reason": "shutdown"}));
+        let input = SessionEnd::parse(&raw(end)).unwrap();
+        assert_eq!(
+            input.session_end_reason(),
+            Some(SessionEndReason::Unknown("shutdown".into()))
+        );
+
+        let failure = envelope("StopFailure", serde_json::json!({"error": "brand_new"}));
+        let input = StopFailure::parse(&raw(failure)).unwrap();
+        assert_eq!(input.stop_failure_error().unwrap().as_str(), "brand_new");
+    }
+
+    #[test]
+    fn typed_accessors_are_scoped_to_their_events() {
+        let prompt = envelope("UserPromptSubmit", serde_json::json!({"prompt": "hi"}));
+        let input = UserPromptSubmit::parse(&raw(prompt)).unwrap();
+        assert_eq!(input.prompt(), Some("hi"));
+        assert_eq!(input.stop_hook_active(), None);
+
+        let denied = envelope(
+            "PermissionDenied",
+            serde_json::json!({
+                "tool_name": "Bash",
+                "tool_input": {},
+                "tool_use_id": "t",
+                "reason": "auto mode",
+            }),
+        );
+        let input = PermissionDenied::parse(&raw(denied)).unwrap();
+        assert_eq!(input.permission_denied_reason(), Some("auto mode"));
+        assert_eq!(input.session_end_reason(), None);
+        assert_eq!(input.prompt(), None);
+    }
+
+    #[test]
+    fn the_parsed_event_identity_survives_edits_to_the_wire_name() {
+        let mut input = PreToolUse::parse(&raw(pre_tool_use())).unwrap();
+        input.hook_event_name = "SessionStart".into();
+        assert_eq!(input.event_id(), PreToolUse::EVENT);
+
+        let mut value = pre_tool_use();
+        value["hook_event_name"] = "Bogus".into();
+        let direct: CatalogInput = serde_json::from_value(value).unwrap();
+        assert_eq!(direct.event_id().name(), "Bogus");
+        let environment = ClaudeCommandEnvironment::from_map(
+            &Stop::EVENT,
+            &hookkit_core::EnvironmentVariables::from_pairs([
+                ("CLAUDECODE", "1"),
+                ("CLAUDE_CODE_CHILD_SESSION", "1"),
+                ("CLAUDE_CODE_SESSION_ID", "s"),
+                ("CLAUDE_PROJECT_DIR", "/repo"),
+            ]),
         )
         .unwrap();
-        let input = DirectoryAdded::parse(&raw).unwrap();
-        assert_eq!(input.field("directory"), Some(&serde_json::json!("/other")));
+        <Stop as EventSpec>::validate_command_environment(&direct, &environment).unwrap();
+    }
+
+    #[test]
+    fn pre_tool_use_context_only_output_makes_no_permission_decision() {
+        let value = stdout_json(
+            &PreToolUse::emit(PreToolUseOutput::with_context("This file is generated.")).unwrap(),
+        );
         assert_eq!(
-            input.field("source"),
-            Some(&serde_json::json!("slash_command"))
+            value,
+            serde_json::json!({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "This file is generated.",
+            }})
+        );
+
+        let rewrite = PreToolUseOutput::no_op()
+            .with_updated_input(
+                serde_json::json!({"command": "ls"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+        let value = stdout_json(&PreToolUse::emit(rewrite).unwrap());
+        assert!(
+            value["hookSpecificOutput"]
+                .get("permissionDecision")
+                .is_none()
+        );
+        assert_eq!(value["hookSpecificOutput"]["updatedInput"]["command"], "ls");
+    }
+
+    #[test]
+    fn pre_tool_use_decisions_carry_their_reasons_in_the_right_field() {
+        let value = stdout_json(&PreToolUse::emit(PreToolUseOutput::deny("no rm")).unwrap());
+        assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(
+            value["hookSpecificOutput"]["permissionDecisionReason"],
+            "no rm"
+        );
+        assert!(
+            value["hookSpecificOutput"]
+                .get("additionalContext")
+                .is_none()
+        );
+
+        let value = stdout_json(&PreToolUse::emit(PreToolUseOutput::defer()).unwrap());
+        assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "defer");
+    }
+
+    #[test]
+    fn pre_tool_use_builders_reject_fields_claude_code_ignores() {
+        let input = || {
+            serde_json::json!({"command": "ls"})
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+        assert!(
+            PreToolUseOutput::deny("no")
+                .with_updated_input(input())
+                .is_err()
+        );
+        assert!(
+            PreToolUseOutput::defer()
+                .with_updated_input(input())
+                .is_err()
+        );
+        assert!(
+            PreToolUseOutput::defer()
+                .with_additional_context("c")
+                .is_err()
+        );
+        assert!(PreToolUseOutput::no_op().with_decision_reason("r").is_err());
+        assert!(
+            PreToolUseOutput::with_context("c")
+                .with_decision_reason("r")
+                .is_err()
+        );
+        assert!(
+            PreToolUseOutput::ask("sure?")
+                .with_updated_input(input())
+                .is_ok()
+        );
+        assert!(
+            PreToolUseOutput::blocking_error("x")
+                .with_additional_context("c")
+                .is_err()
         );
     }
 
     #[test]
-    fn newly_optional_catalog_fields_may_be_absent() {
-        let permission = RawInvocation::parse(
-            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"cargo test"}}"#.to_vec(),
-        )
-        .unwrap();
-        PermissionRequest::parse(&permission).unwrap();
+    fn permission_request_decisions_keep_allow_and_deny_fields_apart() {
+        let input = serde_json::json!({"command": "npm run lint"})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(
+            PermissionRequestOutput::deny("no")
+                .with_updated_input(input.clone())
+                .is_err()
+        );
+        assert!(
+            PermissionRequestOutput::deny("no")
+                .with_updated_permissions(Vec::new())
+                .is_err()
+        );
+        assert!(
+            PermissionRequestOutput::allow()
+                .with_interrupt(true)
+                .is_err()
+        );
+        assert!(
+            PermissionRequestOutput::no_op()
+                .with_updated_input(input.clone())
+                .is_err()
+        );
 
-        let task = RawInvocation::parse(
-            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"TaskCreated","task_id":"1","task_subject":"Test"}"#.to_vec(),
-        )
-        .unwrap();
-        TaskCreated::parse(&task).unwrap();
-
-        let elicitation = RawInvocation::parse(
-            br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"Elicitation","mcp_server_name":"forms","message":"Choose"}"#.to_vec(),
-        )
-        .unwrap();
-        Elicitation::parse(&elicitation).unwrap();
+        let value = stdout_json(
+            &PermissionRequest::emit(
+                PermissionRequestOutput::allow()
+                    .with_updated_input(input)
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            value["hookSpecificOutput"]["decision"],
+            serde_json::json!({"behavior": "allow", "updatedInput": {"command": "npm run lint"}})
+        );
     }
 
     #[test]
-    fn event_specific_output_stamps_its_discriminator() {
-        let emission = PreToolUse::emit(PreToolUseOutput::decide(
-            PreToolPermissionDecision::Ask,
-            Some("confirm".into()),
-            None,
-            Some("production".into()),
-        ))
-        .unwrap();
-        let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-        assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    #[allow(deprecated)]
+    fn permission_request_blocking_error_also_prints_a_deny_decision() {
+        // Claude Code ignores exit 2 on PermissionRequest; only the decision
+        // object denies.
+        let emission =
+            PermissionRequest::emit(PermissionRequestOutput::blocking_error("no rm")).unwrap();
+        assert_eq!(emission.exit_code(), 2);
+        assert_eq!(emission.stderr(), b"no rm");
+        assert_eq!(
+            stdout_json(&emission)["hookSpecificOutput"]["decision"],
+            serde_json::json!({"behavior": "deny", "message": "no rm"})
+        );
+        assert!(PermissionRequest::emit(PermissionRequestOutput::blocking_error("")).is_err());
     }
 
     #[test]
-    fn current_decisions_and_watch_paths_use_wire_fields() {
-        let emission = PreToolUse::emit(PreToolUseOutput::decide(
-            PreToolPermissionDecision::Defer,
-            None,
-            None,
-            None,
-        ))
-        .unwrap();
-        let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "defer");
+    fn user_prompt_submit_can_title_a_session_without_blocking() {
+        let value = stdout_json(
+            &UserPromptSubmit::emit(
+                UserPromptSubmitOutput::no_op()
+                    .with_session_title("auth-refactor")
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            value,
+            serde_json::json!({"hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "sessionTitle": "auth-refactor",
+            }})
+        );
 
-        let emission = CwdChanged::emit(
-            CwdChangedOutput::no_op()
-                .with_watch_paths(vec!["/repo/.env".into()])
-                .unwrap()
-                .with_terminal_sequence("\u{7}")
+        let value =
+            stdout_json(&UserPromptSubmit::emit(UserPromptSubmitOutput::block("no")).unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!({"decision": "block", "reason": "no"})
+        );
+    }
+
+    #[test]
+    fn prompt_text_context_is_verbatim_unless_claude_would_parse_it_as_json() {
+        let emission =
+            UserPromptSubmit::emit(UserPromptSubmitOutput::text_context("plain\n")).unwrap();
+        assert_eq!(emission.stdout(), b"plain\n");
+
+        let emission =
+            UserPromptExpansion::emit(UserPromptExpansionOutput::text_context(" {\"a\":1} \n"))
+                .unwrap();
+        let value = stdout_json(&emission);
+        assert_eq!(
+            value["hookSpecificOutput"]["hookEventName"],
+            "UserPromptExpansion"
+        );
+        assert_eq!(
+            value["hookSpecificOutput"]["additionalContext"],
+            " {\"a\":1} \n"
+        );
+    }
+
+    #[test]
+    fn structured_blocks_can_keep_json_while_exiting_2() {
+        let emission = Stop::emit(
+            StopOutput::block_with_context("again", "ctx")
+                .into_blocking_error("stderr")
                 .unwrap(),
         )
         .unwrap();
-        let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
+        assert_eq!(emission.exit_code(), 2);
+        assert_eq!(emission.stderr(), b"stderr");
+        let value = stdout_json(&emission);
+        assert_eq!(value["decision"], "block");
+        assert_eq!(value["hookSpecificOutput"]["additionalContext"], "ctx");
+    }
+
+    #[test]
+    fn structured_fields_cannot_be_added_after_an_exit_code_outcome() {
+        assert!(
+            ConfigChangeOutput::blocking_error("blocked")
+                .with_block("again")
+                .is_err()
+        );
+        assert!(
+            StopOutput::block("x")
+                .into_blocking_error("y")
+                .unwrap()
+                .with_system_message("late")
+                .is_err()
+        );
+        assert!(
+            StopOutput::nonblocking_error("x")
+                .into_blocking_error("y")
+                .is_err()
+        );
+        assert!(
+            UserPromptSubmitOutput::text_context("plain")
+                .with_session_title("t")
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn discarded_fields_stay_schema_valid_but_setup_context_is_dropped() {
+        let value = stdout_json(&Setup::emit(SetupOutput::with_context("ignored")).unwrap());
+        assert_eq!(value, serde_json::json!({}));
+
+        let value = stdout_json(
+            &Notification::emit(
+                NotificationOutput::terminal_sequence("\u{7}")
+                    .with_continue(true)
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
         assert_eq!(
-            output["hookSpecificOutput"]["watchPaths"],
+            value,
+            serde_json::json!({"terminalSequence": "\u{7}", "continue": true})
+        );
+    }
+
+    #[test]
+    fn watch_paths_must_be_absolute_and_worktree_removal_uses_the_exit_code() {
+        let value = stdout_json(
+            &CwdChanged::emit(
+                CwdChangedOutput::no_op()
+                    .with_watch_paths(vec!["/repo/.env".into()])
+                    .unwrap()
+                    .with_terminal_sequence("\u{7}")
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            value["hookSpecificOutput"]["watchPaths"],
             serde_json::json!(["/repo/.env"])
         );
-        assert_eq!(output["terminalSequence"], "\u{7}");
         assert!(
             FileChangedOutput::no_op()
                 .with_watch_paths(vec!["relative/.env".into()])
                 .is_err()
         );
 
-        let emission = PostToolUseFailure::emit(PostToolUseFailureOutput::block_with_context(
-            "Inspect the failure.",
-            "Use the retry checklist.",
-        ))
-        .unwrap();
-        let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-        assert_eq!(output["decision"], "block");
+        let emission = WorktreeRemove::emit(WorktreeRemoveOutput::removed()).unwrap();
+        assert!(emission.stdout().is_empty());
+        let emission =
+            WorktreeRemove::emit(WorktreeRemoveOutput::failed("in use", 1).unwrap()).unwrap();
         assert_eq!(
-            output["hookSpecificOutput"]["hookEventName"],
-            "PostToolUseFailure"
+            (emission.exit_code(), emission.stderr()),
+            (1, &b"in use"[..])
         );
     }
 
     #[test]
-    fn structured_fields_cannot_be_added_after_blocking_transport() {
-        assert!(
-            ConfigChangeOutput::blocking_error("blocked")
-                .with_system_message("notice")
-                .is_err()
+    fn elicitation_actions_emit_their_documented_shapes() {
+        let value =
+            stdout_json(&Elicitation::emit(ElicitationOutput::accept_without_content()).unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!({"hookSpecificOutput": {
+                "hookEventName": "Elicitation",
+                "action": "accept",
+            }})
         );
+        let value = stdout_json(
+            &ElicitationResult::emit(ElicitationResultOutput::block("declined")).unwrap(),
+        );
+        assert_eq!(
+            value,
+            serde_json::json!({"decision": "block", "reason": "declined"})
+        );
+    }
+
+    #[test]
+    fn parsed_as_json_follows_claude_codes_brace_rule() {
+        assert!(parsed_as_json("{}"));
+        assert!(parsed_as_json(" \n{\"a\":1}\n\t"));
+        assert!(parsed_as_json("{\"a\":1}\n{\"b\":2}"));
+        assert!(!parsed_as_json("{ unclosed"));
+        assert!(!parsed_as_json("[1]"));
+        assert!(!parsed_as_json("\"{}\""));
+        assert!(!parsed_as_json("text {}"));
     }
 }

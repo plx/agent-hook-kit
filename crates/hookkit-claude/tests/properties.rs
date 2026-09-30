@@ -9,14 +9,34 @@ use hookkit_core::EventSpec;
 use proptest::prelude::*;
 use serde_json::Value;
 
+/// Claude Code (v2.1.248 or later) parses stdout as JSON when its trimmed
+/// text starts with `{` and ends with `}`.
+fn claude_parses_as_json(text: &str) -> bool {
+    let trimmed = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    trimmed.starts_with('{') && trimmed.ends_with('}')
+}
+
 proptest! {
     /// Property: the text SessionStart variant is an opaque successful stdout
-    /// payload. It is neither JSON-quoted nor newline-normalized.
+    /// payload. It is neither JSON-quoted nor newline-normalized, except that
+    /// text Claude Code would parse as JSON is delivered as structured
+    /// `additionalContext` so it is never dropped.
     #[test]
-    fn session_start_text_is_byte_exact(text in any::<String>()) {
+    fn session_start_text_is_byte_exact_or_structured(
+        text in prop_oneof![
+            any::<String>(),
+            any::<String>().prop_map(|inner| format!(" {{{inner}}}\n")),
+        ],
+    ) {
         let emission = SessionStart::emit(SessionStartOutput::text_context(text.clone())).unwrap();
 
-        prop_assert_eq!(emission.stdout(), text.as_bytes());
+        if claude_parses_as_json(&text) {
+            let value: Value = serde_json::from_slice(emission.stdout()).unwrap();
+            prop_assert_eq!(value["hookSpecificOutput"]["hookEventName"].as_str(), Some("SessionStart"));
+            prop_assert_eq!(value["hookSpecificOutput"]["additionalContext"].as_str(), Some(text.as_str()));
+        } else {
+            prop_assert_eq!(emission.stdout(), text.as_bytes());
+        }
         prop_assert!(emission.stderr().is_empty());
         prop_assert_eq!(emission.exit_code(), 0);
     }
@@ -49,13 +69,13 @@ proptest! {
         message in any::<String>(),
         updated in any::<i64>(),
         continue_session in any::<bool>(),
-        suppress_output in any::<bool>(),
+        classifier in any::<String>(),
     ) {
         let output = PostToolUseOutput::with_context(context.clone())
             .with_updated_tool_output(Value::Number(updated.into())).unwrap()
             .with_block(reason.clone()).unwrap()
             .with_continue(continue_session).unwrap()
-            .with_suppress_output(suppress_output).unwrap()
+            .with_classifier_context(classifier.clone()).unwrap()
             .with_system_message(message.clone()).unwrap();
         let emission = PostToolUse::emit(output).unwrap();
         let value: Value = serde_json::from_slice(emission.stdout()).unwrap();
@@ -63,7 +83,7 @@ proptest! {
         prop_assert_eq!(value["decision"].as_str(), Some("block"));
         prop_assert_eq!(value["reason"].as_str(), Some(reason.as_str()));
         prop_assert_eq!(value["continue"].as_bool(), Some(continue_session));
-        prop_assert_eq!(value["suppressOutput"].as_bool(), Some(suppress_output));
+        prop_assert_eq!(value["hookSpecificOutput"]["classifierContext"].as_str(), Some(classifier.as_str()));
         prop_assert_eq!(value["systemMessage"].as_str(), Some(message.as_str()));
         prop_assert_eq!(value["hookSpecificOutput"]["hookEventName"].as_str(), Some("PostToolUse"));
         prop_assert_eq!(value["hookSpecificOutput"]["additionalContext"].as_str(), Some(context.as_str()));
