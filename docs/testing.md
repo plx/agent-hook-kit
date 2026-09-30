@@ -17,10 +17,16 @@ cargo xtask contracts verify-vendor
 
 It validates catalog YAML/meta-schemas, offline JSON Schema references, positive
 and negative fixtures, exact stream checksums/framing, immutable snapshots, and
-catalog/status consistency. The conformance executable runs every declared Rust
-case and reconciles the machine-generated implementation registry. Workspace
-tests also compare production identification metadata with the selected catalog
-snapshots.
+catalog/status consistency. The conformance executable checks that each native
+crate implements the registry-selected snapshot, parses every positive input
+fixture with the native parser, requires every negative input fixture to be
+rejected (except one that only closes a harness-sent enumeration, which the
+native crates deliberately read as an `Unknown` value), runs every declared Rust
+process case, and reconciles the machine-generated implementation registry.
+Workspace tests also compare production identification metadata and
+command-environment selectors with the selected catalog snapshots and
+supplement, and check that the repository `fixtures/` inputs decode and its
+golden outputs match typed constructors.
 
 ### 2. Hermetic library, runtime, examples, and documentation
 
@@ -28,7 +34,7 @@ snapshots.
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets
-cargo doc --workspace --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 The workspace test command deliberately excludes tests marked `ignored`. Native
