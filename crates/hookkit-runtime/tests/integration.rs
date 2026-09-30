@@ -1167,6 +1167,18 @@ fn codex_bash_guard_denies_hidden_and_uninspectable_commands() {
         // Input the guard cannot read is denied rather than allowed.
         ("echo 'rm -rf /' | sh", "cannot be inspected"),
         (oversized.as_str(), "cannot be inspected"),
+        // A read-write `<>` opens standard input, so the file, not the benign
+        // here-string or here-document before it, supplies the shell's input.
+        ("bash <<<'echo hi' <> evil.sh", "cannot be inspected"),
+        (
+            "bash <<'EOF' <> evil.sh\necho hi\nEOF\n",
+            "cannot be inspected",
+        ),
+        (
+            "bash <<'EOF' 0<> evil.sh\necho hi\nEOF\n",
+            "cannot be inspected",
+        ),
+        ("bash <<<'echo hi' 00< evil.sh", "cannot be inspected"),
     ] {
         let fixture = serde_json::json!({
             "session_id": "test",

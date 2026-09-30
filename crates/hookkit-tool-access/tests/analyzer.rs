@@ -872,6 +872,8 @@ fn only_the_final_standard_input_supplies_a_shell_patch() {
         format!("apply_patch <<'EOF' <> evil.patch\n{DECOY}"),
         format!("apply_patch <<'EOF' 0<> evil.patch\n{DECOY}"),
         format!("apply_patch <<'EOF' 0< evil.patch\n{DECOY}"),
+        // Bash reads any all-zero descriptor as standard input.
+        format!("apply_patch <<'EOF' 00< evil.patch\n{DECOY}"),
         format!("apply_patch <<'EOF' <&-\n{DECOY}"),
         format!("{{ (apply_patch) < evil.patch; }} <<'EOF'\n{DECOY}"),
         format!("{{ apply_patch; }} <<'EOF' <> evil.patch\n{DECOY}"),

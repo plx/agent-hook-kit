@@ -339,7 +339,7 @@ impl SimpleCommand<'_> {
             .occurrence
             .redirections
             .iter()
-            .filter(|redirection| reads_stdin(redirection))
+            .filter(|redirection| reads_stdin(self.source, redirection))
             .collect();
         let redirections = if own.is_empty() {
             self.analysis
@@ -347,7 +347,7 @@ impl SimpleCommand<'_> {
                 .iter()
                 .filter(|statement| statement.commands.contains(&self.index))
                 .flat_map(|statement| &statement.redirections)
-                .filter(|redirection| reads_stdin(redirection))
+                .filter(|redirection| reads_stdin(self.source, redirection))
                 .collect()
         } else {
             own
@@ -416,8 +416,19 @@ fn nested(source: &str, depth: usize, runner: &str) -> Option<String> {
 }
 
 /// Whether `redirection` supplies the command's standard input.
-fn reads_stdin(redirection: &Redirection) -> bool {
-    matches!(redirection.descriptor.as_deref(), None | Some("0"))
+///
+/// Bash reads `<>` without a descriptor as a read-write open of standard
+/// input, and tree-sitter-bash reduces `0<>` after a here-document to an
+/// `Output` redirection preceded by `<`, so both count. A descriptor counts as
+/// standard input when it is all zeros (`0`, `00`); hookkit-shell reports a
+/// multi-digit descriptor it cannot represent as an empty string, which is
+/// treated as possibly standard input.
+fn reads_stdin(source: &str, redirection: &Redirection) -> bool {
+    let stdin_descriptor = match redirection.descriptor.as_deref() {
+        None => true,
+        Some(descriptor) => descriptor.bytes().all(|byte| byte == b'0'),
+    };
+    stdin_descriptor
         && (matches!(
             redirection.kind,
             RedirectionKind::HereDocument | RedirectionKind::HereString
@@ -425,10 +436,14 @@ fn reads_stdin(redirection: &Redirection) -> bool {
             redirection.operator,
             Some(
                 RedirectionOperator::Input
+                    | RedirectionOperator::ReadWrite
                     | RedirectionOperator::DuplicateInput
                     | RedirectionOperator::CloseInput
             )
-        ))
+        ) || (redirection.operator == Some(RedirectionOperator::Output)
+            && source
+                .get(..redirection.span.start_byte)
+                .is_some_and(|before| before.ends_with('<'))))
 }
 
 /// Where a shell invocation reads its commands from.

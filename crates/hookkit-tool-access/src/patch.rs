@@ -463,7 +463,10 @@ fn last_standard_input<'a>(
 /// counts too.
 fn redirects_standard_input(source: &str, redirection: &Redirection) -> bool {
     match redirection.descriptor.as_deref() {
-        Some(descriptor) => descriptor == "0",
+        // Bash reads any all-zero descriptor (`0`, `00`) as standard input.
+        // hookkit-shell reports a multi-digit descriptor it cannot represent
+        // as an empty string, which is treated as possibly standard input.
+        Some(descriptor) => descriptor.bytes().all(|byte| byte == b'0'),
         None => {
             matches!(
                 redirection.kind,
