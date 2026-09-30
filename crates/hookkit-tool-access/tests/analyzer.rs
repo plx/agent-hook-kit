@@ -143,10 +143,11 @@ fn unknown_structured_tools_keep_unclassified_references_and_gaps() {
 
 #[test]
 fn patch_parser_preserves_add_update_delete_and_move_roles() {
+    // Codex sends apply_patch hook input as `{"command": "<patch>"}`.
     let input = serde_json::json!({
-        "patch": "*** Begin Patch\n*** Add File: src/new.rs\n+new\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** Delete File: src/old.rs\n*** Update File: src/from.rs\n*** Move to: src/to.rs\n*** End Patch"
+        "command": "*** Begin Patch\n*** Add File: src/new.rs\n+new\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** Delete File: src/old.rs\n*** Update File: src/from.rs\n*** Move to: src/to.rs\n*** End Patch"
     });
-    let report = ToolAccessAnalyzer::default().analyze_call(&call("tools.apply_patch", &input));
+    let report = ToolAccessAnalyzer::default().analyze_call(&call("apply_patch", &input));
 
     let roles = report
         .candidates
@@ -170,16 +171,24 @@ fn patch_parser_preserves_add_update_delete_and_move_roles() {
                 payload_pointer: ref pointer,
                 line,
                 ..
-            } if pointer == "/patch" && line > 0
+            } if pointer == "/command" && line > 0
         )
     }));
+    assert!(report.is_complete());
+
+    // Custom namespaced patch tools may still use a `patch` field.
+    let custom = serde_json::json!({
+        "patch": "*** Begin Patch\n*** Add File: src/new.rs\n+new\n*** End Patch"
+    });
+    let report = ToolAccessAnalyzer::default().analyze_call(&call("tools.apply_patch", &custom));
+    assert_eq!(report.candidates.len(), 1);
     assert!(report.is_complete());
 }
 
 #[test]
 fn malformed_patch_retains_partial_evidence_and_a_typed_gap() {
     let input = serde_json::json!({
-        "patch": "*** Add File: recovered.txt\n*** Move to: orphaned.txt"
+        "command": "*** Add File: recovered.txt\n*** Move to: orphaned.txt"
     });
     let report = ToolAccessAnalyzer::default().analyze_call(&call("apply_patch", &input));
 
@@ -354,12 +363,12 @@ fn shell_patch_reports_malformed_dynamic_and_uncertain_cwd_cases() {
         "apply_patch <<'PATCH'\nnot a patch\nPATCH\n",
         "/repo",
     ));
-    assert!(
-        malformed
-            .gaps
-            .iter()
-            .any(|gap| matches!(gap.reason, ToolAccessGapReason::MalformedPatch { .. }))
-    );
+    // A malformed shell heredoc patch is attributed to shell analysis, like
+    // the candidates it would have produced.
+    assert!(malformed.gaps.iter().any(|gap| {
+        gap.source == AccessSource::Shell
+            && matches!(gap.reason, ToolAccessGapReason::MalformedPatch { .. })
+    }));
 
     let dynamic = ToolAccessAnalyzer::default().analyze_pre_tool(&codex_shell(
         "apply_patch <<PATCH\n*** Add File: $TARGET\nPATCH\n",

@@ -71,6 +71,29 @@ pub enum PathBase {
     UnknownAfterDirectoryChange,
     /// The invocation omitted a working directory for a relative expression.
     MissingWorkingDirectory,
+    /// The expression was resolved against the hook payload's session or turn
+    /// working directory (or, for Antigravity structured tools, its first
+    /// workspace root) because the tool's own working directory is not
+    /// observable. The tool may run elsewhere, for example when a Codex shell
+    /// call passes a `workdir` argument that its hook payload omits.
+    SessionCwd,
+    /// The expression begins with `~`, so its meaning depends on how the tool
+    /// expands home directories; it is not lexically resolved.
+    UnexpandedHome,
+    /// The call targets another execution environment (for example a Codex
+    /// patch `*** Environment ID:` header) whose filesystem is not observable.
+    UnknownEnvironment,
+}
+
+impl PathBase {
+    /// Returns whether a relative expression with this base names a location
+    /// the resolver may anchor to the configured workspace roots.
+    pub(crate) const fn is_observable(self) -> bool {
+        matches!(
+            self,
+            Self::Absolute | Self::InvocationCwd | Self::SessionCwd
+        )
+    }
 }
 
 /// A raw path and any justified lexical resolution.
@@ -128,6 +151,11 @@ pub enum StructuredFieldMatch {
     ExactPointer,
     /// Selected because the object's key appears in the configured key set.
     KeyHeuristic,
+    /// Selected by a documented argument of a harness built-in tool.
+    BuiltinTool,
+    /// The documented argument was omitted, so the built-in tool's default
+    /// (its working directory) applies; the pointer names the absent argument.
+    BuiltinDefault,
 }
 
 impl fmt::Display for StructuredFieldMatch {
@@ -135,6 +163,8 @@ impl fmt::Display for StructuredFieldMatch {
         match self {
             Self::ExactPointer => formatter.write_str("exact pointer"),
             Self::KeyHeuristic => formatter.write_str("configured key"),
+            Self::BuiltinTool => formatter.write_str("built-in tool argument"),
+            Self::BuiltinDefault => formatter.write_str("built-in tool default"),
         }
     }
 }
@@ -346,7 +376,7 @@ pub enum ToolAccessGapReason {
         /// Raw relative path.
         raw: String,
         /// Location of the raw path: an RFC 6901 JSON Pointer for structured
-        /// input or a patch payload field (e.g. `/patch`, `/input`), or the
+        /// input or a patch payload field (e.g. `/command`, `/patch`), or the
         /// literal sentinel `"<shell-heredoc>"` for a path recovered from a
         /// shell `apply_patch` here-document; `None` when no location is known.
         pointer: Option<String>,
@@ -408,6 +438,20 @@ pub enum ToolAccessGapReason {
     ShellPatchWorkingDirectoryMayHaveChanged {
         /// Span of the containing `apply_patch` command.
         command_span: SourceSpan,
+    },
+    /// A structured path begins with `~`; its expansion depends on the tool.
+    UnexpandedHomePath {
+        /// Raw path text.
+        raw: String,
+        /// JSON Pointer to the path.
+        pointer: String,
+    },
+    /// The call targets a named execution environment (for example a Codex
+    /// patch `*** Environment ID:` header or `view_image` `environment_id`)
+    /// whose filesystem and working directory are not observable.
+    UnknownExecutionEnvironment {
+        /// Environment identifier declared by the call.
+        environment_id: String,
     },
 }
 
@@ -509,6 +553,14 @@ impl fmt::Display for ToolAccessGap {
                     command_span.start_byte, command_span.end_byte
                 )
             }
+            ToolAccessGapReason::UnexpandedHomePath { raw, pointer } => write!(
+                formatter,
+                "path `{raw}` at {pointer} depends on the tool's home-directory expansion"
+            ),
+            ToolAccessGapReason::UnknownExecutionEnvironment { environment_id } => write!(
+                formatter,
+                "call targets environment `{environment_id}`, whose filesystem is not observable"
+            ),
         }
     }
 }

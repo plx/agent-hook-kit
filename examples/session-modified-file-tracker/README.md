@@ -14,9 +14,12 @@ The example keeps `--harness=claude|codex|antigravity` and
 `--state-dir=PATH` compatible, while the shipped binary accepts those aliases
 as well.
 
-The hook uses `hookkit-file-activity` to classify known structured writer
-names, parse `apply_patch` headers, and run the bounded `hookkit-shell`
-file-access analyzer over native shell calls. Every candidate retains its
+The hook uses `hookkit-file-activity` to read the documented arguments of each
+harness's built-in file tools (for example Claude `Write`/`Edit`, Antigravity
+`write_to_file`), parse Codex `apply_patch` headers from the patch text in
+`tool_input.command`, and run the bounded `hookkit-shell` file-access analyzer
+over native shell calls. Tools documented not to touch files are ignored
+without recording a gap. Every candidate retains its
 effect, source, certainty, timestamp, event, tool-call ID, and turn ID. Known
 blind spots (such as a dynamic shell path) are recorded as coverage gaps rather
 than silently discarded. The post-tool observer does not invoke Git, diff the
@@ -81,6 +84,11 @@ combined result for a complete audit log.
   originating tool call and arguments. It does not carry a tool result, and its
   missing precise session-start producer makes initial mtime reconciliation
   best effort.
+- Claude Code sends failed tool calls to `PostToolUseFailure` rather than
+  `PostToolUse`. This aligned `PostToolUse` tracker therefore misses writes by
+  a Bash command that then exits non-zero; the library's
+  `observe_claude_post_tool_failure` observes that event, and the mtime
+  fallback remains the recovery path until a binary binds it.
 - Aligned `TurnCompletion` maps Claude Code, Codex, and Antigravity `Stop`
   without erasing their native contracts. All three can consume directly
   observed modified paths.

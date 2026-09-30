@@ -1188,7 +1188,9 @@ fn codex_claude_rules_injects_each_matching_rule_once() {
         "permission_mode": "default",
         "tool_name": "apply_patch",
         "tool_use_id": "rules-call",
-        "tool_input": {"patch": "*** Update File: src/lib.rs\n"}
+        "tool_input": {
+            "command": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch\n"
+        }
     }))
     .unwrap();
     let project_arg = project.to_string_lossy().into_owned();

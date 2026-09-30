@@ -9,6 +9,6 @@
   "tool_name": "apply_patch",
   "tool_use_id": "call-1",
   "tool_input": {
-    "patch": "*** Update File: src/lib.rs\n@@\n-old\n+new\n"
+    "command": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch\n"
   }
 }

@@ -4,9 +4,9 @@
   "transcriptPath": "/tmp/antigravity-transcript.jsonl",
   "artifactDirectoryPath": "/tmp/antigravity-artifacts",
   "toolCall": {
-    "name": "read_file",
+    "name": "view_file",
     "args": {
-      "path": "/repo/.env"
+      "AbsolutePath": "/repo/.env"
     }
   },
   "stepIdx": 1

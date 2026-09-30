@@ -25,7 +25,12 @@ impl Drop for TempDirectory {
     }
 }
 
+/// Builds each harness's documented native file-tool payload for `path`:
+/// Claude `Read` (absolute `file_path`), Codex `apply_patch` (patch text in
+/// `command`), and Antigravity `view_file` (PascalCase `AbsolutePath`).
 fn input(harness: &str, cwd: &Path, path: &str) -> serde_json::Value {
+    let absolute = cwd.join(path);
+    let absolute = absolute.to_str().unwrap();
     let cwd = cwd.to_str().unwrap();
     match harness {
         "claude" => serde_json::json!({
@@ -34,8 +39,8 @@ fn input(harness: &str, cwd: &Path, path: &str) -> serde_json::Value {
             "cwd": cwd,
             "permission_mode": "default",
             "hook_event_name": "PreToolUse",
-            "tool_name": "read_file",
-            "tool_input": {"path": path},
+            "tool_name": "Read",
+            "tool_input": {"file_path": absolute},
             "tool_use_id": "call"
         }),
         "codex" => serde_json::json!({
@@ -46,16 +51,20 @@ fn input(harness: &str, cwd: &Path, path: &str) -> serde_json::Value {
             "model": "gpt-test",
             "turn_id": "turn",
             "permission_mode": "default",
-            "tool_name": "read_file",
+            "tool_name": "apply_patch",
             "tool_use_id": "call",
-            "tool_input": {"path": path}
+            "tool_input": {
+                "command": format!(
+                    "*** Begin Patch\n*** Update File: {path}\n@@\n-old\n+new\n*** End Patch\n"
+                )
+            }
         }),
         "antigravity" => serde_json::json!({
             "conversationId": "session",
             "workspacePaths": [cwd],
             "transcriptPath": "/tmp/transcript.jsonl",
             "artifactDirectoryPath": "/tmp/artifacts",
-            "toolCall": {"name": "read_file", "args": {"path": path}},
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": absolute}},
             "stepIdx": 1
         }),
         _ => unreachable!(),
@@ -143,6 +152,23 @@ fn codex_shell_heredoc_patch_is_denied_through_stdin() {
 
     let output = run("codex", &config, &input);
     assert!(output.status.success());
+    assert_eq!(decision(&output), "deny");
+}
+
+#[test]
+fn checked_in_antigravity_fixture_is_denied() {
+    let temporary = TempDirectory::new("antigravity-fixture");
+    let config = temporary.0.join("policy.yaml");
+    std::fs::write(&config, "patterns: ['**/.env']\n").unwrap();
+    let fixture = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/antigravity_pre_tool_use.json"),
+    )
+    .unwrap();
+    let input: serde_json::Value = serde_json::from_slice(&fixture).unwrap();
+    assert_eq!(input["toolCall"]["name"], "view_file");
+
+    let output = run("antigravity", &config, &input);
+    assert!(output.status.success(), "{:?}", output.stderr);
     assert_eq!(decision(&output), "deny");
 }
 

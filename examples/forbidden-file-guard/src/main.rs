@@ -411,6 +411,50 @@ mod tests {
         )
     }
 
+    fn claude_input_at_cwd(
+        cwd: &str,
+        tool_name: &str,
+        tool_input: serde_json::Value,
+    ) -> PreToolUseInput {
+        PreToolUseInput::Claude(
+            serde_json::from_value(serde_json::json!({
+                "session_id": "session",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": cwd,
+                "hook_event_name": "PreToolUse",
+                "permission_mode": "default",
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "tool_use_id": "toolu_1"
+            }))
+            .unwrap(),
+        )
+    }
+
+    fn antigravity_input(tool_name: &str, args: serde_json::Value) -> PreToolUseInput {
+        PreToolUseInput::Antigravity(
+            serde_json::from_value(serde_json::json!({
+                "conversationId": "conversation",
+                "workspacePaths": ["/repo"],
+                "transcriptPath": "/tmp/transcript.jsonl",
+                "artifactDirectoryPath": "/tmp/artifacts",
+                "toolCall": {"name": tool_name, "args": args},
+                "stepIdx": 1
+            }))
+            .unwrap(),
+        )
+    }
+
+    /// Codex's native apply_patch hook input: the patch text in `command`.
+    fn codex_patch(patch_body: &str) -> PreToolUseInput {
+        codex_input(
+            "apply_patch",
+            serde_json::json!({
+                "command": format!("*** Begin Patch\n{patch_body}*** End Patch\n")
+            }),
+        )
+    }
+
     #[test]
     fn blocks_structured_reads_writes_and_patch_roles() {
         let guard = policy(
@@ -418,19 +462,138 @@ mod tests {
             AccessPolicy::InspectKnown,
         );
         for (tool, input) in [
-            ("read_file", serde_json::json!({"path": "/repo/.env"})),
+            ("Read", serde_json::json!({"file_path": "/repo/.env"})),
             (
-                "write_file",
-                serde_json::json!({"file_path": "services/api/.env"}),
+                "Write",
+                serde_json::json!({"file_path": "/repo/services/api/.env", "content": "x"}),
+            ),
+            (
+                "Edit",
+                serde_json::json!({"file_path": "/repo/.env", "old_string": "a", "new_string": "b"}),
             ),
         ] {
-            assert!(evaluate_codex(&guard, &codex_input(tool, input)).is_some());
+            let input = claude_input_at_cwd("/repo", tool, input);
+            assert!(evaluate_codex(&guard, &input).is_some(), "{tool}");
         }
 
-        let patch = serde_json::json!({
-            "patch": "*** Add File: secrets/new.txt\n+new\n*** Update File: secrets/current.txt\n*** Delete File: secrets/old.txt\n*** Update File: secrets/from.txt\n*** Move to: secrets/to.txt\n"
-        });
-        assert!(evaluate_codex(&guard, &codex_input("apply_patch", patch)).is_some());
+        for body in [
+            "*** Add File: secrets/new.txt\n+new\n",
+            "*** Update File: secrets/current.txt\n@@\n-old\n+new\n",
+            "*** Delete File: secrets/old.txt\n",
+            "*** Update File: src/from.txt\n*** Move to: secrets/to.txt\n@@\n-a\n+b\n",
+        ] {
+            assert!(
+                evaluate_codex(&guard, &codex_patch(body)).is_some(),
+                "{body}"
+            );
+        }
+        let benign = codex_patch("*** Update File: src/lib.rs\n@@\n-old\n+new\n");
+        assert!(evaluate_codex(&guard, &benign).is_none());
+        let strict = policy(&["secrets/**"], AccessPolicy::DenyUnresolved);
+        assert!(evaluate_codex(&strict, &benign).is_none());
+    }
+
+    #[test]
+    fn claude_search_and_notebook_tools_are_inspected() {
+        let directory = test_dir("forbidden-claude-search");
+        let root = Utf8PathBuf::from_path_buf(directory.clone()).unwrap();
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/.env"), "KEY=secret").unwrap();
+        std::fs::write(root.join("lib.rs"), "fn main() {}").unwrap();
+        let guard = policy(&["**/.env"], AccessPolicy::InspectKnown);
+        let evaluate_claude = |tool: &str, input: serde_json::Value| {
+            evaluate(
+                &guard,
+                &claude_input_at_cwd(root.as_str(), tool, input),
+                std::slice::from_ref(&root),
+                TARGET_RESOLUTION_BUDGET,
+            )
+        };
+
+        for (tool, input) in [
+            (
+                "Grep",
+                serde_json::json!({"pattern": "KEY", "path": root.as_str(), "glob": "**/.env"}),
+            ),
+            (
+                "Grep",
+                serde_json::json!({"pattern": "KEY", "glob": ".env"}),
+            ),
+            (
+                "Grep",
+                serde_json::json!({"pattern": "KEY", "output_mode": "content"}),
+            ),
+            ("Glob", serde_json::json!({"pattern": "**/.env"})),
+            (
+                "NotebookEdit",
+                serde_json::json!({"notebook_path": root.join(".env").as_str(), "new_source": "x"}),
+            ),
+        ] {
+            assert!(evaluate_claude(tool, input.clone()).is_some(), "{input}");
+        }
+
+        // A search narrowed to other files does not touch the secret.
+        assert!(
+            evaluate_claude(
+                "Grep",
+                serde_json::json!({"pattern": "KEY", "glob": "*.rs"})
+            )
+            .is_none()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn antigravity_documented_file_tools_are_inspected() {
+        let guard = policy(&["**/.env"], AccessPolicy::InspectKnown);
+        for (tool, args) in [
+            (
+                "view_file",
+                serde_json::json!({"AbsolutePath": "/repo/.env"}),
+            ),
+            (
+                "write_to_file",
+                serde_json::json!({"TargetFile": "/repo/.env", "CodeContent": "x"}),
+            ),
+            (
+                "replace_file_content",
+                serde_json::json!({"TargetFile": "/repo/.env", "TargetContent": "a"}),
+            ),
+            (
+                "multi_replace_file_content",
+                serde_json::json!({"TargetFile": "/repo/.env", "ReplacementChunks": []}),
+            ),
+            (
+                "grep_search",
+                serde_json::json!({"SearchPath": "/repo/.env", "Query": "KEY"}),
+            ),
+        ] {
+            assert!(
+                evaluate_codex(&guard, &antigravity_input(tool, args)).is_some(),
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_free_tools_are_not_denied_as_unresolved() {
+        let strict = policy(&["**/.env"], AccessPolicy::DenyUnresolved);
+        for input in [
+            claude_input_at_cwd(
+                "/repo",
+                "TodoWrite",
+                serde_json::json!({"todos": [{"content": "write the file"}]}),
+            ),
+            claude_input_at_cwd(
+                "/repo",
+                "WebFetch",
+                serde_json::json!({"url": "https://example.com", "prompt": "p"}),
+            ),
+            codex_input("update_plan", serde_json::json!({"plan": []})),
+            antigravity_input("search_web", serde_json::json!({"query": "rust"})),
+        ] {
+            assert!(evaluate_codex(&strict, &input).is_none());
+        }
     }
 
     #[test]
@@ -571,7 +734,7 @@ mod tests {
         let guard = policy(&["/project/src/**"], AccessPolicy::InspectKnown);
         let input = codex_input_at_cwd(
             "/native/cwd",
-            "read_file",
+            "mcp__filesystem__read_file",
             serde_json::json!({"path": "src/lib.rs"}),
         );
         assert!(
@@ -638,7 +801,10 @@ mod tests {
     #[test]
     fn parent_traversal_is_normalized_against_native_cwd() {
         let guard = policy(&[".env"], AccessPolicy::InspectKnown);
-        let input = codex_input("read_file", serde_json::json!({"path": "../../repo/.env"}));
+        let input = codex_input(
+            "mcp__filesystem__read_file",
+            serde_json::json!({"path": "../../repo/.env"}),
+        );
         assert!(evaluate_codex(&guard, &input).is_some());
     }
 
@@ -653,7 +819,7 @@ mod tests {
         let guard = policy(&["real/.env"], AccessPolicy::InspectKnown);
         let input = codex_input_at_cwd(
             root.as_str(),
-            "read_file",
+            "mcp__filesystem__read_file",
             serde_json::json!({"path": "alias"}),
         );
         assert!(

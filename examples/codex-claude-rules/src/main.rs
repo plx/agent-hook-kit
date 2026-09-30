@@ -1,7 +1,6 @@
 use clap::Parser;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use hookkit_codex::protocol::{PreToolUse, PreToolUseInput, PreToolUseOutput};
-use hookkit_common::PreToolUseInput as AlignedPreToolUseInput;
 use hookkit_core::{Utf8Path, Utf8PathBuf, normalize_utf8_path, resolve_path, utf8_path_to_slash};
 use hookkit_session_state::{ClaimResult, FamilyId, SessionState, StateRoot};
 use hookkit_shell::{BashAnalyzer, FileAccessAnalyzer, UnknownCommandFallback};
@@ -243,7 +242,8 @@ fn referenced_paths(
             .with_unknown_command_fallback(UnknownCommandFallback::LiteralPathOperands),
         hookkit_tool_access::StructuredFieldAnalyzer::default(),
     );
-    let access = analyzer.analyze_pre_tool(&AlignedPreToolUseInput::Codex(input.clone()));
+    // The typed native input is analyzed in place; no aligned clone is needed.
+    let access = analyzer.analyze_native(input);
     let mut options = TargetResolutionOptions::new(vec![project_root.to_path_buf()]);
     options.max_entries = max_entries;
     options.ignored_directory_names.clear();
@@ -360,11 +360,11 @@ mod tests {
 
     #[test]
     fn extracts_structured_patch_and_shell_paths() {
+        // Codex sends the apply_patch text in `command`.
         let input = pre_tool_input(
             "apply_patch",
             serde_json::json!({
-                "patch": "*** Update File: src/lib.rs\n*** Add File: tests/new.rs\n",
-                "command": "sed -i '' src/main.rs"
+                "command": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** Add File: tests/new.rs\n+new\n*** End Patch\n"
             }),
         );
         let paths = referenced_paths(&input, Utf8Path::new("/repo"), TARGET_RESOLUTION_BUDGET)
@@ -378,7 +378,7 @@ mod tests {
         assert!(paths.contains("/repo/tests/new.rs"));
 
         let structured = pre_tool_input(
-            "read_file",
+            "mcp__docs__read_file",
             serde_json::json!({"nested": {"file_path": "README.md"}}),
         );
         assert!(
@@ -581,7 +581,7 @@ mod tests {
     fn native_cwd_does_not_get_rewritten_to_project_root() {
         let input = pre_tool_input_at_cwd(
             "/native/cwd",
-            "read_file",
+            "mcp__filesystem__read_file",
             serde_json::json!({"path": "src/lib.rs"}),
         );
         let references =

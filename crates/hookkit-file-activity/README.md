@@ -19,7 +19,24 @@ Pending activity is a windowed session-state entity. A consumer acknowledges
 the exact generations it discharged; new observations appended while the
 consumer runs remain pending. Filesystem reconciliation uses a monotonic
 `reconciled_through` cursor, so session-start time is only the bootstrap lower
-bound rather than the definition of every batch.
+bound rather than the definition of every batch. A compaction epoch never moves
+that bootstrap bound past the conversation's start, because compaction can
+begin in the middle of the first turn.
+
+The mtime scan walks each root depth-first in file-name order. Every lower
+bound is widened by `timestamp_tolerance`, so writes on coarse or skewed
+filesystem clocks near the previous cursor are not lost; files already covered
+by a handled baseline stay suppressed, and others inside that overlap may be
+reported once more. When a scan reaches its entry budget, it records a
+`ScanResume` (a separate version-1 `reconciliation-progress` entity) instead of
+silently skipping the tail: the next reconciliation scans the unscanned
+remainder first, against the older lower bound it is still owed. Relative roots
+and excluded roots, including a relative `--state-dir`, are resolved against
+the process working directory before comparison.
+
+`append_report` persists only a SHA-256 digest of its key prefix, so passing
+the raw hook input as the prefix does not copy large tool inputs into every
+journal record.
 
 The pending entity is version 2. In addition to direct evidence and gaps, it
 accepts deterministic retry events. The Stop consumer appends a fresh retry
@@ -47,6 +64,10 @@ required.
 Git dirty-state reconciliation is intentionally disabled by default because it
 cannot distinguish agent edits from changes that were already present. Enable
 it only when that broad fallback is appropriate for the calling application.
+It runs `git --no-optional-locks status` limited to each root with a `.`
+pathspec, re-roots the repository-relative porcelain paths by stripping the
+root's own repository prefix (so a workspace in a monorepo subdirectory works),
+honors excluded roots, and streams at most `max_entries` paths.
 
 The shipped turn-completion runner exposes its reconciliation choices in Pkl:
 
@@ -55,7 +76,7 @@ settings {
   fileActivity = new FileActivity {
     filesystemMtime = true
     vcs = "disabled" // or "git-dirty"
-    timestampToleranceMillis = 2000 // bootstrap scan only
+    timestampToleranceMillis = 2000 // widens every scan's lower bound
     maxEntries = 100000
     coverageGapPolicy = "best-effort" // or "strict"
   }
@@ -73,8 +94,15 @@ The default coverage policy processes materialized files, requeues unresolved
 scopes and analyzer gaps, and exposes those gaps in the run summary without
 calling resolved files dirty. `strict` additionally blocks Stop while a gap is
 present. Both policies retain the unresolved evidence for a later attempt.
-Scoped resolution stops at `maxEntries`; truncation remains an unresolved target
-plus an explicit coverage gap rather than silently dropping the unwalked tail.
+`resolve_files` resolves every exact target first (these probes are not
+budgeted), so a directly observed file is never dropped. Scoped resolution then
+stops at `maxEntries`; the scope being walked and every later scope remain
+unresolved targets, plus an explicit coverage gap, rather than silently
+dropping the unwalked tail. A scope whose root no longer exists (for example
+after `rm -rf dist`), or lies in an ignored or excluded directory, has nothing
+left to check and resolves as empty instead of being retained forever. Exact
+files inside an excluded root or an ignored directory are reported as not
+applicable rather than processed.
 
 Reconciliation may still stat/hash a fallback candidate once to compare its
 current fingerprint with the handled baseline. When the digest matches, it does
@@ -87,6 +115,20 @@ it the same `--state-dir` as `turn-completion-agent-hook`
 and, where supported, `session-start-state-agent-hook`. The older
 `session-modified-file-tracker` example is only a compatibility wrapper around
 that library-owned observer.
-Antigravity supplies the originating tool call and arguments, so structured and
-shell inference can produce direct evidence. Its missing precise session-start
-producer still makes mtime reconciliation a best-effort fallback.
+
+Claude Code reports a failed tool call (for example a Bash command that edits
+files and then exits non-zero) only through `PostToolUseFailure`, which carries
+the same `tool_name` and `tool_input`. Library consumers can observe it with
+`observe_claude_post_tool_failure`, or with `observe_tool_call` for any borrowed
+native input; without that binding such writes are recovered only by the mtime
+fallback.
+
+Documented harness built-ins are analyzed from exact argument contracts in
+`hookkit-tool-access`: Claude `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, Codex
+`apply_patch` (patch text in `command`), and Antigravity `write_to_file`,
+`replace_file_content`, and `multi_replace_file_content` (PascalCase
+`TargetFile`) all produce direct evidence, as do shell commands. Tools that are
+documented not to touch files, such as `TodoWrite`, `WebFetch`, `update_plan`,
+or `search_web`, produce no evidence and no coverage gap. Antigravity's missing
+precise session-start producer still makes mtime reconciliation a best-effort
+fallback.

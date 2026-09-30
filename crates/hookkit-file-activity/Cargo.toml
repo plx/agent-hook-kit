@@ -12,6 +12,7 @@ categories = ["development-tools"]
 
 [dependencies]
 globset = { workspace = true }
+hookkit-claude = { workspace = true }
 hookkit-common = { workspace = true }
 hookkit-core = { workspace = true }
 hookkit-session-state = { workspace = true }

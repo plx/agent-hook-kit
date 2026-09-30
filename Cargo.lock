@@ -594,6 +594,7 @@ name = "hookkit-file-activity"
 version = "0.1.0"
 dependencies = [
  "globset",
+ "hookkit-claude",
  "hookkit-common",
  "hookkit-core",
  "hookkit-session-state",
@@ -670,10 +671,14 @@ name = "hookkit-tool-access"
 version = "0.1.0"
 dependencies = [
  "globset",
+ "hookkit-antigravity",
+ "hookkit-claude",
+ "hookkit-codex",
  "hookkit-common",
  "hookkit-core",
  "hookkit-shell",
  "serde_json",
+ "serde_yaml_ng",
  "walkdir",
 ]
 
