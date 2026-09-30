@@ -4155,13 +4155,17 @@ fn render_upstream_sources(root: &Path) -> Result<String> {
                 _ => None,
             };
             let clone_url = tree.as_ref().map(GitHubTree::clone_url);
+            // Only a Git tree's revision can be fetched. Other sources may
+            // record a free-form revision label, such as a documentation
+            // site's build ETag, which the drift check never uses.
+            let revision = tree.as_ref().and(source.revision.as_deref());
             let fields = [
                 Some(harness.as_str()),
                 Some(selected.current.as_str()),
                 Some(source.id.as_str()),
                 source.reproducibility.as_deref(),
                 Some(source.url.as_str()),
-                source.revision.as_deref(),
+                revision,
                 source.content_sha256.as_deref(),
                 clone_url.as_deref(),
                 tree.as_ref().map(|tree| tree.path),

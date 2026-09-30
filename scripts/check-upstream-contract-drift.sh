@@ -133,7 +133,10 @@ check_pinned_tree() {
 
 check_content_hash() {
   local label=$1 url=$2 recorded=$3 reproducibility=$4 current
-  current="$(curl --fail --silent --show-error --location --retry 3 --max-time 60 "$url" \
+  # Recorded hashes cover the decoded body. --compressed decodes a response the
+  # server content-encodes even unasked (antigravity.google does, sometimes),
+  # and is a no-op for identity responses.
+  current="$(curl --fail --silent --show-error --location --compressed --retry 3 --max-time 60 "$url" \
     | sha256_stream)" || fail "$label: cannot fetch $url"
   if [[ "$current" == "$recorded" ]]; then
     printf 'ok %s: %s still hashes to %s\n' "$label" "$url" "$recorded"
