@@ -3,7 +3,7 @@
 //! These tests build the example binaries, pipe fixture JSON into stdin,
 //! and verify stdout/stderr/exit code behavior.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
@@ -870,6 +870,38 @@ fn files_named(root: &Path, name: &str) -> Vec<PathBuf> {
     }
     found.sort();
     found
+}
+
+/// Sets the modification time of every regular file below `root`, except
+/// below `skip`, to now without changing any content.
+///
+/// The Stop runner's filesystem-mtime fallback rescans from its previous
+/// cursor minus a timestamp tolerance (two seconds by default), so whether a
+/// file written shortly before one Stop is seen again by the next depends on
+/// how long the steps between them took. Touching every file puts all of
+/// them inside the next scan window, leaving only the content-based handled
+/// baselines to suppress them.
+fn touch_files_below(root: &Path, skip: &Path) {
+    let now = SystemTime::now();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.starts_with(skip) {
+            continue;
+        }
+        let file_type = entry.file_type().unwrap();
+        if file_type.is_dir() {
+            touch_files_below(&path, skip);
+        } else if file_type.is_file() {
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|file| file.set_modified(now))
+                .unwrap_or_else(|error| panic!("touch {}: {error}", path.display()));
+        }
+    }
 }
 
 fn ensure_built(binary: &str) {
@@ -2053,6 +2085,10 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
         1
     );
 
+    // The first Stop's mtime scan starts two seconds before the session was
+    // created. Touch the project so it finds the fake ruff script however
+    // long building and starting the hook took.
+    touch_files_below(&project, &state_dir);
     let stopped = run_example(
         "turn-completion-agent-hook",
         &turn_completion_fixture("claude", &project),
@@ -2067,7 +2103,7 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     // without an omission warning.
     assert!(response.get("hookSpecificOutput").is_none(), "{response}");
     assert!(!user.contains("hookkit: omitted"), "{user:?}");
-    let rewritten = std::fs::read_to_string(file).unwrap();
+    let rewritten = std::fs::read_to_string(&file).unwrap();
     assert!(rewritten.contains("formatted"));
     assert!(!rewritten.contains("unused_import"));
     assert_eq!(
@@ -2083,7 +2119,29 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
         summary["stateDisposition"]["source"],
         "acknowledge-sealed-window"
     );
+    // The mtime fallback also found the fake ruff script, which no tool
+    // covers. Both it and the auto-fixed file get content baselines.
+    let handled: BTreeSet<String> = summary["stateDisposition"]["handledBaselineFiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| path.as_str().unwrap().to_owned())
+        .collect();
+    for path in [&fake_ruff, &file] {
+        let path = std::fs::canonicalize(path).unwrap();
+        assert!(
+            handled.contains(path.to_str().unwrap()),
+            "{} has no handled baseline: {handled:?}",
+            path.display()
+        );
+    }
 
+    // Whether the next Stop's mtime scan reaches back to these files depends
+    // on timing (it starts two seconds before the previous scan), so bump
+    // every file's mtime into that window: only the content baselines may
+    // keep the runner's own rewrite and the uncovered script from coming
+    // back as new work.
+    touch_files_below(&project, &state_dir);
     let second = run_example(
         "turn-completion-agent-hook",
         &turn_completion_fixture("claude", &project),
