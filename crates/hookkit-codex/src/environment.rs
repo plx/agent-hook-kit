@@ -71,6 +71,17 @@ impl CommandEnvironmentSpec for CodexCommandEnvironment {
         "CLAUDE_PLUGIN_ROOT",
         "CLAUDE_PLUGIN_DATA",
     ];
+    /// Codex writes every plugin variable from `Path::display`, which is
+    /// always UTF-8, so a non-UTF-8 value can only be inherited ambient state
+    /// (the generic `PLUGIN_*` names especially can come from unrelated
+    /// tools). Capture skips such a value, which leaves an incomplete set and
+    /// therefore no plugin, instead of failing every Codex hook.
+    const LENIENT_VARIABLE_NAMES: &'static [&'static str] = &[
+        "PLUGIN_ROOT",
+        "PLUGIN_DATA",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_DATA",
+    ];
 
     fn from_variables(
         event: &EventId,
@@ -229,6 +240,14 @@ mod tests {
             ("CLAUDE_PLUGIN_DATA", "/data/demo"),
         ]);
         assert!(CodexCommandEnvironment::from_map(&event("Stop"), &conflicting).is_err());
+    }
+
+    #[test]
+    fn lenient_names_are_the_declared_plugin_variables() {
+        assert_eq!(
+            CodexCommandEnvironment::LENIENT_VARIABLE_NAMES,
+            CodexCommandEnvironment::VARIABLE_NAMES
+        );
     }
 
     #[test]

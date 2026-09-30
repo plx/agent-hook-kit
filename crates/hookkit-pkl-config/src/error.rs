@@ -60,8 +60,30 @@ pub enum PklConfigError {
     CatalogValidation(String),
 }
 
+/// Wraps the error as [`hookkit_core::HookkitError::Handler`], keeping its
+/// type: callers can `downcast_ref::<PklConfigError>()` the source, and the
+/// message is not reported as an I/O error.
 impl From<PklConfigError> for hookkit_core::HookkitError {
     fn from(err: PklConfigError) -> Self {
-        std::io::Error::other(err.to_string()).into()
+        hookkit_core::HookkitError::handler(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversion_keeps_the_pkl_error_type_and_message() {
+        let error = hookkit_core::HookkitError::from(PklConfigError::PklNotFound);
+        let hookkit_core::HookkitError::Handler(source) = &error else {
+            panic!("expected a handler error, got {error:?}");
+        };
+        assert!(matches!(
+            source.downcast_ref::<PklConfigError>(),
+            Some(PklConfigError::PklNotFound)
+        ));
+        assert!(error.to_string().contains("pkl is not installed"));
+        assert!(!error.to_string().contains("I/O error"));
     }
 }

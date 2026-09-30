@@ -232,4 +232,31 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         assert!(recorded[0].message.contains("PLUGIN_ROOT"));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn stray_non_utf8_codex_plugin_variable_leaves_an_ordinary_hook() {
+        use hookkit_codex::CodexCommandEnvironment as Codex;
+
+        // An unrelated tool exported a non-UTF-8 PLUGIN_ROOT; Codex itself
+        // only ever writes UTF-8 plugin paths.
+        let sink = Recording::default();
+        let captured = capture_from(
+            Declared {
+                names: Codex::VARIABLE_NAMES,
+                lenient: Codex::LENIENT_VARIABLE_NAMES,
+                prefixes: Codex::VARIABLE_PREFIXES,
+            },
+            |name| (name == "PLUGIN_ROOT").then(non_utf8),
+            [],
+            &sink,
+        )
+        .unwrap();
+        assert!(captured.is_empty());
+        assert_eq!(sink.0.lock().unwrap().len(), 1);
+        let environment =
+            Codex::from_variables(&EventId::builtin(HarnessId::CODEX, "PreToolUse"), &captured)
+                .unwrap();
+        assert!(environment.plugin.is_none());
+    }
 }
