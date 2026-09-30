@@ -1,0 +1,133 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - codex-hooks-reference
+      - codex-generated-schemas
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: none
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: empty
+        presence: optional
+        role: none
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: provide-context
+      exit:
+        exact: 0
+      id: text-context
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: agent-context
+        trailing_newline: allowed
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: failure
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: subagent
+  identification:
+    discriminator:
+      const: SubagentStart
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: subagent_start
+  wire_name: SubagentStart
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- mcp_tool
+harness: codex
+id: codex/commit-ff6aec9-r1/SubagentStart
+schemas:
+  input:
+    assurance:
+      confidence: high
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+  outputs:
+  - assurance:
+      confidence: high
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+snapshot: commit-ff6aec9-r1
+uncertainties:
+- 'Codex trims plain-text stdout before using it as context, and treats stdout whose first non-whitespace character is `{` or `[` as JSON: such text fails the run when it is not a valid output object, and a valid object such as `{}` is consumed as structured output without context.'
+- '`continue: false` is parsed for compatibility but does not stop the subagent from starting.'
+- The official generated schemas include parsed compatibility fields; runtime support restrictions from the hooks reference and pinned source remain controlling.
+- Codex never reads stderr from a command that exits 0, so exit-0 outcomes model stderr as ignored rather than as diagnostics.
+- For non-zero exits that do not select a blocking outcome Codex records only `hook exited with code N`, discards stderr, and continues (fail-open); a process that dies without an exit status is also a failed run.
+- 'Command handlers with `async: true` (Codex >= 0.148.0) run in the background: Codex ignores every control effect (decision, permissionDecision, updatedInput, PermissionRequest decisions, continue:false, stopReason, and exit 2), treats exit 2 as a plain failure, and delivers only additionalContext and systemMessage at the next safe point. The stdin payload carries no execution-mode marker, so these outcomes describe synchronous handlers.'
+- Codex >= 0.148.0 also runs `mcp_tool` handlers, always synchronously, and parses a successful tool result like exit-0 stdout; `prompt` and `agent` handlers are parsed but skipped. Only the command binding is modeled.
+- Since Codex 0.149.0 command hooks receive a replay of the environment Codex captured when the session hook registry was created, not the live environment; since 0.155.0 they start in a new session without a controlling terminal and their timeout also covers stdin delivery. On timeout, I/O failure, or turn abort Codex SIGKILLs the hook's whole process group.
+- Codex does not dispatch command hooks for Work threads that use cloud orchestration, even when tools execute locally; only admin-managed remote mcp_tool hooks run there.

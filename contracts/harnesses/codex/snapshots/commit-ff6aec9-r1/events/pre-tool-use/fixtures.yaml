@@ -1,0 +1,127 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [codex-hooks-reference]
+      value: { session_id: s1, transcript_path: null, cwd: /repo, hook_event_name: PreToolUse, model: gpt-test, turn_id: t1, permission_mode: default, tool_name: Bash, tool_use_id: call1, tool_input: { command: cargo test } }
+    - id: representative
+      origin: synthesized
+      sources: [codex-hooks-reference, codex-generated-schemas]
+      value: { session_id: s2, transcript_path: /tmp/t.jsonl, cwd: /repo, hook_event_name: PreToolUse, model: gpt-test, turn_id: t2, permission_mode: plan, tool_name: apply_patch, tool_use_id: call2, tool_input: { command: "*** Begin Patch" }, future_field: retained }
+    - id: subagent-tool-call
+      origin: synthesized
+      sources: [codex-generated-schemas]
+      value: { session_id: s3, transcript_path: null, cwd: /repo/worktree, hook_event_name: PreToolUse, model: gpt-test, turn_id: t3, permission_mode: bypassPermissions, tool_name: mcp__fs__read, tool_use_id: call3, tool_input: { path: README.md }, agent_id: agent-1, agent_type: reviewer }
+  negative:
+    - id: wrong-discriminator
+      origin: regression
+      sources: [codex-hooks-reference]
+      value: { session_id: s1, transcript_path: null, cwd: /repo, hook_event_name: PostToolUse, model: gpt-test, turn_id: t1, permission_mode: default, tool_name: Bash, tool_use_id: call1, tool_input: {} }
+      expected_pointer: /hook_event_name
+      expected_keyword: const
+    - id: missing-turn-id
+      origin: synthesized
+      sources: [codex-generated-schemas]
+      value: { session_id: s1, transcript_path: null, cwd: /repo, hook_event_name: PreToolUse, model: gpt-test, permission_mode: default, tool_name: Bash, tool_use_id: call1, tool_input: {} }
+      expected_pointer: ""
+      expected_keyword: required
+output:
+  - id: deny
+    schema: command-response
+    origin: synthesized
+    sources: [codex-hooks-reference]
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: deny, permissionDecisionReason: blocked } }
+  - id: rewrite
+    schema: command-response
+    origin: synthesized
+    sources: [codex-hooks-reference]
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: allow, updatedInput: { command: echo rewritten } } }
+  - id: context
+    schema: command-response
+    origin: official
+    sources: [codex-hooks-reference]
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, additionalContext: The pending command touches generated files. } }
+  - id: legacy-block
+    schema: command-response
+    origin: official
+    sources: [codex-hooks-reference]
+    value: { decision: block, reason: Destructive command blocked by hook. }
+  - id: ask
+    schema: command-response
+    origin: synthesized
+    sources: [codex-hooks-reference, codex-generated-schemas]
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: ask, permissionDecisionReason: Confirm this command. } }
+  - id: approve
+    schema: command-response
+    origin: synthesized
+    sources: [codex-generated-schemas]
+    value: { decision: approve }
+  - id: common-controls
+    schema: command-response
+    origin: synthesized
+    sources: [codex-generated-schemas]
+    value: { continue: false, stopReason: Stop before executing., suppressOutput: true, systemMessage: Policy stopped execution. }
+output_negative:
+  - id: deny-without-reason
+    schema: command-response
+    origin: regression
+    sources: [codex-hooks-source]
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: deny } }
+    expected_pointer: /hookSpecificOutput
+    expected_keyword: required
+  - id: deny-blank-reason
+    schema: command-response
+    origin: regression
+    sources: [codex-hooks-source]
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: deny, permissionDecisionReason: "  " } }
+    expected_pointer: /hookSpecificOutput/permissionDecisionReason
+    expected_keyword: pattern
+  - id: legacy-block-blank-reason
+    schema: command-response
+    origin: regression
+    sources: [codex-hooks-source]
+    value: { decision: block, reason: "\t" }
+    expected_pointer: /reason
+    expected_keyword: pattern
+process:
+  - id: no-op
+    binding: command
+    outcome: no-op
+    exit_code: 0
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: deny-json
+    binding: command
+    outcome: control
+    exit_code: 0
+    stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVRvb2xVc2UiLCJwZXJtaXNzaW9uRGVjaXNpb24iOiJkZW55IiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiYmxvY2tlZCJ9fQ==
+    stdout_sha256: 63276993c95912ad3afb280cee36f760ee98a14fac07a1df2beb23fccfd71bef
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: deny-stderr
+    binding: command
+    outcome: block-stderr
+    exit_code: 2
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: YmxvY2tlZA==
+    stderr_sha256: 6973dddd3ef9cb6a2932702f31777faad9c9bf3124d147a84f31aadb6d139546
+  - id: exit-2-blank-stderr
+    binding: command
+    outcome: failure
+    exit_code: 2
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: IAo=
+    stderr_sha256: e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700
+  - id: failure
+    binding: command
+    outcome: failure
+    exit_code: 1
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: aG9vayBmYWlsZWQK
+    stderr_sha256: 339e9a9a2a85233d852616e657d6b262da208ce3ef1e7c8c5fa32659916f0257
