@@ -56,6 +56,27 @@ golden files should use `<workspace>` for anything under the test project.
 The session id is fixed at `test-session`, so golden files can reference it
 directly without normalization.
 
+## Selecting and regenerating fixtures
+
+The lane synthesizes native snake_case `PostToolUse` payloads with the fixed
+tool-use id `fixture-tool` (and turn id `fixture-turn` for Codex), so artifact
+names in goldens include those ids.
+
+- `HOOKKIT_FIXTURE_TOOLS=jq,check-merge-conflict` runs only the listed tool ids.
+- `HOOKKIT_FIXTURE_BLESS=1` rewrites each selected fixture's
+  `<harness>.json`, `<harness>.stderr.txt`, and `<harness>.exit` goldens from
+  the actual run before comparing. Bless only with controlled tool versions.
+
+User notices are lowered to the top-level `systemMessage` (exit-0 stderr is
+not shown by Claude Code or Codex). Goldens other than `jq` and
+`check-merge-conflict` predate that lowering and the snake_case payloads; they
+must be re-blessed with controlled tool versions before the lane can pass.
+
+```
+HOOKKIT_FIXTURE_TOOLS=jq HOOKKIT_FIXTURE_BLESS=1 \
+  cargo test -p hookkit-tool-runner --test tool_fixtures -- --ignored --nocapture
+```
+
 ## Skip behavior
 
 - If `pkl` isn't on PATH, the whole test prints "skipping" and returns.

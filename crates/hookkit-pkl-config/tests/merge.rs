@@ -161,6 +161,106 @@ settings {
 }
 
 #[test]
+fn file_activity_layers_merge_field_by_field() {
+    require_pkl!();
+    let project = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+
+settings {
+  fileActivity = new FileActivity {
+    vcs = "git-dirty"
+    ignoredDirectoryNames = new Listing<String> { ".git"; "dist" }
+  }
+}
+"#,
+    )
+    .expect("project file activity");
+    let local = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+
+settings {
+  fileActivity { coverageGapPolicy = "strict" }
+}
+"#,
+    )
+    .expect("local file activity");
+    let merged = merge_patch_chain([project, local].into_iter());
+
+    let activity = merged.settings.file_activity.expect("file activity");
+    assert_eq!(
+        activity.coverage_gap_policy,
+        CoverageGapPolicy::Strict,
+        "the later layer's field applies"
+    );
+    assert_eq!(
+        activity.vcs,
+        FileActivityVcsFallback::GitDirty,
+        "an earlier layer's field survives a later partial override"
+    );
+    assert_eq!(activity.ignored_directory_names, vec![".git", "dist"]);
+    let defaults = hookkit_pkl_config::FileActivitySettings::default();
+    assert_eq!(activity.max_entries, defaults.max_entries);
+    assert_eq!(activity.filesystem_mtime, defaults.filesystem_mtime);
+}
+
+#[test]
+fn empty_file_activity_block_keeps_runtime_defaults() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+
+settings {
+  fileActivity = new FileActivity {}
+}
+"#,
+    )
+    .expect("empty file activity");
+    let activity = config.settings.file_activity.expect("file activity");
+    let defaults = hookkit_pkl_config::FileActivitySettings::default();
+    assert_eq!(
+        activity.ignored_directory_names,
+        defaults.ignored_directory_names
+    );
+    assert!(
+        activity
+            .ignored_directory_names
+            .iter()
+            .any(|name| name == ".agent-hook-kit"),
+        "the hook's own directory is pruned by default"
+    );
+    assert_eq!(activity.coverage_gap_policy, CoverageGapPolicy::BestEffort);
+}
+
+#[test]
+fn command_timeout_defaults_and_overrides() {
+    require_pkl!();
+    let defaulted = evaluate_pkl_source("amends \"Config.pkl\"\n").expect("defaults");
+    assert_eq!(
+        defaulted.settings.command_timeout_seconds,
+        hookkit_pkl_config::DEFAULT_COMMAND_TIMEOUT_SECONDS
+    );
+    assert_eq!(
+        defaulted.settings.exclude,
+        vec!["**/.git/**", "**/node_modules/**"]
+    );
+
+    let disabled = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+
+settings {
+  commandTimeoutSeconds = 0
+}
+"#,
+    )
+    .expect("disabled timeout");
+    assert_eq!(disabled.settings.command_timeout_seconds, 0);
+}
+
+#[test]
 fn deferred_workflow_schema_round_trips_structured_commands() {
     require_pkl!();
     let config = evaluate_pkl_source(

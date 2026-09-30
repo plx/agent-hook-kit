@@ -2,9 +2,12 @@
 ///
 /// hk's recipes are multi-line bash pipelines (per-file stdout-to-tempfile and
 /// `diff -u`) that the single-argv runtime can't express directly. We expose a
-/// verify-only phase that asks `jq` to parse each file: `jq -e empty <files>`
-/// returns non-zero if parsing fails or the result is null. Use the `taplo`/
-/// `prettier`-style formatters for actual rewriting.
+/// verify-only phase that asks `jq` to parse each file: `jq empty <files>`
+/// exits 0 for valid JSON and non-zero only on a parse or read error. `-e` must
+/// not be used: `empty` produces no output, so `jq -e empty` exits 4 for every
+/// valid file. Parse errors exit 2 before jq 1.7 and 5 from jq 1.7 on (where 2
+/// also covers unreadable files). Use the `taplo`/`prettier`-style formatters
+/// for actual rewriting.
 
 module agent_hook_kit.builtins.tools.Jq
 
@@ -24,14 +27,13 @@ spec: Config.ToolSpec = new Config.ToolSpec {
     ["verify"] = new Config.Phase {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
-        "-e"
         "empty"
         new Config.ExtraArgs {}
         new Config.Files {}
       }
       exitCodes = new Config.ExitCodes {
         clean = new Listing<Int> { 0 }
-        issues = new Listing<Int> { 1; 2; 3; 4; 5 }
+        issues = new Listing<Int> { 2; 5 }
       }
     }
   }

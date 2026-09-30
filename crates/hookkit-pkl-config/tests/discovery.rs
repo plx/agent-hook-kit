@@ -1,7 +1,9 @@
 //! Tests for `discover_and_load` covering walk-up project discovery,
 //! `.local.pkl` override, and `--config PATH` bypass.
 
-use hookkit_pkl_config::{discover_and_load, schema::MissingToolPolicy};
+use hookkit_pkl_config::{
+    PklConfigError, discover_and_load, discover_and_load_with_home, schema::MissingToolPolicy,
+};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -322,6 +324,164 @@ run = new Listing<String> { "ruff" }
         loaded.project_root, root,
         "local-only discovery should anchor project_root on the directory containing .agent-hook-kit/"
     );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn home_config_under_cwd_ancestors_is_loaded_once_and_is_not_the_project_root() {
+    require_pkl!();
+    let home = temp_dir("home-root");
+    let project = home.join("code/proj");
+    std::fs::create_dir_all(&project).unwrap();
+    write_config(
+        &home,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+}
+run = new Listing<String> { "ruff" }
+"#,
+    );
+
+    let loaded = discover_and_load_with_home(&project, None, Some(&home)).expect("discover");
+    assert_eq!(loaded.config.run, vec!["ruff"]);
+    assert_eq!(
+        loaded.project_root, project,
+        "a global config must not make $HOME the project root"
+    );
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn outer_local_layer_keeps_the_inner_project_root() {
+    require_pkl!();
+    let repo = temp_dir("outer-local-root");
+    let package = repo.join("pkg");
+    std::fs::create_dir_all(&package).unwrap();
+    write_config(
+        &repo,
+        "post-tool-use.local.pkl",
+        r#"
+amends "Config.pkl"
+
+settings {
+  jobs = 1
+}
+"#,
+    );
+    write_config(
+        &package,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+import "Builtins.pkl"
+
+tools {
+  ["ruff"] = Builtins.ruff
+}
+run = new Listing<String> { "ruff" }
+"#,
+    );
+
+    let loaded = discover_and_load_with_home(&package, None, None).expect("discover");
+    assert_eq!(loaded.project_root, package);
+    assert_eq!(
+        loaded.config.settings.jobs, 1,
+        "the local layer still merges"
+    );
+    assert_eq!(loaded.config.run, vec!["ruff"]);
+
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn layer_errors_name_the_real_source_file() {
+    require_pkl!();
+    let root = temp_dir("layer-error");
+    write_config(
+        &root,
+        "post-tool-use.pkl",
+        r#"
+amends "Config.pkl"
+"#,
+    );
+    let broken = write_config(
+        &root,
+        "post-tool-use.local.pkl",
+        r#"
+amends "Config.pkl"
+
+settings {
+  jobs = "not a number"
+}
+"#,
+    );
+
+    let error = discover_and_load_with_home(&root, None, None).expect_err("type error");
+    match &error {
+        PklConfigError::PklEvalFailed { path, stderr } => {
+            assert_eq!(path, &broken);
+            assert!(
+                !stderr.contains("hookkit-pkl-stage"),
+                "stderr still names the deleted staging copy: {stderr}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("post-tool-use.local.pkl"),
+        "error should name the failing layer: {rendered}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn every_layer_keeps_its_own_sibling_imports() {
+    require_pkl!();
+    let root = temp_dir("layer-siblings");
+    let nested = root.join("inner");
+    std::fs::create_dir_all(&nested).unwrap();
+    for (dir, run) in [(&root, "outer"), (&nested, "inner")] {
+        let config_dir = dir.join(".agent-hook-kit");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("shared.pkl"),
+            format!("runList = new Listing<String> {{ \"{run}\" }}\n"),
+        )
+        .unwrap();
+        write_config(
+            dir,
+            "post-tool-use.pkl",
+            r#"
+amends "Config.pkl"
+import "shared.pkl" as Shared
+
+run = Shared.runList
+"#,
+        );
+    }
+
+    let paths = [
+        root.join(".agent-hook-kit/post-tool-use.pkl"),
+        nested.join(".agent-hook-kit/post-tool-use.pkl"),
+    ];
+    let patches = hookkit_pkl_config::evaluate_pkl_files_patch(&[&paths[0], &paths[1]])
+        .expect("evaluate both layers in one pass");
+    assert_eq!(patches.len(), 2);
+    assert_eq!(patches[0].run, vec!["outer"]);
+    assert_eq!(patches[1].run, vec!["inner"]);
+
+    let loaded = discover_and_load_with_home(&nested, None, None).expect("discover");
+    assert_eq!(loaded.config.run, vec!["inner"]);
+    assert_eq!(loaded.project_root, nested);
 
     std::fs::remove_dir_all(&root).ok();
 }

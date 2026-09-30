@@ -4,9 +4,15 @@
 //!
 //! 1. **Home/global** — `~/.agent-hook-kit/post-tool-use.pkl`
 //! 2. **Project chain** — walking up from `cwd`, each ancestor's
-//!    `.agent-hook-kit/post-tool-use.pkl` (root → leaf order)
+//!    `.agent-hook-kit/post-tool-use.pkl` (root → leaf order). The home
+//!    directory's own file is the home layer and is never re-added here.
 //! 3. **Local chain** — walking up from `cwd`, each ancestor's
 //!    `.agent-hook-kit/post-tool-use.local.pkl` (root → leaf order)
+//!
+//! The project root is the deepest directory that holds a project or local
+//! config, independent of merge order; configs in the home directory never
+//! make the home directory the project root. Without such a config the
+//! caller's `cwd` is the project root.
 //!
 //! When `--config PATH` is passed, the entire chain is bypassed and only that
 //! file is used.
@@ -42,12 +48,20 @@ pub enum DiscoveredKind {
 
 /// Discover the configs that should be loaded, in merge order (earliest first).
 pub fn discover(cwd: &Path) -> Vec<DiscoveredConfig> {
-    let mut chain = Vec::new();
+    discover_with_home(cwd, dirs::home_dir().as_deref())
+}
 
-    if let Some(home) = home_config_path() {
-        if home.is_file() {
+/// [`discover`] with an explicit home directory (`None` disables the home
+/// layer), for embedders and tests that manage their own home.
+pub fn discover_with_home(cwd: &Path, home: Option<&Path>) -> Vec<DiscoveredConfig> {
+    let mut chain = Vec::new();
+    let home_dir = home.map(canonical_or_lexical);
+
+    if let Some(home) = home {
+        let home_config = home.join(CONFIG_DIR).join(PROJECT_CONFIG_NAME);
+        if home_config.is_file() {
             chain.push(DiscoveredConfig {
-                path: home,
+                path: home_config,
                 kind: DiscoveredKind::Home,
             });
         }
@@ -58,6 +72,12 @@ pub fn discover(cwd: &Path) -> Vec<DiscoveredConfig> {
     ancestors.reverse();
 
     for ancestor in &ancestors {
+        // The home directory's project-named file is already the home layer;
+        // adding it again would evaluate it twice and make `$HOME` the
+        // project root for every project below it.
+        if home_dir.as_deref() == Some(canonical_or_lexical(ancestor).as_path()) {
+            continue;
+        }
         let candidate = ancestor.join(CONFIG_DIR).join(PROJECT_CONFIG_NAME);
         if candidate.is_file() {
             chain.push(DiscoveredConfig {
@@ -88,17 +108,41 @@ pub fn home_config_path() -> Option<PathBuf> {
 /// Project root associated with a discovered config (or the cwd as fallback).
 ///
 /// Home configs and `--config PATH` files do not imply a project root; callers
-/// should use `cwd` in those cases.
+/// should use `cwd` in those cases. To pick the root for a whole chain, use
+/// [`project_root`].
 pub fn project_root_for(config: &DiscoveredConfig, cwd: &Path) -> PathBuf {
     match config.kind {
         DiscoveredKind::Home => cwd.to_path_buf(),
-        DiscoveredKind::Project | DiscoveredKind::Local => config
-            .path
-            .parent()
-            .and_then(Path::parent)
+        DiscoveredKind::Project | DiscoveredKind::Local => config_owner_dir(config)
             .map(Path::to_path_buf)
             .unwrap_or_else(|| cwd.to_path_buf()),
     }
+}
+
+/// Project root for a discovery chain: the deepest directory holding a
+/// project or local config, excluding the home directory, or `cwd`.
+///
+/// Merge order does not matter: an outer `.local.pkl` layer (merged after
+/// every project layer) never replaces the root of an inner project config.
+pub fn project_root(chain: &[DiscoveredConfig], cwd: &Path, home: Option<&Path>) -> PathBuf {
+    let home_dir = home.map(canonical_or_lexical);
+    chain
+        .iter()
+        .filter(|config| config.kind != DiscoveredKind::Home)
+        .filter_map(config_owner_dir)
+        .filter(|dir| home_dir.as_deref() != Some(canonical_or_lexical(dir).as_path()))
+        .max_by_key(|dir| dir.components().count())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
+/// Directory that contains a config's `.agent-hook-kit` directory.
+fn config_owner_dir(config: &DiscoveredConfig) -> Option<&Path> {
+    config.path.parent().and_then(Path::parent)
+}
+
+fn canonical_or_lexical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| hookkit_core::normalize_path(path))
 }
 
 #[cfg(test)]
@@ -136,7 +180,7 @@ mod tests {
         let inner_project = write_config(&nested, PROJECT_CONFIG_NAME);
         let root_local = write_config(&root, LOCAL_CONFIG_NAME);
 
-        let chain = discover(&nested);
+        let chain = discover_with_home(&nested, None);
         let kinds: Vec<_> = chain.iter().map(|c| (c.kind, c.path.clone())).collect();
         assert!(
             kinds.contains(&(DiscoveredKind::Project, root_project)),
@@ -170,5 +214,51 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn home_config_is_discovered_once_and_never_becomes_the_project_root() {
+        let home = temp_dir("home-once");
+        let project = home.join("code/proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let home_config = write_config(&home, PROJECT_CONFIG_NAME);
+
+        let chain = discover_with_home(&project, Some(&home));
+        assert_eq!(chain.len(), 1, "{chain:?}");
+        assert_eq!(chain[0].kind, DiscoveredKind::Home);
+        assert_eq!(chain[0].path, home_config);
+        assert_eq!(project_root(&chain, &project, Some(&home)), project);
+
+        // Running from the home directory itself still evaluates it once.
+        let chain = discover_with_home(&home, Some(&home));
+        assert_eq!(chain.len(), 1, "{chain:?}");
+
+        // A home-level local override does not make `$HOME` the root either.
+        write_config(&home, LOCAL_CONFIG_NAME);
+        let chain = discover_with_home(&project, Some(&home));
+        assert_eq!(chain.len(), 2, "{chain:?}");
+        assert_eq!(project_root(&chain, &project, Some(&home)), project);
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn outer_local_layer_does_not_replace_the_inner_project_root() {
+        let repo = temp_dir("outer-local");
+        let package = repo.join("pkg");
+        let cwd = package.join("src");
+        std::fs::create_dir_all(&cwd).unwrap();
+        write_config(&repo, LOCAL_CONFIG_NAME);
+        write_config(&package, PROJECT_CONFIG_NAME);
+
+        let chain = discover_with_home(&cwd, None);
+        assert_eq!(
+            chain.last().map(|config| config.kind),
+            Some(DiscoveredKind::Local),
+            "the outer local layer still merges last: {chain:?}"
+        );
+        assert_eq!(project_root(&chain, &cwd, None), package);
+
+        std::fs::remove_dir_all(&repo).ok();
     }
 }

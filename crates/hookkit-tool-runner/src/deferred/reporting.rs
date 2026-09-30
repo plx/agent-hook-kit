@@ -344,6 +344,7 @@ impl DeferredReporter {
                 "uncovered": result.uncovered_files.len(),
                 "not_applicable": result.not_applicable_files.len(),
                 "coverage_gaps": result.coverage_gaps.len(),
+                "unavailable_tools": result.unavailable_tools.len(),
                 "groups": groups.len(),
             },
             "files": result.files.values().collect::<Vec<_>>(),
@@ -368,6 +369,7 @@ impl DeferredReporter {
             "artifact_contents": artifact_contents,
             "operational_problems": result.operational_problems,
             "coverage_gaps": result.coverage_gaps,
+            "unavailable_tools": result.unavailable_tools.values().collect::<Vec<_>>(),
         }))
         .map_err(|error| ReportingError::Context(error.to_string()))
     }

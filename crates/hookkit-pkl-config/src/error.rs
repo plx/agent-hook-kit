@@ -19,16 +19,19 @@ pub enum PklConfigError {
     #[error("pkl eval failed for {path}:\n{stderr}", path = path.display())]
     /// Pkl evaluated the source unsuccessfully.
     PklEvalFailed {
-        /// Evaluated staged source path.
+        /// Configuration file that failed. For discovered and explicit files
+        /// this is the real source, not the deleted staging copy; in-memory
+        /// sources report their staged path.
         path: PathBuf,
-        /// Standard error emitted by Pkl.
+        /// Standard error emitted by Pkl, with staged paths rewritten to the
+        /// real source files.
         stderr: String,
     },
 
     #[error("failed to decode pkl JSON output for {path}: {error}", path = path.display())]
     /// Pkl output was not valid for the requested Rust schema.
     JsonDecode {
-        /// Evaluated staged source path.
+        /// Configuration file whose evaluated output failed to decode.
         path: PathBuf,
         /// JSON or schema decoding diagnostic.
         error: String,

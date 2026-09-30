@@ -18,6 +18,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const HARNESSES: &[&str] = &["claude", "codex"];
 const STABLE_SESSION: &str = "test-session";
+const STABLE_TOOL_USE: &str = "fixture-tool";
+const STABLE_TURN: &str = "fixture-turn";
+
+/// Comma-separated tool ids to run (for example `HOOKKIT_FIXTURE_TOOLS=jq`);
+/// unset runs every fixture.
+fn selected_tools() -> Option<Vec<String>> {
+    std::env::var("HOOKKIT_FIXTURE_TOOLS").ok().map(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
+}
 
 #[test]
 #[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
@@ -58,6 +73,9 @@ fn run_all_tool_fixtures() {
         }
         let tool_id = tool_entry.file_name().to_string_lossy().into_owned();
         let tool_dir = tool_entry.path();
+        if selected_tools().is_some_and(|selected| !selected.contains(&tool_id)) {
+            continue;
+        }
 
         let Some(spec) = id_to_spec.get(&tool_id) else {
             results.push(FixtureOutcome::skipped(
@@ -239,6 +257,12 @@ fn run_fixture_for_harness(
         }
     };
 
+    if std::env::var_os("HOOKKIT_FIXTURE_BLESS").is_some() {
+        if let Err(e) = bless_outputs(harness, fixture_dir, &temp_project, &output) {
+            cleanup(&temp_project);
+            return FixtureOutcome::failed(tool_id, example, harness, e);
+        }
+    }
     let result = verify_outputs(
         tool_id,
         example,
@@ -347,6 +371,46 @@ fn verify_outputs(
     }
 
     Ok(())
+}
+
+/// Rewrite one fixture's golden stdout, stderr, and exit files from an actual
+/// run (`HOOKKIT_FIXTURE_BLESS=1`). Use only with controlled tool versions.
+fn bless_outputs(
+    harness: &str,
+    fixture_dir: &Path,
+    temp_project: &Path,
+    output: &std::process::Output,
+) -> Result<(), String> {
+    let aliases = workspace_path_aliases(temp_project);
+    let stdout = normalize(&String::from_utf8_lossy(&output.stdout), &aliases);
+    let stderr = normalize(&String::from_utf8_lossy(&output.stderr), &aliases);
+    let write_or_remove = |name: String, contents: Option<String>| -> Result<(), String> {
+        let path = fixture_dir.join(name);
+        match contents {
+            Some(contents) => {
+                std::fs::write(&path, contents).map_err(|e| format!("write {path:?}: {e}"))
+            }
+            None if path.exists() => {
+                std::fs::remove_file(&path).map_err(|e| format!("remove {path:?}: {e}"))
+            }
+            None => Ok(()),
+        }
+    };
+    let stdout = (!stdout.trim().is_empty()).then(|| {
+        serde_json::from_str::<JsonValue>(&stdout)
+            .map(|value| format!("{value}\n"))
+            .unwrap_or(stdout)
+    });
+    write_or_remove(format!("{harness}.json"), stdout)?;
+    write_or_remove(
+        format!("{harness}.stderr.txt"),
+        (!stderr.trim().is_empty()).then_some(stderr),
+    )?;
+    let exit = output.status.code().unwrap_or(-1);
+    write_or_remove(
+        format!("{harness}.exit"),
+        (exit != 0).then(|| format!("{exit}\n")),
+    )
 }
 
 fn verify_expected_tree(root: &Path, current: &Path, temp_project: &Path) -> Result<(), String> {
@@ -493,28 +557,29 @@ run = new Listing<String> {{ "{tool_id}" }}
         .map_err(|e| format!("write post-tool-use.pkl: {e}"))
 }
 
+/// Native snake_case PostToolUse payloads, matching the harness contracts.
 fn synthesize_hook_event(harness: &str, project: &Path, entry_rel: &Path) -> Vec<u8> {
-    let (event, tool_response_key) = match harness {
-        "claude" => ("PostToolUse", "tool_response"),
-        "codex" => ("PostToolUse", "toolResult"),
-        _ => unreachable!(),
-    };
     let rel_str = entry_rel.to_string_lossy().to_string();
     let abs_str = project.join(entry_rel).to_string_lossy().to_string();
     let mut fixture = serde_json::json!({
-        "sessionId": STABLE_SESSION,
+        "session_id": STABLE_SESSION,
+        "transcript_path": "/tmp/hookkit-fixture-transcript.jsonl",
         "cwd": project.to_string_lossy(),
-        "hookEventName": event,
-        "toolName": "Write",
-        "toolInput": {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Write",
+        "tool_use_id": STABLE_TOOL_USE,
+        "tool_input": {
             "file_path": rel_str,
             "content": "<fixture-test-input>"
-        }
+        },
+        "tool_response": { "filePath": abs_str }
     });
-    fixture.as_object_mut().unwrap().insert(
-        tool_response_key.to_string(),
-        serde_json::json!({ "filePath": abs_str }),
-    );
+    if harness == "codex" {
+        let object = fixture.as_object_mut().unwrap();
+        object.insert("model".into(), serde_json::json!("gpt-fixture"));
+        object.insert("turn_id".into(), serde_json::json!(STABLE_TURN));
+        object.insert("permission_mode".into(), serde_json::json!("default"));
+    }
     serde_json::to_vec(&fixture).unwrap()
 }
 

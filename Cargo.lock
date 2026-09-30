@@ -687,6 +687,7 @@ name = "hookkit-tool-runner"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "clap",
  "globset",
  "hookkit-antigravity",
  "hookkit-claude",
@@ -697,10 +698,12 @@ dependencies = [
  "hookkit-pkl-config",
  "hookkit-runtime",
  "hookkit-session-state",
+ "libc",
  "minijinja",
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "walkdir",
 ]

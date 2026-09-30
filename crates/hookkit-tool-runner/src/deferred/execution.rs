@@ -1,9 +1,14 @@
-use super::{CheckOutcome, DeferredRunResult, FileStatus, OperationalProblem, ToolReport};
-use crate::{
-    CheckScope, CommandPhase, InvocationGranularity, PhaseLog, PhaseStatus, Snapshot, ToolContext,
-    ToolJob, ToolPhase, ToolSpec, WriteBehavior, collect_matching_files, collect_workspace_files,
-    render_command, resolve_worker_count, run_phase_command,
+use super::{
+    CheckOutcome, DeferredRunResult, FileStatus, OperationalProblem, ToolReport, UnavailableTool,
 };
+use crate::CommandPhase;
+use crate::exec::{
+    CommandError, ExecutionSettings, PhaseLog, PhaseStatus, ToolContext, ToolJob, render_command,
+    resolve_worker_count, run_phase_command,
+};
+use crate::snapshot::{Snapshot, collect_matching_files, collect_workspace_files};
+use crate::spec::{CheckScope, InvocationGranularity, ToolPhase, ToolSpec, WriteBehavior};
+use hookkit_pkl_config::schema::MissingToolPolicy;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,6 +29,7 @@ pub(crate) struct ScheduledWorkflow {
     pub compatibility_translation: bool,
     pub job: ToolJob,
     pub project_root: PathBuf,
+    pub settings: Arc<ExecutionSettings>,
 }
 
 impl ScheduledWorkflow {
@@ -39,8 +45,20 @@ impl ScheduledWorkflow {
             spec: &self.spec,
             project_root: &self.project_root,
             global_diagnostics_dir: None,
+            settings: &self.settings,
         }
     }
+}
+
+/// Runner settings that shape one deferred execution.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WorkflowExecutionPolicy {
+    /// Bounded parallelism for read-only checks (`settings.jobs`).
+    pub jobs: u32,
+    /// Skip a tool's remaining remedies after one of its commands failed.
+    pub fail_fast: bool,
+    /// Handling for executables that cannot be found.
+    pub missing_tool_policy: MissingToolPolicy,
 }
 
 #[derive(Debug)]
@@ -65,6 +83,7 @@ struct WorkflowState {
     final_check: Option<CheckOutcome>,
     changed_files: BTreeSet<PathBuf>,
     operational: bool,
+    unavailable: bool,
 }
 
 #[derive(Debug)]
@@ -73,12 +92,24 @@ struct WriteImpact {
     changed_files: BTreeSet<PathBuf>,
 }
 
+/// Classified result of one check or remedy command.
+enum CommandResult {
+    Outcome(CheckOutcome),
+    /// The executable is missing and `missingToolPolicy = "user-notice"`.
+    Unavailable,
+    Failed(String),
+}
+
 /// Execute one global Stop-time plan: all checks first, at most one remedy per
 /// dirty workflow, then authoritative reruns for every invalidated check.
+///
+/// `failFast` is scoped to the failing tool: an operational failure skips that
+/// tool's remaining remedies, while unrelated tools still repair their files.
+/// Under `missingToolPolicy = "user-notice"` a missing executable is recorded
+/// as an unavailable tool rather than an operational failure.
 pub(crate) fn execute_deferred_workflows(
     plan: &[ScheduledWorkflow],
-    jobs_setting: u32,
-    fail_fast: bool,
+    policy: WorkflowExecutionPolicy,
 ) -> DeferredExecution {
     let mut execution = DeferredExecution::default();
     let mut states = (0..plan.len())
@@ -90,20 +121,24 @@ pub(crate) fn execute_deferred_workflows(
         .enumerate()
         .filter_map(|(index, scheduled)| scheduled.check.as_ref().map(|_| index))
         .collect::<Vec<_>>();
-    let mut remedies_stopped = false;
-    for (index, log) in run_checks(plan, &initial_indices, jobs_setting) {
+    let mut remedies_stopped = BTreeSet::<usize>::new();
+    for (index, log) in run_checks(plan, &initial_indices, policy.jobs) {
         let scheduled = &plan[index];
+        let result = classify(&log, policy.missing_tool_policy);
         execution
             .logs
             .push(deferred_log(scheduled, CommandPhase::InitialCheck, log));
-        let log = &execution.logs.last().expect("just pushed").log;
-        match check_outcome(log) {
-            Ok(outcome) => states[index].initial_check = Some(outcome),
-            Err(message) => {
+        match result {
+            CommandResult::Outcome(outcome) => states[index].initial_check = Some(outcome),
+            CommandResult::Unavailable => {
+                states[index].unavailable = true;
+                record_unavailable(&mut execution.result, scheduled, &execution.logs);
+            }
+            CommandResult::Failed(message) => {
                 states[index].operational = true;
                 record_problem(&mut execution.result, scheduled, "initial-check", message);
-                if fail_fast {
-                    remedies_stopped = true;
+                if policy.fail_fast {
+                    remedies_stopped.insert(scheduled.tool_index);
                 }
             }
         }
@@ -115,31 +150,42 @@ pub(crate) fn execute_deferred_workflows(
             || (scheduled.check.is_none()
                 && scheduled.compatibility_translation
                 && scheduled.remedy.is_some());
-        if !needs_remedy || states[index].operational {
+        if !needs_remedy || states[index].operational || states[index].unavailable {
             continue;
         }
         let Some(remedy) = scheduled.remedy.as_ref() else {
             continue;
         };
-        if remedies_stopped {
+        if remedies_stopped.contains(&scheduled.tool_index) {
             states[index].operational = true;
             record_problem(
                 &mut execution.result,
                 scheduled,
                 "remedy",
-                "remedy skipped after an earlier operational failure under failFast",
+                "remedy skipped after an earlier operational failure of this tool under failFast",
             );
             continue;
         }
 
         states[index].fix_attempted = true;
         let context = scheduled.context();
-        let scope = command_write_scope(remedy.writes, &scheduled.job, &context);
-        let before = Snapshot::read(&scope);
+        let before = Snapshot::capture(&command_write_scope(
+            remedy.writes,
+            &scheduled.job,
+            &context,
+        ));
         let command = render_command(remedy, &scheduled.job, &context);
-        let log = run_phase_command(remedy, &command, &scheduled.job.workspace_dir);
-        let after_scope = command_write_scope(remedy.writes, &scheduled.job, &context);
-        let after = Snapshot::read(&after_scope);
+        let log = run_phase_command(
+            remedy,
+            &command,
+            &scheduled.job.workspace_dir,
+            scheduled.settings.command_timeout,
+        );
+        let after = before.recapture(&command_write_scope(
+            remedy.writes,
+            &scheduled.job,
+            &context,
+        ));
         let changed_files = before
             .changed_files(&after)
             .into_iter()
@@ -153,15 +199,23 @@ pub(crate) fn execute_deferred_workflows(
                 changed_files,
             });
         }
-        let failed = command_failed(&log);
+        let result = classify(&log, policy.missing_tool_policy);
         execution
             .logs
             .push(deferred_log(scheduled, CommandPhase::Remedy, log));
-        if let Some(message) = failed {
-            states[index].operational = true;
-            record_problem(&mut execution.result, scheduled, "remedy", message);
-            if fail_fast {
-                remedies_stopped = true;
+        match result {
+            CommandResult::Outcome(_) => {}
+            CommandResult::Unavailable => {
+                // A remedy-only program override is missing: the files still
+                // get their authoritative final check below.
+                record_unavailable(&mut execution.result, scheduled, &execution.logs);
+            }
+            CommandResult::Failed(message) => {
+                states[index].operational = true;
+                record_problem(&mut execution.result, scheduled, "remedy", message);
+                if policy.fail_fast {
+                    remedies_stopped.insert(scheduled.tool_index);
+                }
             }
         }
     }
@@ -171,6 +225,9 @@ pub(crate) fn execute_deferred_workflows(
         .enumerate()
         .filter_map(|(index, scheduled)| {
             scheduled.check.as_ref()?;
+            if states[index].unavailable {
+                return None;
+            }
             let invalidated = impacts
                 .iter()
                 .any(|impact| check_invalidated(scheduled, impact));
@@ -178,15 +235,19 @@ pub(crate) fn execute_deferred_workflows(
         })
         .collect::<Vec<_>>();
     let rerun = final_indices.iter().copied().collect::<BTreeSet<_>>();
-    for (index, log) in run_checks(plan, &final_indices, jobs_setting) {
+    for (index, log) in run_checks(plan, &final_indices, policy.jobs) {
         let scheduled = &plan[index];
+        let result = classify(&log, policy.missing_tool_policy);
         execution
             .logs
             .push(deferred_log(scheduled, CommandPhase::FinalCheck, log));
-        let log = &execution.logs.last().expect("just pushed").log;
-        match check_outcome(log) {
-            Ok(outcome) => states[index].final_check = Some(outcome),
-            Err(message) => {
+        match result {
+            CommandResult::Outcome(outcome) => states[index].final_check = Some(outcome),
+            CommandResult::Unavailable => {
+                states[index].unavailable = true;
+                record_unavailable(&mut execution.result, scheduled, &execution.logs);
+            }
+            CommandResult::Failed(message) => {
                 states[index].operational = true;
                 record_problem(&mut execution.result, scheduled, "final-check", message);
             }
@@ -224,7 +285,7 @@ pub(crate) fn execute_deferred_workflows(
         };
         report.normalize();
 
-        if states[index].operational {
+        if states[index].operational || states[index].unavailable {
             execution.result.reports.insert(report.id.clone(), report);
             continue;
         }
@@ -291,30 +352,31 @@ fn run_check(scheduled: &ScheduledWorkflow) -> PhaseLog {
     let check = scheduled.check.as_ref().expect("scheduled check");
     let context = scheduled.context();
     let command = render_command(check, &scheduled.job, &context);
-    run_phase_command(check, &command, &scheduled.job.workspace_dir)
+    run_phase_command(
+        check,
+        &command,
+        &scheduled.job.workspace_dir,
+        scheduled.settings.command_timeout,
+    )
 }
 
-fn check_outcome(log: &PhaseLog) -> Result<CheckOutcome, String> {
-    if let Some(message) = command_failed(log) {
-        return Err(message);
+/// Classify one check or remedy log.
+fn classify(log: &PhaseLog, missing_tool_policy: MissingToolPolicy) -> CommandResult {
+    if log.error == Some(CommandError::NotFound)
+        && missing_tool_policy == MissingToolPolicy::UserNotice
+    {
+        return CommandResult::Unavailable;
     }
-    match log.classification {
-        Some(PhaseStatus::Clean) => Ok(CheckOutcome::Clean),
-        Some(PhaseStatus::Issues) => Ok(CheckOutcome::Issues),
-        Some(PhaseStatus::Failure) | None => Err("check produced no usable result".into()),
-    }
-}
-
-fn command_failed(log: &PhaseLog) -> Option<String> {
     if let Some(error) = &log.error {
-        return Some(format!("{}: {error}", log.phase));
+        return CommandResult::Failed(format!("{}: {error}", log.phase));
     }
     match log.classification {
-        Some(PhaseStatus::Failure) | None => Some(format!(
+        Some(PhaseStatus::Clean) => CommandResult::Outcome(CheckOutcome::Clean),
+        Some(PhaseStatus::Issues) => CommandResult::Outcome(CheckOutcome::Issues),
+        Some(PhaseStatus::Failure) | None => CommandResult::Failed(format!(
             "{} failed with exit code {:?}",
             log.phase, log.status
         )),
-        Some(PhaseStatus::Clean | PhaseStatus::Issues) => None,
     }
 }
 
@@ -326,10 +388,8 @@ fn command_write_scope(
     match writes {
         WriteBehavior::None => BTreeSet::new(),
         WriteBehavior::TargetFiles => job.files.iter().cloned().collect(),
-        WriteBehavior::MatchingGlobs => {
-            collect_matching_files(&job.workspace_dir, &context.spec.file_selection)
-        }
-        WriteBehavior::Workspace => collect_workspace_files(&job.workspace_dir),
+        WriteBehavior::MatchingGlobs => collect_matching_files(job, context),
+        WriteBehavior::Workspace => collect_workspace_files(job, context),
     }
 }
 
@@ -362,6 +422,32 @@ fn record_problem(
         affected_files: scheduled.job.files.clone(),
         message: message.into(),
         artifact_ids: Vec::new(),
+    });
+}
+
+fn record_unavailable(
+    result: &mut DeferredRunResult,
+    scheduled: &ScheduledWorkflow,
+    logs: &[DeferredLog],
+) {
+    let executable = logs
+        .last()
+        .map(|log| log.log.program.clone())
+        .unwrap_or_else(|| scheduled.spec.executable.clone());
+    let mut message = format!(
+        "{}: `{executable}` is unavailable; its files were not checked",
+        scheduled.spec.display_name
+    );
+    if let Some(hint) = &scheduled.spec.install_hint {
+        message.push_str(&format!(" ({hint})"));
+    }
+    result.record_unavailable_tool(UnavailableTool {
+        tool_id: scheduled.spec.id.clone(),
+        tool_name: scheduled.spec.display_name.clone(),
+        executable,
+        install_hint: scheduled.spec.install_hint.clone(),
+        affected_files: scheduled.job.files.clone(),
+        message,
     });
 }
 

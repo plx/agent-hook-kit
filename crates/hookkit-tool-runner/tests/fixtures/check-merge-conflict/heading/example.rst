@@ -1,0 +1,7 @@
+Changelog
+=========
+
+License
+=======
+
+MIT

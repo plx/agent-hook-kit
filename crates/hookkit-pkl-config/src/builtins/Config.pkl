@@ -13,23 +13,39 @@ class Settings {
   jobs: UInt?
 
   /// Stop after an operational failure (missing tool, configured failure code).
+  /// The immediate runner stops running later tools; the Stop-time runner
+  /// skips the failing tool's remaining remedies but still repairs files for
+  /// unrelated tools. Default: true.
   failFast: Boolean?
 
   /// Continue running later tools after an earlier tool reports issues.
   continueAfterIssues: Boolean?
 
-  /// Global file exclusions applied before per-tool selection.
+  /// Global file exclusions applied before per-tool selection, matched
+  /// against project-relative paths. Replaces the default
+  /// `**/.git/**` and `**/node_modules/**` when set.
   exclude: Listing<String>?
 
   /// How to handle optional common-output intents the harness cannot represent.
   loweringPolicy: ("strict" | "best-effort" | "best-effort-with-warnings")?
 
-  /// Default directory for diagnostic artifacts. Relative paths resolve from
-  /// the project root.
+  /// Directory for the immediate runner's full diagnostic artifacts. Relative
+  /// paths resolve from the project root. Default:
+  /// `.agent-hook-kit/post-tool-use`. The Stop-time runner writes its artifacts
+  /// to session state instead and never treats this directory as a candidate.
   diagnosticsDirectory: String?
 
-  /// What to do when a configured tool executable is missing.
+  /// What to do when a configured tool executable is missing. At Stop,
+  /// `user-notice` reports the tool to the user without blocking or
+  /// re-queueing its files; the other policies block completion.
   missingToolPolicy: ("user-notice" | "hard-failure" | "harness-block")?
+
+  /// Deadline in seconds for each external tool command; 0 disables it.
+  /// A command that runs longer is killed together with its process group
+  /// and reported as an operational failure. Default: 300, below the
+  /// 600-second default hook timeout of Claude Code and Codex. Set it below
+  /// the hook timeout you configure (Antigravity defaults to 30 seconds).
+  commandTimeoutSeconds: UInt?
 
   /// Optional stop-time file-activity fallback overrides. Omit to use the
   /// runtime defaults represented by FileActivity.
@@ -65,34 +81,38 @@ class DeferredReporting {
   renderEmptyBuckets: Boolean?
 }
 
+/// A field-preserving patch over the stop-time file-activity settings. Every
+/// field is optional: a layer that sets one field inherits the others from
+/// earlier layers (or the runtime defaults noted below).
 class FileActivity {
   /// Infer candidates from project files whose mtimes fall in the unreconciled
   /// interval. This is noisy but useful when tool inspection has gaps.
-  filesystemMtime: Boolean = true
+  /// Default: true.
+  filesystemMtime: Boolean?
 
   /// `git-dirty` is deliberately broad: it can include changes that predate
-  /// the agent session. It is disabled unless explicitly selected.
-  vcs: "disabled" | "git-dirty" = "disabled"
+  /// the agent session. Default: "disabled".
+  vcs: ("disabled" | "git-dirty")?
 
   /// Applied only to the first timestamp scan, whose session-start observation
-  /// may occur just after an early edit.
-  timestampToleranceMillis: UInt = 2000
+  /// may occur just after an early edit. Default: 2000.
+  timestampToleranceMillis: UInt?
 
   /// Bound recursive scans and record a coverage gap when the limit is hit.
-  maxEntries: UInt = 100000
+  /// Default: 100000.
+  maxEntries: UInt?
 
-  /// Best effort retains and reports incomplete targets without blocking a
-  /// stop solely for coverage. Strict also asks the harness to continue.
-  coverageGapPolicy: "best-effort" | "strict" = "best-effort"
+  /// Gaps are reported once, in the Stop that first observes them. Best
+  /// effort reports them without blocking; strict also blocks that Stop.
+  /// Default: "best-effort".
+  coverageGapPolicy: ("best-effort" | "strict")?
 
-  ignoredDirectoryNames: Listing<String> = new Listing<String> {
-    ".context"
-    ".git"
-    ".hg"
-    ".svn"
-    "node_modules"
-    "target"
-  }
+  /// Directory basenames pruned from reconciliation, target resolution, and
+  /// snapshot walks. Replaces the whole default list when set: ".agent-hook-kit",
+  /// ".context", ".git", ".hg", ".mypy_cache", ".next", ".pytest_cache",
+  /// ".ruff_cache", ".svn", ".turbo", ".venv", "__pycache__", "node_modules",
+  /// and "target".
+  ignoredDirectoryNames: Listing<String>?
 }
 
 class Merge {
@@ -196,14 +216,18 @@ class ToolSpec {
   /// runner compatibility-translates `phases`; immediate PostToolUse continues
   /// to execute `phases` exactly as before.
   workflows: Mapping<String, Workflow> = new Mapping<String, Workflow> {}
+  /// Optional explicit workflow ordering. Workflows not listed run afterwards
+  /// in alphabetical order of their ids; Pkl mapping order is not preserved.
   workflowOrder: Listing<String> = new Listing<String> {}
   /// Nonempty only when a catalog entry has no authoritative read-only check
   /// and must retain the legacy mutator-first compatibility behavior. Built-in
   /// validation rejects such entries unless this limitation is explicit.
   unverifiedRemedyFallback: String?
   phases: Mapping<String, Phase> = new Mapping<String, Phase> {}
-  /// Optional explicit phase ordering. If empty, runtime iterates `phases`
-  /// in insertion order (Pkl mappings preserve order).
+  /// Optional explicit phase ordering. Phases not listed run afterwards,
+  /// sorted by mode ("format", then "fix", "verify", "check-only") and then
+  /// alphabetically by id; Pkl mapping insertion order is not preserved.
+  /// List same-mode phases here when their relative order matters.
   phaseOrder: Listing<String> = new Listing<String> {}
   messages: Messages = new Messages {}
   diagnostics: Diagnostics = new Diagnostics {}
