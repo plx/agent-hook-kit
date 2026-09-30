@@ -304,7 +304,7 @@ impl EventSpec for PreToolUse {
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "PreToolUse")?;
         require_field(invocation, "transcript_path", "PreToolUse")?;
-        serde_json::from_value(invocation.json().clone()).map_err(Into::into)
+        deserialize_input(invocation, "PreToolUse")
     }
 
     fn emit(output: Self::CommandOutput) -> hookkit_core::Result<ProcessEmission> {
@@ -452,7 +452,9 @@ impl PostToolUseOutput {
     /// for replacing the tool result with feedback for the model.
     ///
     /// The reason must be non-empty after trimming unless `continue: false`
-    /// is also set; this is checked during emission.
+    /// is also set; this is checked during emission. With `continue: false`
+    /// a blank block is left out of the JSON: it would change nothing but
+    /// make Codex drop the response's additional context.
     pub fn block(reason: impl Into<String>) -> Self {
         Self::Structured(StructuredPostToolUseOutput {
             decision: Some("block"),
@@ -466,7 +468,7 @@ impl PostToolUseOutput {
     /// `NoOp` is promoted to an empty structured response. Blocking-error and
     /// stderr-wrapped outputs are rejected because their structure is final.
     /// The reason must be non-empty after trimming unless `continue: false` is
-    /// also set; this is checked during emission.
+    /// also set, as for [`Self::block`]; this is checked during emission.
     pub fn with_block(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         let output = self.structured_mut()?;
         output.decision = Some("block");
@@ -476,6 +478,9 @@ impl PostToolUseOutput {
 
     /// Adds agent-facing `hookSpecificOutput.additionalContext` to a
     /// successful structured response.
+    ///
+    /// Codex discards the context of a response whose block reason is blank,
+    /// even under `continue: false`, so emission never sends such a block.
     pub fn with_additional_context(
         mut self,
         context: impl Into<String>,
@@ -521,14 +526,23 @@ impl PostToolUseOutput {
 
     /// Sets Codex's top-level `continue` control on a structured response.
     ///
-    /// `continue: false` stops the turn after the tool call and takes
-    /// precedence over a block decision.
+    /// For `PostToolUse`, `continue: false` neither ends the turn nor undoes
+    /// the tool call. Codex replaces the tool result the model sees with the
+    /// block `reason` when it is non-blank, else [`Self::with_stop_reason`],
+    /// else `PostToolUse hook stopped execution`, and the model carries on
+    /// from there; code mode's tool promise still resolves. It takes
+    /// precedence over a block decision. To halt, deny the call in
+    /// `PreToolUse`, or use `continue: false` on `Stop` or
+    /// `UserPromptSubmit`.
     pub fn with_continue(mut self, continue_session: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.continue_session = Some(continue_session);
         Ok(self)
     }
 
-    /// Sets the top-level stop reason shown when `continue` is `false`.
+    /// Sets the top-level `stopReason`, used when `continue` is `false`.
+    ///
+    /// Codex records it as the run's stop text and, when the response has no
+    /// non-blank block reason, it becomes the tool result the model sees.
     pub fn with_stop_reason(mut self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.stop_reason = Some(reason.into());
         Ok(self)
@@ -572,7 +586,7 @@ impl EventSpec for PostToolUse {
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "PostToolUse")?;
         require_field(invocation, "transcript_path", "PostToolUse")?;
-        serde_json::from_value(invocation.json().clone()).map_err(Into::into)
+        deserialize_input(invocation, "PostToolUse")
     }
 
     fn emit(output: Self::CommandOutput) -> hookkit_core::Result<ProcessEmission> {
@@ -645,12 +659,24 @@ pub(crate) fn require_event(
     })
 }
 
-/// Rejects input for `event` whose required key is absent.
+/// Deserializes the typed input of `event` after its discriminator matched.
 ///
 /// Like the Claude and Antigravity parsers, a schema violation in a payload
-/// whose event is already known is reported as
-/// [`hookkit_core::HookkitError::InvalidInputForHint`]; only a discriminator
-/// mismatch ([`require_event`]) uses `InvalidForHint`.
+/// whose event is already known (a missing or mistyped field, whether caught
+/// by [`require_field`], a field-type check, or deserialization) is reported
+/// as [`hookkit_core::HookkitError::InvalidInputForHint`]; only a
+/// discriminator mismatch ([`require_event`]) uses `InvalidForHint`.
+pub(crate) fn deserialize_input<T: serde::de::DeserializeOwned>(
+    invocation: &RawInvocation,
+    event: &'static str,
+) -> hookkit_core::Result<T> {
+    serde_json::from_value(invocation.json().clone())
+        .map_err(|error| invalid_input(event, error.to_string()))
+}
+
+/// Rejects input for `event` whose required key is absent, as
+/// [`hookkit_core::HookkitError::InvalidInputForHint`] (see
+/// [`deserialize_input`]).
 pub(crate) fn require_field(
     invocation: &RawInvocation,
     field: &str,
@@ -985,7 +1011,35 @@ mod tests {
             .with_stop_reason("stopping")
             .unwrap();
         let value = stdout_json(&PostToolUse::emit(stopping).unwrap());
+        assert_eq!(
+            value,
+            serde_json::json!({"continue": false, "stopReason": "stopping"})
+        );
+
+        // Regression: Codex discards additionalContext when the block reason
+        // is blank, even under `continue: false`, so the blank block is left
+        // out and the context reaches the model.
+        let stopping_with_context = PostToolUseOutput::block(" ")
+            .with_continue(false)
+            .unwrap()
+            .with_additional_context("see skills/lint")
+            .unwrap();
+        let value = stdout_json(&PostToolUse::emit(stopping_with_context).unwrap());
+        assert!(value.get("decision").is_none() && value.get("reason").is_none());
         assert_eq!(value["continue"], false);
+        assert_eq!(
+            value["hookSpecificOutput"]["additionalContext"],
+            "see skills/lint"
+        );
+
+        // A non-blank reason stays: it is the model-visible tool result.
+        let stopping_with_reason = PostToolUseOutput::block("secret written")
+            .with_continue(false)
+            .unwrap();
+        let value = stdout_json(&PostToolUse::emit(stopping_with_reason).unwrap());
+        assert_eq!(value["decision"], "block");
+        assert_eq!(value["reason"], "secret written");
+
         let block_with_context = PostToolUseOutput::block("fix it")
             .with_additional_context("lint failed")
             .unwrap();
@@ -1014,6 +1068,47 @@ mod tests {
         assert!(matches!(
             PreToolUse::parse(&raw),
             Err(hookkit_core::HookkitError::InvalidForHint { .. })
+        ));
+    }
+
+    #[test]
+    fn every_schema_violation_of_a_known_event_is_invalid_input_for_the_hint() {
+        // Regression: a missing key that only deserialization checks, such as
+        // `model`, used to surface as `InvalidJson` while `transcript_path`
+        // was `InvalidInputForHint`.
+        let without = |field: &str| {
+            let mut value = pre_tool_use("default", "").json().clone();
+            value.as_object_mut().unwrap().remove(field);
+            RawInvocation::parse(serde_json::to_vec(&value).unwrap()).unwrap()
+        };
+        for field in ["model", "session_id", "cwd", "tool_input", "turn_id"] {
+            assert!(
+                matches!(
+                    PreToolUse::parse(&without(field)),
+                    Err(hookkit_core::HookkitError::InvalidInputForHint { event, message })
+                        if event == PreToolUse::EVENT && message.contains(field)
+                ),
+                "{field}"
+            );
+        }
+        let mut mistyped = pre_tool_use("default", "").json().clone();
+        mistyped["model"] = 7.into();
+        assert!(matches!(
+            PreToolUse::parse(
+                &RawInvocation::parse(serde_json::to_vec(&mistyped).unwrap()).unwrap()
+            ),
+            Err(hookkit_core::HookkitError::InvalidInputForHint { .. })
+        ));
+
+        let session_end = RawInvocation::parse(
+            br#"{"transcript_path":null,"cwd":"/repo","hook_event_name":"SessionEnd","reason":"other"}"#
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(matches!(
+            crate::catalog::SessionEnd::parse(&session_end),
+            Err(hookkit_core::HookkitError::InvalidInputForHint { event, message })
+                if event == crate::catalog::SessionEnd::EVENT && message.contains("session_id")
         ));
     }
 

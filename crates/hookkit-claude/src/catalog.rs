@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 use crate::ClaudeCommandEnvironment;
-use crate::protocol::{SNAPSHOT_ID, contract_id, require_event};
+use crate::protocol::{SNAPSHOT_ID, contract_id, deserialize_input, require_event};
 use crate::values::{
     CompactTrigger, Effort, McpServer, NotificationType, PermissionMode, SessionEndReason,
     StopFailureError,
@@ -379,7 +379,7 @@ fn parse(
 ) -> hookkit_core::Result<CatalogInput> {
     require_event(invocation, event)?;
     require_fields(invocation, event, required)?;
-    let mut input = CatalogInput::deserialize(invocation.json())?;
+    let mut input: CatalogInput = deserialize_input(invocation, event)?;
     input.event = Some(event);
     Ok(input)
 }
@@ -389,9 +389,52 @@ fn parse(
 /// Since Claude Code v2.1.248, stdout whose trimmed form starts with `{` and
 /// ends with `}` is parsed as a JSON response; when that fails the text is
 /// dropped and a hook error is reported instead of adding context.
+///
+/// Claude Code trims as JavaScript's `String.prototype.trim` does. Rust's
+/// `char::is_whitespace` plus U+FEFF covers that set and also NEXT LINE
+/// (U+0085), so the predicate errs toward structured context, which still
+/// reaches Claude.
 pub(crate) fn parsed_as_json(text: &str) -> bool {
     let trimmed = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
     trimmed.starts_with('{') && trimmed.ends_with('}')
+}
+
+/// Reports whether a JSON response makes a blocking decision that Claude
+/// Code applies with exit 2: a top-level `decision: "block"`, a
+/// `permissionDecision: "deny"`, or a `PermissionRequest` decision with
+/// `behavior: "deny"`.
+///
+/// Claude Code takes the exit-2 blocking message from such a decision's
+/// reason and falls back to stderr only when the JSON makes none.
+pub(crate) fn makes_blocking_decision(value: &Map<String, Value>) -> bool {
+    let specific = value.get("hookSpecificOutput");
+    value.get("decision").and_then(Value::as_str) == Some("block")
+        || specific
+            .and_then(|specific| specific.get("permissionDecision"))
+            .and_then(Value::as_str)
+            == Some("deny")
+        || specific
+            .and_then(|specific| specific.get("decision"))
+            .and_then(|decision| decision.get("behavior"))
+            .and_then(Value::as_str)
+            == Some("deny")
+}
+
+/// Checks the stderr of an exit-2 response that also prints `value`.
+///
+/// The snapshot lets such a response leave stderr empty. HookKit requires a
+/// message only when the JSON makes no blocking decision, because stderr is
+/// then the only message Claude Code can show.
+pub(crate) fn require_exit_2_message(
+    value: &Map<String, Value>,
+    stderr: &str,
+) -> hookkit_core::Result<()> {
+    if stderr.is_empty() && !makes_blocking_decision(value) {
+        return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+            "an exit-2 response needs a non-empty message unless its JSON makes a blocking decision",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -402,7 +445,8 @@ enum Outcome {
     Text(String),
     /// Exit 0 with empty stdout.
     Empty,
-    /// Exit 2 with a JSON object on stdout and required stderr.
+    /// Exit 2 with a JSON object on stdout and stderr, which may be empty
+    /// only when the JSON makes a blocking decision.
     BlockingJson {
         value: Map<String, Value>,
         stderr: String,
@@ -483,8 +527,7 @@ impl CatalogOutput {
         Self::json::<E>(hook_specific_object::<E>(fields))
     }
 
-    /// [`Self::hook_specific`] printed while exiting 2 with required
-    /// `stderr`.
+    /// [`Self::hook_specific`] printed while exiting 2 with `stderr`.
     pub(crate) fn hook_specific_with_stderr<E: EventSpec>(
         fields: impl IntoIterator<Item = (&'static str, Value)>,
         stderr: String,
@@ -606,17 +649,22 @@ impl CatalogOutput {
         }
     }
 
+    /// Turns a JSON outcome into exit 2 with the same stdout and `stderr`.
+    ///
+    /// `stderr` may be empty only when the JSON makes a blocking decision,
+    /// whose reason Claude Code then uses as the message. Otherwise an empty
+    /// `stderr` is rejected here, while the caller can still choose another
+    /// response, rather than when the output is emitted.
     pub(crate) fn into_blocking(self, stderr: impl Into<String>) -> hookkit_core::Result<Self> {
         let Outcome::Json(value) = self.outcome else {
             return Err(hookkit_core::HookkitError::InvalidProcessEmission(
                 "only a structured JSON response can exit 2 with stdout",
             ));
         };
+        let stderr = stderr.into();
+        require_exit_2_message(&value, &stderr)?;
         Ok(Self {
-            outcome: Outcome::BlockingJson {
-                value,
-                stderr: stderr.into(),
-            },
+            outcome: Outcome::BlockingJson { value, stderr },
             ..self
         })
     }
@@ -632,11 +680,7 @@ impl CatalogOutput {
             Outcome::Text(value) => Ok(ProcessEmission::command_text(contract, value)),
             Outcome::Empty => Ok(ProcessEmission::command_empty(contract)),
             Outcome::BlockingJson { value, stderr } => {
-                if stderr.is_empty() {
-                    return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                        "protocol outcome requires non-empty stderr",
-                    ));
-                }
+                require_exit_2_message(&value, &stderr)?;
                 Ok(ProcessEmission::command_unchecked(
                     contract,
                     serde_json::to_vec(&value)?,
@@ -982,7 +1026,13 @@ macro_rules! into_blocking_error {
             /// blocking `reason` as the message when the JSON makes one. If
             /// the JSON fails validation the block stands and `message` is the
             /// reason, so this is the fail-closed form of a structured block.
-            /// `message` must be non-empty. No field can be added afterwards.
+            ///
+            /// `message` may be empty when the JSON makes a blocking decision
+            /// (a `block` decision or a `deny` permission decision); the
+            /// process then exits 2 with empty stderr, which the snapshot
+            /// allows. Without such a decision an empty `message` is rejected
+            /// here, so the handler can still choose another response. No
+            /// field can be added afterwards.
             pub fn into_blocking_error(
                 self,
                 message: impl Into<String>,
@@ -1004,7 +1054,9 @@ macro_rules! into_feedback_error {
             ///
             /// Claude Code reads JSON on every exit code, so the structured
             /// fields still apply, and it shows `message` to Claude as
-            /// feedback. Nothing is blocked. `message` must be non-empty. No
+            /// feedback. Nothing is blocked. `message` may be empty only when
+            /// the JSON makes a `block` decision, whose `reason` is then the
+            /// feedback; otherwise an empty `message` is rejected here. No
             /// field can be added afterwards.
             pub fn into_feedback_error(
                 self,
@@ -1481,7 +1533,7 @@ no_op!(Stop, StopOutput);
 context_builders!(
     Stop,
     StopOutput,
-    "at the end of the turn without blocking the stop"
+    "at the end of the turn as non-error feedback.\n\nLike [`Self::block`], this keeps the conversation going so Claude can act on the feedback, bounded by the same loop protections (`stop_hook_active` and Claude Code's consecutive-continuation cap); the transcript labels it `Stop hook feedback` instead of a hook error. A hook that only wants to inform should not return it on every stop: use `no_op().with_system_message(..)` for a user notice, or check [`CatalogInput::stop_hook_active`] first"
 );
 block_builders!(
     Stop,
@@ -1516,7 +1568,7 @@ no_op!(SubagentStop, SubagentStopOutput);
 context_builders!(
     SubagentStop,
     SubagentStopOutput,
-    "at the end of the subagent's turn without blocking the stop"
+    "at the end of the subagent's turn as non-error feedback.\n\nLike [`Self::block`], this keeps the subagent running so it can act on the feedback, bounded by the same loop protections (`stop_hook_active` and Claude Code's consecutive-continuation cap); it is shown as hook feedback instead of a hook error. A hook that only wants to inform should not return it on every stop: use `no_op().with_system_message(..)` for a user notice, or check [`CatalogInput::stop_hook_active`] first"
 );
 block_builders!(
     SubagentStop,
@@ -1578,12 +1630,15 @@ universal_builders!(TaskCompletedOutput: continue_session, stop_reason, system_m
 discarded_builders!(TaskCompleted, TaskCompletedOutput: suppress_output);
 
 output_type!(TeammateIdleOutput, "TeammateIdle");
+// `team_name` is not required: Claude Code deprecated it and announced its
+// removal, and a parse failure would let the teammate go idle (fail open).
+// The field is still retained in `CatalogInput::fields` when sent.
 event_spec!(
     TeammateIdle,
     TeammateIdleOutput,
     "TeammateIdle",
     Agent,
-    ["teammate_name": String, "team_name": String]
+    ["teammate_name": String]
 );
 no_op!(TeammateIdle, TeammateIdleOutput);
 blocking_error!(
@@ -1803,8 +1858,9 @@ impl PermissionRequestOutput {
     /// decision object the permission flow proceeds unchanged and stderr is
     /// discarded. This shim therefore also prints the equivalent
     /// [`Self::deny`] decision, which Claude Code applies on every exit code,
-    /// so the request is denied on releases with either behavior.
-    /// `message` must be non-empty.
+    /// so the request is denied on releases with either behavior. An empty
+    /// `message` still denies: stderr is then empty, which the snapshot
+    /// allows next to a decision.
     #[deprecated(
         note = "Claude Code ignores exit 2 on PermissionRequest and discards its stderr (claude-code/docs-2026-09-29-r1); use `deny(message)`"
     )]
@@ -1945,8 +2001,10 @@ impl PreToolUseOutput {
     /// decision, so the normal permission flow applies.
     ///
     /// Prefer this over [`Self::allow`] for context-only hooks: `allow`
-    /// skips the permission prompt and auto-approves the call. Refine it
-    /// with [`Self::with_updated_input`] to rewrite the call without deciding.
+    /// skips the permission prompt and auto-approves the call. To rewrite the
+    /// call without auto-approving it, use [`Self::ask`] with
+    /// [`Self::with_updated_input`]; see that builder for why a rewrite
+    /// without a decision is not documented.
     pub fn with_context(additional_context: impl Into<String>) -> Self {
         Self(CatalogOutput::hook_specific::<PreToolUse>([(
             "additionalContext",
@@ -1959,8 +2017,9 @@ impl PreToolUseOutput {
     /// `ExitPlanMode`, which also need [`Self::with_updated_input`]. Deny and
     /// ask rules are still evaluated.
     ///
-    /// A hook that only wants to add context or rewrite input should not
-    /// choose `allow`; use [`Self::with_context`] or [`Self::no_op`] instead.
+    /// A hook that only wants to add context should not choose `allow`; use
+    /// [`Self::with_context`] or [`Self::no_op`] instead. A rewrite that
+    /// should not auto-approve belongs on [`Self::ask`].
     pub fn allow() -> Self {
         Self::with_decision(PreToolPermissionDecision::Allow, None)
     }
@@ -2027,10 +2086,17 @@ impl PreToolUseOutput {
     }
 
     /// Replaces the whole tool input before execution. Permission rules are
-    /// evaluated against the returned input. Combine with [`Self::allow`] to
-    /// auto-approve, with [`Self::ask`] to show it to the user, or with no
-    /// decision to leave the permission flow unchanged. Rejected for `deny`
-    /// and `defer`, where Claude Code ignores it.
+    /// evaluated against the returned input. Rejected for `deny` and `defer`,
+    /// where Claude Code ignores it.
+    ///
+    /// The pinned reference documents `updatedInput` only with a decision:
+    /// combine it with [`Self::allow`] to auto-approve the rewritten call, or
+    /// with [`Self::ask`] to show it to the user, which is the documented way
+    /// to rewrite without auto-approving. HookKit still emits it on a
+    /// response without a decision, but the reference does not say whether
+    /// Claude Code applies the rewrite and keeps its normal permission flow
+    /// there or drops it and runs the original input, so do not rely on that
+    /// form for a sanitizing rewrite.
     pub fn with_updated_input(self, input: Map<String, Value>) -> hookkit_core::Result<Self> {
         if matches!(self.decision(), Some("deny" | "defer")) {
             return Err(hookkit_core::HookkitError::InvalidProcessEmission(
@@ -2062,6 +2128,9 @@ impl PreToolUseOutput {
 // ---------------------------------------------------------------------------
 
 output_type!(UserPromptExpansionOutput, "UserPromptExpansion");
+// `command_source` is not required: the Agent SDK types it optional
+// (0.3.223 and 0.3.285), and a parse failure would let a blocking hook's
+// expansion through (fail open). It is still retained when sent.
 event_spec!(
     UserPromptExpansion,
     UserPromptExpansionOutput,
@@ -2071,7 +2140,6 @@ event_spec!(
         "expansion_type": String,
         "command_name": String,
         "command_args": String,
-        "command_source": String,
         "prompt": String,
     ]
 );
@@ -2097,6 +2165,24 @@ into_blocking_error!(UserPromptExpansionOutput);
 nonblocking_error!(UserPromptExpansion, UserPromptExpansionOutput);
 universal_builders!(UserPromptExpansionOutput: continue_session, stop_reason, system_message, terminal_sequence);
 discarded_builders!(UserPromptExpansion, UserPromptExpansionOutput: suppress_output);
+
+impl UserPromptExpansionOutput {
+    /// Sets `hookSpecificOutput.suppressOriginalPrompt`, which omits the
+    /// original prompt from the block message when the expansion is blocked.
+    ///
+    /// Agent SDK 0.3.285 types this field for `UserPromptExpansion` ("When
+    /// decision is \"block\", omit the original prompt from the block
+    /// message"). The pinned hooks reference documents it only for
+    /// `UserPromptSubmit`, and the claude-code/docs-2026-09-29-r1 output
+    /// schema does not list it for this event, so this is the one builder
+    /// whose JSON that schema rejects, and whether a given Claude Code
+    /// release honors the field here is unverified.
+    pub fn with_suppress_original_prompt(self, suppress: bool) -> hookkit_core::Result<Self> {
+        self.0
+            .with_specific("suppressOriginalPrompt", suppress.into())
+            .map(Self)
+    }
+}
 
 output_type!(UserPromptSubmitOutput, "UserPromptSubmit");
 event_spec!(UserPromptSubmit, UserPromptSubmitOutput, "UserPromptSubmit", Prompt, ["prompt": String]);
@@ -2133,7 +2219,10 @@ impl UserPromptSubmitOutput {
 
     /// Sets `suppressOriginalPrompt`, which omits the original prompt text
     /// from the block message shown to the user. The pinned reference
-    /// describes it only together with `decision: "block"`.
+    /// describes it only together with `decision: "block"`; the 2026-09-30
+    /// reference adds that it also applies when the hook blocks by exiting 2
+    /// with this JSON on stdout (see `into_blocking_error`). The prompt text
+    /// can still reach local files such as the transcript.
     pub fn with_suppress_original_prompt(self, suppress: bool) -> hookkit_core::Result<Self> {
         self.0
             .with_specific("suppressOriginalPrompt", suppress.into())
@@ -2447,6 +2536,77 @@ mod tests {
     }
 
     #[test]
+    fn sdk_optional_and_deprecated_fields_may_be_absent() {
+        // Regression: a missing `command_source` (optional in the Agent SDK)
+        // or `team_name` (deprecated, announced for removal) failed the parse,
+        // which exits 1 and lets a blocking hook's action through.
+        let expansion = envelope(
+            "UserPromptExpansion",
+            serde_json::json!({
+                "expansion_type": "mcp_prompt",
+                "command_name": "deploy",
+                "command_args": "",
+                "prompt": "/deploy",
+            }),
+        );
+        let input = UserPromptExpansion::parse(&raw(expansion.clone())).unwrap();
+        assert_eq!(input.prompt(), Some("/deploy"));
+        assert_eq!(input.field("command_source"), None);
+        assert_eq!(serde_json::to_value(&input).unwrap(), expansion);
+
+        let idle = envelope(
+            "TeammateIdle",
+            serde_json::json!({"teammate_name": "reviewer"}),
+        );
+        let input = TeammateIdle::parse(&raw(idle)).unwrap();
+        assert_eq!(input.field("team_name"), None);
+        let idle = envelope(
+            "TeammateIdle",
+            serde_json::json!({"teammate_name": "reviewer", "team_name": "session-a1"}),
+        );
+        let input = TeammateIdle::parse(&raw(idle)).unwrap();
+        assert_eq!(
+            input.field("team_name"),
+            Some(&serde_json::json!("session-a1"))
+        );
+
+        // The fields that remain required still are.
+        let missing = envelope(
+            "TeammateIdle",
+            serde_json::json!({"team_name": "session-a1"}),
+        );
+        assert!(TeammateIdle::parse(&raw(missing)).is_err());
+    }
+
+    #[test]
+    fn user_prompt_expansion_can_suppress_the_original_prompt() {
+        let value = stdout_json(
+            &UserPromptExpansion::emit(
+                UserPromptExpansionOutput::block("not available")
+                    .with_suppress_original_prompt(true)
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "decision": "block",
+                "reason": "not available",
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptExpansion",
+                    "suppressOriginalPrompt": true,
+                },
+            })
+        );
+        assert!(
+            UserPromptExpansionOutput::text_context("plain")
+                .with_suppress_original_prompt(true)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn harness_sent_enum_values_outside_the_snapshot_still_parse() {
         let mut value = pre_tool_use();
         value["permission_mode"] = "newMode".into();
@@ -2514,6 +2674,26 @@ mod tests {
         )
         .unwrap();
         <Stop as EventSpec>::validate_command_environment(&direct, &environment).unwrap();
+    }
+
+    #[test]
+    fn rewrites_documented_without_auto_approval_use_ask() {
+        // The reference documents `updatedInput` only with `allow` or `ask`;
+        // `ask` is the documented rewrite that does not auto-approve.
+        let rewrite = PreToolUseOutput::ask("stripped --force")
+            .with_updated_input(
+                serde_json::json!({"command": "git push"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+        let value = stdout_json(&PreToolUse::emit(rewrite).unwrap());
+        assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "ask");
+        assert_eq!(
+            value["hookSpecificOutput"]["updatedInput"]["command"],
+            "git push"
+        );
     }
 
     #[test]
@@ -2659,7 +2839,109 @@ mod tests {
             stdout_json(&emission)["hookSpecificOutput"]["decision"],
             serde_json::json!({"behavior": "deny", "message": "no rm"})
         );
-        assert!(PermissionRequest::emit(PermissionRequestOutput::blocking_error("")).is_err());
+
+        // Regression: an empty message used to fail at emission, which
+        // dropped the deny decision and let the request through.
+        let emission =
+            PermissionRequest::emit(PermissionRequestOutput::blocking_error("")).unwrap();
+        assert_eq!((emission.exit_code(), emission.stderr()), (2, &b""[..]));
+        assert_eq!(
+            stdout_json(&emission)["hookSpecificOutput"]["decision"]["behavior"],
+            "deny"
+        );
+    }
+
+    #[test]
+    fn structured_exit_2_needs_stderr_only_without_a_blocking_decision() {
+        // Regression: an empty message used to pass `into_blocking_error`
+        // and fail only at emission, which exits 1 under the default runner
+        // policy and so dropped a structured block (fail-open).
+        for (emission, reason) in [
+            (
+                PreToolUse::emit(
+                    PreToolUseOutput::deny("no rm")
+                        .into_blocking_error("")
+                        .unwrap(),
+                )
+                .unwrap(),
+                "no rm",
+            ),
+            (
+                Stop::emit(StopOutput::block("again").into_blocking_error("").unwrap()).unwrap(),
+                "again",
+            ),
+            (
+                PostToolUseFailure::emit(
+                    PostToolUseFailureOutput::block("retry")
+                        .into_feedback_error("")
+                        .unwrap(),
+                )
+                .unwrap(),
+                "retry",
+            ),
+        ] {
+            assert_eq!(emission.exit_code(), 2);
+            assert!(emission.stderr().is_empty());
+            let value = stdout_json(&emission);
+            let json_reason = value
+                .get("reason")
+                .or_else(|| value["hookSpecificOutput"].get("permissionDecisionReason"));
+            assert_eq!(json_reason, Some(&Value::from(reason)));
+        }
+        use crate::model_switch::{PreModelSwitch, PreModelSwitchOutput};
+        let emission = PreModelSwitch::emit(
+            PreModelSwitchOutput::deny("retired")
+                .into_blocking_error("")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!((emission.exit_code(), emission.stderr()), (2, &b""[..]));
+
+        // Without a blocking decision stderr is the only message, so an empty
+        // one is rejected while the handler can still fall back.
+        assert!(PreToolUseOutput::allow().into_blocking_error("").is_err());
+        assert!(
+            PreToolUseOutput::ask("sure?")
+                .into_blocking_error("")
+                .is_err()
+        );
+        assert!(
+            StopOutput::with_context("c")
+                .into_blocking_error("")
+                .is_err()
+        );
+        assert!(TeammateIdleOutput::no_op().into_blocking_error("").is_err());
+        assert!(
+            PostToolUseFailureOutput::with_context("c")
+                .into_feedback_error("")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn blocking_decisions_are_recognized_in_every_json_form() {
+        let object = |value: Value| value.as_object().unwrap().clone();
+        assert!(makes_blocking_decision(&object(
+            serde_json::json!({"decision": "block", "reason": "r"})
+        )));
+        assert!(makes_blocking_decision(&object(serde_json::json!({
+            "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"}
+        }))));
+        assert!(makes_blocking_decision(&object(serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "deny"}
+            }
+        }))));
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"decision": "approve"}),
+            serde_json::json!({"hookSpecificOutput": {"permissionDecision": "ask"}}),
+            serde_json::json!({"hookSpecificOutput": {"decision": {"behavior": "allow"}}}),
+            serde_json::json!({"continue": false}),
+        ] {
+            assert!(!makes_blocking_decision(&object(value)));
+        }
     }
 
     #[test]
@@ -2830,5 +3112,13 @@ mod tests {
         assert!(!parsed_as_json("[1]"));
         assert!(!parsed_as_json("\"{}\""));
         assert!(!parsed_as_json("text {}"));
+        // JavaScript's trim also strips these, so Claude Code parses the text.
+        for text in ["\u{2028}{}\u{2029}", "\u{3000}{}", "\u{feff}{}", "{}\u{a0}"] {
+            assert!(parsed_as_json(text), "{text:?}");
+        }
+        // Neither JavaScript nor this predicate trims these.
+        for text in ["\u{200b}{}", "{}\u{180e}"] {
+            assert!(!parsed_as_json(text), "{text:?}");
+        }
     }
 }

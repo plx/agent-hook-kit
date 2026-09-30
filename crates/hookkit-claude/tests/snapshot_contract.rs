@@ -280,6 +280,96 @@ fn every_positive_input_fixture_parses_and_every_negative_is_rejected() {
     check_inputs::<WorktreeRemove>("worktree-remove");
 }
 
+/// Input fields the snapshot schema may require but the native parser
+/// accepts when missing, for forward and backward compatibility: a parse
+/// failure exits 1, which fails a gating hook open. As `(event directory,
+/// field, reason)`.
+const TOLERATED_MISSING_FIELDS: &[(&str, &str, &str)] = &[
+    (
+        "user-prompt-expansion",
+        "command_source",
+        "the Agent SDK (0.3.223, 0.3.285) types it optional",
+    ),
+    (
+        "teammate-idle",
+        "team_name",
+        "deprecated; Claude Code announced its removal",
+    ),
+];
+
+#[test]
+fn tolerated_missing_fields_are_accepted_for_compatibility() {
+    for (event_dir, field, reason) in TOLERATED_MISSING_FIELDS {
+        let mut value = positive(event_dir, "representative");
+        assert!(
+            value.as_object_mut().unwrap().remove(*field).is_some(),
+            "{event_dir}: the representative fixture no longer sends {field}; drop the entry"
+        );
+        // `check_inputs` still requires every negative fixture to be
+        // rejected, so none of them may be a payload missing only this field.
+        let event = EventId::builtin(HarnessId::CLAUDE_CODE, wire_name(event_dir));
+        let decoded = ClaudeCode::decode(&event, &invocation(&value))
+            .unwrap_or_else(|error| panic!("{event_dir} without {field} ({reason}): {error}"));
+        let hookkit_claude::protocol::AnyInput::Catalog(input) = decoded else {
+            panic!("{event_dir} is a catalog event");
+        };
+        assert_eq!(serde_json::to_value(&input).unwrap(), value, "{event_dir}");
+        assert_eq!(input.field(field), None);
+    }
+}
+
+#[test]
+fn known_event_schema_violations_are_invalid_input_for_the_hinted_event() {
+    // Discriminator matches, but a required envelope or event field is
+    // missing: every parser reports the hinted event, whichever check fails.
+    for (event_dir, field) in [
+        ("session-start", "source"),
+        ("post-tool-use", "tool_use_id"),
+        ("worktree-create", "name"),
+        ("pre-model-switch", "to_model"),
+        ("pre-tool-use", "cwd"),
+        ("pre-tool-use", "tool_name"),
+    ] {
+        let mut value = positive(event_dir, "minimal");
+        value.as_object_mut().unwrap().remove(field);
+        let event = EventId::builtin(HarnessId::CLAUDE_CODE, wire_name(event_dir));
+        let error = ClaudeCode::decode(&event, &invocation(&value)).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                hookkit_core::HookkitError::InvalidInputForHint { event: hinted, message }
+                    if *hinted == event && message.contains(field)
+            ),
+            "{event_dir} without {field}: {error:?}"
+        );
+    }
+}
+
+/// `UserPromptExpansionOutput::with_suppress_original_prompt` emits a field
+/// the Agent SDK types but the snapshot's output schema may not list; that
+/// field must be the response's only difference from the schema.
+#[test]
+fn sdk_typed_output_fields_are_the_only_schema_difference() {
+    let emission = catalog::<UserPromptExpansion>(
+        UserPromptExpansionOutput::block("Unavailable.")
+            .with_suppress_original_prompt(true)
+            .unwrap(),
+    );
+    assert_eq!(emission.exit_code(), 0);
+    let mut value: Value = serde_json::from_slice(emission.stdout()).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["suppressOriginalPrompt"], true);
+    let validator = output_validator("user-prompt-expansion").unwrap();
+    if !validator.is_valid(&value) {
+        // claude-code/docs-2026-09-29-r1 closes this hookSpecificOutput
+        // without the field Agent SDK 0.3.285 adds; nothing else differs.
+        value["hookSpecificOutput"]
+            .as_object_mut()
+            .unwrap()
+            .remove("suppressOriginalPrompt");
+        check_schema("user-prompt-expansion", &value);
+    }
+}
+
 fn positive(event_dir: &str, id: &str) -> Value {
     let fixtures = fixtures(event_dir);
     fixture_list(&fixtures, "/input/positive")
@@ -1749,7 +1839,22 @@ fn stderr_and_text_outcomes_use_their_documented_channels() {
     assert_eq!(blocked.stderr(), b"stop");
     assert_eq!(blocked.exit_code(), 2);
     assert!(PreToolUse::emit(PreToolUseOutput::blocking_error("")).is_err());
-    assert!(PreToolUse::emit(PreToolUseOutput::allow().into_blocking_error("").unwrap()).is_err());
+    // Stderr is the only message without a blocking decision, so an empty one
+    // is rejected when the response is built.
+    assert!(PreToolUseOutput::allow().into_blocking_error("").is_err());
+    // The exit-2-structured outcome makes stderr optional, and Claude Code
+    // takes the message from the JSON decision's reason.
+    let denied = PreToolUse::emit(
+        PreToolUseOutput::deny("no rm")
+            .into_blocking_error("")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!((denied.exit_code(), denied.stderr()), (2, &b""[..]));
+    assert_eq!(
+        emitted_json("pre-tool-use", &denied).unwrap()["hookSpecificOutput"]["permissionDecision"],
+        "deny"
+    );
 
     let notice = SessionEnd::emit(SessionEndOutput::nonblocking_error("oops")).unwrap();
     assert_eq!(notice.exit_code(), 1);

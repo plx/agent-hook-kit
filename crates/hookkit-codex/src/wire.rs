@@ -168,14 +168,39 @@ pub(crate) fn validate_block_reason(
     }
 }
 
+/// Reports whether `output` pairs `continue: false` with a `decision:
+/// "block"` whose reason is missing or blank after trimming.
+///
+/// Codex applies `continue: false` before the block, so such a block has no
+/// effect of its own. Codex still marks its reason invalid, and on
+/// `PostToolUse` and `UserPromptSubmit` an invalid block reason makes it
+/// discard the response's `additionalContext` without reporting an error.
+fn blank_block_under_stop(output: &serde_json::Map<String, serde_json::Value>) -> bool {
+    output.get("continue") == Some(&serde_json::Value::Bool(false))
+        && output.get("decision").and_then(serde_json::Value::as_str) == Some("block")
+        && output
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|reason| reason.trim().is_empty())
+}
+
 /// Encodes a structured object, using empty stdout for an object with no
 /// members because Codex's `no-op` outcome is exit 0 with empty stdout.
+///
+/// A blank block under `continue: false` is left out, because Codex would
+/// otherwise drop the additional context while the stop is unchanged.
 pub(crate) fn structured(
     contract: ContractId,
     output: &serde_json::Map<String, serde_json::Value>,
 ) -> hookkit_core::Result<ProcessEmission> {
     if output.is_empty() {
         return Ok(ProcessEmission::command_empty(contract));
+    }
+    if blank_block_under_stop(output) {
+        let mut output = output.clone();
+        output.remove("decision");
+        output.remove("reason");
+        return ProcessEmission::command_json(contract, &output);
     }
     validate_block_reason(output)?;
     ProcessEmission::command_json(contract, output)
@@ -236,5 +261,22 @@ mod tests {
             ))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn a_blank_block_under_stop_is_left_out_of_the_json() {
+        let contract = ContractId::builtin("codex/test/PostToolUse");
+        let emit = |value: serde_json::Value| {
+            let emission = structured(contract, value.as_object().unwrap()).unwrap();
+            serde_json::from_slice::<serde_json::Value>(emission.stdout()).unwrap()
+        };
+        for blank in [
+            serde_json::json!({"decision":"block","continue":false}),
+            serde_json::json!({"decision":"block","reason":" \n","continue":false}),
+        ] {
+            assert_eq!(emit(blank), serde_json::json!({"continue": false}));
+        }
+        let kept = serde_json::json!({"decision":"block","reason":"why","continue":false});
+        assert_eq!(emit(kept.clone()), kept);
     }
 }

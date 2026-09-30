@@ -455,7 +455,7 @@ fn parse(invocation: &RawInvocation, event: CatalogEvent) -> hookkit_core::Resul
             ));
         }
     }
-    serde_json::from_value(invocation.json().clone()).map_err(Into::into)
+    super::protocol::deserialize_input(invocation, name)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -858,6 +858,8 @@ macro_rules! blocking_event {
             ///
             /// The reason must be non-empty after trimming unless
             /// `continue: false` is also set; this is checked during emission.
+            /// Under `continue: false` a blank block is left out of the JSON,
+            /// since the stop already applies.
             pub fn block(reason: impl Into<String>) -> Self {
                 Self(CatalogOutput::json(CatalogEvent::$event, block(reason)))
             }
@@ -888,7 +890,8 @@ impl UserPromptSubmitOutput {
     /// prompt.
     ///
     /// The reason must be non-empty after trimming unless `continue: false`
-    /// is also set; this is checked during emission.
+    /// is also set; this is checked during emission. Under `continue: false`
+    /// a blank block is left out of the JSON, since the stop already applies.
     pub fn block(reason: impl Into<String>) -> Self {
         Self(CatalogOutput::json(
             CatalogEvent::UserPromptSubmit,
@@ -898,8 +901,10 @@ impl UserPromptSubmitOutput {
 
     /// Blocks the prompt while also appending context for the agent.
     ///
-    /// The reason must be non-empty after trimming unless `continue: false`
-    /// is also set; Codex drops the context together with an invalid block.
+    /// Codex drops the context together with a block whose reason is blank,
+    /// so the reason must be non-empty after trimming; this is checked during
+    /// emission. Under `continue: false`, which stops the turn by itself, a
+    /// blank block is left out of the JSON instead, so the context survives.
     pub fn block_with_context(
         reason: impl Into<String>,
         additional_context: impl Into<String>,
@@ -1293,8 +1298,25 @@ mod tests {
             .with_stop_reason("halt")
             .unwrap();
         assert_eq!(
-            stdout_json(&Stop::emit(stopping).unwrap())["continue"],
-            false
+            stdout_json(&Stop::emit(stopping).unwrap()),
+            serde_json::json!({"continue": false, "stopReason": "halt"})
+        );
+
+        // Regression: Codex discards UserPromptSubmit context whose block
+        // reason is blank, even under `continue: false`; the blank block is
+        // left out so the context survives while the stop still applies.
+        let stopping = UserPromptSubmitOutput::block_with_context("", "clarify first")
+            .with_continue(false)
+            .unwrap();
+        assert_eq!(
+            stdout_json(&UserPromptSubmit::emit(stopping).unwrap()),
+            serde_json::json!({
+                "continue": false,
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": "clarify first"
+                }
+            })
         );
 
         // A blank PermissionRequest deny message is still a denial.

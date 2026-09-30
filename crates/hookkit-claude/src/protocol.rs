@@ -430,7 +430,7 @@ impl EventSpec for SessionStart {
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "SessionStart")?;
-        SessionStartInput::deserialize(invocation.json()).map_err(Into::into)
+        deserialize_input(invocation, "SessionStart")
     }
 
     fn emit(output: Self::CommandOutput) -> hookkit_core::Result<ProcessEmission> {
@@ -696,14 +696,21 @@ impl PostToolUseOutput {
     ///
     /// Claude Code reads JSON on every exit code, so the structured fields
     /// still apply, and it shows `message` to Claude as feedback. The tool
-    /// has already run, so nothing is blocked. `message` must be non-empty.
-    /// No field can be added afterwards.
+    /// has already run, so nothing is blocked. `message` may be empty only
+    /// when the response makes a `block` decision, whose `reason` is then the
+    /// feedback; otherwise an empty `message` is rejected here, so the
+    /// handler can still choose another response. No field can be added
+    /// afterwards.
     pub fn into_feedback_error(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
         let output =
             self.into_successful("only a successful structured response can exit 2 with stdout")?;
+        let stderr = message.into();
+        if stderr.is_empty() && !output.blocks() {
+            return Err(empty_feedback_error());
+        }
         Ok(Self(PostToolUseOutcome::StructuredFeedback {
             output: Box::new(output),
-            stderr: message.into(),
+            stderr,
         }))
     }
 
@@ -818,6 +825,20 @@ impl PostToolUseOutput {
     }
 }
 
+impl PostToolUseOutcome {
+    /// Reports whether a successful outcome makes a `block` decision, whose
+    /// reason Claude Code uses as the exit-2 feedback.
+    fn blocks(&self) -> bool {
+        matches!(self, Self::Structured(output) if output.decision == Some("block"))
+    }
+}
+
+fn empty_feedback_error() -> hookkit_core::HookkitError {
+    hookkit_core::HookkitError::InvalidProcessEmission(
+        "an exit-2 response needs a non-empty message unless its JSON makes a blocking decision",
+    )
+}
+
 fn emit_post_tool_use(outcome: PostToolUseOutcome) -> hookkit_core::Result<ProcessEmission> {
     let contract = PostToolUse::CONTRACT;
     match outcome {
@@ -844,10 +865,8 @@ fn emit_post_tool_use(outcome: PostToolUseOutcome) -> hookkit_core::Result<Proce
             ))
         }
         PostToolUseOutcome::StructuredFeedback { output, stderr } => {
-            if stderr.is_empty() {
-                return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                    "protocol outcome requires non-empty stderr",
-                ));
+            if stderr.is_empty() && !output.blocks() {
+                return Err(empty_feedback_error());
             }
             let emission = emit_post_tool_use(*output)?;
             if emission.exit_code() != 0 {
@@ -880,7 +899,7 @@ impl EventSpec for PostToolUse {
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "PostToolUse")?;
-        let input = PostToolUseInput::deserialize(invocation.json())?;
+        let input: PostToolUseInput = deserialize_input(invocation, "PostToolUse")?;
         if input.duration_ms.is_some_and(|duration| duration < 0.0) {
             return Err(invalid_input(
                 "PostToolUse",
@@ -1056,7 +1075,7 @@ impl EventSpec for WorktreeCreate {
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         require_event(invocation, "WorktreeCreate")?;
-        let input = WorktreeCreateInput::deserialize(invocation.json())?;
+        let input: WorktreeCreateInput = deserialize_input(invocation, "WorktreeCreate")?;
         if input.session_id.is_empty() || input.cwd.as_str().is_empty() || input.name.is_empty() {
             return Err(invalid_input(
                 "WorktreeCreate",
@@ -1132,6 +1151,19 @@ pub(crate) fn invalid_input(
         event: EventId::builtin(HarnessId::CLAUDE_CODE, event),
         message: message.into(),
     }
+}
+
+/// Deserializes the typed input of `event` after its discriminator matched.
+///
+/// A payload that violates the event's shape (a missing or mistyped field)
+/// is reported as [`hookkit_core::HookkitError::InvalidInputForHint`], as
+/// the required-field checks report it and as the Codex and Antigravity
+/// parsers do; only a discriminator mismatch is `InvalidForHint`.
+pub(crate) fn deserialize_input<'de, T: Deserialize<'de>>(
+    invocation: &'de RawInvocation,
+    event: &'static str,
+) -> hookkit_core::Result<T> {
+    T::deserialize(invocation.json()).map_err(|error| invalid_input(event, error.to_string()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1688,8 +1720,25 @@ mod tests {
             "ctx"
         );
 
-        let empty = PostToolUseOutput::no_op().into_feedback_error("").unwrap();
-        assert!(PostToolUse::emit(empty).is_err());
+        // Without a block decision stderr is the only feedback, so an empty
+        // message is rejected when the response is built, not at emission.
+        assert!(PostToolUseOutput::no_op().into_feedback_error("").is_err());
+        assert!(
+            PostToolUseOutput::with_context("ctx")
+                .into_feedback_error("")
+                .is_err()
+        );
+
+        // With a block decision its reason is the feedback, and the snapshot
+        // allows exit 2 with empty stderr next to JSON.
+        let emission = PostToolUse::emit(
+            PostToolUseOutput::block("lint failed")
+                .into_feedback_error("")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!((emission.exit_code(), emission.stderr()), (2, &b""[..]));
+        assert_eq!(stdout_json(&emission)["reason"], "lint failed");
     }
 
     #[test]

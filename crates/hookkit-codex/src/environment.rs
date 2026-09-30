@@ -52,10 +52,11 @@ pub struct CodexCommandEnvironment {
 impl CodexCommandEnvironment {
     /// Parses Codex's declared hook variables for `event`.
     ///
-    /// Partial plugin variable sets are ignored because a hook's environment
-    /// replays Codex's own process environment, which can carry unrelated
-    /// ambient values. A complete set must contain non-empty canonical values
-    /// and matching Claude-compatible aliases.
+    /// A hook's environment replays Codex's own process environment, which
+    /// can carry unrelated ambient values, so only a plugin set Codex itself
+    /// could have written counts: all four variables, non-empty canonical
+    /// values, and Claude-compatible aliases equal to them. Any other set
+    /// (partial, empty, or with disagreeing aliases) yields no plugin.
     pub fn from_map(
         event: &EventId,
         variables: &EnvironmentVariables,
@@ -112,17 +113,14 @@ impl CommandEnvironmentSpec for CodexCommandEnvironment {
         let [Some(root), Some(data), Some(claude_root), Some(claude_data)] = values else {
             unreachable!("presence was checked above")
         };
-        if root.is_empty() || data.is_empty() {
-            return Err(invalid(
-                event,
-                "plugin root and data paths must not be empty",
-            ));
-        }
-        if root != claude_root || data != claude_data {
-            return Err(invalid(
-                event,
-                "Claude-compatible plugin path aliases must match the canonical Codex values",
-            ));
+        if root.is_empty() || data.is_empty() || root != claude_root || data != claude_data {
+            // For a plugin hook Codex writes all four variables from the same
+            // non-empty `Path::display` strings over the replayed snapshot,
+            // so an empty or disagreeing complete set can only be ambient
+            // state (for example an outer Codex plugin hook and a Claude Code
+            // plugin hook in the launch chain). Failing here would fail every
+            // ordinary hook of the session.
+            return Ok(Self::default());
         }
 
         Ok(Self {
@@ -131,13 +129,6 @@ impl CommandEnvironmentSpec for CodexCommandEnvironment {
                 data: data.into(),
             }),
         })
-    }
-}
-
-fn invalid(event: &EventId, message: impl Into<String>) -> HookkitError {
-    HookkitError::InvalidHookEnvironment {
-        event: event.clone(),
-        message: message.into(),
     }
 }
 
@@ -232,14 +223,31 @@ mod tests {
     }
 
     #[test]
-    fn complete_conflicting_plugin_state_is_rejected() {
-        let conflicting = EnvironmentVariables::from_pairs([
-            ("PLUGIN_ROOT", "/plugins/demo"),
-            ("PLUGIN_DATA", "/data/demo"),
-            ("CLAUDE_PLUGIN_ROOT", "/other"),
-            ("CLAUDE_PLUGIN_DATA", "/data/demo"),
-        ]);
-        assert!(CodexCommandEnvironment::from_map(&event("Stop"), &conflicting).is_err());
+    fn complete_but_inconsistent_plugin_state_is_ambient_and_ignored() {
+        // Regression: such a set failed every ordinary hook with
+        // InvalidHookEnvironment, although Codex never writes one for a
+        // plugin hook.
+        for (root, data, claude_root, claude_data) in [
+            ("/plugins/demo", "/data/demo", "/other", "/data/demo"),
+            ("/plugins/demo", "/data/demo", "/plugins/demo", "/other"),
+            ("", "", "", ""),
+            ("", "/data/demo", "", "/data/demo"),
+            ("/plugins/demo", "", "/plugins/demo", ""),
+        ] {
+            let variables = EnvironmentVariables::from_pairs([
+                ("PLUGIN_ROOT", root),
+                ("PLUGIN_DATA", data),
+                ("CLAUDE_PLUGIN_ROOT", claude_root),
+                ("CLAUDE_PLUGIN_DATA", claude_data),
+            ]);
+            for name in EVENTS {
+                assert_eq!(
+                    CodexCommandEnvironment::from_map(&event(name), &variables).unwrap(),
+                    CodexCommandEnvironment::default(),
+                    "{name}: {root:?} {data:?} {claude_root:?} {claude_data:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::catalog::{
     CatalogOutput, block_builders, blocking_error, context_builders, into_blocking_error, no_op,
     nonblocking_error, text_context, universal_builders,
 };
-use crate::protocol::{SNAPSHOT_ID, contract_id, invalid_input, require_event};
+use crate::protocol::{SNAPSHOT_ID, contract_id, deserialize_input, invalid_input, require_event};
 use crate::values::{CacheTtl, Effort, ModelSwitchPricing, ModelSwitchSource, PermissionMode};
 
 /// Native input shared by `PreModelSwitch` and `PostModelSwitch`.
@@ -89,7 +89,7 @@ fn parse_model_switch(
     event: &'static str,
 ) -> hookkit_core::Result<ModelSwitchInput> {
     require_event(invocation, event)?;
-    let input = ModelSwitchInput::deserialize(invocation.json())?;
+    let input: ModelSwitchInput = deserialize_input(invocation, event)?;
     if input.estimated_cache_write_usd < 0.0 {
         return Err(invalid_input(
             event,
