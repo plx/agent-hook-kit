@@ -48,6 +48,8 @@
 All three harnesses moved to new frozen contract snapshots, selected together
 with command-environment supplement `command-environments-2026-09-30-r1`. The
 selection now covers 50 events: 33 Claude Code, 12 Codex, and 5 Antigravity.
+The [second review pass](#second-review-pass) below replaced these snapshots
+and the supplement with corrected 2026-09-30 successors.
 Audits: `planning/audits/2026-09-29-claude-code-hooks.md`,
 `planning/audits/2026-09-29-codex-hooks.md`, and
 `planning/audits/2026-09-29-antigravity-hooks.md`.
@@ -461,6 +463,147 @@ Audits: `planning/audits/2026-09-29-claude-code-hooks.md`,
     constructors, and tells Claude Code users to bind the file-activity
     command to `PostToolUseFailure` too.
   - `THIRD_PARTY_LICENSES.md` includes the runner's `clap` dependencies.
+
+### Second review pass
+
+A second review of the refresh above fixed the findings below and replaced
+the three snapshots with frozen successors. The registry now selects
+`claude-code/docs-2026-09-30-r1`, `codex/commit-ff6aec9-r2`, and
+`antigravity/docs-2026-09-30-r1`, with supplement
+`command-environments-2026-09-30-r2` (same 33/12/5 events and profiles).
+Audits: `planning/audits/2026-09-30-{claude-code,codex,antigravity}-hooks.md`.
+
+- **Contracts:**
+  - Claude Code pins the hooks reference that extends
+    `suppressOriginalPrompt` to exit-2 blocks. `UserPromptExpansion`
+    `command_source` is optional and the event accepts the SDK-typed
+    `suppressOriginalPrompt`. New exit-0 `no-op` and `plain-text` outcomes,
+    exact exit-2 outcomes for the notice events and `MessageDisplay`, HTTP
+    failures that follow each event's failure contract, `reason` required
+    with a `Stop`/`SubagentStop` block, and open `permission_mode` and
+    `effort.level`.
+  - Codex `-r2` corrects `-r1`'s reading of the same source:
+    `PermissionRequest` reserved fields discard the whole decision,
+    `PreCompact`/`PostCompact` `continue: false` aborts the turn, and
+    `PostToolUse` `continue: false` replaces the tool result while the turn
+    continues. The generator still reproduces `-r1`.
+  - Antigravity records the CLI changelog's raw URL and allows a missing or
+    `null` `toolCall.args`.
+  - The supplement's Claude changelog evidence now cites the entries that add
+    `CLAUDE_PROJECT_DIR`, `CLAUDE_PLUGIN_DATA`, and `CLAUDE_EFFORT`.
+  - Tooling: GitHub file pages are hashed through their raw URL, new
+    evidence may not hash a `github.com` URL, reviewed hash drift is reported
+    as acknowledged, and `FROZEN_LEDGER` keeps superseded snapshots and
+    supplements from being unfrozen.
+- **hookkit-claude / hookkit-codex / hookkit-antigravity:**
+  - Claude `into_blocking_error`/`into_feedback_error` accept an empty
+    message only next to a blocking JSON decision and otherwise fail when
+    the response is built, not at emission (which exited 1 and dropped the
+    block). `TeammateIdle` no longer requires `team_name`. New
+    `UserPromptExpansionOutput::with_suppress_original_prompt`. Docs now say
+    that `Stop`/`SubagentStop` `with_context` keeps Claude working, and that
+    a blocked prompt's message keeps its text unless
+    `suppressOriginalPrompt` is set.
+  - Codex: a blank block under `continue: false` is left out of the JSON; an
+    empty or inconsistent plugin variable set is ambient state instead of
+    failing every hook; `PostToolUse`, `PreCompact`, and `PostCompact`
+    document what `continue: false` does.
+  - Antigravity: `ToolCall.args` may be missing or `null`; each form reads as
+    an empty map and re-serializes as sent. `Event`, `AnyInput`, and
+    `AnyCommandOutput` are `#[non_exhaustive]`.
+  - Every schema violation of a known event is `InvalidInputForHint`.
+- **hookkit-runtime and examples:**
+  - Failures are lowered for the event the harness sent (resolved event, then
+    payload `hook_event_name`, then hint), so a misregistered guard neither
+    lets `PreToolUse` through nor forces every `Stop` on. A panicking
+    `DiagnosticsSink` no longer exits 101. Caught panics print one stderr
+    line. The aligned runner lowers the `claude` alias like `claude-code`.
+  - `codex-bash-guard` denies commands it cannot inspect and sees through
+    wrappers, option clusters (`bash -lc`), and here-documents.
+    `forbidden-file-guard` blocks on argument errors, covers `PowerShell` and
+    `Monitor` under `deny_all_shell`, and keeps worktrees covered.
+    `shared-posttool-autofix` runs in the workspace that holds the edited
+    file.
+- **hookkit-shell:** grep/rg `-e`/`-f` make every positional a path;
+  substitutions inside `${...}` operands are re-parsed; `{,}` is dynamic; new
+  `IncompleteReason::ReevaluatedText` and `HereDocumentBoundary`; `<>` is
+  `RedirectionOperator::ReadWrite`; zsh `>!` targets survive through
+  `Redirection::trailing_words`; `~+` resolves; common options of `cat`,
+  `touch`, `du`, `mkdir`, and others are parsed.
+- **hookkit-tool-access / hookkit-file-activity:** wrapped `apply_patch`
+  (`sudo`, `env`, `timeout`, ...) is analyzed; the patch comes from its
+  argument (new `ShellPatchArgument` provenance) or its final standard input,
+  so a later `<`, `<>`, `<&-`, pipe, or other descriptor records a gap
+  instead of trusting a decoy here-document; dynamic unquoted bodies are gaps
+  unless Codex intercepts the script; `cd` chains Bash may skip leave the
+  directory unresolved. Claude `Grep` splits `glob` lists and `Glob` matches
+  slash-free patterns at any depth. `manage_task send_input` and Codex
+  `read_mcp_resource` are gaps. Destination- and source-style keys count for
+  write- and read-like tools. Paths resolved against the session directory
+  are `Heuristic` evidence with a coverage gap.
+- **Runners:** tools die with the hook (a watchdog leads each process group)
+  and `settings.runTimeoutSeconds` (default 540) bounds an invocation;
+  `pkl eval` is bounded. Hard-failure and configuration errors reach Claude
+  Code and Codex users through an exit-0 `systemMessage`. Configuration is
+  discovered from the Claude project or entered worktree. `jq` and
+  `invocation = "per-file"` phases check files one at a time. Stop reports
+  persistent gaps once, baselines unchecked files, drops undeliverable
+  built-in text silently, records results of an allowed Stop that fails
+  strict lowering, adds an `unavailableTool` bucket and an `incomplete`
+  status, caps continuation chains at eight, and never continues an
+  Antigravity `max_steps_exceeded`/`error` Stop.
+- **hookkit-session-state:** new `StateRoot::per_user` and
+  `StateRoot::prepare` (ownership checked down to the root); `gc` works under
+  the session's metadata lock and skips busy sessions; record-journal batches
+  pin up to 64 captured files so a re-append cannot alias; entity descriptors
+  keep their mode without hard links.
+- **Template:** an opt-in `pinned` lane compiles renders against the pinned
+  HookKit revision (run by `scripts/release-check.sh`); the default answers
+  render again; generated state defaults to a checked per-user root; a
+  guard-only policy guard fails closed on argument errors; the Claude
+  `WorktreeRemove` starter must be implemented before registration.
+
+#### BREAKING changes in the second pass
+
+- Protocol crates: contract ids name the 2026-09-30 successors. Claude
+  `into_blocking_error`/`into_feedback_error` reject an empty message without
+  a blocking decision; Codex treats a partial or inconsistent plugin variable
+  set as absent; Antigravity `Event`, `AnyInput`, and `AnyCommandOutput` are
+  `#[non_exhaustive]`.
+- hookkit-runtime: failures follow the sent event's exit semantics;
+  `FailureResponse::fails_closed()` is true for Claude `WorktreeCreate`/
+  `WorktreeRemove` exit 1; a process-wide quiet panic hook is installed;
+  `AlignedEventSpec` gains `execute_invocation_with_diagnostics`; new
+  `RawInvocation::MAX_NESTING_DEPTH`.
+- hookkit-shell: some `Complete` reports are now `Partial`, and an option
+  after an operand also yields the BSD-order operand candidates.
+- hookkit-tool-access: `manage_task` without a file-free action and
+  `read_mcp_resource` are gaps; slash-free Claude `Glob` patterns resolve to
+  `<root>/**/<pattern>`; `MissingShellPatchHereDocument` also covers
+  non-here-document input and its message changed.
+- hookkit-file-activity: a `PathBase::SessionCwd` candidate is `Heuristic`
+  and adds a coverage gap, which `coverageGapPolicy = "strict"` blocks on.
+- Runners and hookkit-pkl-config: hard-failure and configuration errors exit
+  0 with an `error:` `systemMessage` on Claude Code and Codex; `summary.json`
+  v2 gains `incomplete`, `continuationCapReached`, `consecutiveBlocks`,
+  `previouslyReportedGaps`, and `unavailable_tool`; an allowed Stop that fails
+  strict lowering acknowledges its window; new public fields
+  (`Settings.run_timeout_seconds`, `Phase.invocation`,
+  `DeferredReporting.unavailable_tool`) and `PklConfigError::PklTimedOut`; a
+  Claude session in a linked worktree uses that worktree as its root.
+- hookkit-session-state: `gc` never collects a session younger than 30 s or
+  one whose metadata lock is busy; record-journal batches hold up to 64 open
+  files on Unix.
+- xtask: `contracts upstream-sources` rows have 11 columns; a frozen snapshot
+  or supplement must be in `FROZEN_LEDGER` before the registry stops
+  selecting it.
+- Generated projects: `resolve_state_root` takes `(context, override_dir)`
+  and returns `Result<StateRoot>`; `default_state_root()` and
+  `runner_state_dir(Option<PathBuf>)` replace the old helpers; a guard-only
+  policy guard exits 2 (or denies on Antigravity) on argument errors.
+- Examples: `forbidden-file-guard` argument errors exit 2 (or deny on
+  Antigravity); `codex-bash-guard` denies commands it cannot inspect,
+  including bare, piped, or stdin-fed shells.
 
 This is an intentional pre-1.0 protocol API reboot. Event-scoped output types are
 the supported surface.
