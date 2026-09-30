@@ -1,8 +1,8 @@
 format_version: 1
 events:
-  - contract: claude-code/docs-2026-08-05-r1/ConfigChange
+  - contract: claude-code/docs-2026-09-29-r1/ConfigChange
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: ConfigChange
     stable_id: config_change
     display_name: Configuration change
@@ -12,13 +12,13 @@ events:
     rust_output: hookkit_claude::catalog::ConfigChangeOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: ConfigChange }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::ConfigChangeOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/config-change/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/config-change/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Observe or reject a native configuration change." }
 
-  - contract: claude-code/docs-2026-08-05-r1/CwdChanged
+  - contract: claude-code/docs-2026-09-29-r1/CwdChanged
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: CwdChanged
     stable_id: cwd_changed
     display_name: Working directory changed
@@ -28,13 +28,13 @@ events:
     rust_output: hookkit_claude::catalog::CwdChangedOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: CwdChanged }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::CwdChangedOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/cwd-changed/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/cwd-changed/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Observe old and new working directories and optionally replace watch paths." }
 
-  - contract: claude-code/docs-2026-08-05-r1/DirectoryAdded
+  - contract: claude-code/docs-2026-09-29-r1/DirectoryAdded
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: DirectoryAdded
     stable_id: directory_added
     display_name: Directory added
@@ -44,13 +44,13 @@ events:
     rust_output: hookkit_claude::catalog::DirectoryAddedOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: DirectoryAdded }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::DirectoryAddedOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/directory-added/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/directory-added/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Retains the refreshed directory path and native source fields." }
 
-  - contract: claude-code/docs-2026-08-05-r1/Elicitation
+  - contract: claude-code/docs-2026-09-29-r1/Elicitation
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: Elicitation
     stable_id: elicitation
     display_name: Elicitation
@@ -60,13 +60,13 @@ events:
     rust_output: hookkit_claude::catalog::ElicitationOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: Elicitation }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::ElicitationOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/elicitation/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/elicitation/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "May accept, decline, cancel, or leave an MCP elicitation unchanged." }
+    support: { status: scaffolded, note: "May accept, decline, cancel, or leave an MCP elicitation unchanged; decision block declines like exit 2." }
 
-  - contract: claude-code/docs-2026-08-05-r1/ElicitationResult
+  - contract: claude-code/docs-2026-09-29-r1/ElicitationResult
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: ElicitationResult
     stable_id: elicitation_result
     display_name: Elicitation result
@@ -76,13 +76,13 @@ events:
     rust_output: hookkit_claude::catalog::ElicitationResultOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: ElicitationResult }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::ElicitationResultOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/elicitation-result/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/elicitation-result/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: true, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "May replace the native MCP elicitation result." }
+    support: { status: scaffolded, note: "May replace the native MCP elicitation result; decision block declines like exit 2." }
 
-  - contract: claude-code/docs-2026-08-05-r1/FileChanged
+  - contract: claude-code/docs-2026-09-29-r1/FileChanged
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: FileChanged
     stable_id: file_changed
     display_name: File changed
@@ -92,13 +92,13 @@ events:
     rust_output: hookkit_claude::catalog::FileChangedOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: FileChanged }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::FileChangedOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/file-changed/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/file-changed/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Observe a watched file change and optionally replace watch paths." }
 
-  - contract: claude-code/docs-2026-08-05-r1/InstructionsLoaded
+  - contract: claude-code/docs-2026-09-29-r1/InstructionsLoaded
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: InstructionsLoaded
     stable_id: instructions_loaded
     display_name: Instructions loaded
@@ -108,13 +108,13 @@ events:
     rust_output: hookkit_claude::catalog::InstructionsLoadedOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: InstructionsLoaded }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::InstructionsLoadedOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/instructions-loaded/fixtures.yaml, case: representative }
-    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "Observe native instruction loading metadata." }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/instructions-loaded/fixtures.yaml, case: representative }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
+    support: { status: scaffolded, note: "Observe native instruction loading metadata; Claude Code discards the output." }
 
-  - contract: claude-code/docs-2026-08-05-r1/MessageDisplay
+  - contract: claude-code/docs-2026-09-29-r1/MessageDisplay
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: MessageDisplay
     stable_id: message_display
     display_name: Message display
@@ -124,13 +124,13 @@ events:
     rust_output: hookkit_claude::catalog::MessageDisplayOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: MessageDisplay }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::MessageDisplayOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/message-display/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/message-display/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: true, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "May replace streamed display content." }
 
-  - contract: claude-code/docs-2026-08-05-r1/Notification
+  - contract: claude-code/docs-2026-09-29-r1/Notification
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: Notification
     stable_id: notification
     display_name: Notification
@@ -140,13 +140,13 @@ events:
     rust_output: hookkit_claude::catalog::NotificationOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: Notification }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::NotificationOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/notification/fixtures.yaml, case: representative }
-    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "Observe a Claude Code notification." }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/notification/fixtures.yaml, case: representative }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
+    support: { status: scaffolded, note: "Observe a Claude Code notification; only a terminal sequence in the output has an effect." }
 
-  - contract: claude-code/docs-2026-08-05-r1/PermissionDenied
+  - contract: claude-code/docs-2026-09-29-r1/PermissionDenied
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PermissionDenied
     stable_id: permission_denied
     display_name: Permission denied
@@ -156,13 +156,13 @@ events:
     rust_output: hookkit_claude::catalog::PermissionDeniedOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PermissionDenied }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::PermissionDeniedOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/permission-denied/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/permission-denied/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "May request a retry after native permission denial." }
 
-  - contract: claude-code/docs-2026-08-05-r1/PermissionRequest
+  - contract: claude-code/docs-2026-09-29-r1/PermissionRequest
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PermissionRequest
     stable_id: permission_request
     display_name: Permission request
@@ -172,14 +172,14 @@ events:
     rust_output: hookkit_claude::catalog::PermissionRequestOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PermissionRequest }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::PermissionRequestOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/permission-request/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/permission-request/fixtures.yaml, case: representative }
     aligned_family: permission_request
     capabilities: { input_rewrite: true, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "Native decisions may also rewrite input and permission rules." }
+    support: { status: scaffolded, note: "Native decisions may also rewrite input and permission rules; exit 2 no longer denies, so deny through the JSON decision." }
 
-  - contract: claude-code/docs-2026-08-05-r1/PostCompact
+  - contract: claude-code/docs-2026-09-29-r1/PostCompact
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PostCompact
     stable_id: post_compact
     display_name: After compaction
@@ -189,14 +189,30 @@ events:
     rust_output: hookkit_claude::catalog::PostCompactOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PostCompact }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::PostCompactOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/post-compact/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/post-compact/fixtures.yaml, case: representative }
     aligned_family: post_compact
-    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "Carries Claude's compact summary in addition to the portable observer floor." }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
+    support: { status: scaffolded, note: "Carries Claude's compact summary in addition to the portable observer floor; Claude Code discards the output." }
 
-  - contract: claude-code/docs-2026-08-05-r1/PostToolBatch
+  - contract: claude-code/docs-2026-09-29-r1/PostModelSwitch
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
+    wire_event: PostModelSwitch
+    stable_id: post_model_switch
+    display_name: After model switch
+    category: model
+    order: 125
+    rust_event: hookkit_claude::model_switch::PostModelSwitch
+    rust_output: hookkit_claude::model_switch::PostModelSwitchOutput
+    selector: { rust_type: hookkit_claude::protocol::Event, variant: PostModelSwitch }
+    starter: { strategy: no_op, expression: "hookkit_claude::model_switch::PostModelSwitchOutput::no_op()" }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/post-model-switch/fixtures.yaml, case: representative }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
+    support: { status: scaffolded, note: "Observe a completed model change and add model-specific agent context; it cannot block." }
+
+  - contract: claude-code/docs-2026-09-29-r1/PostToolBatch
+    harness: claude-code
+    snapshot: docs-2026-09-29-r1
     wire_event: PostToolBatch
     stable_id: post_tool_batch
     display_name: After tool batch
@@ -206,13 +222,13 @@ events:
     rust_output: hookkit_claude::catalog::PostToolBatchOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PostToolBatch }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::PostToolBatchOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/post-tool-batch/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/post-tool-batch/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: false, tool_result: true, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "Post-action block-shaped output is feedback and does not roll back the batch." }
 
-  - contract: claude-code/docs-2026-08-05-r1/PostToolUse
+  - contract: claude-code/docs-2026-09-29-r1/PostToolUse
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PostToolUse
     stable_id: post_tool_use
     display_name: After tool use
@@ -222,14 +238,14 @@ events:
     rust_output: hookkit_claude::protocol::PostToolUseOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PostToolUse }
     starter: { strategy: no_op, expression: "hookkit_claude::protocol::PostToolUseOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/post-tool-use/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/post-tool-use/fixtures.yaml, case: representative }
     aligned_family: post_tool
     capabilities: { input_rewrite: true, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: false, tool_result: true, separate_user_agent_messages: true, session_boundary: none }
-    support: { status: scaffolded, note: "Exit 2 provides post-action feedback; it never blocks or rolls back the completed call." }
+    support: { status: scaffolded, note: "Exit 2 provides post-action feedback; it never blocks or rolls back the completed call. Supports classifier context." }
 
-  - contract: claude-code/docs-2026-08-05-r1/PostToolUseFailure
+  - contract: claude-code/docs-2026-09-29-r1/PostToolUseFailure
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PostToolUseFailure
     stable_id: post_tool_use_failure
     display_name: Tool use failed
@@ -239,13 +255,13 @@ events:
     rust_output: hookkit_claude::catalog::PostToolUseFailureOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PostToolUseFailure }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::PostToolUseFailureOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/post-tool-use-failure/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/post-tool-use-failure/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "Feedback occurs only after the tool has already failed." }
 
-  - contract: claude-code/docs-2026-08-05-r1/PreCompact
+  - contract: claude-code/docs-2026-09-29-r1/PreCompact
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PreCompact
     stable_id: pre_compact
     display_name: Before compaction
@@ -255,14 +271,30 @@ events:
     rust_output: hookkit_claude::catalog::PreCompactOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PreCompact }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::PreCompactOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/pre-compact/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/pre-compact/fixtures.yaml, case: representative }
     aligned_family: pre_compact
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Native Claude output can block compaction; the portable family is observer-only." }
 
-  - contract: claude-code/docs-2026-08-05-r1/PreToolUse
+  - contract: claude-code/docs-2026-09-29-r1/PreModelSwitch
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
+    wire_event: PreModelSwitch
+    stable_id: pre_model_switch
+    display_name: Before model switch
+    category: model
+    order: 165
+    rust_event: hookkit_claude::model_switch::PreModelSwitch
+    rust_output: hookkit_claude::model_switch::PreModelSwitchOutput
+    selector: { rust_type: hookkit_claude::protocol::Event, variant: PreModelSwitch }
+    starter: { strategy: no_op, expression: "hookkit_claude::model_switch::PreModelSwitchOutput::no_op()" }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/pre-model-switch/fixtures.yaml, case: representative }
+    capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
+    support: { status: scaffolded, note: "May allow, ask to confirm, or block a requested model switch, and report its re-cache cost to the user." }
+
+  - contract: claude-code/docs-2026-09-29-r1/PreToolUse
+    harness: claude-code
+    snapshot: docs-2026-09-29-r1
     wire_event: PreToolUse
     stable_id: pre_tool_use
     display_name: Before tool use
@@ -272,14 +304,14 @@ events:
     rust_output: hookkit_claude::catalog::PreToolUseOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PreToolUse }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::PreToolUseOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/pre-tool-use/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/pre-tool-use/fixtures.yaml, case: representative }
     aligned_family: pre_tool
     capabilities: { input_rewrite: true, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "Supports allow, deny, ask, defer, replacement input, and context." }
 
-  - contract: claude-code/docs-2026-08-05-r1/SessionEnd
+  - contract: claude-code/docs-2026-09-29-r1/SessionEnd
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: SessionEnd
     stable_id: session_end
     display_name: Session end
@@ -289,14 +321,14 @@ events:
     rust_output: hookkit_claude::catalog::SessionEndOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: SessionEnd }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::SessionEndOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/session-end/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/session-end/fixtures.yaml, case: representative }
     aligned_family: session_end
-    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: exact }
-    support: { status: scaffolded, note: "Observer floor retains the exact session-end boundary and native reason." }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: exact }
+    support: { status: scaffolded, note: "Observer floor retains the exact session-end boundary and native reason; Claude Code discards the output." }
 
-  - contract: claude-code/docs-2026-08-05-r1/SessionStart
+  - contract: claude-code/docs-2026-09-29-r1/SessionStart
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: SessionStart
     stable_id: session_start
     display_name: Session start
@@ -306,14 +338,14 @@ events:
     rust_output: hookkit_claude::protocol::SessionStartOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: SessionStart }
     starter: { strategy: no_op, expression: "hookkit_claude::protocol::SessionStartOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/session-start/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/session-start/fixtures.yaml, case: representative }
     aligned_family: session_start
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: exact }
     support: { status: scaffolded, note: "Retains source=fork, worktree paths, title, watch paths, skills, and native context controls." }
 
-  - contract: claude-code/docs-2026-08-05-r1/Setup
+  - contract: claude-code/docs-2026-09-29-r1/Setup
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: Setup
     stable_id: setup
     display_name: Setup
@@ -323,13 +355,13 @@ events:
     rust_output: hookkit_claude::catalog::SetupOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: Setup }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::SetupOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/setup/fixtures.yaml, case: representative }
-    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: true, session_boundary: inferred }
-    support: { status: scaffolded, note: "Claude-specific setup observation and context injection." }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/setup/fixtures.yaml, case: representative }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: inferred }
+    support: { status: scaffolded, note: "Observe setup; Claude Code discards Setup JSON output, so persist environment through CLAUDE_ENV_FILE instead." }
 
-  - contract: claude-code/docs-2026-08-05-r1/Stop
+  - contract: claude-code/docs-2026-09-29-r1/Stop
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: Stop
     stable_id: stop
     display_name: Turn completion
@@ -339,14 +371,14 @@ events:
     rust_output: hookkit_claude::catalog::StopOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: Stop }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::StopOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/stop/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/stop/fixtures.yaml, case: representative }
     aligned_family: turn_completion
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "May permit completion, block with a reason, or append agent context." }
 
-  - contract: claude-code/docs-2026-08-05-r1/StopFailure
+  - contract: claude-code/docs-2026-09-29-r1/StopFailure
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: StopFailure
     stable_id: stop_failure
     display_name: Stop failure
@@ -356,13 +388,13 @@ events:
     rust_output: hookkit_claude::catalog::StopFailureOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: StopFailure }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::StopFailureOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/stop-failure/fixtures.yaml, case: representative }
-    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "Observe a failed stop attempt." }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/stop-failure/fixtures.yaml, case: representative }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
+    support: { status: scaffolded, note: "Observe a turn that ended in an API error; only a terminal sequence in the output has an effect." }
 
-  - contract: claude-code/docs-2026-08-05-r1/SubagentStart
+  - contract: claude-code/docs-2026-09-29-r1/SubagentStart
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: SubagentStart
     stable_id: subagent_start
     display_name: Subagent start
@@ -372,14 +404,14 @@ events:
     rust_output: hookkit_claude::catalog::SubagentStartOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: SubagentStart }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::SubagentStartOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/subagent-start/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/subagent-start/fixtures.yaml, case: representative }
     aligned_family: subagent_start
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "Portable behavior observes the subagent and may add context." }
 
-  - contract: claude-code/docs-2026-08-05-r1/SubagentStop
+  - contract: claude-code/docs-2026-09-29-r1/SubagentStop
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: SubagentStop
     stable_id: subagent_stop
     display_name: Subagent stop
@@ -389,14 +421,14 @@ events:
     rust_output: hookkit_claude::catalog::SubagentStopOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: SubagentStop }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::SubagentStopOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/subagent-stop/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/subagent-stop/fixtures.yaml, case: representative }
     aligned_family: subagent_stop
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "May observe or block subagent completion with native context." }
 
-  - contract: claude-code/docs-2026-08-05-r1/TaskCompleted
+  - contract: claude-code/docs-2026-09-29-r1/TaskCompleted
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: TaskCompleted
     stable_id: task_completed
     display_name: Task completed
@@ -406,13 +438,13 @@ events:
     rust_output: hookkit_claude::catalog::TaskCompletedOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: TaskCompleted }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::TaskCompletedOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/task-completed/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/task-completed/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "May reject task completion using Claude's native exit-2 contract." }
 
-  - contract: claude-code/docs-2026-08-05-r1/TaskCreated
+  - contract: claude-code/docs-2026-09-29-r1/TaskCreated
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: TaskCreated
     stable_id: task_created
     display_name: Task created
@@ -422,13 +454,13 @@ events:
     rust_output: hookkit_claude::catalog::TaskCreatedOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: TaskCreated }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::TaskCreatedOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/task-created/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/task-created/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "May reject task creation using Claude's native exit-2 contract." }
+    support: { status: scaffolded, note: "May reject task creation with decision block or exit 2; Claude Code discards continue on this event." }
 
-  - contract: claude-code/docs-2026-08-05-r1/TeammateIdle
+  - contract: claude-code/docs-2026-09-29-r1/TeammateIdle
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: TeammateIdle
     stable_id: teammate_idle
     display_name: Teammate idle
@@ -438,13 +470,13 @@ events:
     rust_output: hookkit_claude::catalog::TeammateIdleOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: TeammateIdle }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::TeammateIdleOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/teammate-idle/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/teammate-idle/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "May reject the native teammate-idle transition." }
 
-  - contract: claude-code/docs-2026-08-05-r1/UserPromptExpansion
+  - contract: claude-code/docs-2026-09-29-r1/UserPromptExpansion
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: UserPromptExpansion
     stable_id: user_prompt_expansion
     display_name: User prompt expansion
@@ -454,13 +486,13 @@ events:
     rust_output: hookkit_claude::catalog::UserPromptExpansionOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: UserPromptExpansion }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::UserPromptExpansionOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/user-prompt-expansion/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/user-prompt-expansion/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: true, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "May block expanded prompts while adding agent context." }
 
-  - contract: claude-code/docs-2026-08-05-r1/UserPromptSubmit
+  - contract: claude-code/docs-2026-09-29-r1/UserPromptSubmit
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: UserPromptSubmit
     stable_id: user_prompt_submit
     display_name: User prompt submitted
@@ -470,14 +502,14 @@ events:
     rust_output: hookkit_claude::catalog::UserPromptSubmitOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: UserPromptSubmit }
     starter: { strategy: no_op, expression: "hookkit_claude::catalog::UserPromptSubmitOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/user-prompt-submit/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/user-prompt-submit/fixtures.yaml, case: representative }
     aligned_family: user_prompt_submit
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
-    support: { status: scaffolded, note: "Portable behavior adds context or blocks; native controls can also alter presentation." }
+    support: { status: scaffolded, note: "Portable behavior adds context or blocks; the block reason reaches only the user, and native controls can also alter presentation." }
 
-  - contract: claude-code/docs-2026-08-05-r1/WorktreeCreate
+  - contract: claude-code/docs-2026-09-29-r1/WorktreeCreate
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: WorktreeCreate
     stable_id: worktree_create
     display_name: Worktree create
@@ -487,13 +519,13 @@ events:
     rust_output: hookkit_claude::protocol::WorktreeCreateOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: WorktreeCreate }
     starter: { strategy: must_implement, expression: "return Err(hookkit_core::HookkitError::InvalidProcessEmission(\"implement WorktreeCreate path selection\"))" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/worktree-create/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/worktree-create/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: true, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "A safe starter cannot invent the required worktree path; complete it before registration." }
 
-  - contract: claude-code/docs-2026-08-05-r1/WorktreeRemove
+  - contract: claude-code/docs-2026-09-29-r1/WorktreeRemove
     harness: claude-code
-    snapshot: docs-2026-08-05-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: WorktreeRemove
     stable_id: worktree_remove
     display_name: Worktree remove
@@ -502,14 +534,30 @@ events:
     rust_event: hookkit_claude::catalog::WorktreeRemove
     rust_output: hookkit_claude::catalog::WorktreeRemoveOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: WorktreeRemove }
-    starter: { strategy: no_op, expression: "hookkit_claude::catalog::WorktreeRemoveOutput::no_op()" }
-    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/worktree-remove/fixtures.yaml, case: representative }
-    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "Retains Claude's exact UTF-8 worktree path." }
+    starter: { strategy: no_op, expression: "hookkit_claude::catalog::WorktreeRemoveOutput::removed()" }
+    fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-09-29-r1/events/worktree-remove/fixtures.yaml, case: representative }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
+    support: { status: scaffolded, note: "Retains Claude's exact UTF-8 worktree path; only the exit code matters, and a nonzero exit fails the removal while the worktree remains." }
 
-  - contract: codex/commit-1e59dc5-r1/PermissionRequest
+  - contract: codex/commit-ff6aec9-r1/Interrupt
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
+    wire_event: Interrupt
+    stable_id: interrupt
+    display_name: Turn interrupted
+    category: turn
+    order: 5
+    rust_event: hookkit_codex::catalog::Interrupt
+    rust_output: hookkit_codex::catalog::InterruptOutput
+    selector: { rust_type: hookkit_codex::protocol::Event, variant: Interrupt }
+    starter: { strategy: no_op, expression: "hookkit_codex::catalog::InterruptOutput::no_op()" }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/interrupt/fixtures.yaml, case: representative }
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
+    support: { status: scaffolded, note: "Observe an interrupted turn, which dispatches no Stop; output is empty or a user-facing system message." }
+
+  - contract: codex/commit-ff6aec9-r1/PermissionRequest
+    harness: codex
+    snapshot: commit-ff6aec9-r1
     wire_event: PermissionRequest
     stable_id: permission_request
     display_name: Permission request
@@ -519,14 +567,14 @@ events:
     rust_output: hookkit_codex::catalog::PermissionRequestOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: PermissionRequest }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::PermissionRequestOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/permission-request/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/permission-request/fixtures.yaml, case: representative }
     aligned_family: permission_request
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Portable output is allow or deny; Codex has no permission-request rewrite arm." }
 
-  - contract: codex/commit-1e59dc5-r1/PostCompact
+  - contract: codex/commit-ff6aec9-r1/PostCompact
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: PostCompact
     stable_id: post_compact
     display_name: After compaction
@@ -536,14 +584,14 @@ events:
     rust_output: hookkit_codex::catalog::PostCompactOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: PostCompact }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::PostCompactOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/post-compact/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/post-compact/fixtures.yaml, case: representative }
     aligned_family: post_compact
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Observer floor has trigger metadata but no native compact summary." }
 
-  - contract: codex/commit-1e59dc5-r1/PostToolUse
+  - contract: codex/commit-ff6aec9-r1/PostToolUse
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: PostToolUse
     stable_id: post_tool_use
     display_name: After tool use
@@ -553,14 +601,14 @@ events:
     rust_output: hookkit_codex::protocol::PostToolUseOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: PostToolUse }
     starter: { strategy: no_op, expression: "hookkit_codex::protocol::PostToolUseOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/post-tool-use/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/post-tool-use/fixtures.yaml, case: representative }
     aligned_family: post_tool
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: false, tool_result: true, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "Carries exact tool input and response; post-action block-shaped output is feedback." }
 
-  - contract: codex/commit-1e59dc5-r1/PreCompact
+  - contract: codex/commit-ff6aec9-r1/PreCompact
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: PreCompact
     stable_id: pre_compact
     display_name: Before compaction
@@ -570,14 +618,14 @@ events:
     rust_output: hookkit_codex::catalog::PreCompactOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: PreCompact }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::PreCompactOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/pre-compact/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/pre-compact/fixtures.yaml, case: representative }
     aligned_family: pre_compact
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Codex continue=false stops execution broadly, so the portable family is observer-only." }
 
-  - contract: codex/commit-1e59dc5-r1/PreToolUse
+  - contract: codex/commit-ff6aec9-r1/PreToolUse
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: PreToolUse
     stable_id: pre_tool_use
     display_name: Before tool use
@@ -587,14 +635,14 @@ events:
     rust_output: hookkit_codex::protocol::PreToolUseOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: PreToolUse }
     starter: { strategy: no_op, expression: "hookkit_codex::protocol::PreToolUseOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/pre-tool-use/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/pre-tool-use/fixtures.yaml, case: representative }
     aligned_family: pre_tool
     capabilities: { input_rewrite: true, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "Supports deny, complete replacement input, context, and system warnings." }
 
-  - contract: codex/commit-1e59dc5-r1/SessionEnd
+  - contract: codex/commit-ff6aec9-r1/SessionEnd
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: SessionEnd
     stable_id: session_end
     display_name: Session end
@@ -604,14 +652,14 @@ events:
     rust_output: hookkit_codex::catalog::SessionEndOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: SessionEnd }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::SessionEndOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/session-end/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/session-end/fixtures.yaml, case: representative }
     aligned_family: session_end
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: exact }
-    support: { status: scaffolded, note: "Codex ignores output; the no-op constructor deliberately emits empty stdout." }
+    support: { status: scaffolded, note: "Codex ignores SessionEnd stdout; the no-op constructor emits empty stdout, and a failure shows its stderr." }
 
-  - contract: codex/commit-1e59dc5-r1/SessionStart
+  - contract: codex/commit-ff6aec9-r1/SessionStart
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: SessionStart
     stable_id: session_start
     display_name: Session start
@@ -621,14 +669,14 @@ events:
     rust_output: hookkit_codex::catalog::SessionStartOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: SessionStart }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::SessionStartOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/session-start/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/session-start/fixtures.yaml, case: representative }
     aligned_family: session_start
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: exact }
-    support: { status: scaffolded, note: "Exact boundary supports portable context injection and native continuation controls." }
+    support: { status: scaffolded, note: "Exact boundary, including the fork source, supports portable context injection and native continuation controls." }
 
-  - contract: codex/commit-1e59dc5-r1/Stop
+  - contract: codex/commit-ff6aec9-r1/Stop
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: Stop
     stable_id: stop
     display_name: Turn completion
@@ -638,14 +686,14 @@ events:
     rust_output: hookkit_codex::catalog::StopOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: Stop }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::StopOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/stop/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/stop/fixtures.yaml, case: representative }
     aligned_family: turn_completion
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "May permit completion or block with a reason." }
 
-  - contract: codex/commit-1e59dc5-r1/SubagentStart
+  - contract: codex/commit-ff6aec9-r1/SubagentStart
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: SubagentStart
     stable_id: subagent_start
     display_name: Subagent start
@@ -655,14 +703,14 @@ events:
     rust_output: hookkit_codex::catalog::SubagentStartOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: SubagentStart }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::SubagentStartOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/subagent-start/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/subagent-start/fixtures.yaml, case: representative }
     aligned_family: subagent_start
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: true, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "Portable behavior observes the subagent and may add context." }
 
-  - contract: codex/commit-1e59dc5-r1/SubagentStop
+  - contract: codex/commit-ff6aec9-r1/SubagentStop
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: SubagentStop
     stable_id: subagent_stop
     display_name: Subagent stop
@@ -672,14 +720,14 @@ events:
     rust_output: hookkit_codex::catalog::SubagentStopOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: SubagentStop }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::SubagentStopOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/subagent-stop/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/subagent-stop/fixtures.yaml, case: representative }
     aligned_family: subagent_stop
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "May observe or block subagent completion with a reason." }
 
-  - contract: codex/commit-1e59dc5-r1/UserPromptSubmit
+  - contract: codex/commit-ff6aec9-r1/UserPromptSubmit
     harness: codex
-    snapshot: commit-1e59dc5-r1
+    snapshot: commit-ff6aec9-r1
     wire_event: UserPromptSubmit
     stable_id: user_prompt_submit
     display_name: User prompt submitted
@@ -689,14 +737,14 @@ events:
     rust_output: hookkit_codex::catalog::UserPromptSubmitOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: UserPromptSubmit }
     starter: { strategy: no_op, expression: "hookkit_codex::catalog::UserPromptSubmitOutput::no_op()" }
-    fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/user-prompt-submit/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r1/events/user-prompt-submit/fixtures.yaml, case: representative }
     aligned_family: user_prompt_submit
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
     support: { status: scaffolded, note: "Portable behavior adds context or blocks the submitted prompt." }
 
-  - contract: antigravity/docs-2026-08-04-r1/PostInvocation
+  - contract: antigravity/docs-2026-09-29-r1/PostInvocation
     harness: antigravity
-    snapshot: docs-2026-08-04-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PostInvocation
     stable_id: post_invocation
     display_name: After invocation
@@ -705,14 +753,14 @@ events:
     rust_event: hookkit_antigravity::PostInvocation
     rust_output: hookkit_antigravity::PostInvocationOutput
     selector: { rust_type: hookkit_antigravity::Event, variant: PostInvocation }
-    starter: { strategy: no_op, expression: "hookkit_antigravity::PostInvocationOutput::default()" }
-    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/post-invocation/fixtures.yaml, case: representative }
+    starter: { strategy: no_op, expression: "hookkit_antigravity::PostInvocationOutput::no_op()" }
+    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-09-29-r1/events/post-invocation/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: true, true_pre_action_block: false, post_action_feedback: true, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Native-only typed injected steps and termination behavior; not equivalent to Stop." }
 
-  - contract: antigravity/docs-2026-08-04-r1/PostToolUse
+  - contract: antigravity/docs-2026-09-29-r1/PostToolUse
     harness: antigravity
-    snapshot: docs-2026-08-04-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PostToolUse
     stable_id: post_tool_use
     display_name: After tool use
@@ -721,15 +769,15 @@ events:
     rust_event: hookkit_antigravity::PostToolUse
     rust_output: hookkit_antigravity::PostToolUseOutput
     selector: { rust_type: hookkit_antigravity::Event, variant: PostToolUse }
-    starter: { strategy: no_op, expression: "hookkit_antigravity::PostToolUseOutput::default()" }
-    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/post-tool-use/fixtures.yaml, case: representative }
+    starter: { strategy: no_op, expression: "hookkit_antigravity::PostToolUseOutput::no_op()" }
+    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-09-29-r1/events/post-tool-use/fixtures.yaml, case: representative }
     aligned_family: post_tool
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, output_ignored: true, output_advisory: true, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
-    support: { status: scaffolded, note: "Carries typed originating tool-call arguments and an error, but no result or message channel." }
+    support: { status: scaffolded, note: "Carries typed originating tool-call arguments, when the payload includes them, and an error, but no result or message channel." }
 
-  - contract: antigravity/docs-2026-08-04-r1/PreInvocation
+  - contract: antigravity/docs-2026-09-29-r1/PreInvocation
     harness: antigravity
-    snapshot: docs-2026-08-04-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PreInvocation
     stable_id: pre_invocation
     display_name: Before invocation
@@ -739,13 +787,13 @@ events:
     rust_output: hookkit_antigravity::PreInvocationOutput
     selector: { rust_type: hookkit_antigravity::Event, variant: PreInvocation }
     starter: { strategy: no_op, expression: "hookkit_antigravity::PreInvocationOutput::no_op()" }
-    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/pre-invocation/fixtures.yaml, case: representative }
+    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-09-29-r1/events/pre-invocation/fixtures.yaml, case: representative }
     capabilities: { input_rewrite: true, true_pre_action_block: false, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: inferred }
     support: { status: scaffolded, note: "invocation_num=0 is an inferred invocation boundary, never an exact SessionStart." }
 
-  - contract: antigravity/docs-2026-08-04-r1/PreToolUse
+  - contract: antigravity/docs-2026-09-29-r1/PreToolUse
     harness: antigravity
-    snapshot: docs-2026-08-04-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: PreToolUse
     stable_id: pre_tool_use
     display_name: Before tool use
@@ -754,15 +802,15 @@ events:
     rust_event: hookkit_antigravity::PreToolUse
     rust_output: hookkit_antigravity::PreToolUseOutput
     selector: { rust_type: hookkit_antigravity::Event, variant: PreToolUse }
-    starter: { strategy: allow, expression: "hookkit_antigravity::PreToolUseOutput { decision: hookkit_antigravity::ToolDecision::Allow, reason: None, permission_overrides: Vec::new() }" }
-    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/pre-tool-use/fixtures.yaml, case: representative }
+    starter: { strategy: allow, expression: "hookkit_antigravity::PreToolUseOutput::allow()" }
+    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-09-29-r1/events/pre-tool-use/fixtures.yaml, case: representative }
     aligned_family: pre_tool
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Native decisions include deny_unless_prior_grant; Antigravity cannot rewrite tool input." }
 
-  - contract: antigravity/docs-2026-08-04-r1/Stop
+  - contract: antigravity/docs-2026-09-29-r1/Stop
     harness: antigravity
-    snapshot: docs-2026-08-04-r1
+    snapshot: docs-2026-09-29-r1
     wire_event: Stop
     stable_id: stop
     display_name: Turn completion
@@ -771,8 +819,8 @@ events:
     rust_event: hookkit_antigravity::Stop
     rust_output: hookkit_antigravity::StopOutput
     selector: { rust_type: hookkit_antigravity::Event, variant: Stop }
-    starter: { strategy: allow, expression: "hookkit_antigravity::StopOutput { decision: String::from(\"stop\"), reason: None }" }
-    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/stop/fixtures.yaml, case: representative }
+    starter: { strategy: allow, expression: "hookkit_antigravity::StopOutput::allow_stop()" }
+    fixture: { source: contracts/harnesses/antigravity/snapshots/docs-2026-09-29-r1/events/stop/fixtures.yaml, case: representative }
     aligned_family: turn_completion
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: false, session_boundary: none }
     support: { status: scaffolded, note: "Can continue or stop with one reason channel; no separate user and agent audiences." }

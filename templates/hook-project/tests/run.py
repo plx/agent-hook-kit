@@ -27,7 +27,7 @@ from copier.errors import InteractiveSessionError
 
 
 SUPPORTED_HARNESSES = ("claude-code", "codex", "antigravity")
-EXPECTED_EVENT_COUNTS = {"claude-code": 31, "codex": 11, "antigravity": 5}
+EXPECTED_EVENT_COUNTS = {"claude-code": 33, "codex": 12, "antigravity": 5}
 EXPECTED_UNIVERSAL_FAMILIES = 3
 EXPECTED_CLAUDE_CODEX_ONLY_FAMILIES = 8
 ALL_STATE_CAPABILITIES = (
@@ -751,15 +751,16 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
         and "pre_tool_use" in data["native_hooks"]
     ):
         # An explicit "allow" skips Claude Code's permission prompt, so the
-        # starters' no-objection path must be an empty pass-through.
+        # starters' no-objection path must be an empty pass-through, and
+        # context is delivered without a permission decision.
         if data["starter"] == "custom":
             starter_path = crate / "src" / "hooks" / "native" / "claude_code_pre_tool_use.rs"
         else:
             starter_path = crate / "src" / "scaffold" / "dispatch.rs"
         starter_source = starter_path.read_text(encoding="utf-8")
-        if "hookkit_claude::catalog::PreToolUseOutput::no_op()" not in starter_source or (
-            data["starter"] != "scoped_context_once"
-            and "PreToolPermissionDecision::Allow" in starter_source
+        if "hookkit_claude::catalog::PreToolUseOutput::no_op()" not in starter_source or any(
+            allow in starter_source
+            for allow in ("PreToolPermissionDecision::Allow", "PreToolUseOutput::allow()")
         ):
             raise AcceptanceFailure(
                 f"{case.name}: Claude PreToolUse starter auto-approves tool calls "

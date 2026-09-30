@@ -106,11 +106,7 @@ fn selected_native_fixture_uses_exact_pre_tool_contract() {
         },
         {%- else -%}
         |_input, _environment, _context| {
-            Ok(hookkit_antigravity::PreToolUseOutput {
-                decision: hookkit_antigravity::ToolDecision::Allow,
-                reason: None,
-                permission_overrides: Vec::new(),
-            })
+            Ok(hookkit_antigravity::PreToolUseOutput::allow())
         },
         {%- endif %}
     );

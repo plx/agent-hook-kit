@@ -4670,7 +4670,8 @@ mod tests {
             check_template_catalog(&root).expect("current template catalog should be valid");
         check_generated_question_catalog(&root, &events, &alignments, &archetypes, &compatibility)
             .expect("generated Copier data should be current");
-        assert_eq!(events.events.len(), 47);
+        // 33 Claude Code, 12 Codex, and 5 Antigravity events.
+        assert_eq!(events.events.len(), 50);
         assert_eq!(alignments.alignments.len(), 11);
     }
 
@@ -4795,23 +4796,62 @@ mod tests {
         };
 
         assert!(
-            find("claude-code/docs-2026-08-05-r1/DirectoryAdded")
+            find("claude-code/docs-2026-09-29-r1/DirectoryAdded")
                 .support
                 .note
                 .contains("source")
         );
         assert!(
-            find("claude-code/docs-2026-08-05-r1/SessionStart")
+            find("claude-code/docs-2026-09-29-r1/SessionStart")
                 .support
                 .note
                 .contains("source=fork")
         );
-        let codex_session_end = find("codex/commit-1e59dc5-r1/SessionEnd");
+        // Claude Code discards the JSON output of these events.
+        for event in [
+            "Setup",
+            "InstructionsLoaded",
+            "Notification",
+            "StopFailure",
+            "SessionEnd",
+            "PostCompact",
+            "WorktreeRemove",
+        ] {
+            let scaffold = find(&format!("claude-code/docs-2026-09-29-r1/{event}"));
+            assert!(scaffold.capabilities.output_ignored, "{event}");
+            assert!(!scaffold.capabilities.post_action_feedback, "{event}");
+        }
+        assert!(
+            find("claude-code/docs-2026-09-29-r1/WorktreeRemove")
+                .starter
+                .expression
+                .ends_with("::removed()")
+        );
+        assert!(
+            find("claude-code/docs-2026-09-29-r1/PreModelSwitch")
+                .capabilities
+                .true_pre_action_block
+        );
+        assert!(
+            !find("claude-code/docs-2026-09-29-r1/PostModelSwitch")
+                .capabilities
+                .true_pre_action_block
+        );
+        let codex_session_end = find("codex/commit-ff6aec9-r1/SessionEnd");
         assert!(codex_session_end.capabilities.output_ignored);
         assert!(codex_session_end.starter.expression.ends_with("::no_op()"));
-        let antigravity_post_tool = find("antigravity/docs-2026-08-04-r1/PostToolUse");
+        let codex_interrupt = find("codex/commit-ff6aec9-r1/Interrupt");
+        assert!(!codex_interrupt.capabilities.true_pre_action_block);
+        assert!(codex_interrupt.starter.expression.ends_with("::no_op()"));
+        let antigravity_post_tool = find("antigravity/docs-2026-09-29-r1/PostToolUse");
         assert!(antigravity_post_tool.support.note.contains("typed"));
         assert!(!antigravity_post_tool.capabilities.tool_result);
+        assert!(
+            find("antigravity/docs-2026-09-29-r1/Stop")
+                .starter
+                .expression
+                .ends_with("::allow_stop()")
+        );
     }
 
     fn temp_tree(name: &str) -> PathBuf {

@@ -282,17 +282,14 @@ fn run_pre_tool() -> std::process::ExitCode {
 {%- endif %}
 {%- if starter == "scoped_context_once" %}
             let aligned_input = hookkit_common::PreToolUseInput::Claude(input.clone());
-            // HookKit's Claude PreToolUse output has no context-only
-            // constructor yet, so "allow" accompanies context solely on the
-            // once-per-scope call that delivers it. Every other call is an
-            // empty pass-through that keeps the normal permission flow.
+            // Context-only output makes no permission decision, so every call,
+            // including the once-per-scope call that delivers the context,
+            // keeps Claude Code's normal permission flow. An explicit "allow"
+            // would skip the user's permission prompt.
             Ok(match scoped_context(&aligned_input, _context, state_dir.as_deref())? {
-                Some(additional_context) => hookkit_claude::catalog::PreToolUseOutput::decide(
-                    hookkit_claude::catalog::PreToolPermissionDecision::Allow,
-                    None,
-                    None,
-                    Some(additional_context),
-                ),
+                Some(additional_context) => {
+                    hookkit_claude::catalog::PreToolUseOutput::with_context(additional_context)
+                }
                 None => hookkit_claude::catalog::PreToolUseOutput::no_op(),
             })
 {%- else %}
@@ -301,12 +298,7 @@ fn run_pre_tool() -> std::process::ExitCode {
             // explicit "allow" decision would skip the user's permission prompt.
             Ok(match crate::hooks::pre_tool::evaluate(tool_name) {
                 Decision::Allow => hookkit_claude::catalog::PreToolUseOutput::no_op(),
-                Decision::Deny(reason) => hookkit_claude::catalog::PreToolUseOutput::decide(
-                    hookkit_claude::catalog::PreToolPermissionDecision::Deny,
-                    Some(reason),
-                    None,
-                    None,
-                ),
+                Decision::Deny(reason) => hookkit_claude::catalog::PreToolUseOutput::deny(reason),
             })
 {%- endif %}
         },

@@ -44,5 +44,5 @@ for a duplicate crate path, refuses to overwrite); any other exception, such as
 a template syntax error, fails the run. Toolchain versions come from
 `catalog/compatibility.yml`.
 The matrix derives native events and aligned-family intersections from the
-canonical catalogs while asserting the design's current 31/11/5 event counts
+canonical catalogs while asserting the design's current 33/12/5 event counts
 and universal-three plus Claude/Codex-eight family split.
