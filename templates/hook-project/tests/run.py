@@ -23,9 +23,9 @@ from typing import Any, Iterable
 
 import copier
 import yaml
+from copier.errors import InteractiveSessionError
 
 
-COPIER_VERSION = "9.17.1"
 SUPPORTED_HARNESSES = ("claude-code", "codex", "antigravity")
 EXPECTED_EVENT_COUNTS = {"claude-code": 31, "codex": 11, "antigravity": 5}
 EXPECTED_UNIVERSAL_FAMILIES = 3
@@ -42,6 +42,14 @@ ALL_STATE_CAPABILITIES = (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CATALOG_ROOT = REPO_ROOT / "templates" / "hook-project" / "catalog"
+
+# The compatibility catalog is the single source for toolchain versions;
+# `cargo xtask template-catalog check` keeps the remaining literal copies
+# (run.sh, copier.yml, CI, and the release check) in agreement with it.
+with (CATALOG_ROOT / "compatibility.yml").open(encoding="utf-8") as _stream:
+    _COMPATIBILITY = yaml.safe_load(_stream)
+COPIER_VERSION = str(_COMPATIBILITY["copier_version"])
+RUST_MSRV = str(_COMPATIBILITY["rust_msrv"])
 
 
 class AcceptanceFailure(RuntimeError):
@@ -718,11 +726,45 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
                 f"{case.name}: standalone file activity did not generate its Pkl configuration"
             )
 
+    if data["output_mode"] == "project":
+        workspace = tomllib.loads((destination / "Cargo.toml").read_text(encoding="utf-8"))
+        if workspace.get("workspace", {}).get("resolver") != "3":
+            raise AcceptanceFailure(
+                f"{case.name}: the generated workspace must use the MSRV-aware resolver \"3\""
+            )
+
     cli_source = (crate / "src" / "scaffold" / "cli.rs").read_text(encoding="utf-8")
     for hook in expected_hooks:
         command = hook.replace("_", "-")
         if command not in cli_source:
             raise AcceptanceFailure(f"{case.name}: selected command {command!r} is unreachable")
+    # Clap's own exit path uses status 2, which Claude Code and Codex treat as
+    # a blocking hook decision.
+    if "try_parse()" not in cli_source or ".exit()" in cli_source:
+        raise AcceptanceFailure(
+            f"{case.name}: argument errors must not exit through Clap's blocking status 2"
+        )
+
+    if (
+        data["harness_mode"] == "single"
+        and data["harness"] == "claude-code"
+        and "pre_tool_use" in data["native_hooks"]
+    ):
+        # An explicit "allow" skips Claude Code's permission prompt, so the
+        # starters' no-objection path must be an empty pass-through.
+        if data["starter"] == "custom":
+            starter_path = crate / "src" / "hooks" / "native" / "claude_code_pre_tool_use.rs"
+        else:
+            starter_path = crate / "src" / "scaffold" / "dispatch.rs"
+        starter_source = starter_path.read_text(encoding="utf-8")
+        if "hookkit_claude::catalog::PreToolUseOutput::no_op()" not in starter_source or (
+            data["starter"] != "scoped_context_once"
+            and "PreToolPermissionDecision::Allow" in starter_source
+        ):
+            raise AcceptanceFailure(
+                f"{case.name}: Claude PreToolUse starter auto-approves tool calls "
+                f"instead of passing through in {starter_path.name}"
+            )
 
     if (
         data["harness_mode"] == "single"
@@ -767,8 +809,40 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
         workflow_text = workflow.read_text(encoding="utf-8")
         if data["package_name"] not in workflow_text:
             raise AcceptanceFailure(f"{case.name}: workflow is not package-namespaced")
+        assert_workflow_cache_target(case, parsed_workflow)
     elif workflow.exists():
         raise AcceptanceFailure(f"{case.name}: workflow generated despite opt-out")
+
+
+def assert_workflow_cache_target(case: Case, workflow: dict[str, Any]) -> None:
+    """Check that rust-cache saves the directory Cargo actually builds into."""
+    for job in workflow["jobs"].values():
+        caches = [
+            step
+            for step in job.get("steps", [])
+            if str(step.get("uses", "")).startswith("Swatinem/rust-cache@")
+        ]
+        if len(caches) != 1:
+            raise AcceptanceFailure(f"{case.name}: workflow job lacks exactly one Rust cache")
+        workspace_root, _, target = caches[0]["with"]["workspaces"].partition(" -> ")
+        cached_target = os.path.normpath(os.path.join(workspace_root, target))
+        if case.data["output_mode"] == "project":
+            # Project mode builds the generated workspace at the repository root.
+            expected = workspace_root == "." and cached_target == "target"
+        else:
+            # Crate mode pins CARGO_TARGET_DIR because the host may or may not
+            # own a workspace; the cache must point at that same directory.
+            target_dir = job.get("env", {}).get("CARGO_TARGET_DIR")
+            expected = (
+                workspace_root == case.data["crate_path"]
+                and cached_target == "target"
+                and target_dir == "${{ github.workspace }}/target"
+            )
+        if not expected:
+            raise AcceptanceFailure(
+                f"{case.name}: workflow caches {caches[0]['with']['workspaces']!r}, "
+                "not the directory Cargo builds into"
+            )
 
 
 def register_workspace_member(destination: Path, case: Case) -> None:
@@ -816,7 +890,7 @@ def validate_generated(
             ["cargo", "fmt", "--manifest-path", str(manifest), "--all", "--", "--check"],
             [
                 "cargo",
-                "+1.85.0",
+                f"+{RUST_MSRV}",
                 "check",
                 "--manifest-path",
                 str(manifest),
@@ -1541,7 +1615,23 @@ def run_quality_config_ownership(staged_source: Path, root: Path) -> None:
     )
 
 
-def assert_rejected(source: Path, root: Path, name: str, data: dict[str, Any]) -> None:
+def is_question_rejection(error: BaseException, question: str) -> bool:
+    """Whether Copier refused an answer to ``question`` through its validator.
+
+    Template syntax errors, raising validator expressions, and I/O failures
+    also surface as exceptions; only Copier's answer-validation message proves
+    that the intended questionnaire rule rejected the input.
+    """
+    message = str(error)
+    return isinstance(error, ValueError) and (
+        message.startswith(f"Validation error for question '{question}':")
+        or message.startswith(f"Invalid choice for '{question}':")
+    )
+
+
+def assert_rejected(
+    source: Path, root: Path, name: str, data: dict[str, Any], question: str
+) -> None:
     destination = root / "negative" / name
     try:
         copier.run_copy(
@@ -1552,7 +1642,12 @@ def assert_rejected(source: Path, root: Path, name: str, data: dict[str, Any]) -
             quiet=True,
             cleanup_on_error=True,
         )
-    except Exception:
+    except Exception as error:
+        if not is_question_rejection(error, question):
+            raise AcceptanceFailure(
+                f"negative case {name} failed for an unexpected reason instead of "
+                f"rejecting {question!r}: {type(error).__name__}: {error}"
+            ) from error
         if destination.exists() and any(destination.rglob("*")):
             raise AcceptanceFailure(f"negative case {name} left a partial destination")
         return
@@ -1613,19 +1708,19 @@ def run_negative_cases(source: Path, root: Path) -> None:
             state=("session_metadata",),
         )
     )
-    for name, data in (
-        ("one_harness_cross", one_harness),
-        ("unavailable_aligned_family", invalid_family),
-        ("state_without_metadata", invalid_state),
-        ("archetype_mode_mismatch", invalid_archetype),
-        ("escaping_crate_path", escaping),
-        ("reserved_package_name", reserved_package),
-        ("dependency_name_collision", dependency_collision),
-        ("incomplete_git_sha", short_sha),
-        ("strict_antigravity_output", strict_antigravity),
-        ("runner_state_without_custom_seam", runner_state_without_seam),
+    for name, data, question in (
+        ("one_harness_cross", one_harness, "harnesses"),
+        ("unavailable_aligned_family", invalid_family, "aligned_hooks"),
+        ("state_without_metadata", invalid_state, "state_capabilities"),
+        ("archetype_mode_mismatch", invalid_archetype, "harness_mode"),
+        ("escaping_crate_path", escaping, "crate_path"),
+        ("reserved_package_name", reserved_package, "package_name"),
+        ("dependency_name_collision", dependency_collision, "package_name"),
+        ("incomplete_git_sha", short_sha, "hookkit_git_rev"),
+        ("strict_antigravity_output", strict_antigravity, "lowering_policy"),
+        ("runner_state_without_custom_seam", runner_state_without_seam, "aligned_hooks"),
     ):
-        assert_rejected(source, root, name, data)
+        assert_rejected(source, root, name, data, question)
 
     collision_root = root / "negative" / "duplicate-owned-path"
     first = cross_data(
@@ -1654,9 +1749,16 @@ def run_negative_cases(source: Path, root: Path) -> None:
             quiet=True,
             cleanup_on_error=True,
         )
-    except Exception:
+    except InteractiveSessionError:
+        # Copier refuses to overwrite the first crate's existing files
+        # without an explicit, interactive overwrite decision.
         if protected.read_bytes() != protected_bytes:
             raise AcceptanceFailure("duplicate owned-path rejection changed the first crate")
+    except Exception as error:
+        raise AcceptanceFailure(
+            "duplicate owned crate path failed for an unexpected reason instead of "
+            f"an overwrite conflict: {type(error).__name__}: {error}"
+        ) from error
     else:
         raise AcceptanceFailure("duplicate owned crate path was unexpectedly accepted")
     print("PASS negative_validation", flush=True)
@@ -1708,7 +1810,12 @@ def run_dependency_source_integrity(source: Path, root: Path) -> None:
             quiet=True,
             cleanup_on_error=True,
         )
-    except Exception:
+    except Exception as error:
+        if not is_question_rejection(error, "hookkit_path"):
+            raise AcceptanceFailure(
+                "nonexistent HookKit path failed for an unexpected reason instead of "
+                f"rejecting 'hookkit_path': {type(error).__name__}: {error}"
+            ) from error
         print("PASS dependency_nonexistent_path", flush=True)
     else:
         raise AcceptanceFailure(

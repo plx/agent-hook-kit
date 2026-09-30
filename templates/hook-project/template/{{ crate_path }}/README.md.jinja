@@ -126,6 +126,11 @@ this crate believes it belongs to the surrounding workspace, add this member:
 members = [{{ crate_path | tojson }}]
 ```
 
+If that workspace still uses `resolver = "2"`, adopt `resolver = "3"` or set
+`CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback`{% if github_actions %}, as
+the generated workflow does,{% endif %} so a fresh lockfile keeps the Rust
+{{ compatibility.rust_msrv }} check on dependency versions that support it.
+
 This instance uses `.copier-answers.{{ package_name }}.yml`:
 
 ```sh

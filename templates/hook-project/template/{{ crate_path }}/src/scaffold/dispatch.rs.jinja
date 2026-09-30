@@ -103,8 +103,10 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
 {%- if "file_activity" in state_capabilities %}
         Command::SessionStartState => {
 {%- if "antigravity" in harnesses %}
+            // `Cli::validate` rejects this combination first. Exit status 2
+            // can mean "block" to a harness, so fail non-blockingly.
             if harness == hookkit_core::HarnessId::ANTIGRAVITY {
-                return std::process::ExitCode::from(2);
+                return std::process::ExitCode::FAILURE;
             }
 {%- endif %}
             crate::scaffold::runners::run_session_start(harness, state_dir)
@@ -280,22 +282,25 @@ fn run_pre_tool() -> std::process::ExitCode {
 {%- endif %}
 {%- if starter == "scoped_context_once" %}
             let aligned_input = hookkit_common::PreToolUseInput::Claude(input.clone());
-            let additional_context =
-                scoped_context(&aligned_input, _context, state_dir.as_deref())?;
-            Ok(hookkit_claude::catalog::PreToolUseOutput::decide(
-                hookkit_claude::catalog::PreToolPermissionDecision::Allow,
-                None,
-                None,
-                additional_context,
-            ))
-{%- else %}
-            Ok(match crate::hooks::pre_tool::evaluate(tool_name) {
-                Decision::Allow => hookkit_claude::catalog::PreToolUseOutput::decide(
+            // HookKit's Claude PreToolUse output has no context-only
+            // constructor yet, so "allow" accompanies context solely on the
+            // once-per-scope call that delivers it. Every other call is an
+            // empty pass-through that keeps the normal permission flow.
+            Ok(match scoped_context(&aligned_input, _context, state_dir.as_deref())? {
+                Some(additional_context) => hookkit_claude::catalog::PreToolUseOutput::decide(
                     hookkit_claude::catalog::PreToolPermissionDecision::Allow,
                     None,
                     None,
-                    None,
+                    Some(additional_context),
                 ),
+                None => hookkit_claude::catalog::PreToolUseOutput::no_op(),
+            })
+{%- else %}
+            // `Decision::Allow` means "no objection": pass through with empty
+            // output so Claude Code's normal permission flow still applies. An
+            // explicit "allow" decision would skip the user's permission prompt.
+            Ok(match crate::hooks::pre_tool::evaluate(tool_name) {
+                Decision::Allow => hookkit_claude::catalog::PreToolUseOutput::no_op(),
                 Decision::Deny(reason) => hookkit_claude::catalog::PreToolUseOutput::decide(
                     hookkit_claude::catalog::PreToolPermissionDecision::Deny,
                     Some(reason),

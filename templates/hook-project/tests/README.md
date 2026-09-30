@@ -39,6 +39,10 @@ unpublished crates.io source is render-only; every direct HookKit dependency
 must use one repository and full Git revision or one compatible crates.io
 version, without mixed source keys. The nonexistent-path check verifies that
 the questionnaire rejects a missing local HookKit checkout before rendering.
+Every negative case passes only when Copier rejects the intended question (or,
+for a duplicate crate path, refuses to overwrite); any other exception, such as
+a template syntax error, fails the run. Toolchain versions come from
+`catalog/compatibility.yml`.
 The matrix derives native events and aligned-family intersections from the
 canonical catalogs while asserting the design's current 31/11/5 event counts
 and universal-three plus Claude/Codex-eight family split.

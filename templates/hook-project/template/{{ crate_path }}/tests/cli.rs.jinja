@@ -8,6 +8,28 @@ use clap::CommandFactory;
 fn command_tree_is_internally_consistent() {
     {{ package_name | replace('-', '_') }}::scaffold::cli::Cli::command().debug_assert();
 }
+
+#[test]
+fn argument_errors_exit_non_blockingly() {
+    let binary = env!("CARGO_BIN_EXE_{{ binary_name }}");
+    let invalid = std::process::Command::new(binary)
+        .arg("--not-a-generated-argument")
+        .output()
+        .expect("the generated hook binary should start");
+    // Claude Code and Codex read exit status 2 as a blocking decision.
+    assert_eq!(invalid.status.code(), Some(1));
+    assert!(
+        !invalid.stderr.is_empty(),
+        "the usage error must be reported"
+    );
+
+    let help = std::process::Command::new(binary)
+        .arg("--help")
+        .output()
+        .expect("the generated hook binary should start");
+    assert_eq!(help.status.code(), Some(0));
+    assert!(!help.stdout.is_empty(), "help must still be printed");
+}
 {% if harness_mode == "cross" and "file_activity" in state_capabilities and "antigravity" in harnesses %}
 #[test]
 fn antigravity_cannot_select_exact_session_start_support() {

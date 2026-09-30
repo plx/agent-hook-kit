@@ -5,5 +5,5 @@ rust_msrv: 1.85.0
 pkl_version: 0.31.1
 hookkit:
   repository: https://github.com/plx/agent-hook-kit
-  git_revision: 83c49d46970602e8fb40a8afaeea521dfb7e9b61
+  git_revision: 828d8d6feacf60015ae325d798b2bc3f32b2bf3b
   crates_io_version: 0.1.0

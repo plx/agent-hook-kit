@@ -42,12 +42,9 @@ enum TemplateCatalogCommand {
 
 #[derive(Subcommand)]
 enum ContractsCommand {
-    /// Validate catalog metadata, schemas, fixtures, and status coverage.
-    Check {
-        /// Validate all snapshots and current-selection status overlays.
-        #[arg(long, value_parser = ["current"])]
-        snapshot: Option<String>,
-    },
+    /// Validate every snapshot's metadata, schemas, and fixtures plus the
+    /// registry-selected status overlays.
+    Check,
     /// Render the generated support report.
     Report {
         /// Update contracts/status/support.md.
@@ -57,12 +54,16 @@ enum ContractsCommand {
         #[arg(long)]
         check: bool,
     },
-    /// Compare event inventories and content hashes between two snapshot IDs.
+    /// Compare event inventories and per-event contract content between two
+    /// snapshot IDs, ignoring the snapshot-ID tokens every file embeds.
     ///
     /// Qualify IDs shared by multiple harnesses as `harness/snapshot`.
     Diff { old: String, new: String },
     /// Verify vendored files against their checked-in SHA-256 manifests.
     VerifyVendor,
+    /// Print the registry-selected snapshots' upstream sources as tab-separated
+    /// rows for scripts/check-upstream-contract-drift.sh.
+    UpstreamSources,
     /// Freeze a reviewed snapshot with a deterministic SHA-256 manifest.
     Freeze { harness: String, snapshot: String },
     /// Freeze a reviewed command-environment supplement.
@@ -712,9 +713,8 @@ fn run() -> Result<()> {
     let root = workspace_root()?;
     match cli.command {
         Command::Contracts {
-            command: ContractsCommand::Check { snapshot },
+            command: ContractsCommand::Check,
         } => {
-            let _ = snapshot;
             let contracts = check_catalog(&root)?;
             println!(
                 "validated {} selected event contracts, all catalog snapshots, and command-environment supplements",
@@ -730,6 +730,12 @@ fn run() -> Result<()> {
         } => {
             let count = verify_vendor(&root)?;
             println!("verified {count} vendored files");
+            Ok(())
+        }
+        Command::Contracts {
+            command: ContractsCommand::UpstreamSources,
+        } => {
+            print!("{}", render_upstream_sources(&root)?);
             Ok(())
         }
         Command::Contracts {
@@ -845,8 +851,97 @@ fn check_template_catalog(
         &compatibility,
         &implementation,
     )?;
+    check_toolchain_versions(root, &compatibility)?;
     hydrate_template_fixture_values(root, &mut events)?;
     Ok((events, alignments, archetypes, compatibility))
+}
+
+/// Check that toolchain versions repeated as literals elsewhere in the
+/// repository agree with the template compatibility catalog, their single
+/// source of truth. Scripts that can read the catalog at run time do so and
+/// need no literal; `required` rules guard pins that must stay literal.
+fn check_toolchain_versions(root: &Path, compatibility: &CompatibilityCatalog) -> Result<()> {
+    let rules = [
+        (
+            "copier.yml",
+            "_min_copier_version: \"",
+            &compatibility.copier_version,
+            true,
+        ),
+        (
+            "templates/hook-project/tests/run.sh",
+            "copier==",
+            &compatibility.copier_version,
+            true,
+        ),
+        (
+            "Cargo.toml",
+            "rust-version = \"",
+            &compatibility.rust_msrv,
+            true,
+        ),
+        (
+            ".github/workflows/ci.yml",
+            "dtolnay/rust-toolchain@",
+            &compatibility.rust_msrv,
+            true,
+        ),
+        (
+            ".github/workflows/ci.yml",
+            "pkl/releases/download/",
+            &compatibility.pkl_version,
+            false,
+        ),
+        (
+            "scripts/release-check.sh",
+            "cargo +",
+            &compatibility.rust_msrv,
+            false,
+        ),
+    ];
+    for (relative, prefix, expected, required) in rules {
+        let path = root.join(relative);
+        let text =
+            fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let versions = pinned_versions(&text, prefix);
+        if required && versions.is_empty() {
+            return Err(format!(
+                "{}: expected a `{prefix}<version>` pin matching the template compatibility catalog",
+                path.display()
+            ));
+        }
+        if let Some(version) = versions
+            .iter()
+            .find(|version| !same_version(version, expected))
+        {
+            return Err(format!(
+                "{}: `{prefix}{version}` disagrees with {expected} in templates/hook-project/catalog/compatibility.yml",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Numeric versions immediately following each occurrence of `prefix`;
+/// non-numeric references such as `@stable` or `${version}` are skipped.
+fn pinned_versions<'a>(text: &'a str, prefix: &str) -> Vec<&'a str> {
+    text.match_indices(prefix)
+        .filter_map(|(index, _)| {
+            let rest = &text[index + prefix.len()..];
+            let end = rest
+                .find(|character: char| !(character.is_ascii_digit() || character == '.'))
+                .unwrap_or(rest.len());
+            let version = rest[..end].trim_end_matches('.');
+            (!version.is_empty()).then_some(version)
+        })
+        .collect()
+}
+
+/// Whether `actual` names `expected`, allowing Cargo's `1.85` shorthand for
+/// `1.85.0`.
+fn same_version(actual: &str, expected: &str) -> bool {
+    actual == expected || expected.strip_suffix(".0") == Some(actual)
 }
 
 fn hydrate_template_fixture_values(root: &Path, events: &mut EventScaffoldCatalog) -> Result<()> {
@@ -1867,7 +1962,8 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
 
     let mut contracts = Vec::new();
     let mut contract_ids = BTreeSet::new();
-    let mut selected_snapshots = BTreeSet::new();
+    let mut selected_snapshots = BTreeMap::new();
+    let mut draft_snapshots = Vec::new();
     for snapshot_path in snapshot_paths {
         let snapshot_dir = snapshot_path
             .parent()
@@ -1879,13 +1975,17 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
             .get(&snapshot.harness)
             .is_some_and(|selected| selected.current == snapshot.id)
         {
-            selected_snapshots.insert(snapshot.harness.clone());
+            selected_snapshots.insert(snapshot.harness.clone(), snapshot.retrieved.clone());
             contracts.extend(loaded);
+        }
+        if snapshot.state != "frozen" {
+            draft_snapshots.push((snapshot_dir.to_path_buf(), snapshot));
         }
     }
     if selected_snapshots.len() != registry.harnesses.len() {
         return Err("one or more registry-selected snapshots were not found".to_string());
     }
+    validate_snapshot_states(&registry, &selected_snapshots, &draft_snapshots)?;
     validate_command_environment_supplements(&catalog, &meta, &registry)?;
 
     let target_keys: BTreeSet<_> = stabilization
@@ -1979,6 +2079,42 @@ fn check_catalog(root: &Path) -> Result<Vec<LoadedContract>> {
     Ok(contracts)
 }
 
+/// Enforce the snapshot lifecycle that content manifests alone cannot.
+///
+/// `snapshot.yaml` carries the frozen marker outside its own manifest, so a
+/// hand edit could otherwise demote a published snapshot to an unverified
+/// draft. Registry-selected snapshots must therefore be frozen, like selected
+/// supplements, and a draft may only be a successor candidate: one retrieved
+/// no earlier than its harness's selected snapshot.
+fn validate_snapshot_states(
+    registry: &Registry,
+    selected_retrieved: &BTreeMap<String, String>,
+    drafts: &[(PathBuf, Snapshot)],
+) -> Result<()> {
+    for (directory, snapshot) in drafts {
+        if registry
+            .harnesses
+            .get(&snapshot.harness)
+            .is_some_and(|selected| selected.current == snapshot.id)
+        {
+            return Err(format!(
+                "{}: registry-selected snapshot must be frozen",
+                directory.display()
+            ));
+        }
+        if selected_retrieved
+            .get(&snapshot.harness)
+            .is_some_and(|selected| snapshot.retrieved.as_str() < selected.as_str())
+        {
+            return Err(format!(
+                "{}: draft snapshot predates the registry-selected snapshot; superseded snapshots must stay frozen",
+                directory.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_snapshot(
     catalog: &Path,
     meta: &Path,
@@ -2039,7 +2175,7 @@ fn validate_snapshot(
                 snapshot_dir.display()
             )
         })?;
-        verify_content_manifest(snapshot_dir, manifest)?;
+        verify_content_manifest(snapshot_dir, manifest, Some(SNAPSHOT_METADATA_FILE))?;
     } else if snapshot.manifest_file.is_some() {
         return Err(format!(
             "{}: draft snapshot must not have manifest_file",
@@ -2068,6 +2204,18 @@ fn validate_snapshot(
     }
     for source in &sources.sources {
         validate_source(source, snapshot_dir, strict_successor)?;
+        if source.reproducibility.as_deref() == Some("vendored") {
+            let revision = source.revision.as_deref().unwrap_or_default();
+            let vendored = safe_join(&catalog.join("vendor").join(harness), revision)?;
+            if !vendored.is_dir() {
+                return Err(format!(
+                    "{}: vendored source {} has no evidence at {}",
+                    snapshot_dir.display(),
+                    source.id,
+                    vendored.display()
+                ));
+            }
+        }
     }
 
     let mut loaded = Vec::new();
@@ -2104,7 +2252,9 @@ fn validate_snapshot(
         .collect();
     let discovered_paths: BTreeSet<_> = walkdir::WalkDir::new(snapshot_dir.join("events"))
         .into_iter()
-        .filter_map(std::result::Result::ok)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| format!("{}: {error}", snapshot_dir.display()))?
+        .into_iter()
         .filter(|entry| entry.file_type().is_file() && entry.file_name() == "contract.yaml")
         .map(|entry| entry.into_path())
         .collect();
@@ -2179,7 +2329,7 @@ fn validate_command_environment_supplements(
                     directory.display()
                 )
             })?;
-            verify_content_manifest(directory, manifest)?;
+            verify_content_manifest(directory, manifest, None)?;
         } else if supplement.state == "draft" {
             if supplement.manifest_file.is_some() {
                 return Err(format!(
@@ -3189,7 +3339,7 @@ fn freeze_snapshot(root: &Path, harness: &str, snapshot_id: &str) -> Result<()> 
         ));
     }
     let manifest_name = "MANIFEST.sha256";
-    let manifest = content_manifest(&directory, manifest_name)?;
+    let manifest = content_manifest(&directory, manifest_name, Some(SNAPSHOT_METADATA_FILE))?;
     fs::write(directory.join(manifest_name), manifest)
         .map_err(|error| format!("{}: {error}", directory.display()))?;
     snapshot.state = "frozen".to_string();
@@ -3198,7 +3348,7 @@ fn freeze_snapshot(root: &Path, harness: &str, snapshot_id: &str) -> Result<()> 
         .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
     fs::write(&snapshot_path, yaml)
         .map_err(|error| format!("{}: {error}", snapshot_path.display()))?;
-    verify_content_manifest(&directory, manifest_name)?;
+    verify_content_manifest(&directory, manifest_name, Some(SNAPSHOT_METADATA_FILE))?;
     println!("froze {harness}/{snapshot_id}");
     Ok(())
 }
@@ -3228,15 +3378,33 @@ fn freeze_command_environment_supplement(root: &Path, supplement_id: &str) -> Re
         .map_err(|error| format!("{}: {error}", supplement_path.display()))?;
     fs::write(&supplement_path, yaml)
         .map_err(|error| format!("{}: {error}", supplement_path.display()))?;
-    let manifest = content_manifest(&directory, manifest_name)?;
+    let manifest = content_manifest(&directory, manifest_name, None)?;
     fs::write(directory.join(manifest_name), manifest)
         .map_err(|error| format!("{}: {error}", directory.display()))?;
-    verify_content_manifest(&directory, manifest_name)?;
+    verify_content_manifest(&directory, manifest_name, None)?;
     println!("froze command-environment supplement {supplement_id}");
     Ok(())
 }
 
-fn content_manifest(directory: &Path, manifest_name: &str) -> Result<String> {
+/// Root-level file that records a snapshot's frozen state. It is rewritten
+/// after the manifest is computed, so the manifest cannot cover it; the
+/// lifecycle rules in [`validate_snapshot_states`] guard it instead.
+const SNAPSHOT_METADATA_FILE: &str = "snapshot.yaml";
+
+/// Render the deterministic SHA-256 manifest of every file below `directory`.
+///
+/// Only the root-level manifest itself and, for snapshots, the root-level
+/// `lifecycle_file` are excluded; identically named files deeper in the tree
+/// are ordinary content.
+fn content_manifest(
+    directory: &Path,
+    manifest_name: &str,
+    lifecycle_file: Option<&str>,
+) -> Result<String> {
+    let excluded: Vec<PathBuf> = std::iter::once(manifest_name)
+        .chain(lifecycle_file)
+        .map(|name| directory.join(name))
+        .collect();
     let mut paths: Vec<_> = walkdir::WalkDir::new(directory)
         .into_iter()
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -3244,10 +3412,7 @@ fn content_manifest(directory: &Path, manifest_name: &str) -> Result<String> {
         .into_iter()
         .filter(|entry| entry.file_type().is_file())
         .map(|entry| entry.into_path())
-        .filter(|path| {
-            path.file_name()
-                .is_none_or(|name| name != "snapshot.yaml" && name != manifest_name)
-        })
+        .filter(|path| !excluded.contains(path))
         .collect();
     paths.sort();
     let mut output = String::new();
@@ -3263,11 +3428,15 @@ fn content_manifest(directory: &Path, manifest_name: &str) -> Result<String> {
     Ok(output)
 }
 
-fn verify_content_manifest(directory: &Path, manifest_name: &str) -> Result<()> {
+fn verify_content_manifest(
+    directory: &Path,
+    manifest_name: &str,
+    lifecycle_file: Option<&str>,
+) -> Result<()> {
     let manifest_path = safe_join(directory, manifest_name)?;
     let actual = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("{}: {error}", manifest_path.display()))?;
-    let expected = content_manifest(directory, manifest_name)?;
+    let expected = content_manifest(directory, manifest_name, lifecycle_file)?;
     if actual != expected {
         return Err(format!(
             "{}: frozen catalog content differs from deterministic manifest",
@@ -3602,22 +3771,46 @@ fn validate_schema_references(schema: &Value, directory: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Verify every vendored file against the `MANIFEST.sha256` in its directory
+/// tree and return the number of verified files.
+///
+/// Every regular file below `contracts/vendor` must be a manifest or be listed
+/// by exactly one manifest, and every manifest must list at least one file, so
+/// unlisted additions and emptied manifests cannot pass silently.
 fn verify_vendor(root: &Path) -> Result<usize> {
     let vendor = root.join("contracts/vendor");
     if !vendor.exists() {
         return Ok(0);
     }
-    let manifests: Vec<_> = walkdir::WalkDir::new(&vendor)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "MANIFEST.sha256")
-        .map(|entry| entry.into_path())
-        .collect();
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(&vendor) {
+        let entry = entry.map_err(|error| format!("{}: {error}", vendor.display()))?;
+        if entry.file_type().is_symlink() {
+            return Err(format!(
+                "{}: vendored evidence must not be a symbolic link",
+                entry.path().display()
+            ));
+        }
+        if entry.file_type().is_file() {
+            files.push(entry.into_path());
+        }
+    }
+    files.sort();
+    let mut listed = BTreeSet::new();
     let mut count = 0;
-    for manifest in manifests {
+    for manifest in files.iter().filter(|path| {
+        path.file_name()
+            .is_some_and(|name| name == "MANIFEST.sha256")
+    }) {
         let directory = manifest.parent().expect("manifest parent");
-        let text = fs::read_to_string(&manifest)
+        let text = fs::read_to_string(manifest)
             .map_err(|error| format!("{}: {error}", manifest.display()))?;
+        if text.lines().next().is_none() {
+            return Err(format!(
+                "{}: vendor manifest lists no files",
+                manifest.display()
+            ));
+        }
         for (line_number, line) in text.lines().enumerate() {
             let (expected, relative) = line.split_once("  ").ok_or_else(|| {
                 format!(
@@ -3637,6 +3830,14 @@ fn verify_vendor(root: &Path) -> Result<usize> {
                 ));
             }
             let path = safe_join(directory, relative)?;
+            if !listed.insert(path.clone()) {
+                return Err(format!(
+                    "{}:{}: {} is listed more than once",
+                    manifest.display(),
+                    line_number + 1,
+                    path.display()
+                ));
+            }
             let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
             if hex_sha256(&bytes) != expected {
                 return Err(format!("{}: vendored checksum mismatch", path.display()));
@@ -3644,54 +3845,194 @@ fn verify_vendor(root: &Path) -> Result<usize> {
             count += 1;
         }
     }
+    if let Some(unlisted) = files.iter().find(|path| {
+        path.file_name()
+            .is_none_or(|name| name != "MANIFEST.sha256")
+            && !listed.contains(*path)
+    }) {
+        return Err(format!(
+            "{}: vendored file is not listed in a MANIFEST.sha256",
+            unlisted.display()
+        ));
+    }
     Ok(count)
 }
 
 fn diff_snapshots(root: &Path, old: &str, new: &str) -> Result<()> {
-    let snapshots = root.join("contracts/harnesses");
-    let old_dir = find_snapshot(&snapshots, old)?;
-    let new_dir = find_snapshot(&snapshots, new)?;
-    let old_snapshot: Snapshot = read_yaml(&old_dir.join("snapshot.yaml"))?;
-    let new_snapshot: Snapshot = read_yaml(&new_dir.join("snapshot.yaml"))?;
-    let old_events: BTreeSet<_> = old_snapshot
+    print!(
+        "{}",
+        render_snapshot_diff(&root.join("contracts/harnesses"), old, new)?
+    );
+    Ok(())
+}
+
+/// Describe how two snapshots differ, event by event.
+///
+/// Every snapshot file embeds its own snapshot ID (contract IDs, schema `$id`s,
+/// fixture provenance), so each side's ID is replaced with a placeholder before
+/// comparing. What remains are substantive schema, fixture, contract, and
+/// provenance differences, which the maintenance workflow classifies.
+fn render_snapshot_diff(snapshots: &Path, old: &str, new: &str) -> Result<String> {
+    let old_dir = find_snapshot(snapshots, old)?;
+    let new_dir = find_snapshot(snapshots, new)?;
+    let old_snapshot: Snapshot = read_yaml(&old_dir.join(SNAPSHOT_METADATA_FILE))?;
+    let new_snapshot: Snapshot = read_yaml(&new_dir.join(SNAPSHOT_METADATA_FILE))?;
+    let old_events: BTreeMap<_, _> = old_snapshot
         .events
         .iter()
-        .map(|event| event.wire_name.as_str())
+        .map(|event| (event.wire_name.as_str(), event))
         .collect();
-    let new_events: BTreeSet<_> = new_snapshot
+    let new_events: BTreeMap<_, _> = new_snapshot
         .events
         .iter()
-        .map(|event| event.wire_name.as_str())
+        .map(|event| (event.wire_name.as_str(), event))
         .collect();
-    println!(
-        "old: {}/{} ({} events)",
-        old_snapshot.harness,
-        old_snapshot.id,
-        old_events.len()
-    );
-    println!(
-        "new: {}/{} ({} events)",
-        new_snapshot.harness,
-        new_snapshot.id,
-        new_events.len()
-    );
-    for event in new_events.difference(&old_events) {
-        println!("+ {event}");
+
+    let mut output = String::new();
+    for (label, snapshot) in [("old", &old_snapshot), ("new", &new_snapshot)] {
+        writeln!(
+            &mut output,
+            "{label}: {}/{} ({} events)",
+            snapshot.harness,
+            snapshot.id,
+            snapshot.events.len()
+        )
+        .expect("writing to String cannot fail");
     }
-    for event in old_events.difference(&new_events) {
-        println!("- {event}");
+    let (mut added, mut removed, mut changed, mut unchanged) = (0, 0, 0, 0);
+    for event in new_events
+        .keys()
+        .filter(|event| !old_events.contains_key(*event))
+    {
+        writeln!(&mut output, "+ {event}").expect("writing to String cannot fail");
+        added += 1;
     }
-    let old_hash = hash_tree(&old_dir)?;
-    let new_hash = hash_tree(&new_dir)?;
-    println!(
+    for event in old_events
+        .keys()
+        .filter(|event| !new_events.contains_key(*event))
+    {
+        writeln!(&mut output, "- {event}").expect("writing to String cannot fail");
+        removed += 1;
+    }
+    for (event, old_event) in &old_events {
+        let Some(new_event) = new_events.get(event) else {
+            continue;
+        };
+        let differences = differing_files(
+            &normalized_tree(
+                &safe_join(&old_dir, &old_event.path)?,
+                &old_snapshot.id,
+                false,
+            )?,
+            &normalized_tree(
+                &safe_join(&new_dir, &new_event.path)?,
+                &new_snapshot.id,
+                false,
+            )?,
+        );
+        if differences.is_empty() {
+            writeln!(&mut output, "= {event}").expect("writing to String cannot fail");
+            unchanged += 1;
+        } else {
+            writeln!(&mut output, "~ {event}: {}", differences.join(", "))
+                .expect("writing to String cannot fail");
+            changed += 1;
+        }
+    }
+    let snapshot_differences = differing_files(
+        &normalized_tree(&old_dir, &old_snapshot.id, true)?,
+        &normalized_tree(&new_dir, &new_snapshot.id, true)?,
+    );
+    if !snapshot_differences.is_empty() {
+        writeln!(
+            &mut output,
+            "~ snapshot files: {}",
+            snapshot_differences.join(", ")
+        )
+        .expect("writing to String cannot fail");
+    }
+    writeln!(
+        &mut output,
+        "events: {added} added, {removed} removed, {changed} changed, {unchanged} unchanged"
+    )
+    .expect("writing to String cannot fail");
+    writeln!(
+        &mut output,
         "content: {}",
-        if old_hash == new_hash {
+        if added + removed + changed == 0 && snapshot_differences.is_empty() {
             "identical"
         } else {
             "changed"
         }
-    );
-    Ok(())
+    )
+    .expect("writing to String cannot fail");
+    Ok(output)
+}
+
+/// Read every file below `directory`, keyed by relative path, with each
+/// occurrence of `snapshot_id` replaced by a placeholder.
+///
+/// With `snapshot_root`, the snapshot's lifecycle metadata, its manifest, and
+/// the per-event trees (compared separately) are skipped.
+fn normalized_tree(
+    directory: &Path,
+    snapshot_id: &str,
+    snapshot_root: bool,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    let skipped: Vec<PathBuf> = if snapshot_root {
+        [SNAPSHOT_METADATA_FILE, "MANIFEST.sha256", "events"]
+            .iter()
+            .map(|name| directory.join(name))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut files = BTreeMap::new();
+    let mut walker = walkdir::WalkDir::new(directory).into_iter();
+    while let Some(entry) = walker.next() {
+        let entry = entry.map_err(|error| format!("{}: {error}", directory.display()))?;
+        if skipped.iter().any(|skip| entry.path() == skip) {
+            if entry.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(directory)
+            .expect("walked path below directory")
+            .to_string_lossy()
+            .into_owned();
+        let bytes = fs::read(entry.path())
+            .map_err(|error| format!("{}: {error}", entry.path().display()))?;
+        let normalized = match String::from_utf8(bytes) {
+            Ok(text) => text.replace(snapshot_id, "<snapshot>").into_bytes(),
+            Err(error) => error.into_bytes(),
+        };
+        files.insert(relative, normalized);
+    }
+    Ok(files)
+}
+
+/// List relative paths whose normalized content differs, marking files that
+/// exist on only one side with `+` (new) or `-` (old).
+fn differing_files(
+    old: &BTreeMap<String, Vec<u8>>,
+    new: &BTreeMap<String, Vec<u8>>,
+) -> Vec<String> {
+    let paths: BTreeSet<_> = old.keys().chain(new.keys()).collect();
+    paths
+        .into_iter()
+        .filter_map(|path| match (old.get(path), new.get(path)) {
+            (Some(before), Some(after)) if before == after => None,
+            (Some(_), Some(_)) => Some(path.clone()),
+            (None, _) => Some(format!("+{path}")),
+            (_, None) => Some(format!("-{path}")),
+        })
+        .collect()
 }
 
 fn find_snapshot(root: &Path, id: &str) -> Result<PathBuf> {
@@ -3711,12 +4052,13 @@ fn find_snapshot(root: &Path, id: &str) -> Result<PathBuf> {
         return Err(format!("snapshot {id} not found"));
     }
 
-    let matches: Vec<_> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_type().is_dir() && entry.file_name() == id)
-        .map(|entry| entry.into_path())
-        .collect();
+    let mut matches = Vec::new();
+    for entry in walkdir::WalkDir::new(root) {
+        let entry = entry.map_err(|error| format!("{}: {error}", root.display()))?;
+        if entry.file_type().is_dir() && entry.file_name() == id {
+            matches.push(entry.into_path());
+        }
+    }
     match matches.as_slice() {
         [path] => Ok(path.clone()),
         [] => Err(format!("snapshot {id} not found")),
@@ -3724,52 +4066,224 @@ fn find_snapshot(root: &Path, id: &str) -> Result<PathBuf> {
     }
 }
 
-fn hash_tree(root: &Path) -> Result<String> {
-    let mut files: Vec<_> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .collect();
-    files.sort();
-    let mut digest = Sha256::new();
-    for path in files {
-        let relative = path.strip_prefix(root).expect("walked path below root");
-        digest.update(relative.to_string_lossy().as_bytes());
-        digest.update([0]);
-        digest.update(fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?);
-        digest.update([0]);
+/// Upstream GitHub tree named by a source URL of the form
+/// `https://github.com/<owner>/<repository>/tree/<revision>/<path>`.
+#[derive(Debug, PartialEq, Eq)]
+struct GitHubTree<'a> {
+    owner: &'a str,
+    repository: &'a str,
+    revision: &'a str,
+    path: &'a str,
+}
+
+impl GitHubTree<'_> {
+    /// Anonymous clone URL for the repository.
+    fn clone_url(&self) -> String {
+        format!("https://github.com/{}/{}.git", self.owner, self.repository)
     }
-    let bytes = digest.finalize();
-    let mut output = String::with_capacity(64);
-    for byte in bytes {
-        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+}
+
+fn parse_github_tree(url: &str) -> Option<GitHubTree<'_>> {
+    let mut parts = url.strip_prefix("https://github.com/")?.splitn(5, '/');
+    let owner = parts.next()?;
+    let repository = parts.next()?;
+    if parts.next()? != "tree" {
+        return None;
+    }
+    let revision = parts.next()?;
+    let path = parts.next()?.trim_end_matches('/');
+    [owner, repository, revision, path]
+        .iter()
+        .all(|part| !part.is_empty() && !part.split('/').any(|segment| segment == ".."))
+        .then_some(GitHubTree {
+            owner,
+            repository,
+            revision,
+            path,
+        })
+}
+
+/// Render the upstream inputs of every registry-selected snapshot for
+/// `scripts/check-upstream-contract-drift.sh`.
+///
+/// Each row holds tab-separated fields, with `-` for an absent value:
+/// harness, snapshot, source ID, reproducibility, URL, pinned revision,
+/// recorded content SHA-256, Git clone URL, upstream path, and the vendored
+/// directory relative to the workspace root.
+fn render_upstream_sources(root: &Path) -> Result<String> {
+    let catalog = root.join("contracts");
+    let registry: Registry = read_yaml(&catalog.join("registry.yaml"))?;
+    require_version(registry.format_version, "registry")?;
+    let mut output = String::new();
+    for (harness, selected) in &registry.harnesses {
+        let snapshot_dir = safe_join(
+            &catalog.join("harnesses"),
+            Path::new(harness).join("snapshots").join(&selected.current),
+        )?;
+        let snapshot: Snapshot = read_yaml(&snapshot_dir.join(SNAPSHOT_METADATA_FILE))?;
+        let sources: Sources = read_yaml(&safe_join(&snapshot_dir, &snapshot.sources_file)?)?;
+        for source in &sources.sources {
+            let tree = parse_github_tree(&source.url);
+            let mismatch = tree
+                .as_ref()
+                .zip(source.revision.as_deref())
+                .filter(|(tree, revision)| tree.revision != *revision);
+            if let Some((tree, revision)) = mismatch {
+                return Err(format!(
+                    "{}: source {} URL names revision {} but records {revision}",
+                    snapshot_dir.display(),
+                    source.id,
+                    tree.revision
+                ));
+            }
+            let vendored = match (&tree, source.reproducibility.as_deref()) {
+                (Some(tree), Some("vendored")) => {
+                    let leaf = tree.path.rsplit('/').next().unwrap_or(tree.path);
+                    let relative = format!("contracts/vendor/{harness}/{}/{leaf}", tree.revision);
+                    if !safe_join(root, &relative)?
+                        .join("MANIFEST.sha256")
+                        .is_file()
+                    {
+                        return Err(format!(
+                            "{}: vendored source {} has no manifest under {relative}",
+                            snapshot_dir.display(),
+                            source.id
+                        ));
+                    }
+                    Some(relative)
+                }
+                _ => None,
+            };
+            let clone_url = tree.as_ref().map(GitHubTree::clone_url);
+            let fields = [
+                Some(harness.as_str()),
+                Some(selected.current.as_str()),
+                Some(source.id.as_str()),
+                source.reproducibility.as_deref(),
+                Some(source.url.as_str()),
+                source.revision.as_deref(),
+                source.content_sha256.as_deref(),
+                clone_url.as_deref(),
+                tree.as_ref().map(|tree| tree.path),
+                vendored.as_deref(),
+            ];
+            let mut row = Vec::with_capacity(fields.len());
+            for field in fields {
+                let field = field.unwrap_or("-");
+                if field.is_empty() || field.contains(char::is_whitespace) {
+                    return Err(format!(
+                        "{}: source {} has an empty or whitespace-bearing field {field:?}",
+                        snapshot_dir.display(),
+                        source.id
+                    ));
+                }
+                row.push(field);
+            }
+            writeln!(&mut output, "{}", row.join("\t")).expect("writing to String cannot fail");
+        }
     }
     Ok(output)
 }
 
 fn read_yaml<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    if bytes.windows(2).any(|window| window == b"<<") {
-        return Err(format!("{}: YAML merge keys are forbidden", path.display()));
-    }
     let text = std::str::from_utf8(&bytes)
         .map_err(|error| format!("{}: YAML must be UTF-8: {error}", path.display()))?;
-    for (index, line) in text.lines().enumerate() {
-        let content = line.split('#').next().unwrap_or_default();
-        if content.contains(": &")
-            || content.trim_start().starts_with('&')
-            || content.trim_start().starts_with('*')
-            || content.contains(": *")
-        {
-            return Err(format!(
-                "{}:{}: YAML anchors and aliases are forbidden",
-                path.display(),
-                index + 1
-            ));
+    reject_yaml_references(text).map_err(|error| format!("{}:{error}", path.display()))?;
+    serde_yaml_ng::from_str(text).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Reject YAML anchors, aliases, and merge keys, returning a `line: message`
+/// error suffix.
+///
+/// serde_yaml_ng resolves aliases before callers see a value and exposes no
+/// parser events, so candidate `&name` and `*name` tokens are found lexically
+/// and then confirmed with the parser itself. Renaming a real alias leaves it
+/// dangling (a parse error); renaming a real anchor dangles its aliases or,
+/// when unused, leaves the parsed document unchanged. Renaming scalar content,
+/// such as a block-scalar `*** Begin Patch` line or quoted text, changes the
+/// parsed document instead, so such content is accepted.
+fn reject_yaml_references(text: &str) -> std::result::Result<(), String> {
+    // Syntax errors are left for the typed parse to report precisely.
+    let Ok(parsed) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text) else {
+        return Ok(());
+    };
+    if let Some(line) = merge_key_line(text, &parsed) {
+        return Err(format!("{line}: YAML merge keys are forbidden"));
+    }
+    for (offset, line, token) in yaml_reference_candidates(text) {
+        let (indicator, name) = token.split_at(1);
+        let mutated = format!(
+            "{}{indicator}hookkit-renamed-{name}{}",
+            &text[..offset],
+            &text[offset + token.len()..]
+        );
+        let is_reference = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&mutated) {
+            Ok(value) => value == parsed,
+            Err(_) => true,
+        };
+        if is_reference {
+            return Err(format!("{line}: YAML anchors and aliases are forbidden"));
         }
     }
-    serde_yaml_ng::from_slice(&bytes).map_err(|error| format!("{}: {error}", path.display()))
+    Ok(())
+}
+
+/// Locate a `<<` mapping key, which serde_yaml_ng keeps as an ordinary key.
+fn merge_key_line(text: &str, value: &serde_yaml_ng::Value) -> Option<usize> {
+    fn contains_merge_key(value: &serde_yaml_ng::Value) -> bool {
+        match value {
+            serde_yaml_ng::Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
+                key.as_str() == Some("<<") || contains_merge_key(key) || contains_merge_key(value)
+            }),
+            serde_yaml_ng::Value::Sequence(items) => items.iter().any(contains_merge_key),
+            serde_yaml_ng::Value::Tagged(tagged) => contains_merge_key(&tagged.value),
+            _ => false,
+        }
+    }
+    contains_merge_key(value).then(|| {
+        text.lines()
+            .position(|line| line.contains("<<"))
+            .map_or(1, |index| index + 1)
+    })
+}
+
+/// Find `&name` and `*name` tokens that start a node position lexically:
+/// at the start of a line's content or after whitespace or a flow indicator,
+/// outside comments. Returns byte offset, 1-based line number, and token.
+fn yaml_reference_candidates(text: &str) -> Vec<(usize, usize, &str)> {
+    let mut candidates = Vec::new();
+    let mut line_start = 0;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        let bytes = line.as_bytes();
+        let mut position = 0;
+        while position < bytes.len() {
+            let byte = bytes[position];
+            let boundary =
+                position == 0 || matches!(bytes[position - 1], b' ' | b'\t' | b'[' | b'{' | b',');
+            if byte == b'#' && (position == 0 || bytes[position - 1].is_ascii_whitespace()) {
+                break;
+            }
+            if boundary && matches!(byte, b'&' | b'*') {
+                let length = bytes[position + 1..]
+                    .iter()
+                    .position(|next| next.is_ascii_whitespace() || b",[]{}".contains(next))
+                    .unwrap_or(bytes.len() - position - 1);
+                if length > 0 {
+                    candidates.push((
+                        line_start + position,
+                        index + 1,
+                        &line[position..=position + length],
+                    ));
+                }
+                position += length + 1;
+                continue;
+            }
+            position += 1;
+        }
+        line_start += line.len();
+    }
+    candidates
 }
 
 fn validate_yaml_metadata(path: &Path, meta_schema: &Path) -> Result<()> {
@@ -4294,5 +4808,269 @@ mod tests {
         let antigravity_post_tool = find("antigravity/docs-2026-08-04-r1/PostToolUse");
         assert!(antigravity_post_tool.support.note.contains("typed"));
         assert!(!antigravity_post_tool.capabilities.tool_result);
+    }
+
+    fn temp_tree(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "hookkit-xtask-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock follows the Unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create temporary tree");
+        root
+    }
+
+    fn write_file(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().expect("file has a parent")).expect("create parent");
+        fs::write(path, contents).expect("write temporary file");
+    }
+
+    #[test]
+    fn yaml_scalar_content_resembling_references_is_accepted() {
+        let text = concat!(
+            "cases:\n",
+            "  - id: patch # an &anchor-like comment\n",
+            "    command: |\n",
+            "      *** Begin Patch\n",
+            "      *** Update File: src/main.rs\n",
+            "      apply_patch <<'PATCH'\n",
+            "      *** End Patch\n",
+            "    quoted: \"*not-an-alias and &not-an-anchor\"\n",
+            "    plain: emphasis *inside* prose\n",
+        );
+        assert_eq!(reject_yaml_references(text), Ok(()));
+    }
+
+    #[test]
+    fn yaml_references_are_rejected_in_every_position() {
+        for (text, expected) in [
+            ("items:\n  - &item one\n  - two\n", "anchors and aliases"),
+            ("items:\n  - &item one\n  - *item\n", "anchors and aliases"),
+            (
+                "base: &base {a: 1}\nflow: {b: *base}\n",
+                "anchors and aliases",
+            ),
+            ("list: [&first 1, *first]\n", "anchors and aliases"),
+            ("base: {a: 1}\nchild:\n  <<: {a: 2}\n", "merge keys"),
+        ] {
+            let error = reject_yaml_references(text).expect_err(text);
+            assert!(error.contains(expected), "{text:?} produced {error}");
+        }
+    }
+
+    #[test]
+    fn selected_and_superseded_snapshots_must_stay_frozen() {
+        let registry = Registry {
+            format_version: 1,
+            harnesses: BTreeMap::from([(
+                "codex".to_string(),
+                RegistryHarness {
+                    current: "selected".to_string(),
+                },
+            )]),
+            supplements: RegistrySupplements {
+                command_environments: "supplement".to_string(),
+            },
+        };
+        let selected = BTreeMap::from([("codex".to_string(), "2026-08-04".to_string())]);
+        let draft = |id: &str, retrieved: &str| {
+            (
+                PathBuf::from(id),
+                Snapshot {
+                    format_version: 1,
+                    id: id.to_string(),
+                    harness: "codex".to_string(),
+                    state: "draft".to_string(),
+                    retrieved: retrieved.to_string(),
+                    sources_file: "sources.yaml".to_string(),
+                    manifest_file: None,
+                    events: Vec::new(),
+                },
+            )
+        };
+
+        let error =
+            validate_snapshot_states(&registry, &selected, &[draft("selected", "2026-08-04")])
+                .expect_err("a selected draft must fail");
+        assert!(error.contains("registry-selected snapshot must be frozen"));
+        let error = validate_snapshot_states(&registry, &selected, &[draft("old", "2026-07-12")])
+            .expect_err("an unfrozen historical snapshot must fail");
+        assert!(error.contains("superseded snapshots must stay frozen"));
+        validate_snapshot_states(&registry, &selected, &[draft("successor", "2026-09-29")])
+            .expect("a successor draft is a legitimate candidate");
+    }
+
+    #[test]
+    fn content_manifests_exclude_only_root_lifecycle_files() {
+        let root = temp_tree("manifest");
+        write_file(&root.join("snapshot.yaml"), "state: frozen\n");
+        write_file(&root.join("events/nested/snapshot.yaml"), "content\n");
+        write_file(&root.join("events/nested/MANIFEST.sha256"), "content\n");
+        let manifest = content_manifest(&root, "MANIFEST.sha256", Some(SNAPSHOT_METADATA_FILE))
+            .expect("manifest renders");
+        assert!(manifest.contains("  events/nested/snapshot.yaml\n"));
+        assert!(manifest.contains("  events/nested/MANIFEST.sha256\n"));
+        assert!(!manifest.contains("  snapshot.yaml\n"));
+        fs::remove_dir_all(root).expect("remove temporary tree");
+    }
+
+    #[test]
+    fn vendor_verification_rejects_unlisted_files_and_empty_manifests() {
+        let root = temp_tree("vendor");
+        let generated = root.join("contracts/vendor/codex/0123/generated");
+        write_file(&generated.join("a.json"), "{}\n");
+        write_file(
+            &generated.join("MANIFEST.sha256"),
+            &format!("{}  a.json\n", hex_sha256(b"{}\n")),
+        );
+        assert_eq!(verify_vendor(&root), Ok(1));
+
+        write_file(&generated.join("unlisted.json"), "{}\n");
+        let error = verify_vendor(&root).expect_err("an unlisted file must fail");
+        assert!(error.contains("not listed in a MANIFEST.sha256"));
+        fs::remove_file(generated.join("unlisted.json")).expect("remove unlisted file");
+
+        write_file(&generated.join("MANIFEST.sha256"), "");
+        let error = verify_vendor(&root).expect_err("an empty manifest must fail");
+        assert!(error.contains("lists no files"));
+        fs::remove_dir_all(root).expect("remove temporary tree");
+    }
+
+    #[test]
+    fn snapshot_diff_ignores_snapshot_ids_and_reports_changed_events() {
+        let root = temp_tree("diff");
+        let write_snapshot = |id: &str, schema: &str, retrieved: &str| {
+            let directory = root.join("codex/snapshots").join(id);
+            write_file(
+                &directory.join("snapshot.yaml"),
+                &format!(
+                    "format_version: 1\nid: {id}\nharness: codex\nstate: draft\nretrieved: {retrieved}\nsources_file: sources.yaml\nevents:\n- wire_name: Stop\n  rust_key: stop\n  path: events/stop\n- wire_name: PreToolUse\n  rust_key: pre_tool_use\n  path: events/pre-tool-use\n"
+                ),
+            );
+            write_file(
+                &directory.join("sources.yaml"),
+                &format!("retrieved: {retrieved}\n"),
+            );
+            write_file(
+                &directory.join("events/stop/contract.yaml"),
+                &format!("id: codex/{id}/Stop\n"),
+            );
+            write_file(
+                &directory.join("events/pre-tool-use/input.schema.json"),
+                &format!("{{\"$id\": \"urn:{id}\", {schema}}}\n"),
+            );
+        };
+        write_snapshot("old-r1", "\"type\": \"object\"", "2026-08-04");
+        write_snapshot("same-r2", "\"type\": \"object\"", "2026-08-04");
+        write_snapshot("new-r3", "\"type\": \"array\"", "2026-09-29");
+
+        let identical = render_snapshot_diff(&root, "old-r1", "same-r2").expect("diff renders");
+        assert!(identical.contains("= PreToolUse\n"), "{identical}");
+        assert!(identical.ends_with("content: identical\n"), "{identical}");
+
+        let changed = render_snapshot_diff(&root, "old-r1", "new-r3").expect("diff renders");
+        assert!(changed.contains("= Stop\n"), "{changed}");
+        assert!(
+            changed.contains("~ PreToolUse: input.schema.json\n"),
+            "{changed}"
+        );
+        assert!(
+            changed.contains("~ snapshot files: sources.yaml\n"),
+            "{changed}"
+        );
+        assert!(changed.ends_with("content: changed\n"), "{changed}");
+        fs::remove_dir_all(root).expect("remove temporary tree");
+    }
+
+    #[test]
+    fn github_tree_urls_parse_into_clone_url_revision_and_path() {
+        let tree = parse_github_tree(
+            "https://github.com/openai/codex/tree/1e59dc5/codex-rs/hooks/schema/generated/",
+        )
+        .expect("tree URL parses");
+        assert_eq!(tree.revision, "1e59dc5");
+        assert_eq!(tree.path, "codex-rs/hooks/schema/generated");
+        assert_eq!(tree.clone_url(), "https://github.com/openai/codex.git");
+        assert!(parse_github_tree("https://learn.chatgpt.com/docs/hooks").is_none());
+        assert!(
+            parse_github_tree("https://github.com/openai/codex/blob/1e59dc5/README.md").is_none()
+        );
+        assert!(
+            parse_github_tree("https://github.com/openai/codex/tree/1e59dc5/../escape").is_none()
+        );
+    }
+
+    #[test]
+    fn upstream_sources_follow_the_registry_selection() {
+        let root = workspace_root().expect("workspace root");
+        let registry: Registry =
+            read_yaml(&root.join("contracts/registry.yaml")).expect("registry parses");
+        let rendered = render_upstream_sources(&root).expect("selected sources render");
+        let rows: Vec<Vec<&str>> = rendered
+            .lines()
+            .map(|line| line.split('\t').collect())
+            .collect();
+        assert!(rows.iter().all(|row| row.len() == 10));
+        for (harness, selected) in &registry.harnesses {
+            assert!(
+                rows.iter()
+                    .any(|row| row[0] == harness && row[1] == selected.current),
+                "{harness} has no selected source row"
+            );
+        }
+        let vendored = rows
+            .iter()
+            .find(|row| row[3] == "vendored")
+            .expect("the Codex generated schemas are vendored");
+        assert!(vendored[9].starts_with(&format!(
+            "contracts/vendor/{}/{}/",
+            vendored[0], vendored[5]
+        )));
+        assert!(root.join(vendored[9]).join("MANIFEST.sha256").is_file());
+    }
+
+    #[test]
+    fn claude_and_codex_pre_tool_starters_pass_through() {
+        // An explicit "allow" skips Claude Code's permission prompt, so the
+        // starters' default must keep the harness's normal permission flow.
+        let (_, events, _, _, _, _) = current_template_catalog_parts();
+        let starters: Vec<_> = events
+            .events
+            .iter()
+            .filter(|event| event.stable_id == "pre_tool_use" && event.harness != "antigravity")
+            .collect();
+        assert_eq!(starters.len(), 2);
+        for event in starters {
+            assert_eq!(event.starter.strategy, "no_op", "{}", event.contract);
+            assert!(
+                event
+                    .starter
+                    .expression
+                    .ends_with("PreToolUseOutput::no_op()"),
+                "{}",
+                event.contract
+            );
+        }
+    }
+
+    #[test]
+    fn toolchain_pins_are_parsed_after_their_prefix() {
+        assert_eq!(
+            pinned_versions(
+                "uses: dtolnay/rust-toolchain@1.85.0\nuses: dtolnay/rust-toolchain@stable\n",
+                "dtolnay/rust-toolchain@"
+            ),
+            vec!["1.85.0"]
+        );
+        assert_eq!(
+            pinned_versions("run: cargo +1.85.0 check.", "cargo +"),
+            vec!["1.85.0"]
+        );
+        assert!(same_version("1.85", "1.85.0"));
+        assert!(same_version("9.17.1", "9.17.1"));
+        assert!(!same_version("1.86", "1.85.0"));
     }
 }

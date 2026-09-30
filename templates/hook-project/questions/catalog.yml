@@ -701,8 +701,8 @@ event_catalog:
         rust_type: hookkit_claude::protocol::Event
         variant: PreToolUse
       starter:
-        strategy: allow
-        expression: hookkit_claude::catalog::PreToolUseOutput::decide(hookkit_claude::catalog::PreToolPermissionDecision::Allow, None, None, None)
+        strategy: no_op
+        expression: hookkit_claude::catalog::PreToolUseOutput::no_op()
       fixture:
         source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/pre-tool-use/fixtures.yaml
         case: representative
@@ -1517,7 +1517,7 @@ event_catalog:
         rust_type: hookkit_codex::protocol::Event
         variant: PreToolUse
       starter:
-        strategy: allow
+        strategy: no_op
         expression: hookkit_codex::protocol::PreToolUseOutput::no_op()
       fixture:
         source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/pre-tool-use/fixtures.yaml
@@ -2391,5 +2391,5 @@ compatibility:
     pkl_version: 0.31.1
     hookkit:
       repository: https://github.com/plx/agent-hook-kit
-      git_revision: 83c49d46970602e8fb40a8afaeea521dfb7e9b61
+      git_revision: 828d8d6feacf60015ae325d798b2bc3f32b2bf3b
       crates_io_version: 0.1.0

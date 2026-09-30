@@ -271,7 +271,7 @@ events:
     rust_event: hookkit_claude::catalog::PreToolUse
     rust_output: hookkit_claude::catalog::PreToolUseOutput
     selector: { rust_type: hookkit_claude::protocol::Event, variant: PreToolUse }
-    starter: { strategy: allow, expression: "hookkit_claude::catalog::PreToolUseOutput::decide(hookkit_claude::catalog::PreToolPermissionDecision::Allow, None, None, None)" }
+    starter: { strategy: no_op, expression: "hookkit_claude::catalog::PreToolUseOutput::no_op()" }
     fixture: { source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/pre-tool-use/fixtures.yaml, case: representative }
     aligned_family: pre_tool
     capabilities: { input_rewrite: true, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }
@@ -586,7 +586,7 @@ events:
     rust_event: hookkit_codex::protocol::PreToolUse
     rust_output: hookkit_codex::protocol::PreToolUseOutput
     selector: { rust_type: hookkit_codex::protocol::Event, variant: PreToolUse }
-    starter: { strategy: allow, expression: "hookkit_codex::protocol::PreToolUseOutput::no_op()" }
+    starter: { strategy: no_op, expression: "hookkit_codex::protocol::PreToolUseOutput::no_op()" }
     fixture: { source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/pre-tool-use/fixtures.yaml, case: representative }
     aligned_family: pre_tool
     capabilities: { input_rewrite: true, true_pre_action_block: true, post_action_feedback: false, output_ignored: false, output_advisory: false, tool_result: false, separate_user_agent_messages: true, session_boundary: none }

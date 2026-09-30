@@ -38,10 +38,17 @@ pub struct Cli {
 impl Cli {
     /// Parse arguments and reject cross-field combinations Clap cannot express
     /// through derive attributes alone.
-    pub fn parse_validated() -> Self {
-        Self::parse()
-            .validate()
-            .unwrap_or_else(|error| error.exit())
+    ///
+    /// On failure this prints Clap's diagnostic, or the requested help or
+    /// version text, and returns the process status to exit with. See
+    /// [`argument_error_status`] for why usage errors never exit with 2.
+    pub fn parse_validated() -> Result<Self, std::process::ExitCode> {
+        Self::try_parse().and_then(Self::validate).map_err(|error| {
+            // Printing can only fail when the standard streams are gone,
+            // and the returned status still reports the outcome.
+            let _ = error.print();
+            std::process::ExitCode::from(argument_error_status(&error))
+        })
     }
 {% if harness_mode == "cross" and "file_activity" in state_capabilities and "antigravity" in harnesses %}
     /// Validate command/harness compatibility for programmatic callers.
@@ -62,6 +69,17 @@ impl Cli {
         Ok(self)
     }
 {% endif -%}
+}
+
+/// Process status for a Clap parse or validation outcome.
+///
+/// Help and version requests succeed with 0. Every argument error uses the
+/// non-blocking failure status 1 instead of Clap's default 2, because Claude
+/// Code and Codex treat exit status 2 from a hook as a blocking decision: a
+/// misregistered command would otherwise block tool calls, erase prompts, or
+/// keep a session from stopping.
+pub fn argument_error_status(error: &clap::Error) -> u8 {
+    if error.use_stderr() { 1 } else { 0 }
 }
 
 /// Selected hook commands. Names remain stable when more hooks are added.
