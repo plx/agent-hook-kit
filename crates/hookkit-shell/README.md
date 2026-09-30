@@ -72,6 +72,9 @@ fn inspect(input: &PreToolUseInput) {
         BashAnalysisOutcome::Unavailable(reason) => {
             eprintln!("Bash analysis unavailable: {reason:?}");
         }
+        // Also non-exhaustive: treat an outcome this version does not know
+        // as unavailable.
+        _ => eprintln!("Bash analysis unavailable"),
     }
 }
 ```

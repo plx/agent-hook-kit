@@ -77,6 +77,13 @@ coverage must be derived from
 `contracts/status/implementation/registry.json`, including Claude's new
 `DirectoryAdded` event and Codex's new `SessionEnd` event.
 
+> **Update (2026-09-30):** the registry now selects
+> `claude-code/docs-2026-09-29-r1` (33 events, adding `PreModelSwitch` and
+> `PostModelSwitch`), `codex/commit-ff6aec9-r1` (12 events, adding
+> `Interrupt`), and `antigravity/docs-2026-09-29-r1` (5 events), 50 in all.
+> The template catalogs were regenerated from the registry and scaffold the
+> three new events; the acceptance tests assert the 33/12/5 split.
+
 All three are normal built-in choices, and cross-harness mode defaults to all
 three. There is no legacy fourth-harness compatibility mode, hidden choice, or
 feature to preserve. Capability and fidelity labels are computed from the

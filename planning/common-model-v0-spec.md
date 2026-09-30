@@ -409,6 +409,18 @@ The lowering layer should maintain an explicit per-harness/event matrix.
 
 The important change is not that all harnesses gain support. The change is that the lowering layer owns this table.
 
+> **Update (2026-09-30):** the stderr fallback in this table never reached
+> Claude Code or Codex users. Neither harness shows stderr from a hook that
+> exits 0: Claude Code writes it only to its debug log, and Codex discards it.
+> Both harnesses' `PostToolUse` responses carry a top-level `systemMessage`
+> that is shown to the user, so the "User notice structured channel" row is
+> now **supported** (`systemMessage`) for Claude and Codex.
+> `post-tool-use-agent-hook` and `examples/shared-posttool-autofix` send user
+> notices there, and Codex `PostToolUse` agent feedback is also supported
+> through `hookSpecificOutput.additionalContext`. The table above is kept as
+> the original design record; see `crates/hookkit-tool-runner/RUNNER_DESIGN.md`
+> for the current lowering.
+
 ### 8.2 Lowering Result
 
 Lowering should return more than just native output:
@@ -476,14 +488,18 @@ fn handle_post_tool(input: CommonPostToolUseInput, ctx: &RuntimeContext) -> Comm
 
 Claude:
 
-- user notices fall back to stderr;
+- user notices fall back to stderr (superseded 2026-09-30: user notices now
+  lower to the top-level `systemMessage`, because Claude Code writes exit-0
+  stderr only to its debug log; see the note under §8.1);
 - agent feedback lowers to `hookSpecificOutput.additionalContext`;
 - diagnostics artifact appears in stderr/user notice and can be referenced in agent feedback.
 
 Codex:
 
-- user notices fall back to stderr;
-- agent feedback is unsupported for `PostToolUse`;
+- user notices fall back to stderr (superseded 2026-09-30: user notices now
+  lower to `systemMessage`, because Codex discards exit-0 stderr);
+- agent feedback is unsupported for `PostToolUse` (superseded: Codex
+  `PostToolUse` now accepts `hookSpecificOutput.additionalContext`);
 - under `BestEffortWithWarnings`, agent feedback is dropped with a warning;
 - under `Strict`, lowering fails.
 

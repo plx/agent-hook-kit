@@ -31,8 +31,10 @@ reported once more. When a scan reaches its entry budget, it records a
 `ScanResume` (a separate version-1 `reconciliation-progress` entity) instead of
 silently skipping the tail: the next reconciliation scans the unscanned
 remainder first, against the older lower bound it is still owed. Relative roots
-and excluded roots, including a relative `--state-dir`, are resolved against
-the process working directory before comparison.
+and excluded roots are made absolute against the process working directory
+before comparison. (The bundled runners resolve a relative `--state-dir`
+against the harness project root before it reaches this crate, because Claude
+Code's hook working directory follows `cd`.)
 
 `append_report` persists only a SHA-256 digest of its key prefix, so passing
 the raw hook input as the prefix does not copy large tool inputs into every
@@ -40,8 +42,9 @@ journal record.
 
 The pending entity is version 2. In addition to direct evidence and gaps, it
 accepts deterministic retry events. The Stop consumer appends a fresh retry
-record for each manual, operationally incomplete, or unresolved target into
-the active generation before acknowledging its sealed source window. Retry ids
+record for each manual or operationally incomplete file, and for each target
+the traversal budget never reached, into the active generation before
+acknowledging its sealed source window. Retry ids
 deduplicate aggregate contributions, while the fresh record ensures that a
 retry is always outside the window being acknowledged. This gives at-least-once
 recovery across crashes without retaining unrelated handled files.
@@ -90,12 +93,14 @@ existing-files-only behavior; new pre-tool consumers can call
 `hookkit_tool_access::resolve_targets` directly for typed unresolved outcomes,
 nonexistent-write retention, and explicit symlink/error policies.
 
-The default coverage policy processes materialized files, requeues unresolved
-scopes and analyzer gaps, and exposes those gaps in the run summary without
-calling resolved files dirty. `strict` additionally blocks Stop while a gap is
-present. Both policies retain the unresolved evidence for a later attempt.
-`resolve_files` resolves every exact target first (these probes are not
-budgeted), so a directly observed file is never dropped. Scoped resolution then
+The bundled Stop runner's default coverage policy processes materialized files
+and reports unresolvable targets and analyzer gaps once, in the run summary of
+the Stop that first sees them, without calling resolved files dirty; retrying
+the same analysis cannot resolve them, so they are discharged with the source
+window. `strict` additionally blocks that one Stop. Only the scopes the
+traversal budget never reached are re-queued. `resolve_files` resolves every
+exact target first (these probes are not budgeted), so a directly observed
+file is never dropped. Scoped resolution then
 stops at `maxEntries`; the scope being walked and every later scope remain
 unresolved targets, plus an explicit coverage gap, rather than silently
 dropping the unwalked tail. `ResolvedFileActivity` names the scope whose walk

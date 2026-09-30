@@ -94,8 +94,10 @@ class FileActivity {
   /// the agent session. Default: "disabled".
   vcs: ("disabled" | "git-dirty")?
 
-  /// Applied only to the first timestamp scan, whose session-start observation
-  /// may occur just after an early edit. Default: 2000.
+  /// Clock-resolution slack subtracted from every mtime scan's lower bound,
+  /// so writes on coarse or skewed filesystem clocks near the previous cursor
+  /// (or just before the session-start observation) are not lost. Default:
+  /// 2000.
   timestampToleranceMillis: UInt?
 
   /// Bound recursive scans and record a coverage gap when the limit is hit.

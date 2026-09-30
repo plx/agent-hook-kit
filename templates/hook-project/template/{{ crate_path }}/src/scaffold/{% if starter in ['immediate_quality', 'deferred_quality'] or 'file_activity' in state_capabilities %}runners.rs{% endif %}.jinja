@@ -60,6 +60,10 @@ pub fn run_session_start(harness: HarnessId, state_dir: PathBuf) -> ExitCode {
 }
 
 /// Append PostToolUse file-activity evidence without emitting hook messages.
+///
+/// On Claude Code the observer also accepts `PostToolUseFailure`, which is the
+/// only event Claude sends for a tool call that failed after writing files, so
+/// register this command for both events there.
 pub fn run_file_activity(harness: HarnessId, state_dir: PathBuf) -> ExitCode {
     hookkit_tool_runner::run_file_activity_observer(hookkit_tool_runner::FileActivityCli {
         harness,

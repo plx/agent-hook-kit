@@ -24,6 +24,8 @@ exist in the registry; during an actual staged publish, run `cargo package` and
 For the Git-pinned template preview:
 
 1. Push the compatibility commit containing every API used by generated code.
+   It must be reachable from `main`: CI's template job fails when the pinned
+   revision is not.
 2. Set `templates/hook-project/catalog/compatibility.yml` to that commit's full
    SHA, then run `cargo xtask template-catalog sync` and the release check.
 3. From a clean directory, generate against the public SHA and verify that all

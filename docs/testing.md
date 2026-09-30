@@ -39,13 +39,50 @@ golden outputs match typed constructors.
 ```sh
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets
+HOOKKIT_REQUIRE_PKL=1 cargo test --workspace --all-targets
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 The workspace test command deliberately excludes tests marked `ignored`. Native
 payloads, fake executables, temporary paths, and checked-in configuration are
 allowed; ambient formatter/linter versions are not.
+
+Tests that evaluate Pkl (`hookkit-pkl-config`'s `merge`, `builtins`, and
+`discovery` suites, the runtime integration suite, and the tool runner's
+`post_tool_e2e`, `turn_completion_e2e`, and `tool_fixtures` suites) skip
+themselves when `pkl` is not on `PATH`, so a local run without Pkl still
+passes. `HOOKKIT_REQUIRE_PKL=1` turns every such skip into a failure. CI's
+check job installs the Pkl version pinned in
+`templates/hook-project/catalog/compatibility.yml` and sets it, as does
+`scripts/release-check.sh`, so Pkl-dependent coverage can never silently
+disappear from the required lane.
+
+The stdin/stdout runners are tested as real processes, because only a process
+shows the bytes and exit status a harness observes:
+
+- `crates/hookkit-runtime/tests/stdin_runners.rs` drives `run_event*`,
+  `run_harness*`, and `dispatch_builtin_harness*`, including the one-line
+  stderr failure report, `FailurePolicy::FailClosed` lowering, caught handler
+  panics, and the diagnostics sink.
+- `crates/hookkit-runtime/tests/aligned_stdin.rs` does the same for
+  `run_aligned_event`, `run_aligned_event_with_diagnostics`, and
+  `run_aligned_event_with_options`: fail-closed exit 2 on Claude Code and
+  Codex gating families, a JSON deny on Antigravity `PreToolUse`, and
+  non-blocking observers and turn completion.
+- `crates/hookkit-runtime/tests/integration.rs` runs the example and runner
+  binaries end to end. It finds them in the same target directory, profile,
+  and target triple as the test executable, so `CARGO_TARGET_DIR`,
+  `--release`, and `--target` exercise freshly built binaries.
+
+`crates/hookkit-shell/tests/adversarial.rs` is a table-driven corpus of Bash
+analysis bypasses, each tagged with its review finding, plus bounded-cost and
+benign-precision checks. With `HOOKKIT_SHELL_DIFFERENTIAL=1` it also runs every
+executable case under `bash` and checks that the case had the effect the
+analysis must report:
+
+```sh
+HOOKKIT_SHELL_DIFFERENTIAL=1 cargo test -p hookkit-shell --test adversarial
+```
 
 ### 3. Hermetic runner orchestration
 
@@ -70,6 +107,10 @@ cargo test -p hookkit-tool-runner --test tool_fixtures \
   -- --ignored --nocapture
 ```
 
+`HOOKKIT_FIXTURE_TOOLS=jq,check-merge-conflict` limits the run to the listed
+tool ids, and `HOOKKIT_FIXTURE_BLESS=1` rewrites the goldens from the installed
+tools; use it only with controlled tool versions. See
+[`crates/hookkit-tool-runner/tests/fixtures/README.md`](../crates/hookkit-tool-runner/tests/fixtures/README.md).
 The aggregate skips missing tools and compares installed-tool output, so it is
 diagnostic unless the job supplies the repository's pinned compatibility
 manifest. Record OS, architecture, locale, color settings, Pkl version, tool
@@ -88,9 +129,21 @@ snapshots are immutable.
 
 ### 6. Upstream drift discovery
 
-Scheduled retrieval compares pinned sources or deterministic normalized hashes
-with a candidate snapshot. It may open a review task and generate artifacts, but
-must not modify the selected snapshot or support claims automatically.
+```sh
+scripts/check-upstream-contract-drift.sh
+```
+
+The scheduled drift workflow runs this script. It reads every revision, URL,
+and hash from the registry-selected snapshots and command-environment
+supplement through `cargo xtask contracts upstream-sources`; supplement rows
+are labeled `command-environments/<supplement-id>/<source-id>`. It checks the
+vendored Codex schemas against upstream at the pinned revision and at upstream
+HEAD, lists pinned source trees that changed for review, and re-hashes every
+documentation URL that records a `content_sha256`. It exits 0 when nothing
+drifted, 1 on drift or a vendored-evidence mismatch, and 2 when discovery
+itself fails, so a broken check never looks clean. It never modifies the
+checkout: a drift report is a prompt to author a successor snapshot or
+supplement, never to edit the selected one.
 
 ## Failure classification
 

@@ -46,8 +46,9 @@ in the typed contract. In particular:
 - A declared exact name with a non-Unicode value is rejected instead of being
   silently changed. A variable matched only through a declared prefix, or named
   in the spec's `LENIENT_VARIABLE_NAMES` (Codex's plugin variables, which Codex
-  always writes as UTF-8), is skipped with a diagnostics warning instead, so
-  stray inherited state cannot disable every hook.
+  always writes as UTF-8, and Claude Code's `CLAUDE_PID`), is skipped with a
+  diagnostics warning instead, so stray inherited state cannot disable every
+  hook.
 - `Debug` for `EnvironmentVariables`, Claude plugin options, and the Claude
   messaging token prints names but redacts values, because they can contain
   secrets.
@@ -66,8 +67,11 @@ Every Claude Code row requires the baseline `CLAUDECODE=1`,
 `CLAUDE_CODE_CHILD_SESSION=1` (Claude Code v2.1.172 or later),
 `CLAUDE_CODE_SESSION_ID`, and `CLAUDE_PROJECT_DIR`. A missing, empty, or
 different baseline value fails the hook. `CLAUDE_PROJECT_DIR` is the project
-root where the session started; it does not follow Claude into a worktree,
-while the input `cwd` does.
+root where the session started; it does not follow `cd` in the Bash tool or
+Claude's move into a worktree, while the input `cwd` does. HookKit therefore
+uses it as the stable Claude Code root: aligned `project_roots()` and
+`project_dir()` return it, and the bundled runners resolve a relative
+`--state-dir` (and Stop-time configuration discovery) against it.
 
 Every row also accepts this optional state:
 
@@ -75,21 +79,26 @@ Every row also accepts this optional state:
   be empty) when trace context propagates. An empty `CLAUDE_EFFORT` is absent,
   and an unknown effort value is kept.
 - `CLAUDE_PID`, Claude Code's own process ID (v2.1.214 or later), as a
-  positive decimal integer. An empty value is absent; a sign, whitespace,
-  non-digit, zero, or overflowing value fails the hook.
+  positive decimal integer. Claude Code never exports anything else, so an
+  empty, signed, padded, non-digit, zero, overflowing, or non-UTF-8 value is
+  inherited state and yields `claude_pid: None` instead of failing the hook.
 - Execution location. A cloud session, Anthropic-hosted or, since v2.1.224, in
   a self-hosted environment, sets `CLAUDE_CODE_REMOTE=true` together with a
   non-empty `CLAUDE_CODE_REMOTE_SESSION_ID`; the marker without the ID fails
   the hook. Any other `CLAUDE_CODE_REMOTE` value, or an ID without the marker,
-  is ambient state and yields a local session. A local session may carry its
-  Remote Control ID in `CLAUDE_CODE_BRIDGE_SESSION_ID` (v2.1.199 or later),
-  which is ignored in a cloud session.
+  is ambient state and yields a local session. The v2.1.224 floor comes from
+  the Claude Code changelog, and the self-hosted configuration page documents
+  `CLAUDE_CODE_REMOTE_SESSION_ID` in the environment the runner gives Claude
+  Code, which hooks inherit. A local session may carry its Remote Control ID
+  in `CLAUDE_CODE_BRIDGE_SESSION_ID` (v2.1.199 or later), which is ignored in
+  a cloud session.
 - Cross-session messaging, in sessions that bind an inbox socket, which is
-  exported before any hook runs, including `SessionStart`:
-  `CLAUDE_CODE_MESSAGING_SOCKET` (v2.1.224 or later) and the per-session
-  secret `CLAUDE_CODE_MESSAGING_TOKEN` (v2.1.228 or later). The socket may
-  appear without the token; a token without a socket, or an empty value, is
-  ignored.
+  exported before any hook runs, including `SessionStart`. The supplement
+  models two profiles: `CLAUDE_CODE_MESSAGING_SOCKET` (v2.1.224 or later), and
+  the per-session secret `CLAUDE_CODE_MESSAGING_TOKEN` (v2.1.228 or later),
+  which applies only alongside the socket. The socket may appear without the
+  token; a token without a socket, or an empty value, is inherited state and
+  is ignored.
 - Plugin state as the non-empty pair `CLAUDE_PLUGIN_ROOT` and
   `CLAUDE_PLUGIN_DATA`, plus zero or more `CLAUDE_PLUGIN_OPTION_<KEY>` values.
   A complete pair with an empty half, or an option with an empty key, fails
@@ -264,7 +273,11 @@ source:
   [plugin components](https://code.claude.com/docs/en/plugins/components),
   [cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket),
   [cloud-session links](https://code.claude.com/docs/en/cloud-environments#link-output-back-to-the-session),
-  and [self-hosted environments](https://code.claude.com/docs/en/self-hosted-environments).
+  [self-hosted environments](https://code.claude.com/docs/en/self-hosted-environments),
+  [self-hosted environment configuration](https://code.claude.com/docs/en/self-hosted-environments-configuration)
+  (runner-provided `CLAUDE_CODE_REMOTE_SESSION_ID`), and the
+  [Claude Code changelog](https://github.com/anthropics/claude-code/blob/2282079d6ac8824ec4b72a432a03e0c636e0512f/CHANGELOG.md)
+  pinned by the selected snapshot (the v2.1.224 self-hosted floor).
 - Codex: [hooks reference](https://learn.chatgpt.com/docs/hooks) and pinned
   `rust-v0.159.2` source:
   [`discovery.rs`](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/hooks/src/engine/discovery.rs#L262-L270)
@@ -282,6 +295,9 @@ source:
 
 The event inventory remains governed by the immutable snapshots under
 [`contracts/`](../contracts/README.md). Its separately versioned
-[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-09-29-r1/)
-is the machine-validated evidence behind the command-process state summarized
-here.
+[command-environment supplement](../contracts/supplements/command-environments/command-environments-2026-09-30-r1/),
+`command-environments-2026-09-30-r1`, is the machine-validated evidence behind
+the command-process state summarized here. It succeeds
+`command-environments-2026-09-29-r1` without a schema change: the messaging
+token became its own profile, conditional on the socket, and the self-hosted
+evidence gained the two sources above.
