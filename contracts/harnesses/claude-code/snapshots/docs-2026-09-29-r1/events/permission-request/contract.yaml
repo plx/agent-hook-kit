@@ -1,0 +1,255 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        exact: 0
+      id: invalid-json
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        exact: 2
+      id: exit-2
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 2
+      id: exit-2-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-unstructured
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: user-message
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+  http:
+    kind: http
+    method: POST
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: json
+        presence: required
+        role: http-body
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: empty-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: non-json-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 599
+          min: 400
+      id: non-success
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: body
+      content_kind: json
+      framing: one-http-message
+    request_content_type: application/json
+    response_content_type: application/json
+event:
+  category: tool
+  identification:
+    discriminator:
+      const: PermissionRequest
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: permission_request
+  wire_name: PermissionRequest
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- http
+- mcp_tool
+- prompt
+harness: claude-code
+id: claude-code/docs-2026-09-29-r1/PermissionRequest
+schemas:
+  input:
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+  outputs:
+  - assurance:
+      confidence: low
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - claude-hooks-reference
+snapshot: docs-2026-09-29-r1
+uncertainties:
+- 'Exit status 2 is not honored: without a decision object the permission flow proceeds unchanged and stderr is discarded; a decision object printed with any exit code still applies.'
+- agent handlers are skipped on PermissionRequest since Claude Code v2.1.280.
+- updatedInput and updatedPermissions apply only to allow; message and interrupt apply only to deny.
+- mcp_server (Claude Code v2.1.274 or later) is present only for MCP tools; its source vocabulary is open, the schema lists the documented values as examples, and an unrecognized source must be treated as an unrecognized configured source rather than sdk.
+- Exit status 2 is described only by the exact exit-2 outcomes; the 1-255 nonzero outcomes model the reference's other exit codes and apply to status 2 only where no exit-2 outcome exists.
