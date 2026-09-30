@@ -1,10 +1,10 @@
-use crate::resolution::resolve_event;
+use crate::failure::{RunOptions, catch_panic, read_stdin, report_run_failure};
+use crate::resolution::{ParserCheck, resolve_event, resolve_event_with};
 use hookkit_core::{
     BuiltinHarness, CommandEnvironmentSpec, DISABLED_DIAGNOSTICS, DiagnosticsSink,
-    EnvironmentVariables, EventId, EventSelector, HarnessSpec, ProcessEmission, RawInvocation,
-    RuntimeContext,
+    EnvironmentVariables, EventId, EventSelector, HarnessId, HarnessSpec, IdentificationDescriptor,
+    ProcessEmission, RawInvocation, RuntimeContext,
 };
-use std::io::Read;
 
 /// Execute a dynamically selected event within one compile-time selected harness.
 pub fn execute_harness<H, F>(
@@ -45,17 +45,29 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
-    execute_harness_with_event_id::<H, _>(
-        bytes,
-        hint.as_ref().map(EventSelector::event_id),
-        variables,
-        diagnostics,
-        handler,
-    )
+    let hint = hint.as_ref().map(EventSelector::event_id);
+    let invocation = parse_for_harness(&H::ID, hint.as_ref(), bytes.into())?;
+    execute_invocation::<H, _>(&invocation, hint, variables, diagnostics, handler)
 }
 
-fn execute_harness_with_event_id<H, F>(
-    bytes: impl Into<Vec<u8>>,
+/// Rejects a hint for another harness before any payload analysis, then
+/// parses the payload.
+fn parse_for_harness(
+    harness: &HarnessId,
+    hint: Option<&EventId>,
+    bytes: Vec<u8>,
+) -> hookkit_core::Result<RawInvocation> {
+    if let Some(hint) = hint.filter(|hint| hint.harness() != harness) {
+        return Err(hookkit_core::HookkitError::HintHarnessMismatch {
+            selected: harness.clone(),
+            hint: hint.clone(),
+        });
+    }
+    RawInvocation::parse(bytes)
+}
+
+fn execute_invocation<H, F>(
+    invocation: &RawInvocation,
     hint: Option<EventId>,
     variables: &EnvironmentVariables,
     diagnostics: &dyn DiagnosticsSink,
@@ -69,20 +81,33 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
-    if let Some(hint) = hint.as_ref().filter(|hint| hint.harness() != &H::ID) {
-        return Err(hookkit_core::HookkitError::HintHarnessMismatch {
-            selected: H::ID,
-            hint: hint.clone(),
-        });
-    }
-    let invocation = RawInvocation::parse(bytes)?;
-    let resolved = resolve_event(&H::identification_descriptors(), H::ID, &invocation, hint)?;
-    let input = H::decode(&resolved.event, &invocation)?;
+    let descriptors = H::identification_descriptors();
+    // A hint or discriminator fixes the event without running its parser;
+    // `H::decode` then parses the payload exactly once. Only a decoding
+    // failure re-runs the validating resolver, to classify the error the same
+    // way `resolve_event` does.
+    let resolved = resolve_event_with(
+        &descriptors,
+        H::ID,
+        invocation,
+        hint.clone(),
+        ParserCheck::DeferToDecode,
+    )?;
+    let input = match H::decode(&resolved.event, invocation) {
+        Ok(input) => input,
+        Err(error) => {
+            resolve_event(&descriptors, H::ID, invocation, hint)?;
+            return Err(hookkit_core::HookkitError::InvalidInputForEvent {
+                event: resolved.event,
+                source: Box::new(error),
+            });
+        }
+    };
     let input_event = H::input_event(&input);
     if input_event != resolved.event {
-        return Err(hookkit_core::HookkitError::OutputEventMismatch {
-            input: resolved.event,
-            output: input_event,
+        return Err(hookkit_core::HookkitError::DecodedEventMismatch {
+            resolved: resolved.event,
+            decoded: input_event,
         });
     }
     let environment =
@@ -94,7 +119,7 @@ where
         input_event.clone(),
         resolved.contract,
         resolved.provenance,
-        &invocation,
+        invocation,
         H::context(&input),
         diagnostics,
     )?;
@@ -113,6 +138,11 @@ where
 }
 
 /// Stdin/stdout adapter for a compile-time selected harness.
+///
+/// On any failure it writes one `hookkit: <program> <hook> failed: ...` line
+/// to stderr and exits 1, which Claude Code and Codex treat as a non-blocking
+/// error: the pending action proceeds. Use [`run_harness_with_options`] to
+/// install a diagnostics sink or to fail closed.
 pub fn run_harness<H, F>(hint: Option<H::EventSelector>, handler: F) -> std::process::ExitCode
 where
     H: HarnessSpec,
@@ -122,22 +152,105 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<H::AnyCommandOutput>,
 {
-    let mut bytes = Vec::new();
-    if let Err(error) = std::io::stdin().read_to_end(&mut bytes) {
-        return crate::report::report_io_failure(H::ID, error);
-    }
-    let variables = match crate::environment::capture_command_environment::<H::CommandEnvironment>()
+    run_harness_with_options::<H, _>(hint, RunOptions::new(), handler)
+}
+
+/// Stdin/stdout adapter for a compile-time selected harness with explicit
+/// options.
+///
+/// `options` selects the diagnostics sink handed to the handler and the
+/// [`crate::failure::FailurePolicy`] applied to failures, including a handler
+/// panic. Every failure is recorded in the sink and reported on stderr. When a
+/// failure happens before the event is resolved, the runner identifies the
+/// event from `hint` or from the payload's authoritative discriminator,
+/// without running any parser, so the policy can still choose that event's
+/// native response.
+pub fn run_harness_with_options<H, F>(
+    hint: Option<H::EventSelector>,
+    options: RunOptions<'_>,
+    handler: F,
+) -> std::process::ExitCode
+where
+    H: HarnessSpec,
+    F: FnOnce(
+        H::AnyInput,
+        &H::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<H::AnyCommandOutput>,
+{
+    let hint = hint.as_ref().map(EventSelector::event_id);
+    let fail = |invocation: Option<&RawInvocation>, error: &dyn std::error::Error| {
+        let event = failure_event(
+            &H::identification_descriptors(),
+            &H::ID,
+            hint.as_ref(),
+            invocation,
+        );
+        report_failure_for(&options, &H::ID, event.as_ref(), error)
+    };
+    let bytes = match read_stdin() {
+        Ok(bytes) => bytes,
+        Err(error) => return fail(None, &error),
+    };
+    let variables = match crate::environment::capture_command_environment_with_diagnostics::<
+        H::CommandEnvironment,
+    >(options.diagnostics())
     {
         Ok(variables) => variables,
-        Err(error) => return crate::report::report_failure(H::ID, &error),
+        Err(error) => return fail(RawInvocation::parse(bytes).ok().as_ref(), &error),
     };
-    match execute_harness::<H, _>(bytes, hint, &variables, handler) {
-        Ok(emission) => crate::typed::write_emission(&emission),
-        Err(error) => crate::report::report_failure(H::ID, &error),
+    let invocation = match parse_for_harness(&H::ID, hint.as_ref(), bytes) {
+        Ok(invocation) => invocation,
+        Err(error) => return fail(None, &error),
+    };
+    let executed = catch_panic(|| {
+        execute_invocation::<H, _>(
+            &invocation,
+            hint.clone(),
+            &variables,
+            options.diagnostics(),
+            handler,
+        )
+    });
+    match executed {
+        Ok(Ok(emission)) => match crate::typed::try_write_emission(&emission) {
+            Ok(code) => code,
+            Err(error) => fail(Some(&invocation), &error),
+        },
+        Ok(Err(error)) => fail(Some(&invocation), &error),
+        Err(panic) => fail(Some(&invocation), &panic),
+    }
+}
+
+/// Best-effort native event for a failed invocation: the hint when it
+/// belongs to `harness`, otherwise the event named by an authoritative
+/// discriminator in the payload. No parser runs.
+fn failure_event(
+    descriptors: &[IdentificationDescriptor],
+    harness: &HarnessId,
+    hint: Option<&EventId>,
+    invocation: Option<&RawInvocation>,
+) -> Option<EventId> {
+    if let Some(hint) = hint.filter(|hint| hint.harness() == harness) {
+        return Some(hint.clone());
+    }
+    crate::resolution::discriminated_event(descriptors, harness, invocation?)
+}
+
+fn report_failure_for(
+    options: &RunOptions<'_>,
+    harness: &HarnessId,
+    event: Option<&EventId>,
+    error: &dyn std::error::Error,
+) -> std::process::ExitCode {
+    match event {
+        Some(event) => report_run_failure(options, harness, Some(event), event, error),
+        None => report_run_failure(options, harness, None, harness, error),
     }
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 /// Lossless sum type over inputs from all built-in harness adapters.
 pub enum BuiltinInput {
     /// Claude Code input.
@@ -149,6 +262,7 @@ pub enum BuiltinInput {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 /// Sum type over outputs from all built-in harness adapters.
 pub enum BuiltinOutput {
     /// Claude Code output.
@@ -160,6 +274,7 @@ pub enum BuiltinOutput {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 /// Lossless sum type over native environments from all built-in harnesses.
 pub enum BuiltinCommandEnvironment {
     /// Claude Code environment.
@@ -185,14 +300,59 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<BuiltinOutput>,
 {
-    let bytes = bytes.into();
+    execute_builtin_harness_with_diagnostics(
+        harness,
+        bytes,
+        hint,
+        variables,
+        &DISABLED_DIAGNOSTICS,
+        handler,
+    )
+}
+
+/// [`execute_builtin_harness`] with an explicit out-of-band diagnostics sink,
+/// which the handler reaches through [`RuntimeContext::diagnostics`].
+pub fn execute_builtin_harness_with_diagnostics<F>(
+    harness: BuiltinHarness,
+    bytes: impl Into<Vec<u8>>,
+    hint: Option<EventId>,
+    variables: &EnvironmentVariables,
+    diagnostics: &dyn DiagnosticsSink,
+    handler: F,
+) -> hookkit_core::Result<ProcessEmission>
+where
+    F: FnOnce(
+        BuiltinInput,
+        &BuiltinCommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<BuiltinOutput>,
+{
+    let invocation = parse_for_harness(&harness.id(), hint.as_ref(), bytes.into())?;
+    execute_builtin_invocation(harness, &invocation, hint, variables, diagnostics, handler)
+}
+
+fn execute_builtin_invocation<F>(
+    harness: BuiltinHarness,
+    invocation: &RawInvocation,
+    hint: Option<EventId>,
+    variables: &EnvironmentVariables,
+    diagnostics: &dyn DiagnosticsSink,
+    handler: F,
+) -> hookkit_core::Result<ProcessEmission>
+where
+    F: FnOnce(
+        BuiltinInput,
+        &BuiltinCommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<BuiltinOutput>,
+{
     match harness {
         BuiltinHarness::ClaudeCode => {
-            execute_harness_with_event_id::<hookkit_claude::protocol::ClaudeCode, _>(
-                bytes,
+            execute_invocation::<hookkit_claude::protocol::ClaudeCode, _>(
+                invocation,
                 hint,
                 variables,
-                &DISABLED_DIAGNOSTICS,
+                diagnostics,
                 |input, environment, context| {
                     let environment = BuiltinCommandEnvironment::Claude(environment.clone());
                     match handler(BuiltinInput::Claude(input), &environment, context)? {
@@ -202,36 +362,32 @@ where
                 },
             )
         }
-        BuiltinHarness::Codex => {
-            execute_harness_with_event_id::<hookkit_codex::protocol::Codex, _>(
-                bytes,
-                hint,
-                variables,
-                &DISABLED_DIAGNOSTICS,
-                |input, environment, context| {
-                    let environment = BuiltinCommandEnvironment::Codex(environment.clone());
-                    match handler(BuiltinInput::Codex(input), &environment, context)? {
-                        BuiltinOutput::Codex(output) => Ok(output),
-                        output => Err(builtin_harness_mismatch(context, &output)),
-                    }
-                },
-            )
-        }
-        BuiltinHarness::Antigravity => {
-            execute_harness_with_event_id::<hookkit_antigravity::Antigravity, _>(
-                bytes,
-                hint,
-                variables,
-                &DISABLED_DIAGNOSTICS,
-                |input, environment, context| {
-                    let environment = BuiltinCommandEnvironment::Antigravity(*environment);
-                    match handler(BuiltinInput::Antigravity(input), &environment, context)? {
-                        BuiltinOutput::Antigravity(output) => Ok(output),
-                        output => Err(builtin_harness_mismatch(context, &output)),
-                    }
-                },
-            )
-        }
+        BuiltinHarness::Codex => execute_invocation::<hookkit_codex::protocol::Codex, _>(
+            invocation,
+            hint,
+            variables,
+            diagnostics,
+            |input, environment, context| {
+                let environment = BuiltinCommandEnvironment::Codex(environment.clone());
+                match handler(BuiltinInput::Codex(input), &environment, context)? {
+                    BuiltinOutput::Codex(output) => Ok(output),
+                    output => Err(builtin_harness_mismatch(context, &output)),
+                }
+            },
+        ),
+        BuiltinHarness::Antigravity => execute_invocation::<hookkit_antigravity::Antigravity, _>(
+            invocation,
+            hint,
+            variables,
+            diagnostics,
+            |input, environment, context| {
+                let environment = BuiltinCommandEnvironment::Antigravity(*environment);
+                match handler(BuiltinInput::Antigravity(input), &environment, context)? {
+                    BuiltinOutput::Antigravity(output) => Ok(output),
+                    output => Err(builtin_harness_mismatch(context, &output)),
+                }
+            },
+        ),
         _ => Err(hookkit_core::HookkitError::UnsupportedBuiltinHarness(
             harness,
         )),
@@ -239,6 +395,12 @@ where
 }
 
 /// Stdin/stdout adapter for runtime-selected built-in dispatch.
+///
+/// On any failure it writes one `hookkit: <program> <hook> failed: ...` line
+/// to stderr and exits 1, which Claude Code and Codex treat as a non-blocking
+/// error: the pending action proceeds. Use
+/// [`dispatch_builtin_harness_with_options`] to install a diagnostics sink or
+/// to fail closed.
 pub fn dispatch_builtin_harness<F>(
     harness: BuiltinHarness,
     hint: Option<EventId>,
@@ -251,33 +413,88 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<BuiltinOutput>,
 {
-    let mut bytes = Vec::new();
-    if let Err(error) = std::io::stdin().read_to_end(&mut bytes) {
-        return crate::report::report_io_failure(harness.id(), error);
-    }
-    let variables = match capture_builtin_command_environment(&harness) {
-        Ok(variables) => variables,
-        Err(error) => return crate::report::report_failure(harness.id(), &error),
+    dispatch_builtin_harness_with_options(harness, hint, RunOptions::new(), handler)
+}
+
+/// Stdin/stdout adapter for runtime-selected built-in dispatch with explicit
+/// options. See [`run_harness_with_options`] for how failures are reported.
+pub fn dispatch_builtin_harness_with_options<F>(
+    harness: BuiltinHarness,
+    hint: Option<EventId>,
+    options: RunOptions<'_>,
+    handler: F,
+) -> std::process::ExitCode
+where
+    F: FnOnce(
+        BuiltinInput,
+        &BuiltinCommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<BuiltinOutput>,
+{
+    let id = harness.id();
+    let fail = |invocation: Option<&RawInvocation>, error: &dyn std::error::Error| {
+        let event = failure_event(
+            &builtin_harness_descriptors(harness),
+            &id,
+            hint.as_ref(),
+            invocation,
+        );
+        report_failure_for(&options, &id, event.as_ref(), error)
     };
-    match execute_builtin_harness(harness, bytes, hint, &variables, handler) {
-        Ok(emission) => crate::typed::write_emission(&emission),
-        Err(error) => crate::report::report_failure(harness.id(), &error),
+    let bytes = match read_stdin() {
+        Ok(bytes) => bytes,
+        Err(error) => return fail(None, &error),
+    };
+    let variables = match capture_builtin_command_environment(&harness, options.diagnostics()) {
+        Ok(variables) => variables,
+        Err(error) => return fail(RawInvocation::parse(bytes).ok().as_ref(), &error),
+    };
+    let invocation = match parse_for_harness(&id, hint.as_ref(), bytes) {
+        Ok(invocation) => invocation,
+        Err(error) => return fail(None, &error),
+    };
+    let executed = catch_panic(|| {
+        execute_builtin_invocation(
+            harness,
+            &invocation,
+            hint.clone(),
+            &variables,
+            options.diagnostics(),
+            handler,
+        )
+    });
+    match executed {
+        Ok(Ok(emission)) => match crate::typed::try_write_emission(&emission) {
+            Ok(code) => code,
+            Err(error) => fail(Some(&invocation), &error),
+        },
+        Ok(Err(error)) => fail(Some(&invocation), &error),
+        Err(panic) => fail(Some(&invocation), &panic),
+    }
+}
+
+fn builtin_harness_descriptors(harness: BuiltinHarness) -> Vec<IdentificationDescriptor> {
+    match harness {
+        BuiltinHarness::ClaudeCode => hookkit_claude::protocol::identification_descriptors(),
+        BuiltinHarness::Codex => hookkit_codex::protocol::identification_descriptors(),
+        BuiltinHarness::Antigravity => hookkit_antigravity::identification_descriptors(),
+        _ => Vec::new(),
     }
 }
 
 fn capture_builtin_command_environment(
     harness: &BuiltinHarness,
+    diagnostics: &dyn DiagnosticsSink,
 ) -> hookkit_core::Result<EnvironmentVariables> {
+    use crate::environment::capture_command_environment_with_diagnostics as capture;
     match harness {
-        BuiltinHarness::ClaudeCode => crate::environment::capture_command_environment::<
-            hookkit_claude::ClaudeCommandEnvironment,
-        >(),
-        BuiltinHarness::Codex => crate::environment::capture_command_environment::<
-            hookkit_codex::CodexCommandEnvironment,
-        >(),
-        BuiltinHarness::Antigravity => crate::environment::capture_command_environment::<
-            hookkit_antigravity::AntigravityCommandEnvironment,
-        >(),
+        BuiltinHarness::ClaudeCode => {
+            capture::<hookkit_claude::ClaudeCommandEnvironment>(diagnostics)
+        }
+        BuiltinHarness::Codex => capture::<hookkit_codex::CodexCommandEnvironment>(diagnostics),
+        BuiltinHarness::Antigravity => {
+            capture::<hookkit_antigravity::AntigravityCommandEnvironment>(diagnostics)
+        }
         _ => Err(hookkit_core::HookkitError::UnsupportedBuiltinHarness(
             *harness,
         )),

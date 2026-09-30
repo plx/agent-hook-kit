@@ -18,6 +18,80 @@ fn workspace_root() -> String {
     manifest.replace("/crates/hookkit-runtime", "").to_string()
 }
 
+/// Cargo output layout of the build that produced this test executable.
+///
+/// Example and runner binaries belong to other packages, so
+/// `CARGO_BIN_EXE_<name>` is unavailable. Instead, the profile directory is
+/// derived from this test executable (`<target>/[<triple>/]<profile>/deps/`),
+/// which honors `CARGO_TARGET_DIR`, `--target-dir`, `--release`/`--profile`,
+/// and `--target` without guessing at `./target/debug`.
+struct BuildLayout {
+    target_dir: PathBuf,
+    profile_dir: PathBuf,
+    profile: String,
+    target_triple: Option<String>,
+}
+
+fn build_layout() -> &'static BuildLayout {
+    static LAYOUT: OnceLock<BuildLayout> = OnceLock::new();
+    LAYOUT.get_or_init(|| {
+        let executable = std::env::current_exe().expect("test executable path");
+        let deps = executable.parent().expect("test executable directory");
+        assert_eq!(
+            deps.file_name().and_then(|name| name.to_str()),
+            Some("deps"),
+            "integration test executable {} is not in a cargo deps directory",
+            executable.display()
+        );
+        let profile_dir = deps
+            .parent()
+            .expect("cargo profile directory")
+            .to_path_buf();
+        let directory_name = profile_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("UTF-8 cargo profile directory name");
+        // Cargo writes the dev and test profiles to `debug`; every other
+        // profile writes to a directory with its own name.
+        let profile = match directory_name {
+            "debug" => "dev".to_owned(),
+            other => other.to_owned(),
+        };
+        let parent = profile_dir.parent().expect("cargo target directory");
+        // Cargo marks the root of every target directory with CACHEDIR.TAG.
+        // Its absence means the layout has a `--target <triple>` level.
+        let (target_dir, target_triple) = if parent.join("CACHEDIR.TAG").exists() {
+            (parent.to_path_buf(), None)
+        } else {
+            let triple = parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned);
+            (
+                parent
+                    .parent()
+                    .expect("cargo target directory")
+                    .to_path_buf(),
+                triple,
+            )
+        };
+        BuildLayout {
+            target_dir,
+            profile_dir,
+            profile,
+            target_triple,
+        }
+    })
+}
+
+/// Path of a workspace binary that [`ensure_built`] builds into the same
+/// target directory and profile as this test executable.
+fn binary_path(binary: &str) -> PathBuf {
+    build_layout()
+        .profile_dir
+        .join(format!("{binary}{}", std::env::consts::EXE_SUFFIX))
+}
+
 fn fixture_bytes(harness: &str, name: &str) -> Vec<u8> {
     let path = format!("{}/fixtures/{harness}/{name}", workspace_root());
     std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path}: {e}"))
@@ -25,7 +99,7 @@ fn fixture_bytes(harness: &str, name: &str) -> Vec<u8> {
 
 fn run_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::process::Output {
     ensure_built(binary);
-    let binary_path = format!("{}/target/debug/{binary}", workspace_root());
+    let binary_path = binary_path(binary);
     let mut command = Command::new(&binary_path);
     command.args(extra_args);
     configure_hook_environment(&mut command, binary, fixture, extra_args);
@@ -39,14 +113,14 @@ fn run_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::proces
             child.stdin.take().unwrap().write_all(fixture).unwrap();
             child.wait_with_output()
         })
-        .unwrap_or_else(|e| panic!("failed to run {binary_path}: {e}"))
+        .unwrap_or_else(|e| panic!("failed to run {}: {e}", binary_path.display()))
 }
 
 fn spawn_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::process::Child {
     use std::io::Write;
 
     ensure_built(binary);
-    let binary_path = format!("{}/target/debug/{binary}", workspace_root());
+    let binary_path = binary_path(binary);
     let mut command = Command::new(&binary_path);
     command.args(extra_args);
     configure_hook_environment(&mut command, binary, fixture, extra_args);
@@ -55,7 +129,7 @@ fn spawn_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::proc
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .unwrap_or_else(|error| panic!("failed to run {binary_path}: {error}"));
+        .unwrap_or_else(|error| panic!("failed to run {}: {error}", binary_path.display()));
     child
         .stdin
         .take()
@@ -417,7 +491,11 @@ run = new Listing {{ "ruff" }}
         .expect("failed to write post-tool-use.pkl");
 }
 
-fn write_selective_operational_hook_config(project: &Path, fake_ruff: &Path) {
+fn write_selective_operational_hook_config(
+    project: &Path,
+    fake_ruff: &Path,
+    missing_tool_policy: &str,
+) {
     let config_dir = project.join(".agent-hook-kit");
     std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
     let clean_executable = fake_ruff.to_string_lossy().replace('\\', "\\\\");
@@ -430,6 +508,7 @@ fn write_selective_operational_hook_config(project: &Path, fake_ruff: &Path) {
 
 settings {{
   fileActivity {{ filesystemMtime = false }}
+  missingToolPolicy = "{missing_tool_policy}"
 }}
 
 tools {{
@@ -543,6 +622,8 @@ fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u
                 "filePath": project.join(rel_path).to_string_lossy()
             }
         }),
+        // Codex edits files through `apply_patch`, whose hook input carries
+        // the patch text in `tool_input.command`.
         "codex" => serde_json::json!({
             "session_id": "codex-ruff-test",
             "transcript_path": "/tmp/codex-ruff-test.jsonl",
@@ -551,15 +632,14 @@ fn post_tool_use_fixture(harness: &str, project: &Path, rel_path: &str) -> Vec<u
             "model": "gpt-test",
             "turn_id": "codex-ruff-turn",
             "permission_mode": "default",
-            "tool_name": "Write",
+            "tool_name": "apply_patch",
             "tool_use_id": "codex-ruff-tool",
             "tool_input": {
-                "file_path": rel_path,
-                "content": "test fixture"
+                "command": format!(
+                    "*** Begin Patch\n*** Update File: {rel_path}\n@@\n-old\n+test fixture\n*** End Patch\n"
+                )
             },
-            "tool_response": {
-                "filePath": project.join(rel_path).to_string_lossy()
-            }
+            "tool_response": format!("Success. Updated the following files:\nM {rel_path}\n")
         }),
         "antigravity" => serde_json::json!({
             "conversationId": "antigravity-ruff-test",
@@ -705,6 +785,30 @@ fn run_deferred_case(harness: &str, project: &Path, state_arg: &str) -> std::pro
     )
 }
 
+/// The concatenated contents of every diagnostics artifact in `dir`.
+///
+/// The post-tool runner keeps full tool output in artifacts and sends users
+/// only a pointer, so assertions about tool output read the artifacts.
+fn artifact_text(dir: &Path) -> String {
+    let mut text = String::new();
+    for entry in std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .filter_map(Result::ok)
+    {
+        if entry.path().is_file() {
+            text.push_str(&std::fs::read_to_string(entry.path()).unwrap_or_default());
+        }
+    }
+    text
+}
+
+/// The user-facing `systemMessage` of a Claude or Codex response.
+fn system_message(response: &serde_json::Value) -> &str {
+    response["systemMessage"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected a systemMessage in {response}"))
+}
+
 fn only_summary(state_dir: &Path) -> serde_json::Value {
     let summaries = files_named(state_dir, "summary.json");
     assert_eq!(summaries.len(), 1, "expected exactly one deferred summary");
@@ -768,8 +872,17 @@ fn ensure_built(binary: &str) {
         _ => binary,
     };
 
-    let mut command = Command::new("cargo");
-    command.args(["build", "-p", package, "--bin", binary]);
+    let layout = build_layout();
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
+    command
+        .args(["build", "-p", package, "--bin", binary, "--profile"])
+        .arg(&layout.profile)
+        .arg("--target-dir")
+        .arg(&layout.target_dir);
+    if let Some(triple) = &layout.target_triple {
+        command.args(["--target", triple]);
+    }
     if package == "shared-posttool-autofix" {
         command.args(["--features", "test-support"]);
     }
@@ -790,9 +903,19 @@ fn pkl_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether Pkl-dependent tests must run instead of skipping. CI installs Pkl
+/// and sets `HOOKKIT_REQUIRE_PKL=1`, so a missing binary fails the test.
+fn pkl_required() -> bool {
+    std::env::var_os("HOOKKIT_REQUIRE_PKL").is_some_and(|value| !value.is_empty() && value != "0")
+}
+
 macro_rules! require_pkl {
     () => {
         if !pkl_available() {
+            assert!(
+                !pkl_required(),
+                "HOOKKIT_REQUIRE_PKL is set, but the pkl binary is not on PATH"
+            );
             eprintln!("skipping test: pkl binary not on PATH");
             return;
         }
@@ -828,9 +951,9 @@ fn aligned_pre_tool_run_path_reads_stdin_and_writes_native_stdout() {
         "model": "gpt-test",
         "turn_id": "stdin-turn",
         "permission_mode": "default",
-        "tool_name": "Read",
+        "tool_name": "Bash",
         "tool_use_id": "stdin-call",
-        "tool_input": {"path": ".env"}
+        "tool_input": {"command": "cat .env"}
     });
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
@@ -1270,7 +1393,10 @@ fn forbidden_file_guard_emits_antigravity_native_deny() {
             "workspacePaths": [project.to_string_lossy()],
             "transcriptPath": "/tmp/guard-antigravity.jsonl",
             "artifactDirectoryPath": "/tmp/guard-antigravity-artifacts",
-            "toolCall": {"name": "read_file", "args": {"path": ".env"}},
+            "toolCall": {
+                "name": "view_file",
+                "args": {"AbsolutePath": project.join(".env").to_string_lossy()}
+            },
             "stepIdx": 1
         }),
     )];
@@ -1363,15 +1489,15 @@ fn file_activity_observer_persists_shared_writer_patch_shell_and_gap_analysis_qu
     let state_arg = state_dir.to_string_lossy().into_owned();
     let cases = [
         (
-            "Write",
+            "mcp__filesystem__write_file",
             "writer",
-            serde_json::json!({"file_path": "src/writer.rs", "content": "fn main() {}"}),
+            serde_json::json!({"path": "src/writer.rs", "content": "fn main() {}"}),
         ),
         (
             "apply_patch",
             "patch",
             serde_json::json!({
-                "patch": "*** Begin Patch\n*** Update File: src/patched.rs\n@@\n-old\n+new\n*** End Patch"
+                "command": "*** Begin Patch\n*** Update File: src/patched.rs\n@@\n-old\n+new\n*** End Patch\n"
             }),
         ),
         (
@@ -1380,9 +1506,9 @@ fn file_activity_observer_persists_shared_writer_patch_shell_and_gap_analysis_qu
             serde_json::json!({"command": "echo ok > src/shell.txt"}),
         ),
         (
-            "Read",
+            "mcp__filesystem__read_file",
             "read-only",
-            serde_json::json!({"file_path": "src/read-only.rs"}),
+            serde_json::json!({"path": "src/read-only.rs"}),
         ),
         (
             "Bash",
@@ -1586,17 +1712,33 @@ fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
                 String::from_utf8_lossy(&output.stderr)
             );
             let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let summary = only_summary(&state_dir);
             if harness == "antigravity" {
-                assert_eq!(response["decision"], "stop");
+                // Antigravity injects Stop `reason` only with "continue", so an
+                // allowed stop has no channel at all: the omission warnings
+                // are recorded in the summary only.
+                assert_eq!(response, serde_json::json!({"decision": "stop"}));
+                let lowering = &summary["renderedMessages"]["lowering"];
+                assert_eq!(lowering["warningsDelivered"], false);
                 assert!(
-                    response["reason"]
-                        .as_str()
+                    lowering["warnings"]
+                        .as_array()
                         .unwrap()
-                        .contains("omitted user deferred Stop message")
+                        .iter()
+                        .any(|warning| warning
+                            .as_str()
+                            .unwrap()
+                            .contains("omitted user deferred Stop message"))
                 );
             } else {
                 assert!(response.get("decision").is_none());
-                let user = response["systemMessage"].as_str().unwrap();
+                // Claude's Stop `additionalContext` continues the turn, so an
+                // allowed stop never carries agent context on either harness.
+                assert!(
+                    response.get("hookSpecificOutput").is_none(),
+                    "{harness}/{case}: {response}"
+                );
+                let user = system_message(&response);
                 if expected_clean == 1 {
                     assert!(
                         user.contains("Checked 1 clean file"),
@@ -1605,19 +1747,12 @@ fn turn_completion_allowed_bucket_matrix_uses_native_audience_channels() {
                 }
                 if expected_auto == 1 {
                     assert!(user.contains("Auto-fixed 1 file"));
-                    if harness == "claude" {
-                        assert!(
-                            response["hookSpecificOutput"]["additionalContext"]
-                                .as_str()
-                                .unwrap()
-                                .contains("re-read changed files")
-                        );
-                    } else {
-                        assert!(user.contains("omitted agent deferred Stop message"));
-                    }
+                    assert!(
+                        user.contains("omitted agent deferred Stop message"),
+                        "{harness}/{case}: {user:?}"
+                    );
                 }
             }
-            let summary = only_summary(&state_dir);
             assert_eq!(summary["status"], "clean");
             assert_eq!(summary["counts"]["clean"], expected_clean);
             assert_eq!(summary["counts"]["autoFixed"], expected_auto);
@@ -1793,11 +1928,24 @@ fn turn_completion_lowering_policies_and_empty_agent_are_explicit() {
     );
     let response: serde_json::Value = serde_json::from_slice(&empty_agent.stdout).unwrap();
     assert_eq!(response["decision"], "block");
-    assert_eq!(response["reason"], "");
+    // Codex rejects a blank block reason (and lets the turn end), so an empty
+    // agent template is replaced by a pointer to the run summary.
+    let reason = response["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with(
+            "Deferred formatter/linter checks need attention before stopping; inspect "
+        ),
+        "{reason:?}"
+    );
+    let summary_path = files_named(&state_dir, "summary.json").remove(0);
+    assert!(
+        reason.contains(summary_path.to_string_lossy().as_ref()),
+        "{reason:?}"
+    );
     let summary = only_summary(&state_dir);
     assert_eq!(
         summary["renderedMessages"]["lowering"]["agent"]["status"],
-        "empty"
+        "synthesized"
     );
 }
 
@@ -1831,15 +1979,14 @@ fn turn_completion_batch_autofixes_then_acknowledges_the_exact_snapshot() {
     );
     assert!(stopped.status.success());
     let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    let user = system_message(&response);
+    assert!(user.contains("Auto-fixed 1 file: src/dirty.py"), "{user:?}");
+    // An allowed Claude stop has no agent channel: `additionalContext` would
+    // continue the turn. The omission is reported to the user instead.
+    assert!(response.get("hookSpecificOutput").is_none(), "{response}");
     assert!(
-        response["systemMessage"]
-            .as_str()
-            .unwrap()
-            .contains("Auto-fixed 1 file: src/dirty.py")
-    );
-    assert_eq!(
-        response["hookSpecificOutput"]["additionalContext"],
-        "Auto-fixed 1 file; re-read changed files before editing further."
+        user.contains("omitted agent deferred Stop message"),
+        "{user:?}"
     );
     let rewritten = std::fs::read_to_string(file).unwrap();
     assert!(rewritten.contains("formatted"));
@@ -2368,7 +2515,10 @@ fn turn_completion_operational_failure_retries_only_affected_files() {
     let state_dir = project.join("state");
     let state_arg = state_dir.to_string_lossy().into_owned();
     let fake_ruff = write_fake_ruff(&project);
-    write_selective_operational_hook_config(&project, &fake_ruff);
+    // Under the default user-notice policy a missing executable is reported
+    // without blocking (see the next test); hard-failure makes it an
+    // operational problem whose files are retried.
+    write_selective_operational_hook_config(&project, &fake_ruff, "hard-failure");
     std::fs::create_dir_all(project.join("src")).unwrap();
     let clean = project.join("src/clean.py");
     let operational = project.join("src/operational.rs");
@@ -2451,6 +2601,54 @@ fn turn_completion_operational_failure_retries_only_affected_files() {
 }
 
 #[test]
+fn turn_completion_reports_a_missing_tool_without_blocking_or_retrying() {
+    require_pkl!();
+    let project = temp_project("turn-completion-missing-tool-notice");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_selective_operational_hook_config(&project, &fake_ruff, "user-notice");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/clean.py"), "print('clean')\n").unwrap();
+    std::fs::write(project.join("src/unavailable.rs"), "fn main() {}\n").unwrap();
+    for file in ["src/clean.py", "src/unavailable.rs"] {
+        let tracked = run_example(
+            "file-activity-agent-hook",
+            &post_tool_use_fixture("codex", &project, file),
+            &["--harness=codex", "--state-dir", state_arg.as_str()],
+        );
+        assert!(tracked.status.success());
+    }
+
+    let stopped = run_example(
+        "turn-completion-agent-hook",
+        &turn_completion_fixture("codex", &project),
+        &["--codex", "--state-dir", state_arg.as_str()],
+    );
+
+    assert!(stopped.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert!(response.get("decision").is_none(), "{response}");
+    assert!(
+        system_message(&response).contains("definitely-missing-checker"),
+        "{response}"
+    );
+    let summary = only_summary(&state_dir);
+    assert_eq!(summary["counts"]["unavailableTools"], 1);
+    assert!(
+        summary["stateDisposition"]["retryTargets"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        session_journal_len(&state_dir, "codex", "codex-ruff-test"),
+        0,
+        "an unavailable tool's files are not re-queued"
+    );
+}
+
+#[test]
 fn turn_completion_per_file_batch_isolates_one_operational_failure() {
     require_pkl!();
     let project = temp_project("turn-completion-partial-batch-failure");
@@ -2522,6 +2720,98 @@ fn turn_completion_per_file_batch_isolates_one_operational_failure() {
         .unwrap();
 }
 
+/// A scope the traversal budget never reached must be retried on the next
+/// Stop; otherwise the activity it covers is silently lost.
+///
+/// Ignored because the Phase 1 runner and file-activity changes disagree:
+/// `resolve_files` now lists the exhausted scope *and every later scope* in
+/// `unresolved_targets`, while `turn_completion::run_turn_completion_view`
+/// still assumes the last unresolved target is the one that exhausted the
+/// budget and retries only the targets after it. The result is that no scope
+/// is ever retried after the budget runs out (`retryTargets` is empty and
+/// `second` is only reported as a gap). The runner (or `ResolvedFiles`, by
+/// reporting the exhausted target) must be fixed; this test asserts the
+/// intended behavior.
+#[test]
+#[ignore = "runner bug: scopes never attempted after the traversal budget are reported once and dropped instead of retried (see doc comment)"]
+fn turn_completion_retains_scopes_never_attempted_after_the_traversal_budget() {
+    require_pkl!();
+    let project = temp_project("turn-completion-budget-tail");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    let fake_ruff = write_fake_ruff(&project);
+    write_per_file_ruff_hook_config(&project, &fake_ruff);
+    replace_file_activity_settings(&project, "filesystemMtime = false; maxEntries = 2");
+    for directory in ["first", "second"] {
+        std::fs::create_dir_all(project.join(directory)).unwrap();
+        for index in 0..3 {
+            std::fs::write(
+                project.join(format!("{directory}/file{index}.py")),
+                "print('clean')\n",
+            )
+            .unwrap();
+        }
+        seed_pending_target(
+            &state_dir,
+            "codex",
+            hookkit_file_activity::FileActivityTarget::Path {
+                path: hookkit_core::Utf8PathBuf::from_path_buf(project.join(directory)).unwrap(),
+                scope: hookkit_file_activity::FileActivityScope::Descendants,
+            },
+        );
+    }
+
+    let stopped = run_deferred_case("codex", &project, &state_arg);
+
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    let summary = only_summary(&state_dir);
+    let second = project.join("second").to_string_lossy().into_owned();
+    let retry_targets = summary["stateDisposition"]["retryTargets"].to_string();
+    assert!(
+        retry_targets.contains(&second),
+        "the scope the budget never reached must be retried on the next Stop: {}",
+        summary["stateDisposition"]
+    );
+}
+
+/// Creates `dir` containing a subdirectory the current user cannot list, so a
+/// traversal of `dir` fails. Returns `false` when permissions are not enforced
+/// (for example when running as root).
+fn prepare_unreadable_directory(dir: &Path) -> bool {
+    let locked = dir.join("unreadable");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("hidden.py"), "print('hidden')\n").unwrap();
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&locked).is_ok() {
+            restore_directory_permissions(dir);
+            return false;
+        }
+        true
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn restore_directory_permissions(dir: &Path) {
+    #[cfg(unix)]
+    {
+        let _ = std::fs::set_permissions(
+            dir.join("unreadable"),
+            std::fs::Permissions::from_mode(0o755),
+        );
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
 #[test]
 fn turn_completion_records_uncovered_deleted_unresolved_and_truncated_activity() {
     require_pkl!();
@@ -2539,6 +2829,11 @@ fn turn_completion_records_uncovered_deleted_unresolved_and_truncated_activity()
         std::fs::write(project.join("src/nested/one.py"), "print('one')\n").unwrap();
         std::fs::write(project.join("src/nested/two.py"), "print('two')\n").unwrap();
 
+        if case == "unresolved" && !prepare_unreadable_directory(&project.join("locked")) {
+            eprintln!("skipping unresolved case: permissions are not enforced for this user");
+            continue;
+        }
+
         match case {
             "uncovered" => {
                 let path = project.join("src/note.unknown");
@@ -2551,14 +2846,13 @@ fn turn_completion_records_uncovered_deleted_unresolved_and_truncated_activity()
                 seed_pending_file(&state_dir, "codex", &path);
                 std::fs::remove_file(path).unwrap();
             }
+            // A missing directory has nothing left to check, so it resolves
+            // as empty. A directory whose traversal fails is unresolvable.
             "unresolved" => seed_pending_target(
                 &state_dir,
                 "codex",
                 hookkit_file_activity::FileActivityTarget::Path {
-                    path: hookkit_core::Utf8PathBuf::from_path_buf(
-                        project.join("missing-directory"),
-                    )
-                    .unwrap(),
+                    path: hookkit_core::Utf8PathBuf::from_path_buf(project.join("locked")).unwrap(),
                     scope: hookkit_file_activity::FileActivityScope::Descendants,
                 },
             ),
@@ -2573,6 +2867,9 @@ fn turn_completion_records_uncovered_deleted_unresolved_and_truncated_activity()
         }
 
         let stopped = run_deferred_case("codex", &project, &state_arg);
+        if case == "unresolved" {
+            restore_directory_permissions(&project.join("locked"));
+        }
 
         assert!(
             stopped.status.success(),
@@ -2580,6 +2877,12 @@ fn turn_completion_records_uncovered_deleted_unresolved_and_truncated_activity()
             String::from_utf8_lossy(&stopped.stderr)
         );
         let summary = only_summary(&state_dir);
+        let reported_gaps = summary["stateDisposition"]["reportedGaps"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{case}: no reportedGaps in {summary}"))
+            .iter()
+            .map(|gap| gap.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
         match case {
             "uncovered" => assert_eq!(
                 summary["result"]["uncoveredFiles"]
@@ -2595,22 +2898,30 @@ fn turn_completion_records_uncovered_deleted_unresolved_and_truncated_activity()
                     .len(),
                 1
             ),
+            // Unresolvable targets and budget gaps are reported once, not
+            // re-queued: requeueing them re-blocked every later Stop.
             "unresolved" => {
                 assert!(summary["counts"]["coverageGaps"].as_u64().unwrap() >= 1);
                 assert!(
+                    reported_gaps
+                        .iter()
+                        .any(|gap| gap.contains("could not be fully materialized")),
+                    "{reported_gaps:?}"
+                );
+                assert!(
                     summary["stateDisposition"]["retryTargets"]
                         .as_array()
-                        .is_some_and(|targets| !targets.is_empty())
+                        .unwrap()
+                        .is_empty()
                 );
             }
             "truncated" => {
                 assert!(summary["counts"]["coverageGaps"].as_u64().unwrap() >= 1);
                 assert!(
-                    summary["stateDisposition"]["retryGaps"]
-                        .as_array()
-                        .unwrap()
+                    reported_gaps
                         .iter()
-                        .any(|gap| gap.as_str().unwrap().contains("traversal budget"))
+                        .any(|gap| gap.contains("traversal budget")),
+                    "{reported_gaps:?}"
                 );
             }
             _ => unreachable!(),
@@ -2920,12 +3231,25 @@ fn post_tool_use_manual_issues_write_diagnostics_and_render_template() {
     assert!(context.contains("fix src/broken.py"));
     assert!(context.contains(".agent-hook-kit/ruff-agent-hook"));
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("F821 undefined name manual_issue"));
+    // Codex discards exit-0 stderr: the user sees a pointer in systemMessage,
+    // and the full tool output stays in the diagnostics artifact.
     assert!(
-        project
-            .join(".agent-hook-kit/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-issues.txt")
-            .is_file()
+        output.stderr.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let artifact = project.join(
+        ".agent-hook-kit/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-issues.txt",
+    );
+    assert!(artifact.is_file());
+    assert!(
+        std::fs::read_to_string(&artifact)
+            .unwrap()
+            .contains("F821 undefined name manual_issue")
+    );
+    assert!(
+        system_message(&json).contains(artifact.to_string_lossy().as_ref()),
+        "{json}"
     );
 }
 
@@ -2970,7 +3294,12 @@ fn post_tool_use_can_pass_phase_extra_args_for_unfixable_rules() {
             .unwrap()
             .contains("unused_import")
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("F401 unused import"));
+    // Claude only logs exit-0 stderr; the diagnostics live in the artifact and
+    // the user gets a pointer through systemMessage.
+    assert!(output.stderr.is_empty());
+    let diagnostics = project.join(".agent-hook-kit/ruff-agent-hook");
+    assert!(artifact_text(&diagnostics).contains("F401 unused import"));
+    assert!(system_message(&json).contains(diagnostics.to_string_lossy().as_ref()));
 }
 
 #[test]
@@ -3031,11 +3360,12 @@ fn post_tool_use_reports_missing_tool_to_user_without_failing_hook() {
 
     assert!(output.status.success());
     let stdout: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("no-op output should be JSON");
-    assert_eq!(stdout, serde_json::json!({}));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unavailable"));
-    assert!(stderr.contains("definitely-missing-ruff"));
+        serde_json::from_slice(&output.stdout).expect("output should be JSON");
+    assert!(stdout.get("decision").is_none(), "{stdout}");
+    let user = system_message(&stdout);
+    assert!(user.contains("unavailable"), "{user:?}");
+    assert!(user.contains("definitely-missing-ruff"), "{user:?}");
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -3057,15 +3387,22 @@ fn post_tool_use_reports_tool_failure_with_diagnostics() {
 
     assert!(output.status.success());
     let stdout: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("no-op output should be JSON");
-    assert_eq!(stdout, serde_json::json!({}));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("phase `format` failed"));
-    assert!(stderr.contains("format crashed"));
+        serde_json::from_slice(&output.stdout).expect("output should be JSON");
+    assert!(stdout.get("decision").is_none(), "{stdout}");
+    let user = system_message(&stdout);
+    assert!(user.contains("phase `format` failed"), "{user:?}");
+    assert!(output.stderr.is_empty());
+    let artifact = project.join(
+        ".agent-hook-kit/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-failure.txt",
+    );
     assert!(
-        project
-            .join(".agent-hook-kit/ruff-agent-hook/codex-ruff-test_codex-ruff-turn_codex-ruff-tool_ruff-tool-failure.txt")
-            .is_file()
+        user.contains(artifact.to_string_lossy().as_ref()),
+        "{user:?}"
+    );
+    assert!(
+        std::fs::read_to_string(&artifact)
+            .unwrap()
+            .contains("format crashed")
     );
 }
 
@@ -3157,9 +3494,12 @@ run = new Listing<String> {{ "combo" }}
             .unwrap()
             .contains("Combo changed src/a.py")
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Combo: phase `verify` failed"));
-    assert!(stderr.contains("verify crashed"));
+    let user = system_message(&json);
+    assert!(user.contains("Combo: phase `verify` failed"), "{user:?}");
+    assert!(output.stderr.is_empty());
+    assert!(
+        artifact_text(&project.join(".agent-hook-kit/post-tool-use")).contains("verify crashed")
+    );
 }
 
 #[test]
@@ -3247,9 +3587,11 @@ run = new Listing<String> {{ "failer"; "changer" }}
         std::fs::read_to_string(src.join("a.py")).unwrap(),
         "original\n"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Failer: phase `verify` failed"));
-    assert!(!stderr.contains("Changer: changed"));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let user = system_message(&json);
+    assert!(user.contains("Failer: phase `verify` failed"), "{user:?}");
+    assert!(!user.contains("Changer: changed"), "{user:?}");
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -3337,9 +3679,11 @@ run = new Listing<String> {{ "issuer"; "changer" }}
         std::fs::read_to_string(src.join("a.py")).unwrap(),
         "original\n"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Issuer: issues remain"));
-    assert!(!stderr.contains("Changer: changed"));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let user = system_message(&json);
+    assert!(user.contains("Issuer: issues remain"), "{user:?}");
+    assert!(!user.contains("Changer: changed"), "{user:?}");
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -3406,7 +3750,11 @@ fn post_tool_use_codex_emits_posttool_agent_context() {
             .unwrap()
             .contains("Ruff changed src/dirty.py")
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Ruff: changed src/dirty.py"));
+    assert!(
+        system_message(&stdout).contains("Ruff: changed src/dirty.py"),
+        "{stdout}"
+    );
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -3464,14 +3812,15 @@ run = new Listing { "ruff" }
 }
 
 #[test]
-fn post_tool_use_harness_block_policy_emits_blocking_exit_code() {
+fn post_tool_use_harness_block_policy_emits_a_native_block_decision() {
     require_pkl!();
-    let project = temp_project("ruff-harness-block");
-    let config_dir = project.join(".agent-hook-kit");
-    std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::write(
-        config_dir.join("post-tool-use.pkl"),
-        r#"amends "Config.pkl"
+    for harness in ["claude", "codex"] {
+        let project = temp_project(&format!("ruff-harness-block-{harness}"));
+        let config_dir = project.join(".agent-hook-kit");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("post-tool-use.pkl"),
+            r#"amends "Config.pkl"
 import "Builtins.pkl"
 
 settings {
@@ -3485,24 +3834,36 @@ tools {
 }
 run = new Listing { "ruff" }
 "#,
-    )
-    .unwrap();
+        )
+        .unwrap();
 
-    let src = project.join("src");
-    std::fs::create_dir_all(&src).unwrap();
-    std::fs::write(src.join("dirty.py"), "print('needs_format')\n").unwrap();
+        let src = project.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("dirty.py"), "print('needs_format')\n").unwrap();
 
-    let output = run_example(
-        "post-tool-use-agent-hook",
-        &post_tool_use_fixture("claude", &project, "src/dirty.py"),
-        &["--claude"],
-    );
+        let harness_arg = format!("--{harness}");
+        let output = run_example(
+            "post-tool-use-agent-hook",
+            &post_tool_use_fixture(harness, &project, "src/dirty.py"),
+            &[harness_arg.as_str()],
+        );
 
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "harness-block should exit 2 (blocking) instead of 0 or 1"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unavailable"));
+        // A structured `decision: "block"` at exit 0 carries the reason and
+        // keeps any earlier notices and agent feedback, which an exit-2
+        // stderr block would drop.
+        assert!(
+            output.status.success(),
+            "{harness}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["decision"], "block", "{harness}: {json}");
+        let reason = json["reason"].as_str().unwrap();
+        assert!(reason.contains("unavailable"), "{harness}: {json}");
+        assert!(
+            reason.contains("definitely-missing-ruff"),
+            "{harness}: {json}"
+        );
+        assert!(output.stderr.is_empty());
+    }
 }

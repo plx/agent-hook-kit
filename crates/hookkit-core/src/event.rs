@@ -5,6 +5,7 @@ use crate::{
 
 /// Cross-harness lifecycle category. This is never an exact protocol identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum EventCategory {
     /// Session lifecycle activity.
     Session,
@@ -264,7 +265,8 @@ impl NativeEventDescriptor {
 }
 
 /// Confidence with which payload shape can identify a native event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum IdentificationStrength {
     /// A documented discriminator uniquely names the event.
     Definitive,
@@ -293,6 +295,21 @@ pub struct IdentificationDescriptor {
 
 fn validate_event<E: EventSpec>(raw: &RawInvocation) -> crate::Result<()> {
     E::parse(raw).map(|_| ())
+}
+
+impl std::fmt::Debug for IdentificationDescriptor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IdentificationDescriptor")
+            .field("event", &self.event)
+            .field("contract", &self.contract)
+            .field("snapshot", &self.snapshot)
+            .field("strength", &self.strength)
+            .field("discriminator", &self.discriminator)
+            .field("overlaps", &self.overlaps)
+            .field("native_parser", &self.validate.is_some())
+            .finish()
+    }
 }
 
 impl IdentificationDescriptor {

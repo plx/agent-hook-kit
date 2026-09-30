@@ -2,7 +2,8 @@ use crate::{ContractId, EventId, HarnessId, RawInvocation, SnapshotId, Utf8PathB
 use std::fmt;
 
 /// How an invocation's exact event identity was established.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ResolutionProvenance {
     /// The caller selected a concrete [`crate::EventSpec`] at compile time.
     TypedStatic,
@@ -16,7 +17,8 @@ pub enum ResolutionProvenance {
 }
 
 /// Diagnostic severity for messages sent outside protocol stdout/stderr.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum DiagnosticLevel {
     /// Fine-grained information useful when tracing runtime decisions.
     Trace,
@@ -57,7 +59,7 @@ pub trait DiagnosticsSink: Send + Sync {
 }
 
 /// Default sink used by convenience runners. It intentionally writes nowhere.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct DisabledDiagnostics;
 
 impl DiagnosticsSink for DisabledDiagnostics {
@@ -174,7 +176,19 @@ pub enum SessionBoundaryKind {
 /// Exact optional context populated by a native event adapter.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeContext {
-    /// Workspace roots explicitly supplied by the native event.
+    /// Directories the native event names as the hook's working context.
+    ///
+    /// What these are depends on the harness:
+    ///
+    /// - Claude Code and Codex have no workspace-root field, so their
+    ///   adapters store the event's `cwd`. That is the session's current
+    ///   working directory, which moves when the agent runs `cd`; it is not
+    ///   a stable project root. On Claude Code the stable project root is
+    ///   `CLAUDE_PROJECT_DIR`, available from the command environment.
+    /// - Antigravity stores the event's `workspacePaths`, which are the
+    ///   workspace roots. The list may be empty.
+    ///
+    /// Nothing is inferred: an empty list means the event supplied none.
     pub workspace_roots: Vec<Utf8PathBuf>,
     /// Exact native session identifier, when the event carries one.
     pub session_id: Option<SessionId>,
@@ -193,6 +207,9 @@ pub struct NativeContext {
 }
 
 /// Exact runtime context. No path or identifier is inferred from arbitrary JSON.
+///
+/// The `Debug` rendering lists the identities and native context but not the
+/// raw payload or the diagnostics sink.
 pub struct RuntimeContext<'a> {
     harness: HarnessId,
     snapshot: SnapshotId,
@@ -266,7 +283,11 @@ impl<'a> RuntimeContext<'a> {
         self.raw
     }
 
-    /// Returns the workspace roots explicitly supplied by the event.
+    /// Returns the event's working-context directories.
+    ///
+    /// For Claude Code and Codex this is the event's current `cwd`, not a
+    /// stable project root; for Antigravity it is `workspacePaths`. See
+    /// [`NativeContext::workspace_roots`].
     pub fn workspace_roots(&self) -> &[Utf8PathBuf] {
         &self.native.workspace_roots
     }
@@ -309,5 +330,19 @@ impl<'a> RuntimeContext<'a> {
     /// Returns the destination for out-of-band runtime diagnostics.
     pub fn diagnostics(&self) -> &dyn DiagnosticsSink {
         self.diagnostics
+    }
+}
+
+impl fmt::Debug for RuntimeContext<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeContext")
+            .field("harness", &self.harness)
+            .field("snapshot", &self.snapshot)
+            .field("event", &self.event)
+            .field("contract", &self.contract)
+            .field("provenance", &self.provenance)
+            .field("native", &self.native)
+            .finish_non_exhaustive()
     }
 }

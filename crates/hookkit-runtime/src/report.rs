@@ -1,17 +1,17 @@
 //! Stderr diagnostics for the stdin/stdout runtime adapters.
 //!
-//! [`crate::aligned::run_aligned_event`], [`crate::typed::run_event_with_diagnostics`]
-//! (and therefore [`crate::typed::run_typed`]), [`crate::selected::run_harness`], and
-//! [`crate::selected::dispatch_builtin_harness`] each read stdin, resolve the hook
-//! environment, and execute a handler, folding every failure along the way into a
-//! bare `exit 1`. Hook protocols require a clean, machine-parseable stdout on every
-//! exit path, so these adapters must never write anything else there — but stderr
-//! carries no such constraint, and writing nothing to it turned every misconfigured
-//! environment variable, malformed payload, or handler bug into an unexplained,
-//! byte-for-byte silent failure. This module gives every one of those adapters a
-//! single, concise stderr line identifying the running program and the hook it was
-//! invoked for, plus the failing error's full cause chain, before they return that
-//! same `exit 1`.
+//! [`crate::aligned::run_aligned_event`], [`crate::typed::run_event_with_options`]
+//! (and therefore [`crate::typed::run_event`] and [`crate::typed::run_typed`]),
+//! [`crate::selected::run_harness_with_options`], and
+//! [`crate::selected::dispatch_builtin_harness_with_options`] each read stdin,
+//! capture the hook environment, and execute a handler. Hook protocols require
+//! clean, machine-parseable stdout, so a failure anywhere along the way never
+//! writes a partial response there. Instead every adapter writes one concise
+//! stderr line, `hookkit: <program> <hook> failed: <cause chain>`, naming the
+//! running program, the hook it was invoked for, and the error's full cause
+//! chain. By default the adapter then exits 1, which Claude Code and Codex treat
+//! as a non-blocking hook error: the pending action proceeds. See
+//! [`crate::failure`] for the fail-closed alternative.
 
 use std::fmt::Display;
 use std::io::Write;
@@ -39,15 +39,28 @@ pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
 }
 
 /// Best-effort file-name portion of the running program's `argv[0]`, falling back
-/// to `"hookkit"` when it is unavailable or not valid Unicode.
+/// to `"hookkit"` when it is unavailable. A name that is not valid Unicode is
+/// rendered lossily; it never panics.
 fn program_name() -> String {
-    std::env::args()
-        .next()
+    program_name_from(std::env::args_os().next())
+}
+
+fn program_name_from(argv0: Option<std::ffi::OsString>) -> String {
+    argv0
         .as_deref()
         .map(std::path::Path::new)
         .and_then(std::path::Path::file_name)
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "hookkit".to_string())
+}
+
+/// Renders the one-line failure diagnostic, without a trailing newline.
+pub(crate) fn failure_line(hook: impl Display, error: &dyn std::error::Error) -> String {
+    format!(
+        "hookkit: {program} {hook} failed: {chain}",
+        program = program_name(),
+        chain = error_chain(error),
+    )
 }
 
 /// Writes the one-block failure diagnostic (program identity, hook identity, and
@@ -58,12 +71,7 @@ pub(crate) fn write_failure_diagnostic(
     hook: impl Display,
     error: &dyn std::error::Error,
 ) -> std::io::Result<()> {
-    writeln!(
-        sink,
-        "hookkit: {program} {hook} failed: {chain}",
-        program = program_name(),
-        chain = error_chain(error),
-    )
+    writeln!(sink, "{}", failure_line(hook, error))
 }
 
 /// Writes the failure diagnostic to real stderr, then returns the `exit 1` the
@@ -145,6 +153,15 @@ mod tests {
         let error = hookkit_core::HookkitError::from(json_error);
         let rendered = error_chain(&error);
         assert_eq!(rendered, format!("invalid JSON: {expected_leaf}"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_program_names_render_lossily_instead_of_panicking() {
+        use std::os::unix::ffi::OsStringExt;
+        let argv0 = std::ffi::OsString::from_vec(b"/opt/hooks/bad\xff-guard".to_vec());
+        assert_eq!(program_name_from(Some(argv0)), "bad\u{FFFD}-guard");
+        assert_eq!(program_name_from(None), "hookkit");
     }
 
     #[test]

@@ -38,6 +38,10 @@ fn selected_tools() -> Option<Vec<String>> {
 #[ignore = "real-tool compatibility lane; requires controlled PATH versions"]
 fn run_all_tool_fixtures() {
     if !pkl_available() {
+        assert!(
+            !pkl_required(),
+            "HOOKKIT_REQUIRE_PKL is set, but the pkl binary is not on PATH"
+        );
         eprintln!("skipping: pkl binary not on PATH");
         return;
     }
@@ -709,6 +713,12 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+}
+
+/// Whether Pkl-dependent tests must run instead of skipping. CI installs Pkl
+/// and sets `HOOKKIT_REQUIRE_PKL=1`, so a missing binary fails the test.
+fn pkl_required() -> bool {
+    std::env::var_os("HOOKKIT_REQUIRE_PKL").is_some_and(|value| !value.is_empty() && value != "0")
 }
 
 fn pkl_available() -> bool {

@@ -31,9 +31,19 @@ fn pkl_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether Pkl-dependent tests must run instead of skipping. CI installs Pkl
+/// and sets `HOOKKIT_REQUIRE_PKL=1`, so a missing binary fails the test.
+fn pkl_required() -> bool {
+    std::env::var_os("HOOKKIT_REQUIRE_PKL").is_some_and(|value| !value.is_empty() && value != "0")
+}
+
 macro_rules! require_pkl {
     () => {
         if !pkl_available() {
+            assert!(
+                !pkl_required(),
+                "HOOKKIT_REQUIRE_PKL is set, but the pkl binary is not on PATH"
+            );
             eprintln!("skipping test: pkl binary not on PATH");
             return;
         }

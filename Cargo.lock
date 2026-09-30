@@ -639,6 +639,7 @@ dependencies = [
  "hookkit-core",
  "hookkit-file-activity",
  "hookkit-session-state",
+ "libc",
  "proptest",
  "serde",
  "serde_json",

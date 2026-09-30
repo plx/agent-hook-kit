@@ -56,12 +56,57 @@ pub enum BuiltinHarness {
 }
 
 impl BuiltinHarness {
+    /// Every built-in harness, in declaration order.
+    pub const ALL: &'static [Self] = &[Self::ClaudeCode, Self::Codex, Self::Antigravity];
+
     /// Returns the stable open identity for this built-in harness.
     pub const fn id(self) -> HarnessId {
         match self {
             Self::ClaudeCode => HarnessId::CLAUDE_CODE,
             Self::Codex => HarnessId::CODEX,
             Self::Antigravity => HarnessId::ANTIGRAVITY,
+        }
+    }
+
+    /// Returns the built-in harness whose stable identity is exactly `id`.
+    ///
+    /// Only canonical identities match; use [`str::parse`] to also accept
+    /// the `claude` alias.
+    pub fn from_id(id: &HarnessId) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|harness| &harness.id() == id)
+    }
+}
+
+impl fmt::Display for BuiltinHarness {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.id().as_str())
+    }
+}
+
+impl From<BuiltinHarness> for HarnessId {
+    fn from(harness: BuiltinHarness) -> Self {
+        harness.id()
+    }
+}
+
+impl std::str::FromStr for BuiltinHarness {
+    type Err = crate::HookkitError;
+
+    /// Parses a canonical identity (`claude-code`, `codex`, `antigravity`)
+    /// or the `claude` alias accepted by the bundled command-line tools.
+    fn from_str(value: &str) -> crate::Result<Self> {
+        match value {
+            "claude" | "claude-code" => Ok(Self::ClaudeCode),
+            "codex" => Ok(Self::Codex),
+            "antigravity" => Ok(Self::Antigravity),
+            _ => Err(crate::HookkitError::UnsupportedHarness {
+                harness: HarnessId::new(value)?,
+                message: "not a built-in harness (expected claude-code, codex, or antigravity)"
+                    .to_owned(),
+            }),
         }
     }
 }
@@ -196,4 +241,42 @@ pub struct DialectLineage {
     pub parent: HarnessId,
     /// Exact catalog snapshot that declares this relationship.
     pub snapshot: SnapshotId,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_harness_identity_round_trips() {
+        for harness in BuiltinHarness::ALL {
+            assert_eq!(BuiltinHarness::from_id(&harness.id()), Some(*harness));
+            assert_eq!(
+                harness.to_string().parse::<BuiltinHarness>().unwrap(),
+                *harness
+            );
+            assert_eq!(HarnessId::from(*harness), harness.id());
+        }
+    }
+
+    #[test]
+    fn builtin_harness_parsing_accepts_the_claude_alias_only_in_from_str() {
+        assert_eq!(
+            "claude".parse::<BuiltinHarness>().unwrap(),
+            BuiltinHarness::ClaudeCode
+        );
+        assert_eq!(
+            BuiltinHarness::from_id(&HarnessId::new("claude").unwrap()),
+            None
+        );
+        assert!(matches!(
+            "gemini".parse::<BuiltinHarness>(),
+            Err(crate::HookkitError::UnsupportedHarness { harness, .. })
+                if harness.as_str() == "gemini"
+        ));
+        assert!(matches!(
+            "".parse::<BuiltinHarness>(),
+            Err(crate::HookkitError::InvalidIdentity(_))
+        ));
+    }
 }
