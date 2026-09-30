@@ -82,6 +82,35 @@ are completely known. Individual commands report either `ArgvStatus::Literal`
 or `ArgvStatus::Dynamic`, with reasons such as parameter expansion, command
 substitution, globbing, or unsupported escaping.
 
+Where the grammar's tree shape differs from what Bash executes, the analysis
+follows Bash:
+
+- words the grammar attaches to a redirection after its target
+  (`rm 2>/dev/null .env`) or after a here-document start (`rm <<EOF .env`)
+  are command arguments, and redirections written after a here-document start
+  (`cat <<EOF > file`) belong to the command;
+- redirections the grammar hangs on a whole `&&`/`||` list, pipeline, or
+  negation (`cd dir && apply_patch <<'EOF'`) belong to its last simple command;
+- redirections on a compound statement, subshell, `if`/loop/`case`, test,
+  declaration, or function definition are reported in
+  `BashAnalysis::statement_redirections` with the range of enclosed commands,
+  so a consumer can find, for example, the here-document read by
+  `(cd dir && apply_patch) <<'EOF'`;
+- a redirection with no command (`> file`, `< file`, `$(< file)`) is a
+  nameless `CommandOccurrence` whose argv is empty;
+- a backslash-newline inside a word joins its pieces, and `0<file`/`{fd}>file`
+  descriptors are not arguments;
+- comma and sequence brace expansion (`.e{n,}v`, `{1..3}`) is expanded
+  statically into separate argv words sharing the source word's span, or the
+  word is marked `DynamicReason::BraceExpansion` when it cannot be;
+- backtick substitutions in an unquoted here-document body are re-parsed and
+  their commands reported; one that cannot be re-parsed exactly makes the
+  outcome `Partial` with `IncompleteReason::UnparsedCommandSubstitution`, and
+  backslash escapes Bash would process leave `literal_body` unset.
+
+Glob and `~` words carry `ShellWord::pattern`, their quote-removed text with
+quoted glob metacharacters bracket-escaped, instead of a literal value.
+
 ## File-access inference
 
 `FileAccessAnalyzer` turns the structural report into a practical, explicitly
@@ -96,7 +125,7 @@ fn inspect_files(call: &ShellToolCallRef<'_>) {
     let bash = BashAnalyzer::default().analyze(call.command);
     let access = FileAccessAnalyzer::default().infer(
         &bash,
-        FileInferenceContext::new(call.cwd),
+        FileInferenceContext::for_call(call),
     );
 
     for candidate in access.may_read() {
@@ -117,27 +146,56 @@ Each `FileAccessCandidate` carries:
   and distinct move-source/move-destination roles;
 - a `FileTargetScope` distinguishing an exact path, descendants, an ambiguous
   exact-or-descendants operand, and an unexpanded glob;
-- the raw path expression, an optional lexically resolved path, and its cwd
-  basis;
-- its argument, redirection, working-directory-default, or rule origin;
+- the raw path expression, an optional lexically resolved path, and its
+  basis: absolute, the invocation cwd, unknown after a directory change, or
+  the home directory for `~` paths (resolved only when
+  `FileInferenceContext::with_home` supplies it);
+- its argument, command or statement redirection, working-directory-default,
+  or rule origin;
 - `Direct`, `Conditional`, or `Heuristic` certainty and the rule identifier
   that inferred it.
 
-The default analyzer understands file redirections and a deliberately bounded
-table of common readers, listings, searches, `sed` (including in-place mode),
-direct mutators, removals, copy/move/link commands, and indirect shell
-evaluation. Unknown commands,
-ambiguous option layouts, dynamic paths, indirect evaluation, partial parsing,
-and unavailable analysis are retained in `FileAccessReport::unresolved`
-instead of being silently treated as file-free.
+The default analyzer understands file redirections (on commands and on
+statements) and a deliberately bounded table of common readers, listings,
+searches, `sed`, direct mutators, removals, copy/move/link commands, and
+indirect evaluation:
 
-Unknown or ambiguous commands with fully literal argv can optionally use
+- `sed` scripts are scanned for `r`/`R`/`w`/`W`/`e` commands and `s///w`/`e`
+  flags unless `--sandbox` is given; script files and unparseable scripts are
+  unresolved;
+- `grep` without a path reads stdin unless it is recursive, and `rg` searches
+  the working directory only when stdin is neither piped nor redirected; a
+  dynamic search word that could be an option or split into several words is
+  unresolved;
+- `mv` sources, and every copy/move/link destination, cover a directory's
+  descendants, and a destination also yields heuristic
+  `destination/basename(source)` candidates;
+- shells, language runtimes (`python`, `node`, `perl`, `awk`, ...), `xargs`,
+  `find -exec`, and interactive pagers (`less`, `more`) are
+  `IndirectEvaluation`;
+- wrappers such as `sudo`, `env`, `nice`, `nohup`, `time`, `timeout`,
+  `command`, `exec`, `builtin`, and `stdbuf` are skipped so the wrapped
+  command's semantics apply (custom rules see the wrapped command too);
+- names match exactly or as the basename of a path in a standard system binary
+  directory such as `/usr/bin`.
+
+Unknown commands, ambiguous option layouts, dynamic paths, indirect
+evaluation, partial parsing, and unavailable analysis are retained in
+`FileAccessReport::unresolved` instead of being silently treated as file-free.
+
+`apply_patch` is recognized without candidates, because its targets are in
+the patch body, which `hookkit-tool-access` parses. A standalone consumer must
+not read a fully resolved report for `apply_patch` as proof that no file
+changes.
+
+Unknown, ambiguous, or indirectly evaluating commands can optionally use
 `UnknownCommandFallback::LiteralPathOperands`. Its documented path-likeness
-rule recognizes dot paths, absolute/explicit-relative prefixes, separators,
-and filename-style dots (including the value side of `name=value`). These
-candidates are `Heuristic` read-modify candidates with argument provenance;
-the original unresolved semantics record is always retained. The default is
-`Disabled`.
+rule recognizes dot paths, absolute/explicit-relative/home prefixes,
+separators, and filename-style dots (including the value side of
+`name=value`) in literal words and in glob or `~` patterns; other dynamic
+words are skipped. These candidates are `Heuristic` read-modify candidates
+with argument provenance; the original unresolved semantics record is always
+retained. The default is `Disabled`.
 
 The command table is extensible without replacing the parser. Implement
 `CommandFileSemantics`, emit candidates through `FileAccessSink`, and register
@@ -148,22 +206,40 @@ scope is the whole project; `emit_argument` retains the exact argv provenance.
 
 Path resolution is lexical and does not touch the filesystem. It does not
 canonicalize symlinks or expand globs. Relative paths resolve against the
-native tool call's cwd when available; after an earlier `cd`, `pushd`, or
-`popd`, later relative paths remain candidates but their resolved path is
-withheld and an unresolved cwd gap is reported.
+native tool call's absolute cwd when available; after an earlier `cd`,
+`pushd`, or `popd` (including `builtin cd` and a directory change anywhere in
+an enclosing loop or function), later relative paths remain candidates but
+their resolved path is withheld and an unresolved cwd gap is reported.
 
 Native adapters recognize the contract-backed names and fields only:
 
-| Harness event | Exact tool | Command location |
-| --- | --- | --- |
-| Claude/Codex tool events | `Bash` | `/command` |
-| Antigravity `PreToolUse` / `PostToolUse` | `run_command` | `/CommandLine` |
+| Harness event | Exact tool | Command location | Cwd |
+| --- | --- | --- | --- |
+| Claude `PreToolUse`, `PermissionRequest`, `PermissionDenied`, `PostToolUse`, `PostToolUseFailure` | `Bash` | `/command` | hook `cwd` |
+| Codex `PreToolUse` / `PostToolUse` | `Bash` | `/command` | `/workdir`, else hook `cwd` (unverified) |
+| Antigravity `PreToolUse` / `PostToolUse` | `run_command` | `/CommandLine` | `/Cwd`, else first workspace path |
+
+The Claude catalog adapter returns `ShellToolCallMatch::UnsupportedEvent` for
+other events rather than claiming they are not shell calls.
 
 Antigravity's current `PostToolUse` input carries the originating `toolCall`, so
-the same exact adapter is available in both tool phases. The optional `/Cwd`
-value overrides the first workspace path used as the fallback cwd. Its
-post-tool input does not carry a tool result, so extraction has no response
-value.
+the same exact adapter is available in both tool phases. Its post-tool input
+does not carry a tool result, so extraction has no response value.
+
+A tool-input cwd must be absolute to become `ShellToolCallRef::cwd`. A
+relative value is joined onto an absolute fallback and exposed only through
+`ShellToolCallRef::effective_cwd`; an empty or `null` value falls back.
+`ShellToolCallRef::cwd_origin` records where the cwd came from. Codex's
+`exec_command` accepts a `workdir` argument that it joins onto the step's
+environment cwd, but its hook payload carries only `command`, so the hook
+`cwd` is only the default and the adapter reports
+`ShellCwdOrigin::UnverifiedFallback`: relative paths resolved against it are
+best effort.
+
+Codex `exec_command` sessions with `tty: true` accept later input through
+`write_stdin`, which emits no `PreToolUse` hook. An interactive program started
+that way can open files or run commands the hook never sees, which is why
+pagers and shells are reported as indirect evaluation.
 
 Use `ShellToolProfile` to describe an exact custom tool name and JSON Pointer;
 the bundled adapters do not guess aliases such as `shell` or `exec_command`.
@@ -185,12 +261,31 @@ filesystem state, symlinks, subprocess effects, or which conditional branch
 will execute. It is not a sandbox, and a parse failure must not be interpreted
 as permission to run a command.
 
-The analyzer accepts Bash syntax. A caller should not silently feed it
-PowerShell, `cmd.exe`, fish, or zsh-specific input.
+The analyzer accepts Bash syntax, but harness shell tools run the user's
+shell: Claude Code and Codex use zsh when it is the user's shell (the macOS
+default), and Codex uses PowerShell on Windows. The native payloads do not
+identify the shell, so the bundled adapters report `ShellDialect::Unknown`.
+Pass it to `FileInferenceContext::with_dialect`: unless the dialect is
+`Bash`, zsh-only forms whose effect differs (`>! file`, `>>!file`) are
+reported as unresolved alongside heuristic zsh-target candidates, and
+`PowerShell` marks the whole analysis unresolved. `n>&word` with a filename
+is treated as a write, as zsh performs it. A caller should not silently feed
+the analyzer PowerShell, `cmd.exe`, or fish input.
 
 Default resource limits are 256 KiB of source, 100 ms of parser time, 50,000
 visited AST nodes, and 128 levels of traversal. `BashAnalyzerLimits` makes all
-four bounds explicit and configurable.
+four bounds explicit and configurable through `with_*` builders. A subtree
+deeper than the depth limit is skipped while its shallower siblings are still
+analyzed, and `&&`/`||` chains are walked iteratively so their length does not
+count toward the depth.
+
+## Adversarial corpus
+
+`tests/adversarial.rs` holds a table of guard-relevant shell forms, each with
+the files it touches or the gap it must report. Set
+`HOOKKIT_SHELL_DIFFERENTIAL=1` to also run its executable cases under `bash`
+in a scratch directory of sentinel files and check every observed read, write,
+creation, and removal against the analysis.
 
 ## Attribution
 
