@@ -181,9 +181,9 @@ pub fn verify_all_inputs() -> Result<BTreeSet<&'static str>, String> {
 /// contracts name their snapshot, so each snapshot update reviews the list.
 pub const OPEN_VALUE_SET_NEGATIVES: &[(&str, &str)] = &[
     // `SessionEnd.reason` reads into `SessionEndReason::Unknown`.
-    ("codex/commit-ff6aec9-r1/SessionEnd", "/reason"),
+    ("codex/commit-ff6aec9-r2/SessionEnd", "/reason"),
     // `SessionStart.source` reads into `SessionStartSource::Unknown`.
-    ("codex/commit-ff6aec9-r1/SessionStart", "/source"),
+    ("codex/commit-ff6aec9-r2/SessionStart", "/source"),
 ];
 
 /// Executes every declared process conformance case and returns their
@@ -764,6 +764,17 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         "command-exit-2-structured",
         built(
             UserPromptSubmitOutput::block("Blocked by JSON reason.").into_blocking_error(BLOCKED)
+        )?
+    );
+    // Exit 2 with JSON that only sets suppressOriginalPrompt: the prompt is
+    // blocked and the block message leaves its text out.
+    case!(
+        UserPromptSubmit,
+        "command-exit-2-suppress-original-prompt",
+        built(
+            UserPromptSubmitOutput::no_op()
+                .with_suppress_original_prompt(true)
+                .and_then(|output| output.into_blocking_error(BLOCKED))
         )?
     );
     case!(

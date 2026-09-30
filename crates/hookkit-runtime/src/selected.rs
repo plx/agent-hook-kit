@@ -625,14 +625,14 @@ mod tests {
                 };
                 assert_eq!(input.tool_name, "shell");
                 assert_eq!(context.harness(), &HarnessId::CODEX);
-                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-ff6aec9-r1"));
+                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-ff6aec9-r2"));
                 assert_eq!(
                     context.event(),
                     &EventId::builtin(HarnessId::CODEX, "PreToolUse")
                 );
                 assert_eq!(
                     context.contract(),
-                    ContractId::builtin("codex/commit-ff6aec9-r1/PreToolUse")
+                    ContractId::builtin("codex/commit-ff6aec9-r2/PreToolUse")
                 );
                 assert_eq!(
                     context.provenance(),

@@ -633,9 +633,13 @@ macro_rules! event_spec {
 }
 
 macro_rules! output_type {
-    ($output:ident, $name:literal) => {
+    ($output:ident, $name:literal $(, $doc:literal)* $(,)?) => {
         #[derive(Debug, Clone, PartialEq)]
         #[doc = concat!("Native response from a Codex `", $name, "` command hook.")]
+        $(
+            #[doc = ""]
+            #[doc = $doc]
+        )*
         pub struct $output(CatalogOutput);
     };
 }
@@ -777,18 +781,34 @@ event_spec!(
     Tool
 );
 
-output_type!(PostCompactOutput, "PostCompact");
+output_type!(
+    PostCompactOutput,
+    "PostCompact",
+    "A synchronous `continue: false` (see `with_continue`) takes effect after \
+     compaction has completed, so the compacted history is kept, and then \
+     aborts the active turn, whether the compaction was manual or automatic. \
+     Codex reports the turn as interrupted, which on the main thread also \
+     dispatches `Interrupt`. Use `no_op` or `with_system_message` to report \
+     without ending the turn."
+);
 common_controls!(PostCompactOutput, PostCompact);
 failure_control!(PostCompactOutput, PostCompact);
 event_spec!(PostCompact, PostCompactOutput, "PostCompact", Context);
 
-output_type!(PreCompactOutput, "PreCompact");
+output_type!(
+    PreCompactOutput,
+    "PreCompact",
+    "A synchronous `continue: false` (`stop`, or `with_continue(false)`) \
+     stops before compacting and aborts the active turn, whether the \
+     compaction was manual or automatic."
+);
 
 impl PreCompactOutput {
     /// Stops compaction with a structured reason.
     ///
-    /// On a manual compact this aborts the turn as interrupted, which also
-    /// dispatches `Interrupt`.
+    /// This aborts the active turn, for manual and automatic compaction
+    /// alike. Codex reports the turn as interrupted, which on the main thread
+    /// also dispatches `Interrupt`.
     pub fn stop(reason: impl Into<String>) -> Self {
         Self(CatalogOutput::json(
             CatalogEvent::PreCompact,
@@ -1226,7 +1246,7 @@ mod tests {
         );
         assert_eq!(
             emission.contract().as_str(),
-            "codex/commit-ff6aec9-r1/PermissionRequest"
+            "codex/commit-ff6aec9-r2/PermissionRequest"
         );
     }
 
@@ -1269,7 +1289,7 @@ mod tests {
         );
         assert_eq!(
             emission.contract().as_str(),
-            "codex/commit-ff6aec9-r1/Interrupt"
+            "codex/commit-ff6aec9-r2/Interrupt"
         );
         let built = InterruptOutput::no_op()
             .with_system_message("saved")

@@ -20,12 +20,12 @@ pub use crate::values::{
 };
 
 /// Claude Code protocol documentation snapshot implemented by this crate.
-pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-09-29-r1");
+pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-09-30-r1");
 
 /// Expands to the [`ContractId`] of a Claude event in the selected snapshot.
 macro_rules! contract_id {
     ($name:literal) => {
-        hookkit_core::ContractId::builtin(concat!("claude-code/docs-2026-09-29-r1/", $name))
+        hookkit_core::ContractId::builtin(concat!("claude-code/docs-2026-09-30-r1/", $name))
     };
 }
 pub(crate) use contract_id;
@@ -375,7 +375,7 @@ impl SessionStartOutput {
     /// Sets the universal `suppressOutput` field, which Claude Code accepts
     /// but ignores.
     #[deprecated(
-        note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-29-r1)"
+        note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-30-r1)"
     )]
     pub fn with_suppress_output(mut self, suppress: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.suppress_output = Some(suppress);
@@ -783,7 +783,7 @@ impl PostToolUseOutput {
     /// Sets the universal `suppressOutput` field, which Claude Code accepts
     /// but ignores.
     #[deprecated(
-        note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-29-r1)"
+        note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-30-r1)"
     )]
     pub fn with_suppress_output(mut self, suppress_output: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.suppress_output = Some(suppress_output);

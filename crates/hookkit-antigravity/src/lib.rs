@@ -1,7 +1,7 @@
 //! Native Antigravity hook contracts.
 //!
 //! This crate implements the five command events of the frozen
-//! `antigravity/docs-2026-09-29-r1` snapshot, which records the unified hook
+//! `antigravity/docs-2026-09-30-r1` snapshot, which records the unified hook
 //! reference shared by Antigravity 2.0, the Antigravity CLI, and the
 //! Antigravity IDE.
 //!
@@ -23,8 +23,8 @@
 //! Inputs are read tolerantly. Unknown top-level and `toolCall` fields are
 //! kept in `extra` maps. Open vocabularies such as [`TerminationReason`] keep
 //! values this snapshot does not list in an `Unknown` arm, verbatim, and a
-//! `null` `toolCall.args` reads as an empty object. Input structs and the
-//! [`Event`], [`AnyInput`], and [`AnyCommandOutput`] enums are
+//! missing or `null` `toolCall.args` reads as an empty object. Input structs
+//! and the [`Event`], [`AnyInput`], and [`AnyCommandOutput`] enums are
 //! `#[non_exhaustive]`, so they can gain documented fields and events without
 //! a breaking change. Strict validation of documented values belongs to the
 //! contract schemas used by conformance, not to runtime parsing. A payload
@@ -46,7 +46,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Antigravity protocol documentation snapshot implemented by this crate.
-pub const SNAPSHOT: SnapshotId = SnapshotId::builtin("docs-2026-09-29-r1");
+pub const SNAPSHOT: SnapshotId = SnapshotId::builtin("docs-2026-09-30-r1");
 
 /// Returns all Antigravity events with native command implementations.
 pub fn events() -> Vec<NativeEventDescriptor> {
@@ -215,7 +215,7 @@ impl EventSpec for PreInvocation {
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PreInvocation");
     const CATEGORY: EventCategory = EventCategory::Model;
     const CONTRACT: ContractId =
-        ContractId::builtin("antigravity/docs-2026-09-29-r1/PreInvocation");
+        ContractId::builtin("antigravity/docs-2026-09-30-r1/PreInvocation");
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
@@ -326,7 +326,7 @@ impl EventSpec for PostInvocation {
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PostInvocation");
     const CATEGORY: EventCategory = EventCategory::Model;
     const CONTRACT: ContractId =
-        ContractId::builtin("antigravity/docs-2026-09-29-r1/PostInvocation");
+        ContractId::builtin("antigravity/docs-2026-09-30-r1/PostInvocation");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
     }
@@ -351,53 +351,84 @@ pub struct ToolCall {
     /// Tool arguments as an exact JSON object, keyed by the tool's native
     /// PascalCase argument names (for example `CommandLine`, `AbsolutePath`).
     ///
-    /// The `args` key is required. The reference types it as an object but
-    /// lists tools that take no arguments (such as `list_permissions`), and
-    /// a Go encoder writes a nil argument map as `null`, so a JSON `null`
-    /// reads as an empty object instead of failing the hook; an unmodified
-    /// call re-serializes it as `null`.
+    /// The reference types `args` as an object but lists tools that take no
+    /// arguments ("Arguments: None", such as `list_permissions`), and a Go
+    /// encoder writes a nil argument map as `null`, or leaves it out under
+    /// `omitempty`. A missing key and a JSON `null` therefore both read as an
+    /// empty object instead of failing the hook, and an unmodified call
+    /// re-serializes exactly as it was sent: without the key, as `null`, or
+    /// as `{}`.
     pub args: serde_json::Map<String, serde_json::Value>,
     /// Unknown tool-call fields retained for forward compatibility.
     pub extra: BTreeMap<String, serde_json::Value>,
-    /// Whether the payload sent `"args": null`.
-    args_null: bool,
+    /// How the payload sent `args`, so an empty object can re-serialize in
+    /// the same form.
+    args_form: ArgsForm,
 }
 
-/// Wire form of [`ToolCall`], which keeps a `null` `args` distinguishable
-/// from `{}` so parsing stays lossless.
+/// Wire form in which a [`ToolCall`] carried its `args`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArgsForm {
+    /// A JSON object, possibly empty.
+    Object,
+    /// `"args": null`.
+    Null,
+    /// No `args` key.
+    Absent,
+}
+
+/// Wire form of [`ToolCall`], which keeps a missing, `null`, and `{}` `args`
+/// distinguishable so parsing stays lossless.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolCallWire {
     name: String,
-    #[serde(deserialize_with = "required_nullable_object")]
-    args: Option<serde_json::Map<String, serde_json::Value>>,
+    /// `None` when the key is absent, `Some(None)` for `null`.
+    #[serde(
+        default,
+        deserialize_with = "present_nullable_object",
+        skip_serializing_if = "Option::is_none"
+    )]
+    args: Option<Option<serde_json::Map<String, serde_json::Value>>>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Deserializes a key that must be present but may be `null`.
-fn required_nullable_object<'de, D: Deserializer<'de>>(
+/// Deserializes a present key whose value may be `null`; a missing key takes
+/// the field's default (`None`) instead.
+fn present_nullable_object<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Option<serde_json::Map<String, serde_json::Value>>, D::Error> {
-    Option::deserialize(deserializer)
+) -> Result<Option<Option<serde_json::Map<String, serde_json::Value>>>, D::Error> {
+    Option::deserialize(deserializer).map(Some)
 }
 
 impl From<ToolCallWire> for ToolCall {
     fn from(wire: ToolCallWire) -> Self {
+        let (args_form, args) = match wire.args {
+            None => (ArgsForm::Absent, serde_json::Map::new()),
+            Some(None) => (ArgsForm::Null, serde_json::Map::new()),
+            Some(Some(args)) => (ArgsForm::Object, args),
+        };
         Self {
             name: wire.name,
-            args_null: wire.args.is_none(),
-            args: wire.args.unwrap_or_default(),
+            args,
             extra: wire.extra,
+            args_form,
         }
     }
 }
 
 impl From<ToolCall> for ToolCallWire {
     fn from(call: ToolCall) -> Self {
+        // Arguments added to a call that arrived without any are serialized.
+        let args = match call.args_form {
+            ArgsForm::Absent if call.args.is_empty() => None,
+            ArgsForm::Null if call.args.is_empty() => Some(None),
+            _ => Some(Some(call.args)),
+        };
         Self {
             name: call.name,
-            args: (!(call.args_null && call.args.is_empty())).then_some(call.args),
+            args,
             extra: call.extra,
         }
     }
@@ -587,7 +618,7 @@ impl EventSpec for PreToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PreToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-29-r1/PreToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-30-r1/PreToolUse");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
     }
@@ -633,7 +664,7 @@ pub struct PostToolUseInput {
     /// Current Antigravity 2.0 and CLI payloads are expected to carry it. It
     /// is `None` when the payload omits it, as the IDE reference example and
     /// earlier generic references did. A present `toolCall` must still carry
-    /// `name` and an `args` key, which may be `null`.
+    /// `name`; its `args` may be missing or `null`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call: Option<ToolCall>,
     /// Zero-based index of the completed step in the whole conversation
@@ -710,7 +741,7 @@ impl EventSpec for PostToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PostToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-29-r1/PostToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-30-r1/PostToolUse");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
     }
@@ -978,7 +1009,7 @@ impl EventSpec for Stop {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "Stop");
     const CATEGORY: EventCategory = EventCategory::Agent;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-29-r1/Stop");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-30-r1/Stop");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
     }
@@ -1208,7 +1239,7 @@ mod tests {
 
     #[test]
     fn contract_identities_point_at_the_current_snapshot() {
-        assert_eq!(SNAPSHOT.as_str(), "docs-2026-09-29-r1");
+        assert_eq!(SNAPSHOT.as_str(), "docs-2026-09-30-r1");
         for contract in [
             PreInvocation::CONTRACT,
             PostInvocation::CONTRACT,
@@ -1219,7 +1250,7 @@ mod tests {
             assert!(
                 contract
                     .as_str()
-                    .starts_with("antigravity/docs-2026-09-29-r1/"),
+                    .starts_with("antigravity/docs-2026-09-30-r1/"),
                 "{contract:?}"
             );
         }
@@ -1431,49 +1462,55 @@ mod tests {
         assert_eq!(call.name, "run_command");
         assert_eq!(call.args["CommandLine"], "cargo test");
 
+        // A present toolCall still needs its name, as the snapshot's
+        // `invalid-tool-call` negative fixture pins.
         let malformed = invocation(
-            r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"run_command"},"stepIdx":0}"#,
+            r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","toolCall":{"args":{"CommandLine":"cargo test"}},"stepIdx":0}"#,
         );
         assert!(PostToolUse::parse(&malformed).is_err());
     }
 
     #[test]
-    fn null_tool_arguments_read_as_an_empty_object_and_round_trip() {
+    fn missing_or_null_tool_arguments_read_as_an_empty_object_and_round_trip() {
         // Regression: `"args": null`, how a Go nil map encodes a call without
-        // arguments, failed every PreToolUse and PostToolUse hook.
+        // arguments, and a call that leaves `args` out (list_permissions
+        // takes none) failed every PreToolUse and PostToolUse hook.
         let json = r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"list_permissions","args":null},"stepIdx":2}"#;
-        let raw = invocation(json);
-        let pre = PreToolUse::parse(&raw).unwrap();
-        assert_eq!(pre.tool_call.name, "list_permissions");
-        assert!(pre.tool_call.args.is_empty());
-        assert_eq!(serde_json::to_value(&pre).unwrap(), *raw.json());
-        let post = PostToolUse::parse(&raw).unwrap();
-        let call = post.tool_call.as_ref().unwrap();
-        assert!(call.args.is_empty());
-        assert_eq!(serde_json::to_value(&post).unwrap(), *raw.json());
-
-        // An empty object stays an object, and arguments added to a null
-        // call are serialized.
+        let null = invocation(json);
         let empty = invocation(&json.replace("null", "{}"));
-        let parsed = PreToolUse::parse(&empty).unwrap();
-        assert_eq!(serde_json::to_value(&parsed).unwrap(), *empty.json());
-        assert_ne!(parsed, pre);
-        let mut edited = pre;
-        edited.tool_call.args.insert("Scope".into(), "all".into());
-        assert_eq!(
-            serde_json::to_value(&edited).unwrap()["toolCall"]["args"],
-            serde_json::json!({"Scope": "all"})
-        );
+        let missing = invocation(&json.replace(r#","args":null"#, ""));
+        let mut parsed = Vec::new();
+        for raw in [&null, &empty, &missing] {
+            let pre = PreToolUse::parse(raw).unwrap();
+            assert_eq!(pre.tool_call.name, "list_permissions");
+            assert!(pre.tool_call.args.is_empty());
+            assert_eq!(serde_json::to_value(&pre).unwrap(), *raw.json());
+            let post = PostToolUse::parse(raw).unwrap();
+            let call = post.tool_call.as_ref().unwrap();
+            assert!(call.args.is_empty());
+            assert_eq!(serde_json::to_value(&post).unwrap(), *raw.json());
+            parsed.push(pre);
+        }
+        // The three wire forms stay distinct.
+        assert_ne!(parsed[0], parsed[1]);
+        assert_ne!(parsed[0], parsed[2]);
+        assert_ne!(parsed[1], parsed[2]);
 
-        // The key itself stays required, as the snapshot's `invalid-tool-call`
-        // negative fixture pins, and a non-object value is still rejected.
+        // Arguments added to a call that arrived without any are serialized.
+        for mut edited in parsed {
+            edited.tool_call.args.insert("Scope".into(), "all".into());
+            assert_eq!(
+                serde_json::to_value(&edited).unwrap()["toolCall"]["args"],
+                serde_json::json!({"Scope": "all"})
+            );
+        }
+
+        // A value that is neither an object nor null is still rejected.
         for args in [r#""args":[]"#, r#""args":"x""#] {
             let malformed = invocation(&json.replace(r#""args":null"#, args));
             assert!(PreToolUse::parse(&malformed).is_err(), "{args}");
+            assert!(PostToolUse::parse(&malformed).is_err(), "{args}");
         }
-        let missing = invocation(&json.replace(r#","args":null"#, ""));
-        assert!(PreToolUse::parse(&missing).is_err());
-        assert!(PostToolUse::parse(&missing).is_err());
     }
 
     #[test]

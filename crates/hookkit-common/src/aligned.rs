@@ -1204,7 +1204,7 @@ impl PostCompactOutput {
     ///
     /// - Codex shows the top-level `systemMessage` as a warning.
     /// - Claude Code discards a `PostCompact` hook's `systemMessage`
-    ///   (claude-code/docs-2026-09-29-r1) and has no other user notice for a
+    ///   (claude-code/docs-2026-09-30-r1) and has no other user notice for a
     ///   successful hook, so the Claude arm is the no-op and `message` is
     ///   dropped. [`Self::system_notice_delivered`] reports this.
     pub fn with_system_notice(
@@ -1561,12 +1561,13 @@ impl UserPromptSubmitOutput {
     /// Blocks prompt submission with a reason using each harness's exit-2
     /// path.
     ///
-    /// The audiences differ. Claude Code erases the prompt and shows the
-    /// reason to the user only; it is not added to Claude's context
-    /// (claude-code/docs-2026-09-29-r1). Codex rejects the prompt and reports
-    /// the reason as the blocking reason. A reason that is empty after
-    /// trimming is rejected for every harness: Codex ignores a blank exit-2
-    /// reason and submits the prompt.
+    /// The audiences differ. Claude Code stops the prompt before it reaches
+    /// Claude and shows the reason to the user only; it is not added to
+    /// Claude's context, and the block message still ends with the prompt
+    /// text (claude-code/docs-2026-09-30-r1). Codex rejects the prompt and
+    /// reports the reason as the blocking reason. A reason that is empty
+    /// after trimming is rejected for every harness: Codex ignores a blank
+    /// exit-2 reason and submits the prompt.
     pub fn block(harness: &HarnessId, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         let reason = require_reason(
             reason.into(),

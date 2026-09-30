@@ -113,7 +113,7 @@ fn assert_targets(report: &ToolAccessReport, expected: &[(&str, AccessIntent, Ac
 #[test]
 fn codex_contract_apply_patch_fixture_reads_the_command_payload() {
     let value = contract_fixture(
-        "codex/snapshots/commit-ff6aec9-r1/events/pre-tool-use",
+        "codex/snapshots/commit-ff6aec9-r2/events/pre-tool-use",
         "representative",
     );
     assert_eq!(value["tool_name"], "apply_patch");
@@ -806,7 +806,7 @@ fn structured_home_relative_paths_stay_unresolved() {
 #[test]
 fn claude_post_tool_use_failure_is_observable_from_the_contract_fixture() {
     let mut value = contract_fixture(
-        "claude-code/snapshots/docs-2026-09-29-r1/events/post-tool-use-failure",
+        "claude-code/snapshots/docs-2026-09-30-r1/events/post-tool-use-failure",
         "representative",
     );
     value["tool_input"]["command"] = serde_json::json!("sed -i 's/a/b/' src/x.py && pytest");
@@ -1021,7 +1021,7 @@ fn unsupported_shell_dialect_gaps_name_the_dialect() {
 #[test]
 fn antigravity_post_tool_use_without_a_tool_call_is_a_gap() {
     let value = contract_fixture(
-        "antigravity/snapshots/docs-2026-09-29-r1/events/post-tool-use",
+        "antigravity/snapshots/docs-2026-09-30-r1/events/post-tool-use",
         "ide-reference-example",
     );
     assert!(value.get("toolCall").is_none());

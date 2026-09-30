@@ -838,7 +838,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, continue_session) => {
         /// Sets the universal `continue` field, which Claude Code discards
         /// for this event.
-        #[deprecated(note = "Claude Code discards `continue` for this event (claude-code/docs-2026-09-29-r1)")]
+        #[deprecated(note = "Claude Code discards `continue` for this event (claude-code/docs-2026-09-30-r1)")]
         pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("continue", continue_session.into())
@@ -848,7 +848,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, stop_reason) => {
         /// Sets the universal `stopReason` field, which has no effect because
         /// Claude Code discards `continue` for this event.
-        #[deprecated(note = "Claude Code discards `continue` and `stopReason` for this event (claude-code/docs-2026-09-29-r1)")]
+        #[deprecated(note = "Claude Code discards `continue` and `stopReason` for this event (claude-code/docs-2026-09-30-r1)")]
         pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("stopReason", reason.into().into())
@@ -858,7 +858,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, system_message) => {
         /// Sets the universal `systemMessage` field, which Claude Code
         /// discards for this event.
-        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-09-29-r1)")]
+        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-09-30-r1)")]
         pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("systemMessage", message.into().into())
@@ -868,7 +868,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, terminal_sequence) => {
         /// Sets the universal `terminalSequence` field, which Claude Code
         /// ignores for this event.
-        #[deprecated(note = "Claude Code ignores this event's JSON output, including `terminalSequence` (claude-code/docs-2026-09-29-r1)")]
+        #[deprecated(note = "Claude Code ignores this event's JSON output, including `terminalSequence` (claude-code/docs-2026-09-30-r1)")]
         pub fn with_terminal_sequence(
             self,
             sequence: impl Into<String>,
@@ -882,7 +882,7 @@ macro_rules! discarded_builders {
         /// Sets the universal `suppressOutput` field. Claude Code accepts it
         /// but ignores it on every event: a successful hook's stdout is never
         /// shown in the transcript.
-        #[deprecated(note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-29-r1)")]
+        #[deprecated(note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-30-r1)")]
         pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("suppressOutput", suppress.into())
@@ -892,7 +892,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, system_message_constructor) => {
         /// Creates a response carrying only a `systemMessage`, which Claude
         /// Code discards for this event.
-        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-09-29-r1); use `no_op`")]
+        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-09-30-r1); use `no_op`")]
         pub fn with_system_message(message: impl Into<String>) -> Self {
             Self($crate::catalog::CatalogOutput::top_level::<$event>([(
                 "systemMessage",
@@ -1155,7 +1155,7 @@ impl SetupOutput {
     /// Creates an empty response. Claude Code discards every Setup output
     /// field, including `additionalContext`, so this emits `{}`.
     #[deprecated(
-        note = "Claude Code discards Setup output, including `additionalContext` (claude-code/docs-2026-09-29-r1); this now emits `{}`, use `no_op`"
+        note = "Claude Code discards Setup output, including `additionalContext` (claude-code/docs-2026-09-30-r1); this now emits `{}`, use `no_op`"
     )]
     pub fn with_context(additional_context: impl Into<String>) -> Self {
         let _ = additional_context.into();
@@ -1330,7 +1330,7 @@ impl WorktreeRemoveOutput {
     /// Creates an exit-0 response with `{}` on stdout, which Claude Code
     /// ignores; the worktree counts as removed.
     #[deprecated(
-        note = "WorktreeRemove has no JSON output (claude-code/docs-2026-09-29-r1); use `removed`"
+        note = "WorktreeRemove has no JSON output (claude-code/docs-2026-09-30-r1); use `removed`"
     )]
     pub fn no_op() -> Self {
         Self(CatalogOutput::empty_object::<WorktreeRemove>())
@@ -1862,7 +1862,7 @@ impl PermissionRequestOutput {
     /// `message` still denies: stderr is then empty, which the snapshot
     /// allows next to a decision.
     #[deprecated(
-        note = "Claude Code ignores exit 2 on PermissionRequest and discards its stderr (claude-code/docs-2026-09-29-r1); use `deny(message)`"
+        note = "Claude Code ignores exit 2 on PermissionRequest and discards its stderr (claude-code/docs-2026-09-30-r1); use `deny(message)`"
     )]
     pub fn blocking_error(message: impl Into<String>) -> Self {
         let message = message.into();
@@ -2173,10 +2173,10 @@ impl UserPromptExpansionOutput {
     /// Agent SDK 0.3.285 types this field for `UserPromptExpansion` ("When
     /// decision is \"block\", omit the original prompt from the block
     /// message"). The pinned hooks reference documents it only for
-    /// `UserPromptSubmit`, and the claude-code/docs-2026-09-29-r1 output
-    /// schema does not list it for this event, so this is the one builder
-    /// whose JSON that schema rejects, and whether a given Claude Code
-    /// release honors the field here is unverified.
+    /// `UserPromptSubmit`; the claude-code/docs-2026-09-30-r1 output schema
+    /// accepts it here as an optional, SDK-typed field. Whether a given
+    /// Claude Code release honors it for this event, and what it does on an
+    /// exit-2 block, is unverified.
     pub fn with_suppress_original_prompt(self, suppress: bool) -> hookkit_core::Result<Self> {
         self.0
             .with_specific("suppressOriginalPrompt", suppress.into())
@@ -2196,12 +2196,12 @@ text_context!(UserPromptSubmit, UserPromptSubmitOutput);
 block_builders!(
     UserPromptSubmit,
     UserPromptSubmitOutput,
-    "Prevents the prompt from being processed and erases it; `reason` is shown to the user and not added to context."
+    "Stops the prompt before it reaches Claude; `reason` is shown to the user and not added to context. By default the block message still ends with the prompt text; see `with_suppress_original_prompt`."
 );
 blocking_error!(
     UserPromptSubmit,
     UserPromptSubmitOutput,
-    "Blocks and erases the prompt; stderr is shown to the user and not added to Claude's context."
+    "Stops the prompt before it reaches Claude; stderr is shown to the user and not added to Claude's context. The block message ends with the prompt text; to leave it out, exit 2 with JSON instead: `no_op().with_suppress_original_prompt(true)` followed by `into_blocking_error`."
 );
 into_blocking_error!(UserPromptSubmitOutput);
 nonblocking_error!(UserPromptSubmit, UserPromptSubmitOutput);
@@ -2218,11 +2218,12 @@ impl UserPromptSubmitOutput {
     }
 
     /// Sets `suppressOriginalPrompt`, which omits the original prompt text
-    /// from the block message shown to the user. The pinned reference
-    /// describes it only together with `decision: "block"`; the 2026-09-30
-    /// reference adds that it also applies when the hook blocks by exiting 2
-    /// with this JSON on stdout (see `into_blocking_error`). The prompt text
-    /// can still reach local files such as the transcript.
+    /// from the block message shown to the user. It applies whether the hook
+    /// blocks with `decision: "block"` or by exiting 2 with this JSON on
+    /// stdout (see `into_blocking_error`); an exit-2 hook that prints no JSON
+    /// always keeps the text. It changes only the block message: the prompt
+    /// text can still reach local files such as the transcript and prompt
+    /// history.
     pub fn with_suppress_original_prompt(self, suppress: bool) -> hookkit_core::Result<Self> {
         self.0
             .with_specific("suppressOriginalPrompt", suppress.into())
@@ -2260,7 +2261,8 @@ impl UserPromptSubmitOutput {
 /// byte for byte or, for JSON, as an equal value with the same framing.
 /// Fixtures that show malformed or discouraged output (invalid JSON, JSON
 /// with a failing exit other than 2, exit 2 with invalid stdout, output that
-/// Claude Code ignores) are not declared.
+/// Claude Code ignores or only logs, empty stdout that `no_op`'s `{}`
+/// replaces) are not declared.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     use hookkit_core::NativeEventDescriptor as D;
     const EXIT_2: &[&str] = &[
@@ -2275,6 +2277,15 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
         "command-text-open-brace",
         "command-exit-2",
         "command-exit-2-structured",
+        "command-nonzero-unstructured",
+    ];
+    const USER_PROMPT_SUBMIT: &[&str] = &[
+        "command-structured",
+        "command-text",
+        "command-text-open-brace",
+        "command-exit-2",
+        "command-exit-2-structured",
+        "command-exit-2-suppress-original-prompt",
         "command-nonzero-unstructured",
     ];
     const WATCH: &[&str] = &["command-structured", "command-nonzero-unstructured"];
@@ -2312,7 +2323,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
         D::command::<TaskCreated>(EXIT_2),
         D::command::<TeammateIdle>(EXIT_2),
         D::command::<UserPromptExpansion>(TEXT_CONTEXT),
-        D::command::<UserPromptSubmit>(TEXT_CONTEXT),
+        D::command::<UserPromptSubmit>(USER_PROMPT_SUBMIT),
         D::command::<WorktreeRemove>(&["command-removed", "command-failed", "command-exit-2"]),
     ]
 }

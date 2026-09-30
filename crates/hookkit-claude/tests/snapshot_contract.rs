@@ -345,31 +345,6 @@ fn known_event_schema_violations_are_invalid_input_for_the_hinted_event() {
     }
 }
 
-/// `UserPromptExpansionOutput::with_suppress_original_prompt` emits a field
-/// the Agent SDK types but the snapshot's output schema may not list; that
-/// field must be the response's only difference from the schema.
-#[test]
-fn sdk_typed_output_fields_are_the_only_schema_difference() {
-    let emission = catalog::<UserPromptExpansion>(
-        UserPromptExpansionOutput::block("Unavailable.")
-            .with_suppress_original_prompt(true)
-            .unwrap(),
-    );
-    assert_eq!(emission.exit_code(), 0);
-    let mut value: Value = serde_json::from_slice(emission.stdout()).unwrap();
-    assert_eq!(value["hookSpecificOutput"]["suppressOriginalPrompt"], true);
-    let validator = output_validator("user-prompt-expansion").unwrap();
-    if !validator.is_valid(&value) {
-        // claude-code/docs-2026-09-29-r1 closes this hookSpecificOutput
-        // without the field Agent SDK 0.3.285 adds; nothing else differs.
-        value["hookSpecificOutput"]
-            .as_object_mut()
-            .unwrap()
-            .remove("suppressOriginalPrompt");
-        check_schema("user-prompt-expansion", &value);
-    }
-}
-
 fn positive(event_dir: &str, id: &str) -> Value {
     let fixtures = fixtures(event_dir);
     fixture_list(&fixtures, "/input/positive")
@@ -856,6 +831,11 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
                 "Use the team checklist.",
             ))
         }
+        ("user-prompt-expansion", "suppress-original-prompt") => catalog::<UserPromptExpansion>(
+            UserPromptExpansionOutput::block("Unavailable.")
+                .with_suppress_original_prompt(true)
+                .unwrap(),
+        ),
         ("user-prompt-expansion", "exit-2-structured") => catalog::<UserPromptExpansion>(
             UserPromptExpansionOutput::block("Blocked by JSON reason.")
                 .into_blocking_error("blocked by hook")
@@ -884,6 +864,13 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ),
         ("user-prompt-submit", "exit-2-structured") => catalog::<UserPromptSubmit>(
             UserPromptSubmitOutput::block("Blocked by JSON reason.")
+                .into_blocking_error("blocked by hook")
+                .unwrap(),
+        ),
+        ("user-prompt-submit", "exit-2-suppress-original-prompt") => catalog::<UserPromptSubmit>(
+            UserPromptSubmitOutput::no_op()
+                .with_suppress_original_prompt(true)
+                .unwrap()
                 .into_blocking_error("blocked by hook")
                 .unwrap(),
         ),
@@ -957,36 +944,58 @@ fn undeclared_reason(event_dir: &str, id: &str) -> Option<&'static str> {
         (_, "command-invalid-json" | "command-schema-invalid-json") => {
             "malformed JSON that typed constructors never emit"
         }
-        (_, "command-exit-2-invalid-stdout" | "command-failed-invalid-stdout") => {
-            "invalid stdout that typed constructors never emit"
-        }
+        (
+            _,
+            "command-exit-2-invalid-stdout"
+            | "command-exit-2-schema-invalid-json"
+            | "command-failed-invalid-stdout",
+        ) => "invalid stdout that typed constructors never emit",
         (_, "command-nonzero-structured") => {
             "JSON with a failing exit other than 2; typed constructors emit JSON only with exit 0 or 2"
         }
         (_, "command-text-json-lines") => {
             "text_context re-routes brace-delimited text to structured additionalContext"
         }
+        (_, "command-no-op") => {
+            "no_op() prints `{}`, the structured outcome with no fields, which has the same effect as empty stdout; typed constructors print empty stdout only for WorktreeRemove"
+        }
+        (_, "command-plain-text") => {
+            "plain text that Claude Code only logs for this event; text_context exists only where plain text becomes context"
+        }
         (
-            "cwd-changed"
-            | "directory-added"
-            | "file-changed"
+            "cwd-changed" | "file-changed" | "post-model-switch" | "session-start"
+            | "subagent-start",
+            "command-exit-2",
+        ) => {
+            "exit 2 cannot block here and only shows stderr to the user, the notice nonblocking_error gives with exit 1"
+        }
+        (
+            "cwd-changed" | "file-changed" | "post-model-switch" | "session-start"
+            | "subagent-start",
+            "command-exit-2-structured",
+        ) => {
+            "exit 2 cannot block here, so typed constructors never pair JSON with it; the same JSON applies on exit 0"
+        }
+        ("message-display", "command-exit-2" | "command-exit-2-json-ignored") => {
+            "a MessageDisplay hook that exits 2 only logs stderr, ignores any displayContent, and displays the original text, which no_op() also leaves unchanged"
+        }
+        ("message-display", "command-nonzero-unstructured") => {
+            "a failing MessageDisplay hook only logs stderr and displays the original text, which no_op() also leaves unchanged"
+        }
+        (
+            "directory-added"
             | "instructions-loaded"
-            | "message-display"
             | "notification"
             | "permission-denied"
-            | "post-model-switch"
-            | "session-start"
             | "stop-failure"
-            | "subagent-start"
             | "setup"
             | "session-end"
             | "post-compact",
             "command-exit-2",
-        ) => "exit 2 is an ordinary failure here; nonblocking_error exits 1",
+        ) => "exit 2 is an ordinary failure here, like any other nonzero exit",
         (
             "directory-added"
             | "instructions-loaded"
-            | "message-display"
             | "notification"
             | "permission-denied"
             | "stop-failure",
@@ -1125,6 +1134,8 @@ fn documented_output_negatives_are_unrepresentable() {
                 }
                 // A command WorktreeCreate hook prints a path, never JSON.
                 ("worktree-create", "missing-worktree-path") => {}
+                // Every block constructor and builder sets `reason`.
+                ("stop" | "subagent-stop", "block-without-reason") => {}
                 _ => panic!("{event_dir}/{id}: classify this output negative"),
             }
             if let Some(validator) = output_validator(event_dir) {

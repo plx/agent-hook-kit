@@ -869,14 +869,14 @@ mod tests {
 
     #[test]
     fn contract_ids_name_the_implemented_snapshot() {
-        assert_eq!(SNAPSHOT_ID.as_str(), "commit-ff6aec9-r1");
+        assert_eq!(SNAPSHOT_ID.as_str(), "commit-ff6aec9-r2");
         assert_eq!(
             PreToolUse::CONTRACT.as_str(),
-            "codex/commit-ff6aec9-r1/PreToolUse"
+            "codex/commit-ff6aec9-r2/PreToolUse"
         );
         assert_eq!(
             PostToolUse::CONTRACT.as_str(),
-            "codex/commit-ff6aec9-r1/PostToolUse"
+            "codex/commit-ff6aec9-r2/PostToolUse"
         );
     }
 

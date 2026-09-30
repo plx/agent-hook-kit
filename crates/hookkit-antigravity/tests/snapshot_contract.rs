@@ -138,6 +138,24 @@ fn snapshot_fixtures_exercise_the_relaxed_input_constraints() {
             .iter()
             .any(|fixture| fixture["value"]["error"].as_str() == Some(""))
     );
+    // A tool that takes no arguments may send `args: null` or leave it out.
+    for event_dir in ["pre-tool-use", "post-tool-use"] {
+        let fixtures = read_yaml(event_dir);
+        let calls: Vec<&Value> = fixture_list(&fixtures, "/input/positive")
+            .iter()
+            .filter_map(|fixture| fixture["value"].get("toolCall"))
+            .collect();
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.get("args") == Some(&Value::Null)),
+            "{event_dir}: expected a null-args positive"
+        );
+        assert!(
+            calls.iter().any(|call| call.get("args").is_none()),
+            "{event_dir}: expected a positive without args"
+        );
+    }
     for event_dir in EVENT_DIRS {
         let fixtures = read_yaml(event_dir);
         let positives = fixture_list(&fixtures, "/input/positive");

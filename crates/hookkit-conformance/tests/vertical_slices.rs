@@ -8,6 +8,6 @@ fn every_registry_case_executes_against_the_native_event_spec() {
             .iter()
             .map(|descriptor| descriptor.conformance_cases().len())
             .sum::<usize>(),
-        147
+        148
     );
 }
