@@ -1,0 +1,82 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: none
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: failure
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: session
+  identification:
+    discriminator:
+      const: SessionEnd
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: session_end
+  wire_name: SessionEnd
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+harness: codex
+id: codex/commit-ff6aec9-r2/SessionEnd
+schemas:
+  input:
+    assurance:
+      confidence: high
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+  outputs: []
+snapshot: commit-ff6aec9-r2
+uncertainties:
+- 'SessionEnd is advisory: Codex ignores stdout at exit 0, never runs it for subagents, and `reason` is always `other`.'
+- SessionEnd handlers always run synchronously even when `async` is true, default to a one-second timeout clamped to one through three seconds, and reject `mcp_tool` handlers; `prompt` and `agent` handlers are parsed but skipped.
+- The official generated schemas include parsed compatibility fields; runtime support restrictions from the hooks reference and pinned source remain controlling.
+- Codex never reads stderr from a command that exits 0, so exit-0 outcomes model stderr as ignored rather than as diagnostics.
+- For non-zero exits Codex marks the run failed and reports the trimmed stderr (or `hook exited with code N` when stderr is blank) as the failure message; exit 2 has no special meaning and the operation continues.
+- Since Codex 0.149.0 command hooks receive a replay of the environment Codex captured when the session hook registry was created, not the live environment; since 0.155.0 they start in a new session without a controlling terminal and their timeout also covers stdin delivery. On timeout, I/O failure, or turn abort Codex SIGKILLs the hook's whole process group.
+- Codex does not dispatch command hooks for Work threads that use cloud orchestration, even when tools execute locally; only admin-managed remote mcp_tool hooks run there.

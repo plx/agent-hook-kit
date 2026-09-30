@@ -1,0 +1,297 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: plain-text
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: diagnostics
+        semantic_format: plain-text-unless-brace-delimited
+        trailing_newline: allowed
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        exact: 0
+      id: invalid-json
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: brace-delimited
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: continue
+      exit:
+        exact: 2
+      id: exit-2
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: agent-context
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: continue
+      exit:
+        exact: 2
+      id: exit-2-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: agent-context
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-unstructured
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: user-message
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+  http:
+    kind: http
+    method: POST
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: json
+        presence: required
+        role: http-body
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: empty-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: non-json-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: not-a-json-object
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 599
+          min: 400
+      id: non-success
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: body
+      content_kind: json
+      framing: one-http-message
+    request_content_type: application/json
+    response_content_type: application/json
+event:
+  category: turn
+  identification:
+    discriminator:
+      const: Stop
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: stop
+  wire_name: Stop
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- http
+- mcp_tool
+- prompt
+- agent
+harness: claude-code
+id: claude-code/docs-2026-09-30-r1/Stop
+schemas:
+  input:
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+  outputs:
+  - assurance:
+      confidence: low
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - claude-hooks-reference
+snapshot: docs-2026-09-30-r1
+uncertainties:
+- The reference lists last_assistant_message among Stop inputs, but the Agent SDK has typed it optional since 0.3.223, so the schema keeps it optional.
+- background_tasks and session_crons are present when the task registry is reachable.
+- 'hookSpecificOutput.additionalContext is non-error feedback that keeps Claude working: like decision block it continues the conversation, subject to the stop_hook_active input and the 8-consecutive-continuation cap (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP), but the transcript labels it hook feedback rather than a hook error.'
+- The reference requires reason when decision is block, so the output schema requires it; it does not require the reason to be non-empty.
+- Exit status 2 is described only by the exact exit-2 outcomes; the 1-255 nonzero outcomes model the reference's other exit codes and apply to status 2 only where no exit-2 outcome exists.

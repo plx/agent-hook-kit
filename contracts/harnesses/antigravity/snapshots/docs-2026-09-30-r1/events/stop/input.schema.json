@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-09-30-r1:stop:input",
+  "type": "object",
+  "required": ["conversationId", "workspacePaths", "transcriptPath", "artifactDirectoryPath", "executionNum", "terminationReason", "fullyIdle"],
+  "properties": {
+    "conversationId": { "type": "string", "description": "Unique UUID of the active agent conversation." },
+    "workspacePaths": { "type": "array", "items": { "type": "string" }, "description": "Absolute directory paths of the user's mounted workspaces; may be empty for a conversation without a workspace." },
+    "transcriptPath": { "type": "string", "description": "Path to the conversation's transcript.jsonl under <app_data_dir>/brain/<conversationId>/.system_generated/logs/." },
+    "artifactDirectoryPath": { "type": "string", "description": "Path to the directory containing the conversation's artifacts and screenshots." },
+    "modelName": { "type": "string", "description": "Name or identifier of the model handling the invocation; optional because earlier builds did not document or send it." },
+    "executionNum": { "type": "integer", "minimum": 0, "description": "Sequence number of the execution attempt." },
+    "terminationReason": { "type": "string", "description": "Why execution is stopping, for example model_stop, max_steps_exceeded, or error; open vocabulary." },
+    "error": { "type": "string", "description": "Error message when a system error caused termination; the official example sends an empty string otherwise." },
+    "fullyIdle": { "type": "boolean", "description": "true when the agent and all background commands and asynchronous tasks have finished; false while background tasks are still running." }
+  },
+  "additionalProperties": true
+}

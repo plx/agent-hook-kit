@@ -1,0 +1,238 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: terminal-sequence-only
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: plain-text
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: diagnostics
+        semantic_format: plain-text-unless-brace-delimited
+        trailing_newline: allowed
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: terminal-sequence-only
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-unstructured
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+  http:
+    kind: http
+    method: POST
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: terminal-sequence-only
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: json
+        presence: required
+        role: http-body
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: empty-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: non-json-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: not-a-json-object
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        range:
+          max: 599
+          min: 400
+      id: non-success
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: body
+      content_kind: json
+      framing: one-http-message
+    request_content_type: application/json
+    response_content_type: application/json
+event:
+  category: notification
+  identification:
+    discriminator:
+      const: Notification
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: notification
+  wire_name: Notification
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- http
+- mcp_tool
+harness: claude-code
+id: claude-code/docs-2026-09-30-r1/Notification
+schemas:
+  input:
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+  outputs:
+  - assurance:
+      confidence: low
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+snapshot: docs-2026-09-30-r1
+uncertainties:
+- 'notification_type is modeled as an open string: the Agent SDK types it as string, and the reference added elicitation_url_dialog and quota_auto_resume_fired, quota_auto_resume_stale, and quota_auto_resume_disabled (Claude Code v2.1.234 or later) after the previous snapshot. The schema lists the documented values as examples.'
+- systemMessage and continue are discarded; terminalSequence is still emitted on every exit code.
+- The Agent SDK output union types hookSpecificOutput.additionalContext for Notification, which the reference does not document; it is omitted.
+- 'An HTTP hook applies this event''s failure contract from the per-event exit-code table: a non-2xx status, or a 2xx body that is neither empty nor a JSON object, has the effect of a failed command hook rather than the generic non-blocking error.'

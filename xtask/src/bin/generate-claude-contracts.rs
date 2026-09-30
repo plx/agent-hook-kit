@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SNAPSHOT: &str = "docs-2026-09-29-r1";
+const SNAPSHOT: &str = "docs-2026-09-30-r1";
 const SOURCE: &str = "claude-hooks-reference";
 const CHANGELOG: &str = "claude-code-changelog";
 const SDK: &str = "claude-agent-sdk-types";
@@ -24,10 +24,14 @@ const THREE: &[&str] = &["command", "http", "mcp_tool"];
 const COMMAND_MCP: &[&str] = &["command", "mcp_tool"];
 const COMMAND_ONLY: &[&str] = &["command"];
 
+const HTTP_FAILURE_CONTRACT: &str = "An HTTP hook applies this event's failure contract from the per-event exit-code table: a non-2xx status, or a 2xx body that is neither empty nor a JSON object, has the effect of a failed command hook rather than the generic non-blocking error.";
 const EXIT_PRECEDENCE: &str = "Exit status 2 is described only by the exact exit-2 outcomes; the 1-255 nonzero outcomes model the reference's other exit codes and apply to status 2 only where no exit-2 outcome exists.";
 const TEXT_JSON_RULE: &str = "Stdout whose trimmed text starts with { and ends with } is parsed as JSON (Claude Code v2.1.248 or later); a parse or schema-validation failure is a non-blocking error and the text is not added as context. Output of two or more lines that each parse as JSON, none setting an output field, remains plain text.";
 const MCP_SERVER_NOTE: &str = "mcp_server (Claude Code v2.1.274 or later) is present only for MCP tools; its source vocabulary is open, the schema lists the documented values as examples, and an unrecognized source must be treated as an unrecognized configured source rather than sdk.";
 const TEAM_NAME_NOTE: &str = "team_name is deprecated upstream (a session-derived name that will be removed in a future release).";
+const EXIT_2_NOTICE_JSON: &str = "Exit status 2 cannot block this event. A schema-valid JSON object printed with exit 2 is read as on exit 0, because Claude Code reads JSON on every exit code; the reference does not say whether the exit-2 notice is still shown then, so the exit-2-structured outcome keeps stderr as a user message.";
+const STOP_CONTEXT: &str = "hookSpecificOutput.additionalContext is non-error feedback that keeps Claude working: like decision block it continues the conversation, subject to the stop_hook_active input and the 8-consecutive-continuation cap (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP), but the transcript labels it hook feedback rather than a hook error.";
+const BLOCK_REASON: &str = "The reference requires reason when decision is block, so the output schema requires it; it does not require the reason to be non-empty.";
 
 #[derive(Clone, Copy)]
 enum Profile {
@@ -82,9 +86,23 @@ enum Nonzero {
 struct Exit2 {
     effect: &'static str,
     stderr_role: &'static str,
-    /// Effect and fixture when stdout also carries a schema-valid JSON object;
-    /// `None` when Claude Code ignores that JSON.
-    json: Option<(&'static str, Value)>,
+    json: Exit2Json,
+    /// Exit 2 blocks the action, so stderr is the blocking message; otherwise
+    /// exit 2 only changes where a failure is reported.
+    blocks: bool,
+}
+
+/// What Claude Code does with a schema-valid JSON object printed with exit 2.
+enum Exit2Json {
+    /// The JSON is ignored.
+    Ignored,
+    /// The JSON is read with `effect`; `fixture` is a dedicated output example.
+    Read {
+        effect: &'static str,
+        fixture: Value,
+    },
+    /// The JSON is read exactly as on exit 0, so the structured fixture applies.
+    AsStructured,
 }
 
 struct Field {
@@ -131,7 +149,12 @@ struct Seed {
     handlers: &'static [&'static str],
     text_context: bool,
     top_level_block: bool,
+    /// `decision: block` must carry a `reason`.
+    block_reason_required: bool,
     reason_description: Option<&'static str>,
+    /// Effect of unparseable or schema-invalid exit-0 JSON when it differs
+    /// from the standard non-blocking error.
+    invalid_json_effect: Option<&'static str>,
     permission_mode: Option<&'static str>,
     effort: bool,
     representative: Vec<(&'static str, Value)>,
@@ -167,7 +190,9 @@ impl Seed {
             handlers: THREE,
             text_context: false,
             top_level_block: false,
+            block_reason_required: false,
             reason_description: None,
+            invalid_json_effect: None,
             permission_mode: None,
             effort: false,
             representative: Vec::new(),
@@ -196,15 +221,19 @@ impl Seed {
         self
     }
 
+    /// Exit 2 blocks with `effect` and ignores any JSON on stdout.
     fn exit2(mut self, effect: &'static str, stderr_role: &'static str) -> Self {
         self.exit2 = Some(Exit2 {
             effect,
             stderr_role,
-            json: None,
+            json: Exit2Json::Ignored,
+            blocks: true,
         });
         self
     }
 
+    /// Exit 2 blocks with `effect`, and a schema-valid JSON object printed
+    /// with it is read with `json_effect`.
     fn exit2_json(
         mut self,
         effect: &'static str,
@@ -215,7 +244,35 @@ impl Seed {
         self.exit2 = Some(Exit2 {
             effect,
             stderr_role,
-            json: Some((json_effect, fixture)),
+            json: Exit2Json::Read {
+                effect: json_effect,
+                fixture,
+            },
+            blocks: true,
+        });
+        self
+    }
+
+    /// Exit 2 cannot block but shows stderr to the user as a hook error
+    /// notice, and a schema-valid JSON object printed with it is read as on
+    /// exit 0.
+    fn exit2_notice(mut self) -> Self {
+        self.exit2 = Some(Exit2 {
+            effect: "nonblocking-error",
+            stderr_role: "user-message",
+            json: Exit2Json::AsStructured,
+            blocks: false,
+        });
+        self
+    }
+
+    /// Exit 2 is a failure with `effect` whatever stdout holds.
+    fn exit2_failure(mut self, effect: &'static str, stderr_role: &'static str) -> Self {
+        self.exit2 = Some(Exit2 {
+            effect,
+            stderr_role,
+            json: Exit2Json::Ignored,
+            blocks: false,
         });
         self
     }
@@ -240,8 +297,18 @@ impl Seed {
         self
     }
 
+    fn block_reason_required(mut self) -> Self {
+        self.block_reason_required = true;
+        self
+    }
+
     fn reason_description(mut self, description: &'static str) -> Self {
         self.reason_description = Some(description);
+        self
+    }
+
+    fn invalid_json_effect(mut self, effect: &'static str) -> Self {
+        self.invalid_json_effect = Some(effect);
         self
     }
 
@@ -331,6 +398,15 @@ impl Seed {
             Json::SideEffects => "terminal-sequence-only",
             Json::Discarded => "ignored",
             Json::Absent { success, .. } => success,
+        }
+    }
+
+    /// Effect of a failed hook, which the reference also applies to a failed
+    /// HTTP hook: a non-2xx status or a 2xx body that is not a JSON object.
+    fn failure_effect(&self) -> &'static str {
+        match (self.json, self.nonzero) {
+            (Json::Absent { failure, .. }, _) => failure,
+            (_, Nonzero::Split { effect, .. } | Nonzero::Merged { effect, .. }) => effect,
         }
     }
 }
@@ -424,6 +500,7 @@ fn seeds() -> Vec<Seed> {
                 ),
             ])
             .structured(json!({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Read conventions.","sessionTitle":"Review","watchPaths":["/repo/.env"],"reloadSkills":true}}))
+            .exit2_notice()
             .handlers(COMMAND_MCP)
             .text_context()
             .representative("source", json!("resume"))
@@ -432,6 +509,7 @@ fn seeds() -> Vec<Seed> {
             .uncertainty("sessionTitle applies when source is startup, resume, or fork and is ignored on clear and compact.")
             .uncertainty("mcp_tool handlers are skipped for SessionStart at launch, including --continue and --resume, and run only for later SessionStart events after /clear or compaction.")
             .uncertainty("Exit status 2 renders stderr as a hook error notice for the user, the same way as any other non-blocking error; Claude does not see it.")
+            .uncertainty(EXIT_2_NOTICE_JSON)
             .uncertainty(TEXT_JSON_RULE),
         Seed::new("Setup", "setup", "session", NoControl)
             .fields(vec![required(
@@ -513,8 +591,17 @@ fn seeds() -> Vec<Seed> {
                 json!({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","sessionTitle":"Test run"}}),
                 &[SOURCE],
             )
+            .process(
+                "command-exit-2-suppress-original-prompt",
+                "exit-2-structured",
+                2,
+                br#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","suppressOriginalPrompt":true}}"#,
+                b"blocked by hook",
+            )
+            .input_source(SDK)
             .uncertainty("reason and exit-2 stderr are shown to the user and are not added to Claude's context.")
-            .uncertainty("The pinned reference describes suppressOriginalPrompt only for decision block; a later, unpinned revision of the reference (retrieved 2026-09-30) says it also applies when an exit-2 hook prints it, and that an exit-2 hook printing no JSON always keeps the prompt text in the block message.")
+            .uncertainty("A blocked prompt never reaches Claude, but by default the block message shown to the user ends with Original prompt: and the submitted text, and Claude Code writes that message to the session transcript on disk. suppressOriginalPrompt leaves the text out of the message whether the hook blocks with decision block or by exiting 2 while printing it; an exit-2 hook that prints no JSON always keeps the text. It changes only the block message: the text can still reach local files such as the transcript and prompt history.")
+            .uncertainty("The Agent SDK types two optional inputs the reference does not document: source (user, sdk, system, loop_wakeup, schedule_wakeup, or poll_event, which payloads may omit while the field rolls out) and session_title. The open input schema accepts them without encoding them.")
             .uncertainty("prompt carries pasted text expanded in place; when Claude Code marks pasted text, it sits between pasted_content id marker lines.")
             .uncertainty(TEXT_JSON_RULE),
         Seed::new("UserPromptExpansion", "user_prompt_expansion", "prompt", Prompt)
@@ -526,7 +613,7 @@ fn seeds() -> Vec<Seed> {
                 ),
                 string("command_name", "review"),
                 string("command_args", "--strict"),
-                string("command_source", "plugin"),
+                optional_string("command_source", "plugin"),
                 string("prompt", "/review --strict"),
             ])
             .structured(json!({"decision":"block","reason":"Unavailable.","hookSpecificOutput":{"hookEventName":"UserPromptExpansion","additionalContext":"Use the team checklist."}}))
@@ -541,7 +628,20 @@ fn seeds() -> Vec<Seed> {
             .top_level_block()
             .reason_description("Shown to the user when decision is block.")
             .permission_mode("default")
+            .positive(
+                "mcp-prompt",
+                json!({"expansion_type":"mcp_prompt","command_name":"mcp__github__triage","command_args":"","prompt":"/mcp__github__triage"}),
+            )
+            .output(
+                "suppress-original-prompt",
+                json!({"decision":"block","reason":"Unavailable.","hookSpecificOutput":{"hookEventName":"UserPromptExpansion","suppressOriginalPrompt":true}}),
+                &[SDK],
+            )
+            .input_source(SDK)
+            .output_source(SDK)
             .uncertainty("reason and exit-2 stderr are shown to the user.")
+            .uncertainty("The reference lists command_source among the inputs, but the Agent SDK has typed it optional since 0.3.223, so the schema keeps it optional.")
+            .uncertainty("suppressOriginalPrompt is typed by Agent SDK 0.3.285 (omit the original prompt from the block message when decision is block) but not documented for this event; the reference documents it only for UserPromptSubmit. It is accepted as optional, and its effect on an exit-2 block is unknown.")
             .uncertainty(TEXT_JSON_RULE),
         Seed::new("MessageDisplay", "message_display", "display", Display)
             .fields(vec![
@@ -552,12 +652,22 @@ fn seeds() -> Vec<Seed> {
                 string("delta", "Here is the plan:\n"),
             ])
             .structured(json!({"hookSpecificOutput":{"hookEventName":"MessageDisplay","displayContent":"Here is the plan:"}}))
+            .exit2_failure("display-original", "diagnostics")
             .nonzero(Nonzero::Split {
                 effect: "display-original",
                 stderr_role: "diagnostics",
             })
+            .invalid_json_effect("display-original")
+            .process(
+                "command-exit-2-json-ignored",
+                "exit-2",
+                2,
+                br#"{"hookSpecificOutput":{"hookEventName":"MessageDisplay","displayContent":"Here is the plan:"}}"#,
+                b"hook failed",
+            )
             .uncertainty("Claude Code acts only on displayContent; systemMessage and continue are discarded.")
-            .uncertainty("A failed or timed-out hook displays the original text; the reference does not say whether a failure notice is rendered or whether JSON printed with a nonzero exit is honored, so the standard other-exit-code rule is assumed."),
+            .uncertainty("A failed or timed-out hook displays the original text, and Claude Code notes the failure only in debug output, not in the session. The per-event exit-code table gives exit 2 its own row (the original text is displayed), so exit 2 ignores displayContent; invalid JSON is modeled as the same quiet failure, although the general rule reports a hook error notice for it.")
+            .uncertainty("The reference does not say whether displayContent printed with a nonzero exit other than 2 is honored, so the standard other-exit-code rule is assumed for those codes."),
         Seed::new("PreToolUse", "pre_tool_use", "tool", PreTool)
             .fields(tool_fields(false))
             .structured(json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Review command.","updatedInput":{"command":"cargo test"},"additionalContext":"Production environment."}}))
@@ -571,8 +681,14 @@ fn seeds() -> Vec<Seed> {
             .permission_mode("default")
             .effort()
             .positive("mcp-tool", mcp_tool_call(false))
+            .positive(
+                "unrecognized-mode-and-effort",
+                json!({"permission_mode":"reviewOnly","effort":{"level":"ultra","source":"setting"}}),
+            )
             .input_source(SDK)
             .uncertainty(MCP_SERVER_NOTE)
+            .uncertainty("permission_mode and effort.level are open strings: the reference lists their current values, which the schema keeps as examples, but the Agent SDK types both as string, and effort may gain members.")
+            .uncertainty("updatedInput is documented only together with a permissionDecision: allow auto-approves the rewritten input, ask shows it to the user, and defer ignores it. Whether Claude Code applies updatedInput without a permissionDecision is undocumented.")
             .uncertainty("permissionDecisionReason is shown to Claude for deny, to the user for ask, and written only to the debug log for allow and defer.")
             .uncertainty("A timed-out command, http, or mcp_tool hook does not block the tool call.")
             .uncertainty("The deprecated top-level decision and reason (approve or block) are still mapped by Claude Code but are intentionally omitted in favor of hookSpecificOutput."),
@@ -744,8 +860,10 @@ fn seeds() -> Vec<Seed> {
                 string("agent_type", "Explore"),
             ])
             .structured(context("SubagentStart"))
+            .exit2_notice()
             .uncertainty("SubagentStart fires on spawn, on subagent resume, and for each message an in-process teammate handles; repeated context is injected only when the subagent context no longer holds the earlier copy.")
-            .uncertainty("Exit status 2 renders stderr as a hook error notice in the subagent's own transcript; Claude does not see it."),
+            .uncertainty("Exit status 2 renders stderr as a hook error notice in the subagent's own transcript; Claude does not see it.")
+            .uncertainty(EXIT_2_NOTICE_JSON),
         Seed::new("SubagentStop", "subagent_stop", "subagent", Stop)
             .fields(vec![
                 required("stop_hook_active", json!({"type":"boolean"}), json!(false)),
@@ -769,12 +887,22 @@ fn seeds() -> Vec<Seed> {
             )
             .handlers(ALL_FIVE)
             .top_level_block()
+            .block_reason_required()
             .permission_mode("default")
             .effort()
             .positive("internal-agent", json!({"agent_type":""}))
+            .output_negative(
+                "block-without-reason",
+                json!({"decision":"block"}),
+                "",
+                "required",
+            )
             .input_source(SDK)
             .uncertainty("Internal agents such as prompt suggestions and /btw side questions also fire SubagentStop with agent_type set to the session's agent name or an empty string; the reference does not say whether agent_id and agent_transcript_path are always present for them, so both remain required.")
-            .uncertainty("last_assistant_message is optional: since Claude Code v2.1.271 a subagent using SubagentHandback delivers its report through that tool and the field holds only closing text, if any, and the Agent SDK types the field optional."),
+            .uncertainty("last_assistant_message is optional: since Claude Code v2.1.271 a subagent using SubagentHandback delivers its report through that tool and the field holds only closing text, if any, and the Agent SDK types the field optional.")
+            .uncertainty("SubagentStop uses the Stop decision control: decision block with a reason, or exit-2 stderr, keeps the subagent running and becomes its next instruction.")
+            .uncertainty(STOP_CONTEXT)
+            .uncertainty(BLOCK_REASON),
         Seed::new("TaskCreated", "task_created", "task", NoControl)
             .fields(task_fields())
             .structured(json!({"decision":"block","reason":"Task needs an owner."}))
@@ -824,11 +952,20 @@ fn seeds() -> Vec<Seed> {
             )
             .handlers(ALL_FIVE)
             .top_level_block()
+            .block_reason_required()
             .permission_mode("default")
             .effort()
+            .output_negative(
+                "block-without-reason",
+                json!({"decision":"block"}),
+                "",
+                "required",
+            )
             .input_source(SDK)
             .uncertainty("The reference lists last_assistant_message among Stop inputs, but the Agent SDK has typed it optional since 0.3.223, so the schema keeps it optional.")
-            .uncertainty("background_tasks and session_crons are present when the task registry is reachable."),
+            .uncertainty("background_tasks and session_crons are present when the task registry is reachable.")
+            .uncertainty(STOP_CONTEXT)
+            .uncertainty(BLOCK_REASON),
         Seed::new("StopFailure", "stop_failure", "turn", NoControl)
             .fields(vec![
                 required(
@@ -905,8 +1042,10 @@ fn seeds() -> Vec<Seed> {
         Seed::new("CwdChanged", "cwd_changed", "workspace", WatchPaths)
             .fields(vec![string("old_cwd", "/repo"), string("new_cwd", "/repo/crate")])
             .structured(json!({"systemMessage":"Working directory changed.","hookSpecificOutput":{"hookEventName":"CwdChanged","watchPaths":["/repo/crate/.env"]}}))
+            .exit2_notice()
             .uncertainty("continue is discarded; systemMessage is shown as a brief terminal notification in interactive sessions and does not reach the SDK message stream.")
-            .uncertainty("Exit status 2 shows stderr to the user only."),
+            .uncertainty("Exit status 2 shows stderr to the user only.")
+            .uncertainty(EXIT_2_NOTICE_JSON),
         Seed::new("DirectoryAdded", "directory_added", "workspace", NoControl)
             .fields(vec![
                 string("directory", "/repo/related"),
@@ -934,8 +1073,10 @@ fn seeds() -> Vec<Seed> {
                 ),
             ])
             .structured(json!({"systemMessage":"Watched file changed.","hookSpecificOutput":{"hookEventName":"FileChanged","watchPaths":["/repo/.env","/repo/.env.local"]}}))
+            .exit2_notice()
             .uncertainty("continue is discarded; systemMessage is shown as a brief terminal notification in interactive sessions and does not reach the SDK message stream.")
-            .uncertainty("Exit status 2 shows stderr to the user only."),
+            .uncertainty("Exit status 2 shows stderr to the user only.")
+            .uncertainty(EXIT_2_NOTICE_JSON),
         Seed::new("WorktreeRemove", "worktree_remove", "workspace", NoControl)
             .fields(vec![string("worktree_path", "/tmp/worktree")])
             .json(Json::Absent {
@@ -945,7 +1086,8 @@ fn seeds() -> Vec<Seed> {
             .uncertainty("Claude Code reads only the exit code: exit 0 counts as removed, and a nonzero exit fails the removal when worktree_path still exists afterward, leaving the worktree on disk with no git fallback.")
             .uncertainty("The reference says Claude Code reads nothing else from the hook and discards its JSON output fields, so stdout is modeled as ignored; the general statement that terminalSequence still fires on discarding events is not restated for WorktreeRemove.")
             .uncertainty("A failed removal writes the hook command and stderr to the debug log; agent view quotes the start of stderr when a background-session delete is refused.")
-            .uncertainty("An HTTP hook applies the same failure contract. Without any WorktreeRemove hook, Claude Code falls back to git worktree remove --force on the WorktreeCreate path."),
+            .uncertainty("An HTTP hook applies the same failure contract: a non-2xx status, or a 2xx body that is neither empty nor a JSON object, fails the removal when the directory remains. The reference does not say whether a 2xx JSON object that fails the universal output schema also counts as a failure.")
+            .uncertainty("Without any WorktreeRemove hook, Claude Code falls back to git worktree remove --force on the WorktreeCreate path."),
         Seed::new("PreCompact", "pre_compact", "compaction", NoControl)
             .fields(vec![
                 required(
@@ -1055,11 +1197,13 @@ fn seeds() -> Vec<Seed> {
                 "automatic-fallback",
                 json!({"source":"auto","requested_model":null,"to_model":"claude-sonnet-5","from_model":"claude-opus-5"}),
             )
+            .exit2_notice()
             .input_source(SDK)
             .output_source(SDK)
             .uncertainty("PostModelSwitch requires Claude Code v2.1.251 or later and cannot block; requested_model is null when source is auto and is the restored setting when source is resume.")
             .uncertainty("Plain-text stdout or additionalContext is delivered with the next request; output from a hook still running five seconds after the next prompt rolls over to the following request, and only the last switch's output is delivered.")
             .uncertainty("Exit status 2 renders stderr as a hook error notice for the user; Claude does not see it.")
+            .uncertainty(EXIT_2_NOTICE_JSON)
             .uncertainty(TEXT_JSON_RULE),
         Seed::new("SessionEnd", "session_end", "session", NoControl)
             .fields(vec![required(
@@ -1340,11 +1484,11 @@ fn input_schema(seed: &Seed) -> Value {
         ),
         (
             "permission_mode".into(),
-            json!({"enum":["default","plan","acceptEdits","auto","dontAsk","bypassPermissions"]}),
+            json!({"type":"string","examples":["default","plan","acceptEdits","auto","dontAsk","bypassPermissions"],"description":"Open string: the Agent SDK types it as string; the examples are the documented modes."}),
         ),
         (
             "effort".into(),
-            json!({"type":"object","required":["level"],"properties":{"level":{"enum":["low","medium","high","xhigh","max"]}},"additionalProperties":false}),
+            json!({"type":"object","required":["level"],"properties":{"level":{"type":"string","examples":["low","medium","high","xhigh","max"],"description":"Open string: the Agent SDK types it as string; the examples are the documented levels."}},"additionalProperties":true}),
         ),
         ("hook_event_name".into(), json!({"const":seed.wire})),
         ("agent_id".into(), json!({"type":"string"})),
@@ -1377,9 +1521,11 @@ fn output_schema(seed: &Seed) -> Value {
             json!({"additionalContext":{"type":"string"},"initialUserMessage":{"type":"string"},"sessionTitle":{"type":"string"},"watchPaths":{"type":"array","items":{"type":"string"}},"reloadSkills":{"type":"boolean"}})
         }
         Profile::Prompt if seed.wire == "UserPromptSubmit" => {
-            json!({"additionalContext":{"type":"string"},"sessionTitle":{"type":"string"},"suppressOriginalPrompt":{"type":"boolean"}})
+            json!({"additionalContext":{"type":"string"},"sessionTitle":{"type":"string"},"suppressOriginalPrompt":{"type":"boolean","description":"Leaves the prompt text out of the block message when the hook blocks with decision block or with exit 2."}})
         }
-        Profile::Prompt => json!({"additionalContext":{"type":"string"}}),
+        Profile::Prompt => {
+            json!({"additionalContext":{"type":"string"},"suppressOriginalPrompt":{"type":"boolean","description":"Typed by the Agent SDK (0.3.285) but not documented for this event by the reference."}})
+        }
         Profile::Display => json!({"displayContent":{"type":"string"}}),
         Profile::PreTool => {
             json!({"permissionDecision":{"enum":["allow","deny","ask","defer"]},"permissionDecisionReason":{"type":"string"},"updatedInput":{},"additionalContext":{"type":"string"}})
@@ -1407,7 +1553,19 @@ fn output_schema(seed: &Seed) -> Value {
         props.insert("hookEventName".into(), json!({"const":seed.wire}));
         top.insert("hookSpecificOutput".into(),json!({"type":"object","required":["hookEventName"],"properties":props,"additionalProperties":false}));
     }
-    json!({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":format!("urn:agent-hook-kit:contracts:claude-code:{SNAPSHOT}:{}:command-output",kebab(seed.wire)),"type":"object","properties":top,"additionalProperties":false})
+    let mut schema = json!({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":format!("urn:agent-hook-kit:contracts:claude-code:{SNAPSHOT}:{}:command-output",kebab(seed.wire)),"type":"object","properties":top,"additionalProperties":false});
+    if seed.block_reason_required {
+        assert!(
+            seed.top_level_block,
+            "{}: a block reason needs decision",
+            seed.wire
+        );
+        schema["allOf"] = json!([{
+            "if":{"properties":{"decision":{"const":"block"}},"required":["decision"]},
+            "then":{"required":["reason"]}
+        }]);
+    }
+    schema
 }
 
 fn add_universal(top: &mut Map<String, Value>) {
@@ -1439,6 +1597,12 @@ fn contract(seed: &Seed) -> Value {
     let mut uncertainties = seed.uncertainties.clone();
     if seed.exit2.is_some() {
         uncertainties.push(EXIT_PRECEDENCE);
+    }
+    if seed.handlers.contains(&"http")
+        && !matches!(seed.json, Json::Absent { .. })
+        && seed.failure_effect() != "nonblocking-error"
+    {
+        uncertainties.push(HTTP_FAILURE_CONTRACT);
     }
     if !uncertainties.is_empty() {
         value["uncertainties"] = json!(uncertainties);
@@ -1485,36 +1649,58 @@ fn command_outcomes(seed: &Seed) -> Vec<Value> {
             outcome("failed", failure, nonzero, ignored_stdout, diagnostics),
         ];
     }
-    let mut outcomes = vec![outcome(
-        "structured",
-        seed.structured_effect(),
-        zero.clone(),
-        json_out.clone(),
-        diagnostics.clone(),
-    )];
+    let mut outcomes = vec![
+        outcome(
+            "structured",
+            seed.structured_effect(),
+            zero.clone(),
+            json_out.clone(),
+            diagnostics.clone(),
+        ),
+        // Exit 0 with no output reports no decision.
+        outcome(
+            "no-op",
+            "no-op",
+            zero.clone(),
+            channel("forbidden", "none", "empty"),
+            diagnostics.clone(),
+        ),
+    ];
+    let mut plain_text = channel("required", "protocol-value", "text");
+    plain_text["semantic_format"] = json!("plain-text-unless-brace-delimited");
+    plain_text["trailing_newline"] = json!("allowed");
     if seed.text_context {
-        let mut stdout = channel("required", "protocol-value", "text");
-        stdout["semantic_format"] = json!("plain-text-unless-brace-delimited");
-        stdout["trailing_newline"] = json!("allowed");
         outcomes.push(outcome(
             "text-context",
             "provide-context",
             zero.clone(),
-            stdout,
+            plain_text,
+            diagnostics.clone(),
+        ));
+    } else {
+        // Every other event writes plain-text stdout to the debug log.
+        plain_text["role"] = json!("diagnostics");
+        outcomes.push(outcome(
+            "plain-text",
+            "no-op",
+            zero.clone(),
+            plain_text,
             diagnostics.clone(),
         ));
     }
     if seed.json == Json::Control {
-        let effect = if seed.text_context {
-            "nonblocking-error-context-dropped"
-        } else {
-            "nonblocking-error"
+        let effect = match (seed.invalid_json_effect, seed.text_context) {
+            (Some(effect), _) => effect,
+            (None, true) => "nonblocking-error-context-dropped",
+            (None, false) => "nonblocking-error",
         };
+        let mut stdout = channel("required", "ignored", "opaque");
+        stdout["semantic_format"] = json!("brace-delimited");
         let mut invalid = outcome(
             "invalid-json",
             effect,
             zero.clone(),
-            channel("required", "ignored", "opaque"),
+            stdout,
             diagnostics.clone(),
         );
         invalid["sources"] = json!([SOURCE, CHANGELOG]);
@@ -1522,11 +1708,12 @@ fn command_outcomes(seed: &Seed) -> Vec<Value> {
     }
     if let Some(exit2) = &seed.exit2 {
         // Stderr is the blocking message only where someone reads it; a message
-        // routed to the debug log or discarded does not have to be written.
-        let presence = if matches!(exit2.stderr_role, "ignored" | "diagnostics") {
-            "optional"
-        } else {
+        // routed to the debug log or discarded does not have to be written,
+        // and a failure notice may be empty.
+        let presence = if exit2.blocks && !matches!(exit2.stderr_role, "ignored" | "diagnostics") {
             "required"
+        } else {
+            "optional"
         };
         outcomes.push(outcome(
             "exit-2",
@@ -1535,7 +1722,12 @@ fn command_outcomes(seed: &Seed) -> Vec<Value> {
             ignored_stdout.clone(),
             channel(presence, exit2.stderr_role, "text"),
         ));
-        if let Some((effect, _)) = &exit2.json {
+        let json_effect = match &exit2.json {
+            Exit2Json::Ignored => None,
+            Exit2Json::Read { effect, .. } => Some(*effect),
+            Exit2Json::AsStructured => Some(seed.structured_effect()),
+        };
+        if let Some(effect) = json_effect {
             outcomes.push(outcome(
                 "exit-2-structured",
                 effect,
@@ -1588,17 +1780,29 @@ fn http_outcomes(seed: &Seed) -> Vec<Value> {
     let success = json!({"range":{"min":200,"max":299}});
     let failure = json!({"range":{"min":400,"max":599}});
     let no_stderr = channel("forbidden", "none", "empty");
+    // A 2xx body that is neither empty nor a JSON object is a failed hook.
+    let mut non_json_body = channel("required", "ignored", "opaque");
+    non_json_body["semantic_format"] = json!("not-a-json-object");
+    let failed = seed.failure_effect();
     if let Json::Absent {
-        success: removed,
-        failure: failed,
+        success: removed, ..
     } = seed.json
     {
+        let mut ignored_body = channel("optional", "ignored", "opaque");
+        ignored_body["semantic_format"] = json!("empty-or-json-object");
         return vec![
             outcome(
                 "removed",
                 removed,
+                success.clone(),
+                ignored_body,
+                no_stderr.clone(),
+            ),
+            outcome(
+                "non-json-body",
+                failed,
                 success,
-                channel("optional", "ignored", "opaque"),
+                non_json_body,
                 no_stderr.clone(),
             ),
             outcome(
@@ -1627,14 +1831,14 @@ fn http_outcomes(seed: &Seed) -> Vec<Value> {
         ),
         outcome(
             "non-json-body",
-            "nonblocking-error",
+            failed,
             success,
-            channel("required", "ignored", "opaque"),
+            non_json_body,
             no_stderr.clone(),
         ),
         outcome(
             "non-success",
-            "nonblocking-error",
+            failed,
             failure,
             channel("optional", "ignored", "opaque"),
             no_stderr,
@@ -1704,11 +1908,11 @@ fn fixtures(seed: &Seed) -> Value {
             json!({"id":"structured","schema":"command-response","origin":"synthesized","sources":[SOURCE],"value":seed.structured}),
         ];
         if let Some(Exit2 {
-            json: Some((_, value)),
+            json: Exit2Json::Read { fixture, .. },
             ..
         }) = &seed.exit2
         {
-            outputs.push(json!({"id":"exit-2-structured","schema":"command-response","origin":"synthesized","sources":[SOURCE],"value":value}));
+            outputs.push(json!({"id":"exit-2-structured","schema":"command-response","origin":"synthesized","sources":[SOURCE],"value":fixture}));
         }
         for example in &seed.outputs {
             outputs.push(json!({"id":example.id,"schema":"command-response","origin":"synthesized","sources":example.sources,"value":example.value}));
@@ -1763,6 +1967,17 @@ fn process_cases(seed: &Seed) -> Vec<Value> {
             &structured,
             b"",
         ));
+        process.push(case("command-no-op", "command", "no-op", 0, b"", b""));
+        if !seed.text_context {
+            process.push(case(
+                "command-plain-text",
+                "command",
+                "plain-text",
+                0,
+                b"Hook finished.\n",
+                b"",
+            ));
+        }
         if seed.text_context {
             process.push(case(
                 "command-text",
@@ -1808,6 +2023,11 @@ fn process_cases(seed: &Seed) -> Vec<Value> {
             ));
         }
         if let Some(exit2) = &seed.exit2 {
+            let stderr: &[u8] = if exit2.blocks {
+                b"blocked by hook"
+            } else {
+                b"hook failed"
+            };
             if exit2.effect == "ignored" {
                 process.push(case(
                     "command-exit-2-ignored",
@@ -1815,34 +2035,42 @@ fn process_cases(seed: &Seed) -> Vec<Value> {
                     "exit-2",
                     2,
                     b"",
-                    b"blocked by hook",
+                    stderr,
                 ));
             } else {
-                process.push(case(
-                    "command-exit-2",
-                    "command",
-                    "exit-2",
-                    2,
-                    b"",
-                    b"blocked by hook",
-                ));
+                process.push(case("command-exit-2", "command", "exit-2", 2, b"", stderr));
+                // Brace-delimited stdout that fails to parse, and a parsed
+                // object that fails schema validation, leave exit 2 in charge.
                 process.push(case(
                     "command-exit-2-invalid-stdout",
                     "command",
                     "exit-2",
                     2,
-                    b"{invalid-json",
-                    b"blocked by hook",
+                    b"{not json}",
+                    stderr,
+                ));
+                process.push(case(
+                    "command-exit-2-schema-invalid-json",
+                    "command",
+                    "exit-2",
+                    2,
+                    b"{\"continue\":\"yes\"}",
+                    stderr,
                 ));
             }
-            if let Some((_, value)) = &exit2.json {
+            let json_stdout = match &exit2.json {
+                Exit2Json::Ignored => None,
+                Exit2Json::Read { fixture, .. } => Some(serde_json::to_vec(fixture).unwrap()),
+                Exit2Json::AsStructured => Some(structured.clone()),
+            };
+            if let Some(stdout) = json_stdout {
                 process.push(case(
                     "command-exit-2-structured",
                     "command",
                     "exit-2-structured",
                     2,
-                    &serde_json::to_vec(value).unwrap(),
-                    b"blocked by hook",
+                    &stdout,
+                    stderr,
                 ));
             }
         }
@@ -1910,6 +2138,22 @@ fn process_cases(seed: &Seed) -> Vec<Value> {
     if seed.handlers.contains(&"http") {
         if matches!(seed.json, Json::Absent { .. }) {
             process.push(case("http-removed", "http", "removed", 204, b"", b""));
+            process.push(case(
+                "http-removed-json-ignored",
+                "http",
+                "removed",
+                200,
+                br#"{"systemMessage":"Worktree removed."}"#,
+                b"",
+            ));
+            process.push(case(
+                "http-non-json",
+                "http",
+                "non-json-body",
+                200,
+                b"ok",
+                b"",
+            ));
             process.push(case("http-error", "http", "failed", 500, b"", b""));
         } else {
             process.push(case(

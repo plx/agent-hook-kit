@@ -1,0 +1,41 @@
+format_version: 1
+sources:
+  - id: codex-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://learn.chatgpt.com/docs/hooks.md
+    retrieved: 2026-09-30
+    content_sha256: 724881d81f1a9fdb35ea42d4851a11b1f6606bbc6e9d2d05c1e8c466fc25c630
+    reproducibility: content-hash-only
+    limitations:
+      - The mutable Markdown endpoint has no checked-in capture; the hash covers the decoded 46,965-byte body of `curl --fail --silent --show-error --location --compressed https://learn.chatgpt.com/docs/hooks.md`, unchanged since commit-ff6aec9-r1 (https://developers.openai.com/codex/hooks.md served identical bytes), and cannot be re-verified after the page changes.
+      - The page is the release behavior reference but lags the pinned release, omitting the SessionStart `fork` source and still describing the session cwd for tool hooks; the pinned generated schemas and source control where they disagree.
+      - Its PermissionRequest section says the reserved `updatedInput`, `updatedPermissions`, and `interrupt` fields "fail closed"; the pinned source discards the handler's whole decision instead, which the PermissionRequest contract records.
+  - id: codex-generated-schemas
+    kind: official-source
+    authority: primary
+    url: https://github.com/openai/codex/tree/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/hooks/schema/generated
+    retrieved: 2026-09-29
+    revision: ff6aec96948b70d94983af2641a6b67c94faeff5
+    license: Apache-2.0
+    reproducibility: vendored
+  - id: codex-hooks-source
+    kind: official-source
+    authority: primary
+    url: https://github.com/openai/codex/tree/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/hooks
+    retrieved: 2026-09-30
+    revision: ff6aec96948b70d94983af2641a6b67c94faeff5
+    license: Apache-2.0
+    reproducibility: pinned-revision
+    limitations:
+      - Re-reviewed on 2026-09-30 for this revision (tag rust-v0.159.2), notably engine/output_parser.rs and events/permission_request.rs, events/post_tool_use.rs, and events/compact.rs.
+  - id: codex-core-source
+    kind: official-source
+    authority: primary
+    url: https://github.com/openai/codex/tree/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/core
+    retrieved: 2026-09-30
+    revision: ff6aec96948b70d94983af2641a6b67c94faeff5
+    license: Apache-2.0
+    reproducibility: pinned-revision
+    limitations:
+      - Re-reviewed on 2026-09-30 for this revision, notably tools/approvals.rs (hook decisions before Guardian or user review), tools/registry.rs (PostToolUse feedback replacing the tool result), compact.rs, compact_remote_v2.rs, compact_token_budget.rs, session/turn.rs, and tasks/mod.rs (TurnAborted reported as interrupted and dispatching Interrupt).

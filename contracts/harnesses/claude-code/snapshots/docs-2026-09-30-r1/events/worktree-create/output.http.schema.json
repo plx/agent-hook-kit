@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-30-r1:worktree-create:http-output",
+  "type": "object",
+  "required": [
+    "hookSpecificOutput"
+  ],
+  "properties": {
+    "continue": {
+      "type": "boolean",
+      "description": "Accepted and discarded for WorktreeCreate."
+    },
+    "stopReason": {
+      "type": "string"
+    },
+    "suppressOutput": {
+      "type": "boolean",
+      "description": "Accepted but has no effect."
+    },
+    "systemMessage": {
+      "type": "string",
+      "description": "Accepted and discarded for WorktreeCreate."
+    },
+    "terminalSequence": {
+      "type": "string"
+    },
+    "hookSpecificOutput": {
+      "type": "object",
+      "required": [
+        "hookEventName",
+        "worktreePath"
+      ],
+      "properties": {
+        "hookEventName": {
+          "const": "WorktreeCreate"
+        },
+        "worktreePath": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,47 @@
+format_version: 1
+id: antigravity/docs-2026-09-30-r1/PostInvocation
+harness: antigravity
+snapshot: docs-2026-09-30-r1
+event:
+  wire_name: PostInvocation
+  rust_key: post_invocation
+  category: model
+  identification:
+    inferability: ambiguous
+    overlaps: [PreInvocation]
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-changelog, antigravity-cli-changelog, antigravity-hooks-archive-2026-08-16]
+    assurance: { confidence: low, verification: source-reviewed }
+  outputs:
+    - id: command-response
+      file: output.command.schema.json
+      origin: derived
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+      assurance: { confidence: low, verification: source-reviewed }
+bindings:
+  command:
+    kind: process
+    request: { channel: stdin, framing: single-document-at-eof, content_kind: json }
+    outcomes:
+      - id: control
+        effect: control
+        exit: { exact: 0 }
+        stdout: { presence: required, role: protocol-value, content_kind: json }
+        stderr: { presence: optional, role: diagnostics, content_kind: text, encoding: utf-8 }
+        output_schema: command-response
+        sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+        assurance: { confidence: low, verification: source-reviewed }
+handler_kinds: [command]
+fixtures: fixtures.yaml
+uncertainties:
+  - "The reference still does not specify nonzero-exit, timeout, or invalid-stdout behavior, so no failure outcome is modelled. Antigravity 2.0 v2.12.0 release notes say a failing custom hook no longer ends the session and is reported as an error while the conversation continues; 'failing' is undefined, the CLI and IDE notes have no counterpart, and earlier 2.0 builds ended the session."
+  - "modelName is listed among the common input fields and appears in every official example, but it was first documented between the 2026-07-21 and 2026-08-16 archive captures, was absent from docs-2026-08-04-r1 and from every IDE-specific copy, and no release note dates it. It is optional so that payloads from earlier builds, and possibly the IDE v2.5.5 build, still validate."
+  - "workspacePaths may be an empty array. The reference sets no minimum, and release notes describe conversations without a workspace (CLI 1.2.2, 2.0 v2.14.0 standalone conversations) while global hooks load from ~/.gemini/config/hooks.json. Whether such payloads send [] or omit the field is undocumented, so the field stays required."
+  - "transcriptPath and artifactDirectoryPath are described as absolute paths, but every official example uses a literal ~/ prefix; the schema does not require an absolute or expanded path."
+  - "The reference says the input fields are the same as PreInvocation (invocationNum and initialNumSteps) and gives no separate example, so whether initialNumSteps counts steps before or after the completed invocation is undocumented."
+  - "The reference now says PostInvocation fires immediately after each model invocation completes; the 2026-07-21 reference and the superseded IDE-specific copy said it fires after tool calls finish. CLI 1.1.10 runs hooks before the built-in termination checks so the final invocation of a turn is observable, and Antigravity 2.0 v2.6.0 made custom hooks run at the end of a turn instead of being skipped."
+  - "Each injected step 'can have one of' toolCall, userMessage, or ephemeralMessage; the schema requires exactly one. The shape of an injected toolCall object is undocumented beyond being an object."
+  - "The reference supports only command handlers. Release notes mention prompt hooks (CLI 1.1.23) and hooks that call a model (2.0 v2.6.0) that the reference does not document, so they are not inventoried."

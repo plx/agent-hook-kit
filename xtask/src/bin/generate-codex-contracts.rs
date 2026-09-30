@@ -1,9 +1,10 @@
-//! Generates the draft Codex event contracts for one snapshot from the vendored
-//! upstream schemas.
+//! Generates the Codex event contracts of every snapshot in [`SNAPSHOTS`] from
+//! the vendored upstream schemas.
 //!
 //! `PreToolUse` is hand-authored in each snapshot and is intentionally not
-//! seeded here. Frozen snapshots are immutable: point `SNAPSHOT`/`REVISION` at a
-//! new draft before running this generator.
+//! seeded here. Frozen snapshots are immutable, so regenerating must reproduce
+//! each of them byte for byte: a seed correction gets a new [`Snapshot`]
+//! revision and keeps the text of the revisions before it.
 
 use base64::Engine as _;
 use serde_json::{Map, Value, json};
@@ -11,8 +12,26 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SNAPSHOT: &str = "commit-ff6aec9-r1";
 const REVISION: &str = "ff6aec96948b70d94983af2641a6b67c94faeff5";
+
+/// Interpretations of the pinned [`REVISION`], oldest first.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Snapshot {
+    R1,
+    /// Corrects uncertainty text that misstated the pinned source.
+    R2,
+}
+
+const SNAPSHOTS: [Snapshot; 2] = [Snapshot::R1, Snapshot::R2];
+
+impl Snapshot {
+    fn id(self) -> &'static str {
+        match self {
+            Self::R1 => "commit-ff6aec9-r1",
+            Self::R2 => "commit-ff6aec9-r2",
+        }
+    }
+}
 
 /// Stderr written by the synthesized non-zero-exit failure fixtures.
 const FAILURE_STDERR: &[u8] = b"hook failed\n";
@@ -49,7 +68,7 @@ struct Seed {
     block_reason_required: bool,
     /// Pinned core source controls part of this event's input semantics.
     core_semantics: bool,
-    uncertainties: &'static [&'static str],
+    uncertainties: Vec<&'static str>,
 }
 
 fn main() {
@@ -57,12 +76,15 @@ fn main() {
         .parent()
         .expect("xtask parent")
         .to_path_buf();
-    for seed in seeds() {
-        generate(&root, seed);
+    for snapshot in SNAPSHOTS {
+        for seed in seeds(snapshot) {
+            generate(&root, snapshot, seed);
+        }
     }
 }
 
-fn seeds() -> Vec<Seed> {
+fn seeds(snapshot: Snapshot) -> Vec<Seed> {
+    let r2 = snapshot >= Snapshot::R2;
     vec![
         Seed {
             file_key: "session-start",
@@ -77,7 +99,7 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: false,
             block_reason_required: false,
             core_semantics: true,
-            uncertainties: &[
+            uncertainties: vec![
                 "Codex >= 0.155.0 reports `fork` for threads forked from a parent thread (also the matcher input) and `resume` instead of `startup` for thread/resume with supplied history. The hooks reference still lists only startup, resume, clear, and compact; the pinned release schema and core source control.",
                 TEXT_CONTEXT,
                 "`continue: false` from a synchronous handler ends the turn without another model request.",
@@ -94,7 +116,7 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: true,
             block_reason_required: false,
             core_semantics: false,
-            uncertainties: &[
+            uncertainties: vec![
                 "SessionEnd is advisory: Codex ignores stdout at exit 0, never runs it for subagents, and `reason` is always `other`.",
                 "SessionEnd handlers always run synchronously even when `async` is true, default to a one-second timeout clamped to one through three seconds, and reject `mcp_tool` handlers; `prompt` and `agent` handlers are parsed but skipped.",
             ],
@@ -112,7 +134,7 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: false,
             block_reason_required: false,
             core_semantics: false,
-            uncertainties: &[
+            uncertainties: vec![
                 TEXT_CONTEXT,
                 "`continue: false` is parsed for compatibility but does not stop the subagent from starting.",
             ],
@@ -130,11 +152,20 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: false,
             block_reason_required: false,
             core_semantics: true,
-            uncertainties: &[
-                TOOL_HOOK_SCOPE,
-                BLOCKING_EXIT_2,
-                "A structured deny whose message is missing, empty, or whitespace-only is still a denial; Codex substitutes `PermissionRequest hook denied approval`. `updatedInput`, `updatedPermissions`, and `interrupt: true` fail closed, and `continue: false`, `stopReason`, and `suppressOutput` fail the run.",
-            ],
+            uncertainties: if r2 {
+                vec![
+                    TOOL_HOOK_SCOPE,
+                    BLOCKING_EXIT_2,
+                    "A structured deny whose message is missing, empty, or whitespace-only is still a denial; Codex substitutes `PermissionRequest hook denied approval`.",
+                    "The hooks reference calls `updatedInput`, `updatedPermissions`, and `interrupt` reserved fields that fail closed, but the pinned source treats them like `continue: false`, `stopReason`, and `suppressOutput`: any of them (`interrupt` only when `true`) fails the run and discards that handler's whole decision, allow or deny alike. Unless another matching hook decides, Codex falls back to the normal approval flow (Guardian review or the user prompt), so such an allow is not auto-approved and such a deny, for example a Claude Code style deny with `interrupt: true`, is not enforced.",
+                ]
+            } else {
+                vec![
+                    TOOL_HOOK_SCOPE,
+                    BLOCKING_EXIT_2,
+                    "A structured deny whose message is missing, empty, or whitespace-only is still a denial; Codex substitutes `PermissionRequest hook denied approval`. `updatedInput`, `updatedPermissions`, and `interrupt: true` fail closed, and `continue: false`, `stopReason`, and `suppressOutput` fail the run.",
+                ]
+            },
         },
         Seed {
             file_key: "post-tool-use",
@@ -149,12 +180,22 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: false,
             block_reason_required: true,
             core_semantics: true,
-            uncertainties: &[
-                TOOL_HOOK_SCOPE,
-                BLOCKING_EXIT_2,
-                BLOCK_REASON,
-                "`reason` without `decision: block` fails the run unless `continue` is false; `suppressOutput` and `updatedMCPToolOutput` are parsed but fail the run.",
-            ],
+            uncertainties: if r2 {
+                vec![
+                    TOOL_HOOK_SCOPE,
+                    BLOCKING_EXIT_2,
+                    BLOCK_REASON,
+                    "`reason` without `decision: block` fails the run, and `suppressOutput` and `updatedMCPToolOutput` are parsed but fail the run, unless `continue` is false.",
+                    "A synchronous `continue: false` does not end the turn. It marks the run stopped, takes precedence over `decision: block`, the reason rules, and the unsupported fields, and replaces the model-visible tool result with the trimmed `reason` when one is present, otherwise with `stopReason` (or `PostToolUse hook stopped execution`); the model then continues from that text, and a code-mode tool promise resolves instead of rejecting.",
+                ]
+            } else {
+                vec![
+                    TOOL_HOOK_SCOPE,
+                    BLOCKING_EXIT_2,
+                    BLOCK_REASON,
+                    "`reason` without `decision: block` fails the run unless `continue` is false; `suppressOutput` and `updatedMCPToolOutput` are parsed but fail the run.",
+                ]
+            },
         },
         Seed {
             file_key: "pre-compact",
@@ -169,9 +210,15 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: true,
             block_reason_required: false,
             core_semantics: false,
-            uncertainties: &[
-                "Plain text on stdout is ignored at exit 0. A synchronous `continue: false` stops before compacting; on a manual compact this aborts the turn as interrupted, which also dispatches Interrupt.",
-            ],
+            uncertainties: if r2 {
+                vec![
+                    "Plain text on stdout is ignored at exit 0. A synchronous `continue: false` stops before compacting and aborts the active turn, whether the compaction is manual or automatic; Codex reports the turn as interrupted, which on the main thread also dispatches Interrupt.",
+                ]
+            } else {
+                vec![
+                    "Plain text on stdout is ignored at exit 0. A synchronous `continue: false` stops before compacting; on a manual compact this aborts the turn as interrupted, which also dispatches Interrupt.",
+                ]
+            },
         },
         Seed {
             file_key: "post-compact",
@@ -184,7 +231,13 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: true,
             block_reason_required: false,
             core_semantics: false,
-            uncertainties: &["Plain text on stdout is ignored at exit 0."],
+            uncertainties: if r2 {
+                vec![
+                    "Plain text on stdout is ignored at exit 0. A synchronous `continue: false` takes effect after compaction has completed, so the compacted history is kept, and aborts the active turn, whether the compaction is manual or automatic; Codex reports the turn as interrupted, which on the main thread also dispatches Interrupt.",
+                ]
+            } else {
+                vec!["Plain text on stdout is ignored at exit 0."]
+            },
         },
         Seed {
             file_key: "user-prompt-submit",
@@ -199,7 +252,7 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: false,
             block_reason_required: true,
             core_semantics: false,
-            uncertainties: &[TEXT_CONTEXT, BLOCKING_EXIT_2, BLOCK_REASON],
+            uncertainties: vec![TEXT_CONTEXT, BLOCKING_EXIT_2, BLOCK_REASON],
         },
         Seed {
             file_key: "subagent-stop",
@@ -212,7 +265,7 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: false,
             block_reason_required: true,
             core_semantics: false,
-            uncertainties: &[
+            uncertainties: vec![
                 "Synchronous handlers must write JSON or nothing at exit 0; plain text fails the run.",
                 BLOCKING_EXIT_2,
                 BLOCK_REASON,
@@ -229,7 +282,7 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: false,
             block_reason_required: true,
             core_semantics: true,
-            uncertainties: &[
+            uncertainties: vec![
                 "Synchronous handlers must write JSON or nothing at exit 0; plain text fails the run.",
                 BLOCKING_EXIT_2,
                 BLOCK_REASON,
@@ -250,9 +303,13 @@ fn seeds() -> Vec<Seed> {
             failure_stderr_visible: false,
             block_reason_required: false,
             core_semantics: true,
-            uncertainties: &[
+            uncertainties: vec![
                 "Interrupt (Codex >= 0.150.0) runs for an active main-thread turn aborted as interrupted, after Codex flushes the transcript and before it reports the aborted turn. It never runs for subagents or idle threads, ignores any configured matcher, and carries no agent_id or agent_type.",
-                "The hooks reference describes user interrupts only; the pinned core source and tests also dispatch Interrupt for self-aborts reported as interrupted, such as a manual compact stopped by a PreCompact `continue: false`.",
+                if r2 {
+                    "The hooks reference describes user interrupts only; the pinned core source and tests also dispatch Interrupt for self-aborts reported as interrupted, such as a turn aborted by a PreCompact or PostCompact `continue: false`."
+                } else {
+                    "The hooks reference describes user interrupts only; the pinned core source and tests also dispatch Interrupt for self-aborts reported as interrupted, such as a manual compact stopped by a PreCompact `continue: false`."
+                },
                 "Output cannot prevent the interruption or restart the turn. Codex accepts empty stdout or a JSON object whose only member is `systemMessage`, which surfaces as a warning; plain text, any other member (including continue, stopReason, suppressOutput, and decision), and every non-zero exit (including 2) fail the run.",
                 "The runtime deserializes `systemMessage` as an optional string and therefore also accepts null, but the generated schema declares a string; emit a string or omit the member.",
                 "Command handlers default to a one-second timeout clamped to one through three seconds, including when `async` is true.",
@@ -261,39 +318,39 @@ fn seeds() -> Vec<Seed> {
     ]
 }
 
-fn generate(root: &Path, seed: Seed) {
+fn generate(root: &Path, snapshot: Snapshot, seed: Seed) {
     let vendor = root
         .join("contracts/vendor/codex")
         .join(REVISION)
         .join("generated");
     let event_dir = root
         .join("contracts/harnesses/codex/snapshots")
-        .join(SNAPSHOT)
+        .join(snapshot.id())
         .join("events")
         .join(seed.file_key);
     fs::create_dir_all(&event_dir).expect("create Codex event directory");
 
     let mut input = read_json(&vendor.join(format!("{}.command.input.schema.json", seed.file_key)));
-    normalize_schema(&mut input, &seed, "input");
+    normalize_schema(&mut input, snapshot, &seed, "input");
     write_json(&event_dir.join("input.schema.json"), &input);
 
     if seed.structured.is_some() {
         let mut output =
             read_json(&vendor.join(format!("{}.command.output.schema.json", seed.file_key)));
-        normalize_schema(&mut output, &seed, "command-output");
+        normalize_schema(&mut output, snapshot, &seed, "command-output");
         if seed.block_reason_required {
             require_block_reason(&mut output);
         }
         write_json(&event_dir.join("output.command.schema.json"), &output);
     }
 
-    let contract = contract(&seed);
+    let contract = contract(snapshot, &seed);
     write_yaml(&event_dir.join("contract.yaml"), &contract);
     let fixtures = fixtures(&seed, &input);
     write_yaml(&event_dir.join("fixtures.yaml"), &fixtures);
 }
 
-fn normalize_schema(schema: &mut Value, seed: &Seed, suffix: &str) {
+fn normalize_schema(schema: &mut Value, snapshot: Snapshot, seed: &Seed, suffix: &str) {
     let object = schema.as_object_mut().expect("official schema object");
     object.insert(
         "$schema".to_string(),
@@ -302,7 +359,8 @@ fn normalize_schema(schema: &mut Value, seed: &Seed, suffix: &str) {
     object.insert(
         "$id".to_string(),
         Value::String(format!(
-            "urn:agent-hook-kit:contracts:codex:{SNAPSHOT}:{}:{suffix}",
+            "urn:agent-hook-kit:contracts:codex:{}:{}:{suffix}",
+            snapshot.id(),
             seed.file_key
         )),
     );
@@ -339,7 +397,7 @@ fn ignored_stderr() -> Value {
     json!({"presence":"optional","role":"ignored","content_kind":"opaque"})
 }
 
-fn contract(seed: &Seed) -> Value {
+fn contract(snapshot: Snapshot, seed: &Seed) -> Value {
     let mut outcomes = Vec::new();
     if seed.structured.is_some() {
         outcomes.push(json!({
@@ -411,7 +469,7 @@ fn contract(seed: &Seed) -> Value {
         output_sources.push("codex-hooks-source");
     }
 
-    let mut uncertainties: Vec<&str> = seed.uncertainties.to_vec();
+    let mut uncertainties: Vec<&str> = seed.uncertainties.clone();
     uncertainties.push(COMPATIBILITY_FIELDS);
     uncertainties.push(EXIT_ZERO_STDERR);
     uncertainties.push(if seed.failure_stderr_visible {
@@ -428,9 +486,9 @@ fn contract(seed: &Seed) -> Value {
 
     json!({
         "format_version":1,
-        "id":format!("codex/{SNAPSHOT}/{}",seed.wire_name),
+        "id":format!("codex/{}/{}",snapshot.id(),seed.wire_name),
         "harness":"codex",
-        "snapshot":SNAPSHOT,
+        "snapshot":snapshot.id(),
         "event":{
             "wire_name":seed.wire_name,
             "rust_key":seed.rust_key,

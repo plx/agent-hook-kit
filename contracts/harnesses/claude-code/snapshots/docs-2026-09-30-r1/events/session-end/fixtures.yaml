@@ -1,0 +1,148 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      reason: other
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-reason
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      reason: other
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      prompt_id: prompt-1
+      reason: other
+      scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: legacy-bypass-permissions-disabled
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: SessionEnd
+      reason: bypass_permissions_disabled
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value: {}
+- id: discarded-universal-fields
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    systemMessage: Session ended.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e30=
+  stdout_sha256: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+- binding: command
+  exit_code: 0
+  id: command-no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: command-plain-text
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vayBmaW5pc2hlZC4K
+  stdout_sha256: db54b54d6320eaf7a59146e70f1674ec377b7c199af059daffc92171d6e8b774
+- binding: command
+  exit_code: 1
+  id: command-nonzero
+  outcome: nonzero
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: nonzero
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e30=
+  stdout_sha256: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+- binding: http
+  exit_code: 204
+  id: http-empty
+  outcome: empty-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-non-json
+  outcome: non-json-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: cGxhaW4gdGV4dCBib2R5
+  stdout_sha256: 9fc5d90c995fdacb82e2cb454025e169a5b94d0cd31051d23e82d51338311da8
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

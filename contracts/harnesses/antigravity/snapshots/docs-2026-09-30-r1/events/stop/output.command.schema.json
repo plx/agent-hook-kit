@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-09-30-r1:stop:command-output",
+  "type": "object",
+  "required": ["decision"],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "minLength": 1,
+      "description": "continue prevents the stop and re-enters the execution loop, subject to a runtime cap on consecutive continuations; any other value allows the stop."
+    },
+    "reason": { "type": "string", "description": "Injected as a system message when decision is continue; no effect is documented for other decisions." }
+  },
+  "additionalProperties": false
+}

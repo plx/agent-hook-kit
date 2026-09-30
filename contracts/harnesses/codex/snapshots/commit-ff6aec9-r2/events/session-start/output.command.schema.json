@@ -1,0 +1,52 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:codex:commit-ff6aec9-r2:session-start:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "SessionStartHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "default": null,
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "SessionStart",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SessionStartHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "session-start.command.output",
+  "type": "object"
+}

@@ -1,0 +1,40 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-30-r1:message-display:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "type": "boolean"
+    },
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "displayContent": {
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "MessageDisplay"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "stopReason": {
+      "description": "Shown to the user when continue is false; it stays in the conversation, so Claude sees it if the conversation continues.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

@@ -1,0 +1,55 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-30-r1:session-start:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "type": "boolean"
+    },
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "SessionStart"
+        },
+        "initialUserMessage": {
+          "type": "string"
+        },
+        "reloadSkills": {
+          "type": "boolean"
+        },
+        "sessionTitle": {
+          "type": "string"
+        },
+        "watchPaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "stopReason": {
+      "description": "Shown to the user when continue is false; it stays in the conversation, so Claude sees it if the conversation continues.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

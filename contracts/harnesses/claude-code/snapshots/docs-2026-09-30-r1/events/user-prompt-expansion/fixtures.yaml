@@ -1,0 +1,246 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      command_args: --strict
+      command_name: review
+      cwd: /repo
+      expansion_type: slash_command
+      hook_event_name: WrongEvent
+      prompt: /review --strict
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-expansion_type
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      command_args: --strict
+      command_name: review
+      cwd: /repo
+      hook_event_name: UserPromptExpansion
+      prompt: /review --strict
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      command_args: --strict
+      command_name: review
+      cwd: /repo
+      expansion_type: slash_command
+      hook_event_name: UserPromptExpansion
+      prompt: /review --strict
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      command_args: --strict
+      command_name: review
+      command_source: plugin
+      cwd: /repo
+      expansion_type: slash_command
+      hook_event_name: UserPromptExpansion
+      permission_mode: default
+      prompt: /review --strict
+      prompt_id: prompt-1
+      scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  - id: mcp-prompt
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      command_args: ''
+      command_name: mcp__github__triage
+      cwd: /repo
+      expansion_type: mcp_prompt
+      hook_event_name: UserPromptExpansion
+      prompt: /mcp__github__triage
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    hookSpecificOutput:
+      additionalContext: Use the team checklist.
+      hookEventName: UserPromptExpansion
+    reason: Unavailable.
+- id: exit-2-structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    reason: Blocked by JSON reason.
+- id: suppress-original-prompt
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-agent-sdk-types
+  value:
+    decision: block
+    hookSpecificOutput:
+      hookEventName: UserPromptExpansion
+      suppressOriginalPrompt: true
+    reason: Unavailable.
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiVXNlIHRoZSB0ZWFtIGNoZWNrbGlzdC4iLCJob29rRXZlbnROYW1lIjoiVXNlclByb21wdEV4cGFuc2lvbiJ9LCJyZWFzb24iOiJVbmF2YWlsYWJsZS4ifQ==
+  stdout_sha256: 57ecf2c775d4cac2879316227812ea098fb7fa17d92b293453502df8ae5d309c
+- binding: command
+  exit_code: 0
+  id: command-no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: command-text
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vay1wcm92aWRlZCBjb250ZXh0Lg==
+  stdout_sha256: 5a9a1e0f83d894e72832408640efb2e622b634e35378d402ee8a97c47e5f3456
+- binding: command
+  exit_code: 0
+  id: command-text-json-lines
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7Im5vdGUiOjJ9Cg==
+  stdout_sha256: 3a150299ab73b3e5974ab3aa4823ec51799349ab4a07fa27dfb0e33c57570479
+- binding: command
+  exit_code: 0
+  id: command-text-open-brace
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyBjb250ZXh0IHdpdGhvdXQgYSBjbG9zaW5nIGJyYWNl
+  stdout_sha256: 754820491a3c662f4052600932dfa19c97a606791d819a501cd5c2c9b8d62d73
+- binding: command
+  exit_code: 0
+  id: command-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command
+  exit_code: 0
+  id: command-schema-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2-invalid-stdout
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command
+  exit_code: 2
+  id: command-exit-2-schema-invalid-json
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command
+  exit_code: 2
+  id: command-exit-2-structured
+  outcome: exit-2-structured
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiQmxvY2tlZCBieSBKU09OIHJlYXNvbi4ifQ==
+  stdout_sha256: 8d7cc2920614001b272e785cdecd759a154685a86a4026ac47683d6d2230b1e7
+- binding: command
+  exit_code: 1
+  id: command-nonzero-structured
+  outcome: nonzero-structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiVXNlIHRoZSB0ZWFtIGNoZWNrbGlzdC4iLCJob29rRXZlbnROYW1lIjoiVXNlclByb21wdEV4cGFuc2lvbiJ9LCJyZWFzb24iOiJVbmF2YWlsYWJsZS4ifQ==
+  stdout_sha256: 57ecf2c775d4cac2879316227812ea098fb7fa17d92b293453502df8ae5d309c
+- binding: command
+  exit_code: 1
+  id: command-nonzero-unstructured
+  outcome: nonzero-unstructured
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiVXNlIHRoZSB0ZWFtIGNoZWNrbGlzdC4iLCJob29rRXZlbnROYW1lIjoiVXNlclByb21wdEV4cGFuc2lvbiJ9LCJyZWFzb24iOiJVbmF2YWlsYWJsZS4ifQ==
+  stdout_sha256: 57ecf2c775d4cac2879316227812ea098fb7fa17d92b293453502df8ae5d309c
+- binding: http
+  exit_code: 204
+  id: http-empty
+  outcome: empty-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-non-json
+  outcome: non-json-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: cGxhaW4gdGV4dCBib2R5
+  stdout_sha256: 9fc5d90c995fdacb82e2cb454025e169a5b94d0cd31051d23e82d51338311da8
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

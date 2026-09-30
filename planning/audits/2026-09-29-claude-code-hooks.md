@@ -45,13 +45,19 @@ control channel:
 
 These are behavioral changes for existing HookKit outputs, not only additions.
 
-`cargo xtask contracts diff claude-code/docs-2026-08-05-r1 claude-code/docs-2026-09-29-r1`:
+`cargo xtask contracts diff claude-code/docs-2026-08-05-r1 claude-code/docs-2026-09-29-r1`
+(re-run on 2026-09-30, after the command learned to report per-event
+changes; 29 more `~` lines of the same shape are elided):
 
 ```text
 old: claude-code/docs-2026-08-05-r1 (31 events)
 new: claude-code/docs-2026-09-29-r1 (33 events)
 + PostModelSwitch
 + PreModelSwitch
+~ ConfigChange: contract.yaml, fixtures.yaml, input.schema.json, output.command.schema.json
+~ WorktreeRemove: contract.yaml, fixtures.yaml, input.schema.json, -output.command.schema.json
+~ snapshot files: sources.yaml
+events: 2 added, 0 removed, 31 changed, 0 unchanged
 content: changed
 ```
 
@@ -258,15 +264,21 @@ entries without `environment-file`.
 
 ## Follow-up
 
-Selecting this snapshot requires coordinated work:
+The coordinated work that selecting this snapshot required has landed:
 
-- a successor command-environment supplement that links
-  `docs-2026-09-29-r1` and covers the two new events;
-- native Rust types for the new events and the behavioral output changes above;
-- updated conformance cases and implementation registry. The
-  `PermissionRequest` `command-exit-2`, `WorktreeRemove` `command-structured`,
-  and the Notification, Setup, SessionEnd, PostCompact, and TaskCreated
-  `command-structured` bytes all change;
-- template scaffolds that point at the new fixtures.
+- `9d11f3c` selected this snapshot in `contracts/registry.yaml`, together with
+  `command-environments-2026-09-29-r1`, a successor supplement that links it
+  and covers the two new events. `e7f5e13` later replaced that supplement with
+  `command-environments-2026-09-30-r1`, which the registry now selects.
+- `ddc9bd2` implemented native Rust types for the new events and the
+  behavioral output changes above.
+- `16c4306` updated the conformance cases, runtime tests, and fixtures,
+  including the changed `PermissionRequest` `command-exit-2`,
+  `WorktreeRemove`, and discarding-event bytes.
+- `0b43d36` pointed the template scaffolds at the new fixtures.
 
-Until then `contracts/registry.yaml` keeps `docs-2026-08-05-r1` selected.
+A final review after selection found gaps in this frozen snapshot: missing
+exit-0 and exit-2 outcomes, HTTP bindings that ignore per-event failure
+contracts, and a `UserPromptExpansion` input that the Agent SDK types
+optional. The successor `docs-2026-09-30-r1` corrects them; see
+[`2026-09-30-claude-code-hooks.md`](2026-09-30-claude-code-hooks.md).

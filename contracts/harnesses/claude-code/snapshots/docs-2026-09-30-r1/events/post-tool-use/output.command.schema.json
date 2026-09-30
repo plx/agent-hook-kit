@@ -1,0 +1,52 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-30-r1:post-tool-use:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "type": "boolean"
+    },
+    "decision": {
+      "const": "block"
+    },
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "type": "string"
+        },
+        "classifierContext": {
+          "description": "Note for the auto-mode classifier (Claude Code v2.1.236 or later), capped at 2,000 UTF-16 code units shared by every hook for one call.",
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "PostToolUse"
+        },
+        "updatedMCPToolOutput": {},
+        "updatedToolOutput": {}
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "stopReason": {
+      "description": "Shown to the user when continue is false; it stays in the conversation, so Claude sees it if the conversation continues.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

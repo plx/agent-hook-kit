@@ -1,0 +1,147 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_transcript_path: null
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: WrongEvent
+      last_assistant_message: null
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      stop_hook_active: false
+      transcript_path: null
+      turn_id: turn-1
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-agent_id
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      agent_transcript_path: null
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: SubagentStop
+      last_assistant_message: null
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      stop_hook_active: false
+      transcript_path: null
+      turn_id: turn-1
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_transcript_path: null
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: SubagentStop
+      last_assistant_message: null
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      stop_hook_active: false
+      transcript_path: null
+      turn_id: turn-1
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_transcript_path: null
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: SubagentStop
+      last_assistant_message: null
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      stop_hook_active: false
+      transcript_path: /tmp/transcript.jsonl
+      turn_id: turn-1
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - codex-hooks-reference
+  - codex-generated-schemas
+  value:
+    decision: block
+    reason: Run another focused pass.
+output_negative:
+- expected_keyword: required
+  expected_pointer: ''
+  id: block-without-reason
+  origin: regression
+  schema: command-response
+  sources:
+  - codex-hooks-source
+  value:
+    decision: block
+- expected_keyword: pattern
+  expected_pointer: /reason
+  id: block-blank-reason
+  origin: regression
+  schema: command-response
+  sources:
+  - codex-hooks-source
+  value:
+    decision: block
+    reason: " \t"
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiUnVuIGFub3RoZXIgZm9jdXNlZCBwYXNzLiJ9
+  stdout_sha256: 3ada7aa2a3eed2b1b01c33ad2078bebc9dec91408be4e57e43fd6fa17d49c6c4
+- binding: command
+  exit_code: 0
+  id: no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: exit-2-blank-stderr
+  outcome: failure
+  stderr_base64: IAo=
+  stderr_sha256: e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 1
+  id: failure
+  outcome: failure
+  stderr_base64: aG9vayBmYWlsZWQK
+  stderr_sha256: 339e9a9a2a85233d852616e657d6b262da208ce3ef1e7c8c5fa32659916f0257
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
