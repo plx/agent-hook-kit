@@ -20,191 +20,203 @@ defaults:
     level: catalog-only
     verification: source-reviewed
 targets:
-  - contract: antigravity/docs-2026-08-04-r1/PreInvocation
+  - contract: antigravity/docs-2026-09-29-r1/PreInvocation
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: antigravity/docs-2026-08-04-r1/PostInvocation
+  - contract: antigravity/docs-2026-09-29-r1/PostInvocation
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: antigravity/docs-2026-08-04-r1/PreToolUse
+  - contract: antigravity/docs-2026-09-29-r1/PreToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: antigravity/docs-2026-08-04-r1/PostToolUse
+  - contract: antigravity/docs-2026-09-29-r1/PostToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: antigravity/docs-2026-08-04-r1/Stop
+  - contract: antigravity/docs-2026-09-29-r1/Stop
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/SessionStart
+  - contract: claude-code/docs-2026-09-29-r1/SessionStart
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/WorktreeCreate
+  - contract: claude-code/docs-2026-09-29-r1/WorktreeCreate
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/PostToolUse
+  - contract: claude-code/docs-2026-09-29-r1/PostToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/PreToolUse
+  - contract: codex/commit-ff6aec9-r1/PreToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/PostToolUse
+  - contract: codex/commit-ff6aec9-r1/PostToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/ConfigChange
+  - contract: claude-code/docs-2026-09-29-r1/ConfigChange
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/CwdChanged
+  - contract: claude-code/docs-2026-09-29-r1/CwdChanged
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/DirectoryAdded
+  - contract: claude-code/docs-2026-09-29-r1/DirectoryAdded
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/Elicitation
+  - contract: claude-code/docs-2026-09-29-r1/Elicitation
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/ElicitationResult
+  - contract: claude-code/docs-2026-09-29-r1/ElicitationResult
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/FileChanged
+  - contract: claude-code/docs-2026-09-29-r1/FileChanged
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/InstructionsLoaded
+  - contract: claude-code/docs-2026-09-29-r1/InstructionsLoaded
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/MessageDisplay
+  - contract: claude-code/docs-2026-09-29-r1/MessageDisplay
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/Notification
+  - contract: claude-code/docs-2026-09-29-r1/Notification
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/PermissionDenied
+  - contract: claude-code/docs-2026-09-29-r1/PermissionDenied
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/PermissionRequest
+  - contract: claude-code/docs-2026-09-29-r1/PermissionRequest
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/PostCompact
+  - contract: claude-code/docs-2026-09-29-r1/PostCompact
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/PostToolBatch
+  - contract: claude-code/docs-2026-09-29-r1/PostModelSwitch
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/PostToolUseFailure
+  - contract: claude-code/docs-2026-09-29-r1/PostToolBatch
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/PreCompact
+  - contract: claude-code/docs-2026-09-29-r1/PostToolUseFailure
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/PreToolUse
+  - contract: claude-code/docs-2026-09-29-r1/PreCompact
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/SessionEnd
+  - contract: claude-code/docs-2026-09-29-r1/PreModelSwitch
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/Setup
+  - contract: claude-code/docs-2026-09-29-r1/PreToolUse
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/Stop
+  - contract: claude-code/docs-2026-09-29-r1/SessionEnd
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/StopFailure
+  - contract: claude-code/docs-2026-09-29-r1/Setup
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/SubagentStart
+  - contract: claude-code/docs-2026-09-29-r1/Stop
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/SubagentStop
+  - contract: claude-code/docs-2026-09-29-r1/StopFailure
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/TaskCompleted
+  - contract: claude-code/docs-2026-09-29-r1/SubagentStart
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/TaskCreated
+  - contract: claude-code/docs-2026-09-29-r1/SubagentStop
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/TeammateIdle
+  - contract: claude-code/docs-2026-09-29-r1/TaskCompleted
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/UserPromptExpansion
+  - contract: claude-code/docs-2026-09-29-r1/TaskCreated
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/UserPromptSubmit
+  - contract: claude-code/docs-2026-09-29-r1/TeammateIdle
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: claude-code/docs-2026-08-05-r1/WorktreeRemove
+  - contract: claude-code/docs-2026-09-29-r1/UserPromptExpansion
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/PermissionRequest
+  - contract: claude-code/docs-2026-09-29-r1/UserPromptSubmit
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/PostCompact
+  - contract: claude-code/docs-2026-09-29-r1/WorktreeRemove
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/PreCompact
+  - contract: codex/commit-ff6aec9-r1/Interrupt
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/SessionEnd
+  - contract: codex/commit-ff6aec9-r1/PermissionRequest
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/SessionStart
+  - contract: codex/commit-ff6aec9-r1/PostCompact
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/Stop
+  - contract: codex/commit-ff6aec9-r1/PreCompact
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/SubagentStart
+  - contract: codex/commit-ff6aec9-r1/SessionEnd
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/SubagentStop
+  - contract: codex/commit-ff6aec9-r1/SessionStart
     binding: command
     level: command-runtime-beta
     verification: source-reviewed
-  - contract: codex/commit-1e59dc5-r1/UserPromptSubmit
+  - contract: codex/commit-ff6aec9-r1/Stop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-ff6aec9-r1/SubagentStart
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-ff6aec9-r1/SubagentStop
+    binding: command
+    level: command-runtime-beta
+    verification: source-reviewed
+  - contract: codex/commit-ff6aec9-r1/UserPromptSubmit
     binding: command
     level: command-runtime-beta
     verification: source-reviewed

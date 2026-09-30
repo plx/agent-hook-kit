@@ -1,10 +1,10 @@
 format_version: 1
 harnesses:
   antigravity:
-    current: docs-2026-08-04-r1
+    current: docs-2026-09-29-r1
   claude-code:
-    current: docs-2026-08-05-r1
+    current: docs-2026-09-29-r1
   codex:
-    current: commit-1e59dc5-r1
+    current: commit-ff6aec9-r1
 supplements:
-  command_environments: command-environments-2026-08-05-r4
+  command_environments: command-environments-2026-09-29-r1
