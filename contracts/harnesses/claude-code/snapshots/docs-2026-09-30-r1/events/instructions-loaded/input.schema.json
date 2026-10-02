@@ -1,0 +1,106 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-30-r1:instructions-loaded:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": true,
+      "properties": {
+        "level": {
+          "description": "Open string: the Agent SDK types it as string; the examples are the documented levels.",
+          "examples": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "file_path": {
+      "type": "string"
+    },
+    "globs": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "hook_event_name": {
+      "const": "InstructionsLoaded"
+    },
+    "load_reason": {
+      "enum": [
+        "session_start",
+        "nested_traversal",
+        "path_glob_match",
+        "include",
+        "compact"
+      ]
+    },
+    "memory_type": {
+      "enum": [
+        "User",
+        "Project",
+        "Local",
+        "Managed"
+      ]
+    },
+    "parent_file_path": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "description": "Open string: the Agent SDK types it as string; the examples are the documented modes.",
+      "examples": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "description": "Session scratchpad directory; absent when the session has none or the temp directory is unavailable (Claude Code v2.1.257 or later).",
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    },
+    "trigger_file_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "file_path",
+    "memory_type",
+    "load_reason"
+  ],
+  "type": "object"
+}

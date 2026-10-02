@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-09-29-r1:pre-tool-use:command-output",
+  "type": "object",
+  "required": ["decision"],
+  "properties": {
+    "decision": {
+      "enum": ["allow", "deny", "ask", "force_ask", "deny_unless_prior_grant"],
+      "description": "allow auto-approves; deny hard-blocks; ask prompts but respects Always Allow; force_ask always prompts; deny_unless_prior_grant denies unless a prior user grant covers the resource."
+    },
+    "reason": { "type": "string", "description": "Explanation shown to the agent or user for the decision." },
+    "permissionOverrides": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "description": "Permission resources in action(target) form, for example read_file(/path) or command(npm test), that override default tool permissions."
+    }
+  },
+  "additionalProperties": false
+}

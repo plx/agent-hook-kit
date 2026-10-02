@@ -14,20 +14,71 @@ pub fn default_config_path() -> PathBuf {
     PathBuf::from({{ quality_config_path | tojson }})
 }
 
+/// Anchors a relative `--config` path at the harness's stable project root.
+///
+/// Claude Code runs hooks in the agent's current directory, which follows
+/// `cd` in its Bash tool, so a repository-relative policy path would stop
+/// resolving after `cd src`. Claude Code exports the project root where the
+/// session started as `CLAUDE_PROJECT_DIR`; a relative path is resolved
+/// against it when it is set and absolute. Absolute paths, and every other
+/// harness, keep the path unchanged.
+pub fn anchor_config_path(harness: &HarnessId, config_path: PathBuf) -> PathBuf {
+    let project_dir = (*harness == HarnessId::CLAUDE_CODE)
+        .then(|| std::env::var_os("CLAUDE_PROJECT_DIR"))
+        .flatten()
+        .map(PathBuf::from);
+    anchor_config_path_at(config_path, project_dir)
+}
+
+fn anchor_config_path_at(config_path: PathBuf, project_dir: Option<PathBuf>) -> PathBuf {
+    match project_dir {
+        Some(project_dir) if config_path.is_relative() && project_dir.is_absolute() => {
+            project_dir.join(config_path)
+        }
+        _ => config_path,
+    }
+}
+
 {% if starter == "deferred_quality" or "file_activity" in state_capabilities -%}
-/// Package-specific state root shared by the lifecycle producer and consumer.
-pub fn default_state_dir() -> PathBuf {
-    std::env::temp_dir()
-        .join("agent-hook-kit")
-        .join("generated")
-        .join({{ package_name | tojson }})
+/// Selects the state directory handed to a HookKit runner.
+///
+/// A `--state-dir` value is passed through unchanged; the runner anchors a
+/// relative one at the project root, as
+/// [`crate::scaffold::state::anchor_state_dir`] does. Without one, this
+/// package's per-user default,
+/// [`crate::scaffold::state::default_state_root`], is created and checked
+/// first: a runner treats every directory it is given as an explicit root and
+/// would skip the per-user ownership checks.
+pub fn runner_state_dir(state_dir: Option<PathBuf>) -> hookkit_session_state::Result<PathBuf> {
+    if let Some(state_dir) = state_dir {
+        return Ok(state_dir);
+    }
+    let root = crate::scaffold::state::default_state_root()?;
+    root.prepare()?;
+    Ok(root.path().to_path_buf())
+}
+
+/// Resolves the runner state directory, reporting a failure the way HookKit's
+/// runners report theirs: one stderr line and the non-blocking exit status 1.
+fn prepared_state_dir(state_dir: Option<PathBuf>) -> Result<PathBuf, ExitCode> {
+    runner_state_dir(state_dir).map_err(|error| {
+        eprintln!(
+            "{}: cannot prepare the state directory: {error}",
+            env!("CARGO_PKG_NAME"),
+        );
+        ExitCode::FAILURE
+    })
 }
 
 /// Record precise session metadata at Claude/Codex SessionStart.
 ///
 /// Antigravity intentionally does not call this entrypoint: its lower bound is
 /// established best-effort by the first PostToolUse observation instead.
-pub fn run_session_start(harness: HarnessId, state_dir: PathBuf) -> ExitCode {
+pub fn run_session_start(harness: HarnessId, state_dir: Option<PathBuf>) -> ExitCode {
+    let state_dir = match prepared_state_dir(state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(status) => return status,
+    };
     hookkit_tool_runner::run_session_start_observer(hookkit_tool_runner::SessionStartCli {
         harness,
         state_dir: Some(state_dir),
@@ -35,7 +86,15 @@ pub fn run_session_start(harness: HarnessId, state_dir: PathBuf) -> ExitCode {
 }
 
 /// Append PostToolUse file-activity evidence without emitting hook messages.
-pub fn run_file_activity(harness: HarnessId, state_dir: PathBuf) -> ExitCode {
+///
+/// On Claude Code the observer also accepts `PostToolUseFailure`, which is the
+/// only event Claude sends for a tool call that failed after writing files, so
+/// register this command for both events there.
+pub fn run_file_activity(harness: HarnessId, state_dir: Option<PathBuf>) -> ExitCode {
+    let state_dir = match prepared_state_dir(state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(status) => return status,
+    };
     hookkit_tool_runner::run_file_activity_observer(hookkit_tool_runner::FileActivityCli {
         harness,
         state_dir: Some(state_dir),
@@ -46,8 +105,13 @@ pub fn run_file_activity(harness: HarnessId, state_dir: PathBuf) -> ExitCode {
 pub fn run_turn_completion(
     harness: HarnessId,
     config_path: PathBuf,
-    state_dir: PathBuf,
+    state_dir: Option<PathBuf>,
 ) -> ExitCode {
+    let state_dir = match prepared_state_dir(state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(status) => return status,
+    };
+    let config_path = anchor_config_path(&harness, config_path);
     hookkit_tool_runner::run_turn_completion_runner(hookkit_tool_runner::TurnCompletionCli {
         harness,
         config_path: Some(config_path),
@@ -57,9 +121,58 @@ pub fn run_turn_completion(
 {% else -%}
 /// Run the selected formatter/linter policy immediately after a tool call.
 pub fn run_immediate(harness: HarnessId, config_path: PathBuf) -> ExitCode {
+    let config_path = anchor_config_path(&harness, config_path);
     hookkit_tool_runner::run_runner(hookkit_tool_runner::Cli {
         harness,
         config_path: Some(config_path),
     })
 }
-{% endif -%}
+{% endif %}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_policy_paths_resolve_against_the_project_root() {
+        let project = std::env::temp_dir().join("project");
+        assert_eq!(
+            anchor_config_path_at(PathBuf::from("policy.pkl"), Some(project.clone())),
+            project.join("policy.pkl"),
+        );
+        let absolute = std::env::temp_dir().join("elsewhere/policy.pkl");
+        assert_eq!(
+            anchor_config_path_at(absolute.clone(), Some(project)),
+            absolute,
+        );
+        assert_eq!(
+            anchor_config_path_at(PathBuf::from("policy.pkl"), None),
+            PathBuf::from("policy.pkl"),
+        );
+        assert_eq!(
+            anchor_config_path_at(PathBuf::from("policy.pkl"), Some(PathBuf::from("relative"))),
+            PathBuf::from("policy.pkl"),
+        );
+    }
+{%- if starter == "deferred_quality" or "file_activity" in state_capabilities %}
+
+    #[test]
+    fn runners_receive_the_override_or_the_checked_per_user_default() {
+        let explicit = PathBuf::from(".hookkit-state");
+        assert_eq!(
+            runner_state_dir(Some(explicit.clone())).expect("an override is passed through"),
+            explicit,
+        );
+        let default = runner_state_dir(None).expect("the per-user default is usable");
+        assert_eq!(
+            default,
+            crate::scaffold::state::default_state_root()
+                .expect("the package directory is a plain relative path")
+                .path(),
+        );
+        assert!(
+            default.is_dir(),
+            "the per-user default is created before a runner uses it"
+        );
+    }
+{%- endif %}
+}

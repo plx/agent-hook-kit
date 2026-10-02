@@ -19,9 +19,19 @@ fn pkl_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether Pkl-dependent tests must run instead of skipping. CI installs Pkl
+/// and sets `HOOKKIT_REQUIRE_PKL=1`, so a missing binary fails the test.
+fn pkl_required() -> bool {
+    std::env::var_os("HOOKKIT_REQUIRE_PKL").is_some_and(|value| !value.is_empty() && value != "0")
+}
+
 macro_rules! require_pkl {
     () => {
         if !pkl_available() {
+            assert!(
+                !pkl_required(),
+                "HOOKKIT_REQUIRE_PKL is set, but the pkl binary is not on PATH"
+            );
             eprintln!("skipping test: pkl binary not on PATH");
             return;
         }
@@ -497,6 +507,148 @@ fn formerly_mutating_only_tools_and_ruff_have_authoritative_workflows() {
             .iter()
             .any(|arg| matches!(arg, ArgvElement::Literal(value) if value == "--check"))
     );
+}
+
+/// Run one builtin verify phase's literal argv against `file` and return the
+/// exit code, or `None` when the executable is unavailable.
+fn run_verify_phase(spec: &ToolSpec, file: &std::path::Path) -> Option<i32> {
+    let phase = spec.phases.get("verify").expect("verify phase");
+    let mut command = std::process::Command::new(&spec.executable);
+    for arg in &phase.argv {
+        match arg {
+            ArgvElement::Literal(value) => {
+                command.arg(value);
+            }
+            ArgvElement::Token(ArgToken::Files) => {
+                command.arg(file);
+            }
+            ArgvElement::Token(ArgToken::ExtraArgs) => {}
+            ArgvElement::Token(other) => panic!("unexpected token {other:?}"),
+        }
+    }
+    let output = command.output().ok()?;
+    output.status.code()
+}
+
+fn classify(codes: &ExitCodes, code: i32) -> &'static str {
+    if codes.clean.contains(&code) {
+        "clean"
+    } else if codes.issues.contains(&code) {
+        "issues"
+    } else {
+        "failure"
+    }
+}
+
+fn temp_file(name: &str, contents: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "hookkit-builtin-probe-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, contents).unwrap();
+    path
+}
+
+#[test]
+fn jq_builtin_parses_without_exit_status_mode() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let jq = spec(&specs, "jq");
+    let verify = jq.phases.get("verify").expect("verify phase");
+    // `jq -e empty` exits 4 for every valid file because `empty` produces no
+    // output; only parse and read errors may be issues.
+    assert_argv(
+        verify,
+        vec![
+            literal("empty"),
+            token(ArgToken::ExtraArgs),
+            token(ArgToken::Files),
+        ],
+    );
+    assert_exit_codes(&verify.exit_codes, &[0], &[2, 5], &[]);
+    // jq parses all of its file arguments as one concatenated stream, so a
+    // batch would validate files together instead of independently.
+    assert_eq!(verify.invocation, InvocationGranularity::PerFile);
+
+    let valid = temp_file("valid.json", "{\"name\": \"hookkit\"}\n");
+    let null = temp_file("null.json", "null\n");
+    let invalid = temp_file("invalid.json", "{not valid json}\n");
+    let Some(valid_code) = run_verify_phase(&jq, &valid) else {
+        eprintln!("skipping real-jq probe: jq not on PATH");
+        return;
+    };
+    assert_eq!(classify(&verify.exit_codes, valid_code), "clean");
+    let null_code = run_verify_phase(&jq, &null).unwrap();
+    assert_eq!(classify(&verify.exit_codes, null_code), "clean");
+    let invalid_code = run_verify_phase(&jq, &invalid).unwrap();
+    assert_eq!(classify(&verify.exit_codes, invalid_code), "issues");
+
+    // Two files that are only valid (or only invalid) when concatenated: a
+    // split object passes a batched `jq empty`, and two scalar documents
+    // without trailing newlines fail it. Each file is judged on its own.
+    let head = temp_file("head.json", "{\"a\":");
+    let tail = temp_file("tail.json", "1}");
+    let first_scalar = temp_file("first.json", "true");
+    let second_scalar = temp_file("second.json", "true");
+    let batched = std::process::Command::new(&jq.executable)
+        .args(["empty"])
+        .arg(&head)
+        .arg(&tail)
+        .output()
+        .unwrap();
+    assert_eq!(
+        classify(&verify.exit_codes, batched.status.code().unwrap()),
+        "clean",
+        "a batch of the two halves hides both parse errors"
+    );
+    for half in [&head, &tail] {
+        let code = run_verify_phase(&jq, half).unwrap();
+        assert_eq!(classify(&verify.exit_codes, code), "issues", "{half:?}");
+    }
+    for scalar in [&first_scalar, &second_scalar] {
+        let code = run_verify_phase(&jq, scalar).unwrap();
+        assert_eq!(classify(&verify.exit_codes, code), "clean", "{scalar:?}");
+    }
+    for path in [
+        valid,
+        null,
+        invalid,
+        head,
+        tail,
+        first_scalar,
+        second_scalar,
+    ] {
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+}
+
+#[test]
+fn check_merge_conflict_ignores_heading_underlines_but_finds_conflicts() {
+    require_pkl!();
+    let specs = hookkit_pkl_config::builtin_specs().expect("evaluate builtins");
+    let checker = spec(&specs, "checkMergeConflict");
+    let verify = checker.phases.get("verify").expect("verify phase");
+    let heading = temp_file("CHANGES.rst", "License\n=======\n\nSummary\n=======\n");
+    let conflict = temp_file(
+        "conflict.py",
+        "a = 1\n<<<<<<< HEAD\nb = 2\n=======\nb = 3\n>>>>>>> branch\n",
+    );
+    let Some(heading_code) = run_verify_phase(&checker, &heading) else {
+        eprintln!("skipping merge-conflict probe: grep not on PATH");
+        return;
+    };
+    assert_eq!(classify(&verify.exit_codes, heading_code), "clean");
+    let conflict_code = run_verify_phase(&checker, &conflict).unwrap();
+    assert_eq!(classify(&verify.exit_codes, conflict_code), "issues");
+    for path in [heading, conflict] {
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
 }
 
 #[test]

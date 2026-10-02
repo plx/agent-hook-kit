@@ -1,5 +1,9 @@
 /// Top-level error type for hookkit.
+///
+/// The enum is `#[non_exhaustive]`: new failure classes are added as the
+/// supported protocols grow, so downstream matches need a wildcard arm.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum HookkitError {
     /// An open identity value violated a constructor invariant.
     #[error("invalid protocol identity: {0}")]
@@ -71,23 +75,14 @@ pub enum HookkitError {
         hint: crate::EventId,
     },
 
-    /// A validated hint named a different event than the observed input.
+    /// A caller-supplied event hint named a different event than the one the
+    /// payload's authoritative discriminator, or its unique sound shape,
+    /// identifies.
     #[error("event hint `{hint}` contradicts observed event `{actual}`")]
     EventHintMismatch {
         /// Caller-supplied event hint.
         hint: crate::EventId,
         /// Event represented by the decoded input or output.
-        actual: crate::EventId,
-    },
-
-    /// A hint disagreed with a protocol's authoritative discriminator.
-    #[error("event hint `{hint}` contradicts authoritative discriminator `{actual}` for {harness}")]
-    HintContradiction {
-        /// Harness performing event resolution.
-        harness: crate::HarnessId,
-        /// Caller-supplied event hint.
-        hint: crate::EventId,
-        /// Event named by the authoritative wire discriminator.
         actual: crate::EventId,
     },
 
@@ -100,6 +95,17 @@ pub enum HookkitError {
         output: crate::EventId,
     },
 
+    /// A harness adapter decoded a different input arm than the event that
+    /// resolution selected. This is an adapter defect detected before any
+    /// handler runs.
+    #[error("harness adapter decoded `{decoded}` for resolved event `{resolved}`")]
+    DecodedEventMismatch {
+        /// Event selected by resolution.
+        resolved: crate::EventId,
+        /// Event represented by the decoded input arm.
+        decoded: crate::EventId,
+    },
+
     /// Shape-based resolution left more than one viable event.
     #[error("event resolution is ambiguous for {harness}; candidates: {candidates:?}")]
     AmbiguousEvent {
@@ -109,8 +115,13 @@ pub enum HookkitError {
         candidates: Vec<crate::EventId>,
     },
 
-    /// A hinted catalog event had a native parser, but the parser rejected the
-    /// payload.
+    /// A protocol crate's hinted catalog lookup found a native parser, but
+    /// that parser rejected the payload.
+    ///
+    /// This variant carries the harness whose catalog was searched. It and
+    /// [`HookkitError::InvalidInputForHint`] both mean "the hinted parser
+    /// rejected the input"; protocol crates choose the variant that carries
+    /// the context they have.
     #[error("input is invalid for hinted event `{event}` on {harness}: {message}")]
     InvalidForHint {
         /// Harness whose catalog was searched.
@@ -121,8 +132,10 @@ pub enum HookkitError {
         message: String,
     },
 
-    /// A compile-time selected adapter rejected input supplied with a dynamic
-    /// event hint.
+    /// A caller-supplied event hint was not registered, had no native parser,
+    /// or its parser rejected the payload.
+    ///
+    /// See [`HookkitError::InvalidForHint`] for the harness-qualified form.
     #[error("input is invalid for hinted event `{event}`: {message}")]
     InvalidInputForHint {
         /// Caller-supplied event hint.
@@ -131,11 +144,15 @@ pub enum HookkitError {
         message: String,
     },
 
-    /// No implemented or catalog-only descriptor could represent the payload.
-    #[error("no event candidate for harness {harness}")]
-    NoEventCandidate {
-        /// Harness whose descriptors were searched.
-        harness: crate::HarnessId,
+    /// An event identified without a hint (for example by its authoritative
+    /// discriminator) was rejected by its exact native parser.
+    #[error("input is invalid for `{event}`: {source}")]
+    InvalidInputForEvent {
+        /// Event whose native parser rejected the payload.
+        event: crate::EventId,
+        /// The native parser's error.
+        #[source]
+        source: Box<HookkitError>,
     },
 
     /// Harness-specific decoding could not recognize the payload.
@@ -157,4 +174,101 @@ pub enum HookkitError {
     /// The selected built-in does not have a runtime dispatch arm.
     #[error("unsupported built-in harness selection: {0:?}")]
     UnsupportedBuiltinHarness(crate::BuiltinHarness),
+
+    /// An open harness identity has no adapter for the requested operation.
+    ///
+    /// [`crate::HarnessId`] is deliberately open, so APIs that only support
+    /// the built-in harnesses report other identities (including aliases
+    /// such as `claude` for `claude-code`) with this variant.
+    #[error("unsupported harness `{harness}`: {message}")]
+    UnsupportedHarness {
+        /// The harness identity that has no adapter.
+        harness: crate::HarnessId,
+        /// What the caller tried to do with it.
+        message: String,
+    },
+
+    /// An application hook handler failed for a domain-specific reason.
+    ///
+    /// Construct it with [`HookkitError::handler`]. The boxed error stays
+    /// available through [`std::error::Error::source`] and
+    /// `downcast_ref`, so application error types are not flattened into
+    /// strings or disguised as I/O errors.
+    #[error("hook handler failed: {0}")]
+    Handler(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+impl HookkitError {
+    /// Wraps an application error returned by a hook handler.
+    ///
+    /// ```
+    /// use hookkit_core::HookkitError;
+    ///
+    /// let error = HookkitError::handler(std::fmt::Error);
+    /// assert!(matches!(error, HookkitError::Handler(_)));
+    /// assert_eq!(error.to_string(), "hook handler failed: an error occurred when formatting an argument");
+    /// ```
+    pub fn handler(error: impl Into<Box<dyn std::error::Error + Send + Sync + 'static>>) -> Self {
+        Self::Handler(error.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error as _;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("policy file is missing")]
+    struct PolicyMissing;
+
+    #[test]
+    fn handler_errors_keep_their_type_and_source() {
+        let error = HookkitError::handler(PolicyMissing);
+        assert_eq!(
+            error.to_string(),
+            "hook handler failed: policy file is missing"
+        );
+        let source = error.source().expect("handler source");
+        assert!(source.downcast_ref::<PolicyMissing>().is_some());
+    }
+
+    #[test]
+    fn handler_accepts_plain_messages() {
+        let error = HookkitError::handler("configuration is inconsistent");
+        assert_eq!(
+            error.to_string(),
+            "hook handler failed: configuration is inconsistent"
+        );
+    }
+
+    #[test]
+    fn event_qualified_parse_errors_name_the_event_and_keep_the_cause() {
+        let parse = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        let event = crate::EventId::builtin(crate::HarnessId::CLAUDE_CODE, "SessionStart");
+        let error = HookkitError::InvalidInputForEvent {
+            event,
+            source: Box::new(HookkitError::from(parse)),
+        };
+        let rendered = error.to_string();
+        assert!(
+            rendered.starts_with("input is invalid for `claude-code/SessionStart`: invalid JSON:")
+        );
+        let cause = error
+            .source()
+            .and_then(|source| source.downcast_ref::<Box<HookkitError>>())
+            .expect("boxed parser error source");
+        assert!(matches!(**cause, HookkitError::InvalidJson(_)));
+        assert!(matches!(
+            &error,
+            HookkitError::InvalidInputForEvent { source, .. }
+                if matches!(**source, HookkitError::InvalidJson(_))
+        ));
+    }
+
+    #[test]
+    fn errors_are_thread_safe() {
+        fn assert_send_sync<T: Send + Sync + 'static>() {}
+        assert_send_sync::<HookkitError>();
+    }
 }

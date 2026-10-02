@@ -13,9 +13,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Discover pinned-source drift without mutating snapshots
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The script derives every revision, URL, and hash from the
+      # registry-selected snapshots, never mutates the checkout, and exits 1
+      # on drift or 2 when discovery fails, so either outcome fails this job.
+      - name: Compare upstream sources with the registry-selected snapshots
+        shell: bash
         run: scripts/check-upstream-contract-drift.sh | tee contract-drift-report.txt
+      - name: Summarize the drift report
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f contract-drift-report.txt ]]; then
+            {
+              echo '## Upstream contract drift'
+              echo
+              echo '```text'
+              cat contract-drift-report.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: contract-drift-report
           path: contract-drift-report.txt
+          if-no-files-found: ignore

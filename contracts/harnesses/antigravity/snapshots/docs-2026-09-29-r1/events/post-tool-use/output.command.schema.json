@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-09-29-r1:post-tool-use:command-output",
+  "description": "Exactly the empty JSON object; the reference defines no PostToolUse response fields.",
+  "type": "object",
+  "maxProperties": 0,
+  "additionalProperties": false
+}

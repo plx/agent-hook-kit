@@ -5,9 +5,9 @@ event_catalog:
   default:
     format_version: 1
     events:
-    - contract: claude-code/docs-2026-08-05-r1/ConfigChange
+    - contract: claude-code/docs-2026-09-30-r1/ConfigChange
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: ConfigChange
       stable_id: config_change
       display_name: Configuration change
@@ -22,14 +22,14 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::ConfigChangeOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/config-change/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/config-change/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           file_path: /repo/.claude/settings.json
           hook_event_name: ConfigChange
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           source: project_settings
           transcript_path: /tmp/t.jsonl
@@ -45,9 +45,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Observe or reject a native configuration change.
-    - contract: claude-code/docs-2026-08-05-r1/CwdChanged
+    - contract: claude-code/docs-2026-09-30-r1/CwdChanged
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: CwdChanged
       stable_id: cwd_changed
       display_name: Working directory changed
@@ -62,15 +62,15 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::CwdChangedOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/cwd-changed/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/cwd-changed/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: CwdChanged
           new_cwd: /repo/crate
           old_cwd: /repo
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -85,9 +85,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Observe old and new working directories and optionally replace watch paths.
-    - contract: claude-code/docs-2026-08-05-r1/DirectoryAdded
+    - contract: claude-code/docs-2026-09-30-r1/DirectoryAdded
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: DirectoryAdded
       stable_id: directory_added
       display_name: Directory added
@@ -102,14 +102,14 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::DirectoryAddedOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/directory-added/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/directory-added/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           directory: /repo/related
           hook_event_name: DirectoryAdded
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           source: slash_command
           transcript_path: /tmp/t.jsonl
@@ -125,9 +125,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Retains the refreshed directory path and native source fields.
-    - contract: claude-code/docs-2026-08-05-r1/Elicitation
+    - contract: claude-code/docs-2026-09-30-r1/Elicitation
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: Elicitation
       stable_id: elicitation
       display_name: Elicitation
@@ -142,7 +142,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::ElicitationOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/elicitation/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/elicitation/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -151,10 +151,10 @@ event_catalog:
           mcp_server_name: forms
           message: Provide values
           mode: form
-          permission_mode: default
           prompt_id: prompt-1
           requested_schema:
             type: object
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
           url: https://example.test
@@ -169,10 +169,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: May accept, decline, cancel, or leave an MCP elicitation unchanged.
-    - contract: claude-code/docs-2026-08-05-r1/ElicitationResult
+        note: May accept, decline, cancel, or leave an MCP elicitation unchanged; decision block declines like exit 2.
+    - contract: claude-code/docs-2026-09-30-r1/ElicitationResult
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: ElicitationResult
       stable_id: elicitation_result
       display_name: Elicitation result
@@ -187,7 +187,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::ElicitationResultOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/elicitation-result/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/elicitation-result/fixtures.yaml
         case: representative
         value:
           action: accept
@@ -198,8 +198,8 @@ event_catalog:
           hook_event_name: ElicitationResult
           mcp_server_name: forms
           mode: form
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -213,10 +213,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: May replace the native MCP elicitation result.
-    - contract: claude-code/docs-2026-08-05-r1/FileChanged
+        note: May replace the native MCP elicitation result; decision block declines like exit 2.
+    - contract: claude-code/docs-2026-09-30-r1/FileChanged
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: FileChanged
       stable_id: file_changed
       display_name: File changed
@@ -231,15 +231,15 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::FileChangedOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/file-changed/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/file-changed/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           event: change
           file_path: /repo/.env
           hook_event_name: FileChanged
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -254,9 +254,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Observe a watched file change and optionally replace watch paths.
-    - contract: claude-code/docs-2026-08-05-r1/InstructionsLoaded
+    - contract: claude-code/docs-2026-09-30-r1/InstructionsLoaded
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: InstructionsLoaded
       stable_id: instructions_loaded
       display_name: Instructions loaded
@@ -271,7 +271,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::InstructionsLoadedOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/instructions-loaded/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/instructions-loaded/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -282,8 +282,8 @@ event_catalog:
           load_reason: session_start
           memory_type: Project
           parent_file_path: /repo/CLAUDE.md
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
           trigger_file_path: /repo/src/lib.rs
@@ -291,17 +291,17 @@ event_catalog:
         input_rewrite: false
         true_pre_action_block: false
         post_action_feedback: false
-        output_ignored: false
+        output_ignored: true
         output_advisory: true
         tool_result: false
         separate_user_agent_messages: false
         session_boundary: none
       support:
         status: scaffolded
-        note: Observe native instruction loading metadata.
-    - contract: claude-code/docs-2026-08-05-r1/MessageDisplay
+        note: Observe native instruction loading metadata; Claude Code discards the output.
+    - contract: claude-code/docs-2026-09-30-r1/MessageDisplay
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: MessageDisplay
       stable_id: message_display
       display_name: Message display
@@ -316,7 +316,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::MessageDisplayOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/message-display/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/message-display/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -326,8 +326,8 @@ event_catalog:
           hook_event_name: MessageDisplay
           index: 0
           message_id: message-1
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
           turn_id: turn-1
@@ -343,9 +343,9 @@ event_catalog:
       support:
         status: scaffolded
         note: May replace streamed display content.
-    - contract: claude-code/docs-2026-08-05-r1/Notification
+    - contract: claude-code/docs-2026-09-30-r1/Notification
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: Notification
       stable_id: notification
       display_name: Notification
@@ -360,15 +360,15 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::NotificationOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/notification/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/notification/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: Notification
           message: Permission required
           notification_type: permission_prompt
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           title: Claude Code
           transcript_path: /tmp/t.jsonl
@@ -376,17 +376,17 @@ event_catalog:
         input_rewrite: false
         true_pre_action_block: false
         post_action_feedback: false
-        output_ignored: false
+        output_ignored: true
         output_advisory: true
         tool_result: false
         separate_user_agent_messages: false
         session_boundary: none
       support:
         status: scaffolded
-        note: Observe a Claude Code notification.
-    - contract: claude-code/docs-2026-08-05-r1/PermissionDenied
+        note: Observe a Claude Code notification; only a terminal sequence in the output has an effect.
+    - contract: claude-code/docs-2026-09-30-r1/PermissionDenied
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PermissionDenied
       stable_id: permission_denied
       display_name: Permission denied
@@ -401,14 +401,15 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::PermissionDeniedOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/permission-denied/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/permission-denied/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: PermissionDenied
-          permission_mode: default
+          permission_mode: auto
           prompt_id: prompt-1
-          reason: Auto mode denied
+          reason: '[Irreversible Local Destruction]'
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           tool_input:
             command: rm -rf /tmp/build
@@ -427,9 +428,9 @@ event_catalog:
       support:
         status: scaffolded
         note: May request a retry after native permission denial.
-    - contract: claude-code/docs-2026-08-05-r1/PermissionRequest
+    - contract: claude-code/docs-2026-09-30-r1/PermissionRequest
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PermissionRequest
       stable_id: permission_request
       display_name: Permission request
@@ -444,7 +445,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::PermissionRequestOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/permission-request/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/permission-request/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -452,6 +453,7 @@ event_catalog:
           permission_mode: default
           permission_suggestions: []
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           tool_input:
             command: cargo test
@@ -469,10 +471,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: Native decisions may also rewrite input and permission rules.
-    - contract: claude-code/docs-2026-08-05-r1/PostCompact
+        note: Native decisions may also rewrite input and permission rules; exit 2 no longer denies, so deny through the JSON decision.
+    - contract: claude-code/docs-2026-09-30-r1/PostCompact
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PostCompact
       stable_id: post_compact
       display_name: After compaction
@@ -487,14 +489,14 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::PostCompactOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/post-compact/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/post-compact/fixtures.yaml
         case: representative
         value:
           compact_summary: Summary
           cwd: /repo
           hook_event_name: PostCompact
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
           trigger: auto
@@ -502,18 +504,65 @@ event_catalog:
       capabilities:
         input_rewrite: false
         true_pre_action_block: false
-        post_action_feedback: true
-        output_ignored: false
+        post_action_feedback: false
+        output_ignored: true
         output_advisory: true
         tool_result: false
         separate_user_agent_messages: false
         session_boundary: none
       support:
         status: scaffolded
-        note: Carries Claude's compact summary in addition to the portable observer floor.
-    - contract: claude-code/docs-2026-08-05-r1/PostToolBatch
+        note: Carries Claude's compact summary in addition to the portable observer floor; Claude Code discards the output.
+    - contract: claude-code/docs-2026-09-30-r1/PostModelSwitch
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
+      wire_event: PostModelSwitch
+      stable_id: post_model_switch
+      display_name: After model switch
+      category: model
+      order: 125
+      rust_event: hookkit_claude::model_switch::PostModelSwitch
+      rust_output: hookkit_claude::model_switch::PostModelSwitchOutput
+      selector:
+        rust_type: hookkit_claude::protocol::Event
+        variant: PostModelSwitch
+      starter:
+        strategy: no_op
+        expression: hookkit_claude::model_switch::PostModelSwitchOutput::no_op()
+      fixture:
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/post-model-switch/fixtures.yaml
+        case: representative
+        value:
+          cache_ttl: 5m
+          context_tokens: 182340
+          cwd: /repo
+          estimated_cache_write_usd: 1.1396
+          from_model: claude-sonnet-5
+          hook_event_name: PostModelSwitch
+          pricing: catalog
+          prompt_cache_warm: true
+          prompt_id: prompt-1
+          requested_model: opus
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+          session_id: s1
+          source: command
+          to_model: claude-opus-5
+          transcript_path: /tmp/t.jsonl
+      capabilities:
+        input_rewrite: false
+        true_pre_action_block: false
+        post_action_feedback: false
+        output_ignored: false
+        output_advisory: true
+        tool_result: false
+        separate_user_agent_messages: true
+        session_boundary: none
+      support:
+        status: scaffolded
+        note: Observe a completed model change and add model-specific agent context; it cannot block.
+    - contract: claude-code/docs-2026-09-30-r1/PostToolBatch
+      harness: claude-code
+      snapshot: docs-2026-09-30-r1
       wire_event: PostToolBatch
       stable_id: post_tool_batch
       display_name: After tool batch
@@ -528,19 +577,20 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::PostToolBatchOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/post-tool-batch/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/post-tool-batch/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: PostToolBatch
           permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           tool_calls:
           - tool_input:
               file_path: /repo/a
             tool_name: Read
-            tool_response: content
+            tool_response: "1\tcontent"
             tool_use_id: toolu_1
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -555,9 +605,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Post-action block-shaped output is feedback and does not roll back the batch.
-    - contract: claude-code/docs-2026-08-05-r1/PostToolUse
+    - contract: claude-code/docs-2026-09-30-r1/PostToolUse
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PostToolUse
       stable_id: post_tool_use
       display_name: After tool use
@@ -572,14 +622,17 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::protocol::PostToolUseOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/post-tool-use/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/post-tool-use/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           duration_ms: 12
+          effort:
+            level: high
           hook_event_name: PostToolUse
           permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           tool_input:
             command: cargo test
@@ -600,10 +653,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: Exit 2 provides post-action feedback; it never blocks or rolls back the completed call.
-    - contract: claude-code/docs-2026-08-05-r1/PostToolUseFailure
+        note: Exit 2 provides post-action feedback; it never blocks or rolls back the completed call. Supports classifier context.
+    - contract: claude-code/docs-2026-09-30-r1/PostToolUseFailure
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PostToolUseFailure
       stable_id: post_tool_use_failure
       display_name: Tool use failed
@@ -618,16 +671,19 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::PostToolUseFailureOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/post-tool-use-failure/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/post-tool-use-failure/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           duration_ms: 12
-          error: exit status 1
+          error: |-
+            Exit code 1
+            error: test failed
           hook_event_name: PostToolUseFailure
           is_interrupt: false
           permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           tool_input:
             command: cargo test
@@ -646,9 +702,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Feedback occurs only after the tool has already failed.
-    - contract: claude-code/docs-2026-08-05-r1/PreCompact
+    - contract: claude-code/docs-2026-09-30-r1/PreCompact
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PreCompact
       stable_id: pre_compact
       display_name: Before compaction
@@ -663,14 +719,14 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::PreCompactOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/pre-compact/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/pre-compact/fixtures.yaml
         case: representative
         value:
           custom_instructions: Preserve test results
           cwd: /repo
           hook_event_name: PreCompact
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
           trigger: manual
@@ -687,9 +743,56 @@ event_catalog:
       support:
         status: scaffolded
         note: Native Claude output can block compaction; the portable family is observer-only.
-    - contract: claude-code/docs-2026-08-05-r1/PreToolUse
+    - contract: claude-code/docs-2026-09-30-r1/PreModelSwitch
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
+      wire_event: PreModelSwitch
+      stable_id: pre_model_switch
+      display_name: Before model switch
+      category: model
+      order: 165
+      rust_event: hookkit_claude::model_switch::PreModelSwitch
+      rust_output: hookkit_claude::model_switch::PreModelSwitchOutput
+      selector:
+        rust_type: hookkit_claude::protocol::Event
+        variant: PreModelSwitch
+      starter:
+        strategy: no_op
+        expression: hookkit_claude::model_switch::PreModelSwitchOutput::no_op()
+      fixture:
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/pre-model-switch/fixtures.yaml
+        case: representative
+        value:
+          cache_ttl: 5m
+          context_tokens: 182340
+          cwd: /repo
+          estimated_cache_write_usd: 1.1396
+          from_model: claude-sonnet-5
+          hook_event_name: PreModelSwitch
+          pricing: catalog
+          prompt_cache_warm: true
+          prompt_id: prompt-1
+          requested_model: opus
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+          session_id: s1
+          source: command
+          to_model: claude-opus-5
+          transcript_path: /tmp/t.jsonl
+      capabilities:
+        input_rewrite: false
+        true_pre_action_block: true
+        post_action_feedback: false
+        output_ignored: false
+        output_advisory: false
+        tool_result: false
+        separate_user_agent_messages: false
+        session_boundary: none
+      support:
+        status: scaffolded
+        note: May allow, ask to confirm, or block a requested model switch, and report its re-cache cost to the user.
+    - contract: claude-code/docs-2026-09-30-r1/PreToolUse
+      harness: claude-code
+      snapshot: docs-2026-09-30-r1
       wire_event: PreToolUse
       stable_id: pre_tool_use
       display_name: Before tool use
@@ -701,16 +804,19 @@ event_catalog:
         rust_type: hookkit_claude::protocol::Event
         variant: PreToolUse
       starter:
-        strategy: allow
-        expression: hookkit_claude::catalog::PreToolUseOutput::decide(hookkit_claude::catalog::PreToolPermissionDecision::Allow, None, None, None)
+        strategy: no_op
+        expression: hookkit_claude::catalog::PreToolUseOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/pre-tool-use/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/pre-tool-use/fixtures.yaml
         case: representative
         value:
           cwd: /repo
+          effort:
+            level: high
           hook_event_name: PreToolUse
           permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           tool_input:
             command: cargo test
@@ -730,9 +836,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Supports allow, deny, ask, defer, replacement input, and context.
-    - contract: claude-code/docs-2026-08-05-r1/SessionEnd
+    - contract: claude-code/docs-2026-09-30-r1/SessionEnd
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: SessionEnd
       stable_id: session_end
       display_name: Session end
@@ -747,14 +853,14 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::SessionEndOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/session-end/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/session-end/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: SessionEnd
-          permission_mode: default
           prompt_id: prompt-1
           reason: other
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
       aligned_family: session_end
@@ -762,17 +868,17 @@ event_catalog:
         input_rewrite: false
         true_pre_action_block: false
         post_action_feedback: false
-        output_ignored: false
+        output_ignored: true
         output_advisory: true
         tool_result: false
         separate_user_agent_messages: false
         session_boundary: exact
       support:
         status: scaffolded
-        note: Observer floor retains the exact session-end boundary and native reason.
-    - contract: claude-code/docs-2026-08-05-r1/SessionStart
+        note: Observer floor retains the exact session-end boundary and native reason; Claude Code discards the output.
+    - contract: claude-code/docs-2026-09-30-r1/SessionStart
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: SessionStart
       stable_id: session_start
       display_name: Session start
@@ -787,18 +893,22 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::protocol::SessionStartOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/session-start/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/session-start/fixtures.yaml
         case: representative
         value:
           agent_type: reviewer
+          context_tokens: 182340
           cwd: /repo
+          estimated_cache_write_usd: 1.1396
           hook_event_name: SessionStart
-          model: claude-test
-          permission_mode: default
+          model: claude-opus-5
+          prompt_cache_likely_expired: true
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+          seconds_since_last_response: 5400
           session_id: s1
           session_title: Review
-          source: startup
+          source: resume
           transcript_path: /tmp/t.jsonl
       aligned_family: session_start
       capabilities:
@@ -813,9 +923,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Retains source=fork, worktree paths, title, watch paths, skills, and native context controls.
-    - contract: claude-code/docs-2026-08-05-r1/Setup
+    - contract: claude-code/docs-2026-09-30-r1/Setup
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: Setup
       stable_id: setup
       display_name: Setup
@@ -830,13 +940,13 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::SetupOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/setup/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/setup/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: Setup
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
           trigger: init
@@ -844,17 +954,17 @@ event_catalog:
         input_rewrite: false
         true_pre_action_block: false
         post_action_feedback: false
-        output_ignored: false
+        output_ignored: true
         output_advisory: true
         tool_result: false
-        separate_user_agent_messages: true
+        separate_user_agent_messages: false
         session_boundary: inferred
       support:
         status: scaffolded
-        note: Claude-specific setup observation and context injection.
-    - contract: claude-code/docs-2026-08-05-r1/Stop
+        note: Observe setup; Claude Code discards Setup JSON output, so persist environment through CLAUDE_ENV_FILE instead.
+    - contract: claude-code/docs-2026-09-30-r1/Stop
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: Stop
       stable_id: stop
       display_name: Turn completion
@@ -869,7 +979,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::StopOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/stop/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/stop/fixtures.yaml
         case: representative
         value:
           background_tasks:
@@ -879,10 +989,13 @@ event_catalog:
             status: running
             type: shell
           cwd: /repo
+          effort:
+            level: high
           hook_event_name: Stop
           last_assistant_message: All work complete
           permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_crons:
           - id: cron-1
             prompt: Check the build
@@ -903,10 +1016,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: May permit completion, block with a reason, or append agent context.
-    - contract: claude-code/docs-2026-08-05-r1/StopFailure
+        note: May permit completion, or keep Claude working with a block reason or agent context (both are subject to the continuation cap).
+    - contract: claude-code/docs-2026-09-30-r1/StopFailure
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: StopFailure
       stable_id: stop_failure
       display_name: Stop failure
@@ -921,34 +1034,33 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::StopFailureOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/stop-failure/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/stop-failure/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           error: rate_limit
-          error_details:
-            type: rate_limit
+          error_details: 429 Too Many Requests
           hook_event_name: StopFailure
-          last_assistant_message: Partial response
-          permission_mode: default
+          last_assistant_message: 'API Error: Rate limit reached'
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
       capabilities:
         input_rewrite: false
         true_pre_action_block: false
-        post_action_feedback: true
-        output_ignored: false
+        post_action_feedback: false
+        output_ignored: true
         output_advisory: true
         tool_result: false
         separate_user_agent_messages: false
         session_boundary: none
       support:
         status: scaffolded
-        note: Observe a failed stop attempt.
-    - contract: claude-code/docs-2026-08-05-r1/SubagentStart
+        note: Observe a turn that ended in an API error; only a terminal sequence in the output has an effect.
+    - contract: claude-code/docs-2026-09-30-r1/SubagentStart
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: SubagentStart
       stable_id: subagent_start
       display_name: Subagent start
@@ -963,15 +1075,15 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::SubagentStartOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/subagent-start/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/subagent-start/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
           agent_type: Explore
           cwd: /repo
           hook_event_name: SubagentStart
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
       aligned_family: subagent_start
@@ -987,9 +1099,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Portable behavior observes the subagent and may add context.
-    - contract: claude-code/docs-2026-08-05-r1/SubagentStop
+    - contract: claude-code/docs-2026-09-30-r1/SubagentStop
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: SubagentStop
       stable_id: subagent_stop
       display_name: Subagent stop
@@ -1004,7 +1116,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::SubagentStopOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/subagent-stop/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/subagent-stop/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
@@ -1017,10 +1129,13 @@ event_catalog:
             status: running
             type: shell
           cwd: /repo
+          effort:
+            level: high
           hook_event_name: SubagentStop
           last_assistant_message: Done
           permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_crons:
           - id: cron-1
             prompt: Check the build
@@ -1041,10 +1156,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: May observe or block subagent completion with native context.
-    - contract: claude-code/docs-2026-08-05-r1/TaskCompleted
+        note: May observe subagent completion, or keep the subagent working with a block reason or native context.
+    - contract: claude-code/docs-2026-09-30-r1/TaskCompleted
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: TaskCompleted
       stable_id: task_completed
       display_name: Task completed
@@ -1059,18 +1174,19 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::TaskCompletedOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/task-completed/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/task-completed/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: TaskCompleted
           permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           task_description: Run all checks
           task_id: task-1
           task_subject: Run tests
-          team_name: quality
+          team_name: session-a1b2c3d4
           teammate_name: reviewer
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -1085,9 +1201,9 @@ event_catalog:
       support:
         status: scaffolded
         note: May reject task completion using Claude's native exit-2 contract.
-    - contract: claude-code/docs-2026-08-05-r1/TaskCreated
+    - contract: claude-code/docs-2026-09-30-r1/TaskCreated
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: TaskCreated
       stable_id: task_created
       display_name: Task created
@@ -1102,18 +1218,18 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::TaskCreatedOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/task-created/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/task-created/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: TaskCreated
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           task_description: Run all checks
           task_id: task-1
           task_subject: Run tests
-          team_name: quality
+          team_name: session-a1b2c3d4
           teammate_name: reviewer
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -1127,10 +1243,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: May reject task creation using Claude's native exit-2 contract.
-    - contract: claude-code/docs-2026-08-05-r1/TeammateIdle
+        note: May reject task creation with decision block or exit 2; Claude Code discards continue on this event.
+    - contract: claude-code/docs-2026-09-30-r1/TeammateIdle
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: TeammateIdle
       stable_id: teammate_idle
       display_name: Teammate idle
@@ -1145,15 +1261,16 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::TeammateIdleOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/teammate-idle/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/teammate-idle/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: TeammateIdle
           permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
-          team_name: quality
+          team_name: session-a1b2c3d4
           teammate_name: reviewer
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -1168,9 +1285,9 @@ event_catalog:
       support:
         status: scaffolded
         note: May reject the native teammate-idle transition.
-    - contract: claude-code/docs-2026-08-05-r1/UserPromptExpansion
+    - contract: claude-code/docs-2026-09-30-r1/UserPromptExpansion
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: UserPromptExpansion
       stable_id: user_prompt_expansion
       display_name: User prompt expansion
@@ -1185,7 +1302,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::UserPromptExpansionOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/user-prompt-expansion/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/user-prompt-expansion/fixtures.yaml
         case: representative
         value:
           command_args: --strict
@@ -1197,6 +1314,7 @@ event_catalog:
           permission_mode: default
           prompt: /review --strict
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -1211,9 +1329,9 @@ event_catalog:
       support:
         status: scaffolded
         note: May block expanded prompts while adding agent context.
-    - contract: claude-code/docs-2026-08-05-r1/UserPromptSubmit
+    - contract: claude-code/docs-2026-09-30-r1/UserPromptSubmit
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: UserPromptSubmit
       stable_id: user_prompt_submit
       display_name: User prompt submitted
@@ -1228,7 +1346,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_claude::catalog::UserPromptSubmitOutput::no_op()
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/user-prompt-submit/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/user-prompt-submit/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -1236,6 +1354,7 @@ event_catalog:
           permission_mode: default
           prompt: Run the tests
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
       aligned_family: user_prompt_submit
@@ -1250,10 +1369,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: Portable behavior adds context or blocks; native controls can also alter presentation.
-    - contract: claude-code/docs-2026-08-05-r1/WorktreeCreate
+        note: Portable behavior adds context or blocks; the block reason reaches only the user, and native controls can also alter presentation.
+    - contract: claude-code/docs-2026-09-30-r1/WorktreeCreate
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: WorktreeCreate
       stable_id: worktree_create
       display_name: Worktree create
@@ -1268,14 +1387,15 @@ event_catalog:
         strategy: must_implement
         expression: return Err(hookkit_core::HookkitError::InvalidProcessEmission("implement WorktreeCreate path selection"))
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/worktree-create/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/worktree-create/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           future_field: retained
           hook_event_name: WorktreeCreate
           name: bold-oak-a3f2
-          permission_mode: default
+          prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s2/scratchpad
           session_id: s2
           transcript_path: /tmp/t.jsonl
       capabilities:
@@ -1290,9 +1410,9 @@ event_catalog:
       support:
         status: scaffolded
         note: A safe starter cannot invent the required worktree path; complete it before registration.
-    - contract: claude-code/docs-2026-08-05-r1/WorktreeRemove
+    - contract: claude-code/docs-2026-09-30-r1/WorktreeRemove
       harness: claude-code
-      snapshot: docs-2026-08-05-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: WorktreeRemove
       stable_id: worktree_remove
       display_name: Worktree remove
@@ -1304,16 +1424,16 @@ event_catalog:
         rust_type: hookkit_claude::protocol::Event
         variant: WorktreeRemove
       starter:
-        strategy: no_op
-        expression: hookkit_claude::catalog::WorktreeRemoveOutput::no_op()
+        strategy: must_implement
+        expression: return Err(hookkit_core::HookkitError::InvalidProcessEmission("implement WorktreeRemove cleanup"))
       fixture:
-        source: contracts/harnesses/claude-code/snapshots/docs-2026-08-05-r1/events/worktree-remove/fixtures.yaml
+        source: contracts/harnesses/claude-code/snapshots/docs-2026-09-30-r1/events/worktree-remove/fixtures.yaml
         case: representative
         value:
           cwd: /repo
           hook_event_name: WorktreeRemove
-          permission_mode: default
           prompt_id: prompt-1
+          scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
           session_id: s1
           transcript_path: /tmp/t.jsonl
           worktree_path: /tmp/worktree
@@ -1321,6 +1441,45 @@ event_catalog:
         input_rewrite: false
         true_pre_action_block: false
         post_action_feedback: false
+        output_ignored: true
+        output_advisory: false
+        tool_result: false
+        separate_user_agent_messages: false
+        session_boundary: none
+      support:
+        status: scaffolded
+        note: A registered hook replaces Claude's git worktree cleanup and exit 0 counts the worktree as removed, so a safe starter cannot report success without deleting it; complete the cleanup before registration.
+    - contract: codex/commit-ff6aec9-r2/Interrupt
+      harness: codex
+      snapshot: commit-ff6aec9-r2
+      wire_event: Interrupt
+      stable_id: interrupt
+      display_name: Turn interrupted
+      category: turn
+      order: 5
+      rust_event: hookkit_codex::catalog::Interrupt
+      rust_output: hookkit_codex::catalog::InterruptOutput
+      selector:
+        rust_type: hookkit_codex::protocol::Event
+        variant: Interrupt
+      starter:
+        strategy: no_op
+        expression: hookkit_codex::catalog::InterruptOutput::no_op()
+      fixture:
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/interrupt/fixtures.yaml
+        case: representative
+        value:
+          cwd: /repo
+          hook_event_name: Interrupt
+          model: gpt-test
+          permission_mode: default
+          session_id: session-1
+          transcript_path: /tmp/transcript.jsonl
+          turn_id: turn-1
+      capabilities:
+        input_rewrite: false
+        true_pre_action_block: false
+        post_action_feedback: true
         output_ignored: false
         output_advisory: true
         tool_result: false
@@ -1328,10 +1487,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: Retains Claude's exact UTF-8 worktree path.
-    - contract: codex/commit-1e59dc5-r1/PermissionRequest
+        note: Observe an interrupted turn, which dispatches no Stop; output is empty or a user-facing system message.
+    - contract: codex/commit-ff6aec9-r2/PermissionRequest
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: PermissionRequest
       stable_id: permission_request
       display_name: Permission request
@@ -1346,7 +1505,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::PermissionRequestOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/permission-request/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/permission-request/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
@@ -1373,9 +1532,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Portable output is allow or deny; Codex has no permission-request rewrite arm.
-    - contract: codex/commit-1e59dc5-r1/PostCompact
+    - contract: codex/commit-ff6aec9-r2/PostCompact
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: PostCompact
       stable_id: post_compact
       display_name: After compaction
@@ -1390,7 +1549,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::PostCompactOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/post-compact/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/post-compact/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
@@ -1415,9 +1574,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Observer floor has trigger metadata but no native compact summary.
-    - contract: codex/commit-1e59dc5-r1/PostToolUse
+    - contract: codex/commit-ff6aec9-r2/PostToolUse
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: PostToolUse
       stable_id: post_tool_use
       display_name: After tool use
@@ -1432,7 +1591,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::protocol::PostToolUseOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/post-tool-use/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/post-tool-use/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
@@ -1461,9 +1620,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Carries exact tool input and response; post-action block-shaped output is feedback.
-    - contract: codex/commit-1e59dc5-r1/PreCompact
+    - contract: codex/commit-ff6aec9-r2/PreCompact
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: PreCompact
       stable_id: pre_compact
       display_name: Before compaction
@@ -1478,7 +1637,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::PreCompactOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/pre-compact/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/pre-compact/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
@@ -1503,9 +1662,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Codex continue=false stops execution broadly, so the portable family is observer-only.
-    - contract: codex/commit-1e59dc5-r1/PreToolUse
+    - contract: codex/commit-ff6aec9-r2/PreToolUse
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: PreToolUse
       stable_id: pre_tool_use
       display_name: Before tool use
@@ -1517,10 +1676,10 @@ event_catalog:
         rust_type: hookkit_codex::protocol::Event
         variant: PreToolUse
       starter:
-        strategy: allow
+        strategy: no_op
         expression: hookkit_codex::protocol::PreToolUseOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/pre-tool-use/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/pre-tool-use/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -1548,9 +1707,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Supports deny, complete replacement input, context, and system warnings.
-    - contract: codex/commit-1e59dc5-r1/SessionEnd
+    - contract: codex/commit-ff6aec9-r2/SessionEnd
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: SessionEnd
       stable_id: session_end
       display_name: Session end
@@ -1565,7 +1724,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::SessionEndOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/session-end/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/session-end/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -1585,10 +1744,10 @@ event_catalog:
         session_boundary: exact
       support:
         status: scaffolded
-        note: Codex ignores output; the no-op constructor deliberately emits empty stdout.
-    - contract: codex/commit-1e59dc5-r1/SessionStart
+        note: Codex ignores SessionEnd stdout; the no-op constructor emits empty stdout, and a failure shows its stderr.
+    - contract: codex/commit-ff6aec9-r2/SessionStart
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: SessionStart
       stable_id: session_start
       display_name: Session start
@@ -1603,7 +1762,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::SessionStartOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/session-start/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/session-start/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -1625,10 +1784,10 @@ event_catalog:
         session_boundary: exact
       support:
         status: scaffolded
-        note: Exact boundary supports portable context injection and native continuation controls.
-    - contract: codex/commit-1e59dc5-r1/Stop
+        note: Exact boundary, including the fork source, supports portable context injection and native continuation controls.
+    - contract: codex/commit-ff6aec9-r2/Stop
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: Stop
       stable_id: stop
       display_name: Turn completion
@@ -1643,7 +1802,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::StopOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/stop/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/stop/fixtures.yaml
         case: representative
         value:
           cwd: /repo
@@ -1668,9 +1827,9 @@ event_catalog:
       support:
         status: scaffolded
         note: May permit completion or block with a reason.
-    - contract: codex/commit-1e59dc5-r1/SubagentStart
+    - contract: codex/commit-ff6aec9-r2/SubagentStart
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: SubagentStart
       stable_id: subagent_start
       display_name: Subagent start
@@ -1685,7 +1844,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::SubagentStartOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/subagent-start/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/subagent-start/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
@@ -1710,9 +1869,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Portable behavior observes the subagent and may add context.
-    - contract: codex/commit-1e59dc5-r1/SubagentStop
+    - contract: codex/commit-ff6aec9-r2/SubagentStop
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: SubagentStop
       stable_id: subagent_stop
       display_name: Subagent stop
@@ -1727,7 +1886,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::SubagentStopOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/subagent-stop/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/subagent-stop/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
@@ -1755,9 +1914,9 @@ event_catalog:
       support:
         status: scaffolded
         note: May observe or block subagent completion with a reason.
-    - contract: codex/commit-1e59dc5-r1/UserPromptSubmit
+    - contract: codex/commit-ff6aec9-r2/UserPromptSubmit
       harness: codex
-      snapshot: commit-1e59dc5-r1
+      snapshot: commit-ff6aec9-r2
       wire_event: UserPromptSubmit
       stable_id: user_prompt_submit
       display_name: User prompt submitted
@@ -1772,7 +1931,7 @@ event_catalog:
         strategy: no_op
         expression: hookkit_codex::catalog::UserPromptSubmitOutput::no_op()
       fixture:
-        source: contracts/harnesses/codex/snapshots/commit-1e59dc5-r1/events/user-prompt-submit/fixtures.yaml
+        source: contracts/harnesses/codex/snapshots/commit-ff6aec9-r2/events/user-prompt-submit/fixtures.yaml
         case: representative
         value:
           agent_id: agent-1
@@ -1798,9 +1957,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Portable behavior adds context or blocks the submitted prompt.
-    - contract: antigravity/docs-2026-08-04-r1/PostInvocation
+    - contract: antigravity/docs-2026-09-30-r1/PostInvocation
       harness: antigravity
-      snapshot: docs-2026-08-04-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PostInvocation
       stable_id: post_invocation
       display_name: After invocation
@@ -1813,15 +1972,16 @@ event_catalog:
         variant: PostInvocation
       starter:
         strategy: no_op
-        expression: hookkit_antigravity::PostInvocationOutput::default()
+        expression: hookkit_antigravity::PostInvocationOutput::no_op()
       fixture:
-        source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/post-invocation/fixtures.yaml
+        source: contracts/harnesses/antigravity/snapshots/docs-2026-09-30-r1/events/post-invocation/fixtures.yaml
         case: representative
         value:
           artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587
           conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587
           initialNumSteps: 10
           invocationNum: 3
+          modelName: gemini-3.6-flash-medium
           transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl
           workspacePaths:
           - /workspace/project
@@ -1837,9 +1997,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Native-only typed injected steps and termination behavior; not equivalent to Stop.
-    - contract: antigravity/docs-2026-08-04-r1/PostToolUse
+    - contract: antigravity/docs-2026-09-30-r1/PostToolUse
       harness: antigravity
-      snapshot: docs-2026-08-04-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PostToolUse
       stable_id: post_tool_use
       display_name: After tool use
@@ -1852,14 +2012,15 @@ event_catalog:
         variant: PostToolUse
       starter:
         strategy: no_op
-        expression: hookkit_antigravity::PostToolUseOutput::default()
+        expression: hookkit_antigravity::PostToolUseOutput::no_op()
       fixture:
-        source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/post-tool-use/fixtures.yaml
+        source: contracts/harnesses/antigravity/snapshots/docs-2026-09-30-r1/events/post-tool-use/fixtures.yaml
         case: representative
         value:
           artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587
           conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587
           error: exit status 1
+          modelName: gemini-3.6-flash-medium
           stepIdx: 5
           toolCall:
             args:
@@ -1882,10 +2043,10 @@ event_catalog:
         session_boundary: none
       support:
         status: scaffolded
-        note: Carries typed originating tool-call arguments and an error, but no result or message channel.
-    - contract: antigravity/docs-2026-08-04-r1/PreInvocation
+        note: Carries typed originating tool-call arguments, when the payload includes them, and an error, but no result or message channel.
+    - contract: antigravity/docs-2026-09-30-r1/PreInvocation
       harness: antigravity
-      snapshot: docs-2026-08-04-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PreInvocation
       stable_id: pre_invocation
       display_name: Before invocation
@@ -1900,13 +2061,14 @@ event_catalog:
         strategy: no_op
         expression: hookkit_antigravity::PreInvocationOutput::no_op()
       fixture:
-        source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/pre-invocation/fixtures.yaml
+        source: contracts/harnesses/antigravity/snapshots/docs-2026-09-30-r1/events/pre-invocation/fixtures.yaml
         case: representative
         value:
           artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587
           conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587
           initialNumSteps: 10
           invocationNum: 3
+          modelName: gemini-3.6-flash-medium
           transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl
           workspacePaths:
           - /workspace/project
@@ -1922,9 +2084,9 @@ event_catalog:
       support:
         status: scaffolded
         note: invocation_num=0 is an inferred invocation boundary, never an exact SessionStart.
-    - contract: antigravity/docs-2026-08-04-r1/PreToolUse
+    - contract: antigravity/docs-2026-09-30-r1/PreToolUse
       harness: antigravity
-      snapshot: docs-2026-08-04-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: PreToolUse
       stable_id: pre_tool_use
       display_name: Before tool use
@@ -1936,14 +2098,15 @@ event_catalog:
         rust_type: hookkit_antigravity::Event
         variant: PreToolUse
       starter:
-        strategy: allow
-        expression: 'hookkit_antigravity::PreToolUseOutput { decision: hookkit_antigravity::ToolDecision::Allow, reason: None, permission_overrides: Vec::new() }'
+        strategy: no_op
+        expression: hookkit_antigravity::PreToolUseOutput::ask()
       fixture:
-        source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/pre-tool-use/fixtures.yaml
+        source: contracts/harnesses/antigravity/snapshots/docs-2026-09-30-r1/events/pre-tool-use/fixtures.yaml
         case: representative
         value:
           artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587
           conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587
+          modelName: gemini-3.6-flash-medium
           stepIdx: 19
           toolCall:
             args:
@@ -1967,9 +2130,9 @@ event_catalog:
       support:
         status: scaffolded
         note: Native decisions include deny_unless_prior_grant; Antigravity cannot rewrite tool input.
-    - contract: antigravity/docs-2026-08-04-r1/Stop
+    - contract: antigravity/docs-2026-09-30-r1/Stop
       harness: antigravity
-      snapshot: docs-2026-08-04-r1
+      snapshot: docs-2026-09-30-r1
       wire_event: Stop
       stable_id: stop
       display_name: Turn completion
@@ -1982,9 +2145,9 @@ event_catalog:
         variant: Stop
       starter:
         strategy: allow
-        expression: 'hookkit_antigravity::StopOutput { decision: String::from("stop"), reason: None }'
+        expression: hookkit_antigravity::StopOutput::allow_stop()
       fixture:
-        source: contracts/harnesses/antigravity/snapshots/docs-2026-08-04-r1/events/stop/fixtures.yaml
+        source: contracts/harnesses/antigravity/snapshots/docs-2026-09-30-r1/events/stop/fixtures.yaml
         case: representative
         value:
           artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587
@@ -1992,6 +2155,7 @@ event_catalog:
           error: ''
           executionNum: 1
           fullyIdle: true
+          modelName: gemini-3.6-flash-medium
           terminationReason: model_stop
           transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl
           workspacePaths:
@@ -2024,9 +2188,9 @@ alignment_catalog:
       - codex
       - antigravity
       native_members:
-        antigravity: antigravity/docs-2026-08-04-r1/PreToolUse
-        claude-code: claude-code/docs-2026-08-05-r1/PreToolUse
-        codex: codex/commit-1e59dc5-r1/PreToolUse
+        antigravity: antigravity/docs-2026-09-30-r1/PreToolUse
+        claude-code: claude-code/docs-2026-09-30-r1/PreToolUse
+        codex: codex/commit-ff6aec9-r2/PreToolUse
       portable_floor:
         input: Exact native input arms plus harness, workspace roots, tool name, and tool input views.
         output: Explicit native allow or deny with a reason; native-only decisions and rewrites remain arm-specific.
@@ -2046,9 +2210,9 @@ alignment_catalog:
       - codex
       - antigravity
       native_members:
-        antigravity: antigravity/docs-2026-08-04-r1/PostToolUse
-        claude-code: claude-code/docs-2026-08-05-r1/PostToolUse
-        codex: codex/commit-1e59dc5-r1/PostToolUse
+        antigravity: antigravity/docs-2026-09-30-r1/PostToolUse
+        claude-code: claude-code/docs-2026-09-30-r1/PostToolUse
+        codex: codex/commit-ff6aec9-r2/PostToolUse
       portable_floor:
         input: Exact native input arms plus harness and workspace roots; result and message fidelity is arm-specific.
         output: Exact native output arm selected by the handler; the universal safe response is no-op.
@@ -2068,9 +2232,9 @@ alignment_catalog:
       - codex
       - antigravity
       native_members:
-        antigravity: antigravity/docs-2026-08-04-r1/Stop
-        claude-code: claude-code/docs-2026-08-05-r1/Stop
-        codex: codex/commit-1e59dc5-r1/Stop
+        antigravity: antigravity/docs-2026-09-30-r1/Stop
+        claude-code: claude-code/docs-2026-09-30-r1/Stop
+        codex: codex/commit-ff6aec9-r2/Stop
       portable_floor:
         input: Exact native stop input arms plus harness and workspace roots.
         output: Allow completion or continue execution with one portable reason; message audiences remain native-specific.
@@ -2089,8 +2253,8 @@ alignment_catalog:
       - claude-code
       - codex
       native_members:
-        claude-code: claude-code/docs-2026-08-05-r1/PermissionRequest
-        codex: codex/commit-1e59dc5-r1/PermissionRequest
+        claude-code: claude-code/docs-2026-09-30-r1/PermissionRequest
+        codex: codex/commit-ff6aec9-r2/PermissionRequest
       portable_floor:
         input: Exact native permission-request arms plus harness, workspace roots, tool name, and tool input.
         output: Allow or deny with a reason; Claude input and permission rewrites are intentionally outside the floor.
@@ -2109,8 +2273,8 @@ alignment_catalog:
       - claude-code
       - codex
       native_members:
-        claude-code: claude-code/docs-2026-08-05-r1/PreCompact
-        codex: codex/commit-1e59dc5-r1/PreCompact
+        claude-code: claude-code/docs-2026-09-30-r1/PreCompact
+        codex: codex/commit-ff6aec9-r2/PreCompact
       portable_floor:
         input: Exact native pre-compaction arms plus trigger and shared session context.
         output: 'Observer-only no-op: Claude can block compaction specifically while Codex continuation control is broader.'
@@ -2129,15 +2293,15 @@ alignment_catalog:
       - claude-code
       - codex
       native_members:
-        claude-code: claude-code/docs-2026-08-05-r1/PostCompact
-        codex: codex/commit-1e59dc5-r1/PostCompact
+        claude-code: claude-code/docs-2026-09-30-r1/PostCompact
+        codex: codex/commit-ff6aec9-r2/PostCompact
       portable_floor:
         input: Exact native post-compaction arms plus trigger; only Claude carries the compact summary.
-        output: No-op or a portable system notice.
+        output: No-op or a portable system notice, which only Codex shows; Claude Code discards PostCompact output.
       capabilities:
         input_rewrite: false
         true_pre_action_block: false
-        post_action_feedback: true
+        post_action_feedback: false
         tool_result: false
         separate_user_agent_messages: false
         exact_session_boundary: false
@@ -2149,8 +2313,8 @@ alignment_catalog:
       - claude-code
       - codex
       native_members:
-        claude-code: claude-code/docs-2026-08-05-r1/SessionStart
-        codex: codex/commit-1e59dc5-r1/SessionStart
+        claude-code: claude-code/docs-2026-09-30-r1/SessionStart
+        codex: codex/commit-ff6aec9-r2/SessionStart
       portable_floor:
         input: Exact boundary with native input arms plus session, workspace, source, and cwd context.
         output: No-op or agent context injection; titles, watch paths, initial messages, and skill reloads remain native.
@@ -2169,11 +2333,11 @@ alignment_catalog:
       - claude-code
       - codex
       native_members:
-        claude-code: claude-code/docs-2026-08-05-r1/SessionEnd
-        codex: codex/commit-1e59dc5-r1/SessionEnd
+        claude-code: claude-code/docs-2026-09-30-r1/SessionEnd
+        codex: codex/commit-ff6aec9-r2/SessionEnd
       portable_floor:
         input: Exact session-end boundary with native reason and context.
-        output: Observer-only no-op; Codex ignores output and therefore emits empty stdout.
+        output: Observer-only no-op; both harnesses discard SessionEnd output, and Codex's no-op is empty stdout.
       capabilities:
         input_rewrite: false
         true_pre_action_block: false
@@ -2189,8 +2353,8 @@ alignment_catalog:
       - claude-code
       - codex
       native_members:
-        claude-code: claude-code/docs-2026-08-05-r1/SubagentStart
-        codex: codex/commit-1e59dc5-r1/SubagentStart
+        claude-code: claude-code/docs-2026-09-30-r1/SubagentStart
+        codex: codex/commit-ff6aec9-r2/SubagentStart
       portable_floor:
         input: Exact native arms plus subagent identity and workspace context.
         output: Observe or append agent context; there is no portable pre-start block.
@@ -2209,8 +2373,8 @@ alignment_catalog:
       - claude-code
       - codex
       native_members:
-        claude-code: claude-code/docs-2026-08-05-r1/SubagentStop
-        codex: codex/commit-1e59dc5-r1/SubagentStop
+        claude-code: claude-code/docs-2026-09-30-r1/SubagentStop
+        codex: codex/commit-ff6aec9-r2/SubagentStop
       portable_floor:
         input: Exact native arms plus subagent identity, transcript, and completion context.
         output: Observe or block completion with one reason; richer message audiences remain native-specific.
@@ -2229,11 +2393,11 @@ alignment_catalog:
       - claude-code
       - codex
       native_members:
-        claude-code: claude-code/docs-2026-08-05-r1/UserPromptSubmit
-        codex: codex/commit-1e59dc5-r1/UserPromptSubmit
+        claude-code: claude-code/docs-2026-09-30-r1/UserPromptSubmit
+        codex: codex/commit-ff6aec9-r2/UserPromptSubmit
       portable_floor:
         input: Exact native submitted-prompt arms plus prompt and shared session context.
-        output: No-op, append agent context, or block with a reason; Claude presentation controls remain native.
+        output: No-op, append agent context, or block with a reason (on Claude Code the reason reaches only the user); Claude presentation controls remain native.
       capabilities:
         input_rewrite: false
         true_pre_action_block: true
@@ -2391,5 +2555,5 @@ compatibility:
     pkl_version: 0.31.1
     hookkit:
       repository: https://github.com/plx/agent-hook-kit
-      git_revision: 83c49d46970602e8fb40a8afaeea521dfb7e9b61
+      git_revision: 828d8d6feacf60015ae325d798b2bc3f32b2bf3b
       crates_io_version: 0.1.0

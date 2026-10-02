@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"additionalContext":"jq reports issues; inspect diagnostics at <workspace>/.agent-hook-kit/jq-agent-hook/test-session_fixture-turn_fixture-tool_jq-tool-issues.txt.","hookEventName":"PostToolUse"},"systemMessage":"warning: jq: issues remain; diagnostics: <workspace>/.agent-hook-kit/jq-agent-hook/test-session_fixture-turn_fixture-tool_jq-tool-issues.txt"}

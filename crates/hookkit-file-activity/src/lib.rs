@@ -6,21 +6,24 @@
 //! and opt-in VCS fallbacks for deferred consumers.
 
 use hookkit_common::PostToolUseInput;
-use hookkit_core::{RuntimeContext, Utf8Path, Utf8PathBuf, normalize_utf8_path};
+use hookkit_core::{RuntimeContext, Utf8Path, Utf8PathBuf, normalize_utf8_path, resolve_utf8_path};
 use hookkit_session_state::{
-    EntityId, EntityJournal, EntityMode, EntityOutcome, FamilyId, JournalEntity, SessionState,
-    StateRoot, UtcTimestamp,
+    EntityId, EntityJournal, EntityMode, EntityOutcome, FamilyId, JournalEntity, SessionEpochKind,
+    SessionState, StateRoot, UtcTimestamp,
 };
 use hookkit_tool_access::{
     AccessCandidate, AccessCertainty, AccessIntent, AccessScope, AccessSource, AccessTarget,
-    ExactPathPolicy, PathBase, PathExpression, ResolutionIssuePolicy, SymlinkPolicy,
-    TargetResolutionOptions, TargetResolutionReason, ToolAccessAnalyzer, resolve_targets,
+    ExactPathPolicy, ObservableToolCall, PathBase, PathExpression, ResolutionIssuePolicy,
+    SymlinkPolicy, TargetResolutionOptions, TargetResolutionReason, ToolAccessAnalyzer,
+    resolve_targets,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 use walkdir::{DirEntry, WalkDir};
 
@@ -30,11 +33,15 @@ pub const FILE_ACTIVITY_FAMILY: &str = "agent-hook-kit.file-activity";
 pub const PENDING_ACTIVITY_ENTITY: &str = "pending-files";
 /// Monotonic entity name containing the fallback reconciliation cursor.
 pub const RECONCILIATION_CURSOR_ENTITY: &str = "reconciliation-cursor";
+/// Monotonic entity name containing the resume point of a truncated
+/// filesystem scan.
+pub const RECONCILIATION_PROGRESS_ENTITY: &str = "reconciliation-progress";
 /// Monotonic entity name containing handled content baselines.
 pub const HANDLED_BASELINES_ENTITY: &str = "handled-baselines";
 
 /// Error returned by file-activity persistence, traversal, or reconciliation.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum FileActivityError {
     /// Session-state operation failed.
     #[error(transparent)]
@@ -64,6 +71,7 @@ pub type Result<T> = std::result::Result<T, FileActivityError>;
 /// Possible mutating effect retained for a file target.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum FileActivityEffect {
     /// Creates a path or changes an existing path.
     CreateOrModify,
@@ -80,6 +88,7 @@ pub enum FileActivityEffect {
 /// Analyzer or fallback that produced an activity event.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum FileActivitySource {
     /// A path-bearing field in structured tool input.
     StructuredToolInput,
@@ -93,11 +102,15 @@ pub enum FileActivitySource {
     VcsDirty,
     /// Retained evidence from an incomplete deferred workflow attempt.
     DeferredRetry,
+    /// An application-defined analyzer, or an analyzer source this version
+    /// does not recognize.
+    Custom,
 }
 
 /// Strength of the static or fallback association with a target.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ActivityCertainty {
     /// Directly observed in tool input or fallback state.
     Direct,
@@ -110,6 +123,7 @@ pub enum ActivityCertainty {
 /// Region selected by a file-activity target.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum FileActivityScope {
     /// Only the named path.
     Exact,
@@ -300,6 +314,7 @@ pub struct HandledFingerprint {
 /// Filesystem object kind captured by a handled baseline.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum HandledFileKind {
     /// No filesystem object exists at the path.
     Missing,
@@ -399,6 +414,63 @@ impl JournalEntity for ReconciliationCursor {
     }
 }
 
+/// Resume point of a filesystem-mtime scan that stopped at its entry budget.
+///
+/// The scan walks each root depth-first in file-name order, so path order
+/// within a root is walk order. Entries at or before `after` were checked
+/// through the reconciliation cursor; later entries were checked only
+/// through `tail_since`, and the next reconciliation scans them first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanResume {
+    /// Roots of the truncated scan, in scan order.
+    pub roots: Vec<Utf8PathBuf>,
+    /// Index into `roots` of the last examined entry.
+    pub root_index: usize,
+    /// Last examined entry.
+    pub after: Utf8PathBuf,
+    /// Inclusive modification-time lower bound still owed to later entries.
+    pub tail_since: UtcTimestamp,
+}
+
+/// Latest filesystem-scan progress recorded by [`reconcile`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationProgress {
+    /// Upper bound of the reconciliation that recorded this progress.
+    pub recorded_at: Option<UtcTimestamp>,
+    /// Unfinished scan, or `None` when the last scan completed.
+    pub resume: Option<ScanResume>,
+}
+
+/// One scan-progress update appended by [`reconcile`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconciliationProgressEvent {
+    /// Upper bound of the reconciliation that recorded the update.
+    pub recorded_at: UtcTimestamp,
+    /// Unfinished scan, or `None` when the scan completed.
+    pub resume: Option<ScanResume>,
+}
+
+impl JournalEntity for ReconciliationProgress {
+    type Event = ReconciliationProgressEvent;
+
+    fn empty() -> Self {
+        Self::default()
+    }
+
+    fn apply(&mut self, event: &Self::Event) {
+        if self
+            .recorded_at
+            .is_none_or(|current| event.recorded_at >= current)
+        {
+            self.recorded_at = Some(event.recorded_at);
+            self.resume = event.resume.clone();
+        }
+    }
+}
+
 /// Activity events derived from one observation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActivityReport {
@@ -436,6 +508,7 @@ pub struct FileActivityStore {
     state: SessionState,
     pending: EntityJournal<PendingFileActivity>,
     cursor: EntityJournal<ReconciliationCursor>,
+    progress: EntityJournal<ReconciliationProgress>,
     handled: EntityJournal<HandledBaselines>,
 }
 
@@ -458,6 +531,10 @@ impl FileActivityStore {
             EntityId::new(RECONCILIATION_CURSOR_ENTITY, 1)?,
             EntityMode::Monotonic,
         )?;
+        let progress = scope.entity::<ReconciliationProgress>(
+            EntityId::new(RECONCILIATION_PROGRESS_ENTITY, 1)?,
+            EntityMode::Monotonic,
+        )?;
         let handled = scope.entity::<HandledBaselines>(
             EntityId::new(HANDLED_BASELINES_ENTITY, 1)?,
             EntityMode::Monotonic,
@@ -466,6 +543,7 @@ impl FileActivityStore {
             state,
             pending,
             cursor,
+            progress,
             handled,
         })
     }
@@ -487,12 +565,14 @@ impl FileActivityStore {
 
     /// Appends every report event under a stable, per-observation key prefix.
     ///
-    /// The event index is appended to `event_key_prefix`, so callers must use a
-    /// prefix that uniquely and repeatably identifies the source observation.
+    /// Callers must use a prefix that uniquely and repeatably identifies the
+    /// source observation, such as the raw hook input. Only a SHA-256 digest
+    /// of the prefix is persisted (followed by the event index), so a large
+    /// prefix does not bloat every journal record.
     pub fn append_report(&self, event_key_prefix: &str, report: &ActivityReport) -> Result<()> {
+        let prefix = sha256_hex(event_key_prefix.as_bytes());
         for (index, event) in report.events.iter().enumerate() {
-            self.pending
-                .append(&format!("{event_key_prefix}\0{index}"), event)?;
+            self.pending.append(&format!("{prefix}\0{index}"), event)?;
         }
         Ok(())
     }
@@ -619,26 +699,75 @@ impl FileActivityStore {
         Ok(())
     }
 
-    /// Returns the current session's start time for initial reconciliation.
+    /// Returns the resume point of a filesystem scan that stopped at its
+    /// entry budget, if the latest reconciliation left one.
+    pub fn scan_resume(&self) -> Result<Option<ScanResume>> {
+        Ok(self
+            .progress
+            .with_entity(|view| Ok(EntityOutcome::retain(view.state().resume.clone())))?)
+    }
+
+    fn record_scan_progress(
+        &self,
+        recorded_at: UtcTimestamp,
+        resume: Option<ScanResume>,
+    ) -> Result<()> {
+        self.progress.append(
+            &format!("progress:{}", recorded_at.unix_milliseconds()),
+            &ReconciliationProgressEvent {
+                recorded_at,
+                resume,
+            },
+        )?;
+        self.progress
+            .with_entity(|_| Ok(EntityOutcome::compact(())))?;
+        Ok(())
+    }
+
+    /// Returns the lower bound for the first, cursor-less reconciliation.
+    ///
+    /// This is the current session epoch's start, except that a compaction
+    /// epoch (which can begin in the middle of the first turn) never moves
+    /// the bound past the conversation's start.
     pub fn bootstrap_started_at(&self) -> Result<UtcTimestamp> {
-        self.state.current_session_started_at().map_err(Into::into)
+        let metadata = self.state.metadata()?;
+        let current = metadata.current_session.started_at.at;
+        Ok(match metadata.current_session.kind {
+            SessionEpochKind::Compact => current.min(metadata.conversation.started_at.at),
+            _ => current,
+        })
     }
 }
 
 /// Observe one native post-tool event without claiming complete coverage.
 pub fn observe_post_tool(input: &PostToolUseInput, context: &RuntimeContext<'_>) -> ActivityReport {
-    let observed_at = UtcTimestamp::now();
-    let event = Some(context.event().name().to_owned());
-    let tool_call_id = context.tool_call_id().map(ToString::to_string);
-    let turn_id = context.turn_id().map(ToString::to_string);
-    let metadata = ObservationMetadata {
-        observed_at,
-        event,
-        tool_call_id,
-        turn_id,
-    };
+    observe_tool_call(input, context)
+}
 
-    let access = ToolAccessAnalyzer::default().analyze_post_tool(input);
+/// Observe Claude Code `PostToolUseFailure`, which Claude sends instead of
+/// `PostToolUse` when a tool call fails. A failing Bash command (for example
+/// `sed -i ... && pytest` with failing tests) may still have written files,
+/// so file-activity producers should be bound to both events.
+pub fn observe_claude_post_tool_failure(
+    input: &hookkit_claude::catalog::CatalogInput,
+    context: &RuntimeContext<'_>,
+) -> ActivityReport {
+    observe_tool_call(input, context)
+}
+
+/// Observe any borrowed native or aligned input that carries its originating
+/// tool call, without claiming complete coverage.
+pub fn observe_tool_call<T: ObservableToolCall + ?Sized>(
+    input: &T,
+    context: &RuntimeContext<'_>,
+) -> ActivityReport {
+    let metadata = ObservationMetadata {
+        observed_at: UtcTimestamp::now(),
+        event: Some(context.event().name().to_owned()),
+        tool_call_id: context.tool_call_id().map(ToString::to_string),
+        turn_id: context.turn_id().map(ToString::to_string),
+    };
+    let access = ToolAccessAnalyzer::default().analyze_native(input);
     activity_report(access, &metadata)
 }
 
@@ -647,9 +776,18 @@ fn activity_report(
     metadata: &ObservationMetadata,
 ) -> ActivityReport {
     let mut events = Vec::new();
+    let mut session_relative: Option<(AccessSource, Vec<&str>)> = None;
     for candidate in access.may_modify() {
         match activity_evidence(candidate, metadata) {
-            Some(evidence) => events.push(FileActivityEvent::Evidence(evidence)),
+            Some(evidence) => {
+                if let Some(raw) = session_relative_path(candidate) {
+                    session_relative
+                        .get_or_insert_with(|| (candidate.provenance.source(), Vec::new()))
+                        .1
+                        .push(raw);
+                }
+                events.push(FileActivityEvent::Evidence(evidence));
+            }
             None => events.push(FileActivityEvent::Gap(metadata.gap(
                 activity_source(candidate.provenance.source()),
                 format!(
@@ -659,10 +797,38 @@ fn activity_report(
             ))),
         }
     }
+    if let Some((source, raws)) = session_relative {
+        events.push(FileActivityEvent::Gap(metadata.gap(
+            activity_source(source),
+            format!(
+                "relative paths {} were resolved against the session directory; the tool call's \
+                 own working directory is not observable, so they may name other files",
+                raws.iter()
+                    .map(|raw| format!("`{raw}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )));
+    }
     events.extend(access.gaps.into_iter().map(|gap| {
         FileActivityEvent::Gap(metadata.gap(activity_source(gap.source), gap.to_string()))
     }));
     ActivityReport { events }
+}
+
+/// The raw path of a candidate resolved against the hook's session directory
+/// because the tool's own working directory was not observable, as for a
+/// relative path in a Codex `Bash` command, which may have run in an
+/// unreported `workdir`.
+fn session_relative_path(candidate: &AccessCandidate) -> Option<&str> {
+    match &candidate.target {
+        AccessTarget::Path { expression, .. }
+            if expression.base == PathBase::SessionCwd && expression.resolved.is_some() =>
+        {
+            Some(expression.raw.as_str())
+        }
+        _ => None,
+    }
 }
 
 fn activity_evidence(
@@ -690,18 +856,29 @@ fn activity_evidence(
         AccessIntent::Modify | AccessIntent::ReadModify => FileActivityEffect::CreateOrModify,
         _ => FileActivityEffect::MaybeWrite,
     };
+    let session_relative = session_relative_path(candidate).is_some();
+    // A session-relative path is only a guess at the file the tool changed.
     let certainty = match candidate.certainty {
+        _ if session_relative => ActivityCertainty::Heuristic,
         AccessCertainty::Direct => ActivityCertainty::Direct,
         AccessCertainty::Conditional => ActivityCertainty::Conditional,
         AccessCertainty::Heuristic => ActivityCertainty::Heuristic,
         _ => ActivityCertainty::Heuristic,
+    };
+    let detail = if session_relative {
+        format!(
+            "{}; resolved against the session directory",
+            candidate.provenance
+        )
+    } else {
+        candidate.provenance.to_string()
     };
     Some(metadata.evidence(
         target,
         effect,
         activity_source(candidate.provenance.source()),
         certainty,
-        Some(candidate.provenance.to_string()),
+        Some(detail),
     ))
 }
 
@@ -710,8 +887,7 @@ fn activity_source(source: AccessSource) -> FileActivitySource {
         AccessSource::Structured => FileActivitySource::StructuredToolInput,
         AccessSource::Patch => FileActivitySource::Patch,
         AccessSource::Shell => FileActivitySource::ShellInference,
-        AccessSource::Custom => FileActivitySource::StructuredToolInput,
-        _ => FileActivitySource::StructuredToolInput,
+        _ => FileActivitySource::Custom,
     }
 }
 
@@ -759,6 +935,7 @@ impl ObservationMetadata {
 
 /// Optional version-control fallback used during reconciliation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VcsFallback {
     /// Do not inspect version-control state.
     #[default]
@@ -768,7 +945,12 @@ pub enum VcsFallback {
 }
 
 /// Bounds and evidence sources for one reconciliation interval.
+///
+/// Construct with [`ReconciliationOptions::new`] and assign fields. Relative
+/// roots and excluded roots are resolved against the process working
+/// directory.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ReconciliationOptions {
     /// Workspace roots to scan or query.
     pub roots: Vec<Utf8PathBuf>,
@@ -776,20 +958,22 @@ pub struct ReconciliationOptions {
     pub fallback_since: Option<UtcTimestamp>,
     /// Inclusive upper bound recorded after successful reconciliation.
     pub through: UtcTimestamp,
-    /// Clock-resolution slack subtracted from the lower bound during the first,
-    /// cursor-less reconciliation only; the upper bound and later incremental
-    /// runs are unaffected.
+    /// Clock-resolution slack subtracted from every lower bound, so writes on
+    /// coarse or skewed filesystem clocks near the previous cursor are not
+    /// lost. Unchanged files that already have a handled baseline are still
+    /// suppressed; others inside the overlap may be reported again.
     pub timestamp_tolerance: Duration,
     /// Whether to scan filesystem modification times.
     pub filesystem_mtime: bool,
     /// Optional version-control dirty-state fallback.
     pub vcs: VcsFallback,
-    /// Maximum directory entries visited by the filesystem scan.
+    /// Maximum directory entries visited by the filesystem scan, and maximum
+    /// dirty paths read from version control.
     pub max_entries: usize,
     /// Directory basenames pruned from recursive traversal.
     pub ignored_directory_names: BTreeSet<String>,
-    /// Roots pruned from the filesystem-mtime scan and its traversal. The VCS
-    /// dirty-state fallback does not honor this set.
+    /// Roots pruned from both fallbacks. The session state directory is
+    /// always excluded.
     pub excluded_roots: BTreeSet<Utf8PathBuf>,
 }
 
@@ -830,8 +1014,11 @@ pub struct ReconciliationReport {
     pub suppressed_vcs_files: usize,
     /// Directory entries charged to the traversal budget.
     pub scanned_entries: usize,
-    /// Whether the filesystem scan stopped at its entry budget.
+    /// Whether the filesystem scan stopped at its entry budget. Its unscanned
+    /// remainder is recorded as a [`ScanResume`] and scanned first next time.
     pub truncated: bool,
+    /// Whether the VCS fallback stopped reading dirty paths at the budget.
+    pub vcs_truncated: bool,
     /// Non-fatal fallback failures and coverage limitations.
     pub gaps: Vec<ReconciliationGap>,
 }
@@ -845,15 +1032,34 @@ pub struct ReconciliationGap {
     pub detail: String,
 }
 
-/// Reconcile fallback evidence, then durably advance the cursor. If appending
-/// discoveries fails, the cursor remains unchanged and the next attempt safely
-/// rescans the same interval.
+/// Reconcile fallback evidence, then durably record progress.
+///
+/// Discoveries are appended before any progress is recorded, so if appending
+/// fails the cursor remains unchanged and the next attempt safely rescans the
+/// same interval. A filesystem scan that reaches its entry budget records
+/// where it stopped; the next reconciliation scans that remainder first,
+/// against the older lower bound it is still owed, so no part of the tree is
+/// permanently skipped.
 pub fn reconcile(
     store: &FileActivityStore,
     mut options: ReconciliationOptions,
 ) -> Result<ReconciliationReport> {
+    let working_directory = current_utf8_dir();
+    options.roots = options
+        .roots
+        .iter()
+        .map(|root| absolute_path(root, working_directory.as_deref()))
+        .collect();
+    options.excluded_roots = options
+        .excluded_roots
+        .iter()
+        .map(|root| absolute_path(root, working_directory.as_deref()))
+        .collect();
     if let Ok(state_directory) = utf8_path(store.state().directory()) {
-        options.excluded_roots.insert(state_directory);
+        options.excluded_roots.insert(absolute_path(
+            &state_directory,
+            working_directory.as_deref(),
+        ));
     }
     let cursor = store.reconciled_through()?;
     let since = cursor
@@ -872,18 +1078,30 @@ pub fn reconcile(
     };
     let handled = store.handled_baselines()?;
     let mut events = Vec::new();
+    let mut progress = None;
+    let mut advance_cursor = true;
 
     if options.filesystem_mtime {
         match since {
-            Some(since) => collect_mtime_activity(
-                &options,
-                since,
-                cursor.is_none(),
-                &metadata,
-                &handled,
-                &mut events,
-                &mut report,
-            )?,
+            Some(since) => {
+                let resume = store.scan_resume()?;
+                let had_resume = resume.is_some();
+                let outcome = MtimeScan {
+                    options: &options,
+                    metadata: &metadata,
+                    handled: &handled,
+                    events: &mut events,
+                    report: &mut report,
+                    seen: BTreeSet::new(),
+                    last: None,
+                }
+                .run(since, cursor.is_none(), resume)?;
+                // Complete scans with nothing owed need no progress record.
+                if had_resume || outcome.resume.is_some() {
+                    progress = Some(outcome.resume);
+                }
+                advance_cursor = outcome.advance_cursor;
+            }
             None => push_reconciliation_gap(
                 &mut report,
                 FileActivitySource::FilesystemMtime,
@@ -892,14 +1110,7 @@ pub fn reconcile(
         }
     }
     if options.vcs == VcsFallback::GitDirty {
-        collect_git_dirty_activity(
-            &options.roots,
-            &options.excluded_roots,
-            &metadata,
-            &handled,
-            &mut events,
-            &mut report,
-        )?;
+        collect_git_dirty_activity(&options, &metadata, &handled, &mut events, &mut report)?;
     }
     for gap in &report.gaps {
         events.push(FileActivityEvent::Gap(
@@ -911,131 +1122,301 @@ pub fn reconcile(
         &format!("reconcile:{}", options.through.unix_milliseconds()),
         &activity,
     )?;
-    // The order is intentional: pending evidence before cursor advancement.
-    store.record_reconciled_through(options.through)?;
+    // The order is intentional: pending evidence, then scan progress, then
+    // the cursor. A crash between steps only widens the next scan.
+    if let Some(resume) = progress {
+        store.record_scan_progress(options.through, resume)?;
+    }
+    if advance_cursor {
+        store.record_reconciled_through(options.through)?;
+    }
     Ok(report)
 }
 
-fn collect_mtime_activity(
-    options: &ReconciliationOptions,
-    since: UtcTimestamp,
-    is_bootstrap: bool,
-    metadata: &ObservationMetadata,
-    handled: &HandledBaselines,
-    events: &mut Vec<FileActivityEvent>,
-    report: &mut ReconciliationReport,
-) -> Result<()> {
-    let lower = if is_bootstrap {
-        since
-            .as_system_time()
-            .checked_sub(options.timestamp_tolerance)
-            .unwrap_or(SystemTime::UNIX_EPOCH)
-    } else {
-        since.as_system_time()
-    };
-    let upper = options.through.as_system_time();
-    let mut seen = BTreeSet::new();
-    'roots: for root in &options.roots {
-        let walker = WalkDir::new(root.as_std_path())
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| {
-                should_descend(
-                    entry,
-                    &options.ignored_directory_names,
-                    &options.excluded_roots,
-                )
-            });
-        for entry in walker {
-            if report.scanned_entries >= options.max_entries {
-                report.truncated = true;
-                push_reconciliation_gap(
-                    report,
-                    FileActivitySource::FilesystemMtime,
-                    format!(
-                        "filesystem fallback stopped after {} entries",
-                        options.max_entries
-                    ),
-                );
-                break 'roots;
+/// Modification-time lower bound for one scan pass.
+#[derive(Debug, Clone, Copy)]
+struct Bound {
+    at: SystemTime,
+    inclusive: bool,
+}
+
+impl Bound {
+    fn admits(self, modified: SystemTime) -> bool {
+        if self.inclusive {
+            modified >= self.at
+        } else {
+            modified > self.at
+        }
+    }
+
+    fn min(self, other: Self) -> Self {
+        match self.at.cmp(&other.at) {
+            Ordering::Less => self,
+            Ordering::Greater => other,
+            Ordering::Equal => Self {
+                at: self.at,
+                inclusive: self.inclusive || other.inclusive,
+            },
+        }
+    }
+}
+
+/// Which part of the sorted walk a pass covers, relative to a resume point.
+#[derive(Debug, Clone, Copy)]
+enum ScanRange<'a> {
+    /// Every entry of every root.
+    All,
+    /// Entries strictly after the resume point.
+    After(usize, &'a Utf8Path),
+    /// Entries at or before the resume point.
+    UpTo(usize, &'a Utf8Path),
+}
+
+enum ScanStop {
+    Complete,
+    Stopped,
+}
+
+struct ScanOutcome {
+    resume: Option<ScanResume>,
+    advance_cursor: bool,
+}
+
+struct MtimeScan<'a> {
+    options: &'a ReconciliationOptions,
+    metadata: &'a ObservationMetadata,
+    handled: &'a HandledBaselines,
+    events: &'a mut Vec<FileActivityEvent>,
+    report: &'a mut ReconciliationReport,
+    seen: BTreeSet<Utf8PathBuf>,
+    /// Last entry examined, in walk order.
+    last: Option<(usize, Utf8PathBuf)>,
+}
+
+impl MtimeScan<'_> {
+    /// Scans the owed remainder of a truncated scan first, then the rest of
+    /// the tree, sharing one entry budget.
+    ///
+    /// Every lower bound is widened by the timestamp tolerance, and the
+    /// first, cursor-less scan also includes writes at exactly its bound.
+    fn run(
+        mut self,
+        since: UtcTimestamp,
+        is_bootstrap: bool,
+        resume: Option<ScanResume>,
+    ) -> Result<ScanOutcome> {
+        let options = self.options;
+        let roots = &options.roots;
+        let mut current = Bound {
+            at: since
+                .as_system_time()
+                .checked_sub(options.timestamp_tolerance)
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+            inclusive: is_bootstrap,
+        };
+        let resume = match resume {
+            Some(resume) if resume.roots == *roots && resume.root_index < roots.len() => {
+                Some(resume)
             }
-            report.scanned_entries += 1;
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    push_reconciliation_gap(
-                        report,
-                        FileActivitySource::FilesystemMtime,
-                        error.to_string(),
-                    );
-                    continue;
+            Some(stale) => {
+                // The roots changed, so the old resume point cannot be
+                // located; rescan everything against its older bound.
+                current = current.min(Bound {
+                    at: stale.tail_since.as_system_time(),
+                    inclusive: true,
+                });
+                None
+            }
+            None => None,
+        };
+        let start = roots.first().map(|root| (0, root.clone()));
+        let Some(resume) = resume else {
+            self.last = start;
+            return Ok(match self.scan(ScanRange::All, current)? {
+                ScanStop::Complete => ScanOutcome {
+                    resume: None,
+                    advance_cursor: true,
+                },
+                ScanStop::Stopped => ScanOutcome {
+                    resume: self.resume_point(current),
+                    advance_cursor: true,
+                },
+            });
+        };
+
+        let owed = Bound {
+            at: resume.tail_since.as_system_time(),
+            inclusive: true,
+        };
+        self.last = Some((resume.root_index, resume.after.clone()));
+        if let ScanStop::Stopped =
+            self.scan(ScanRange::After(resume.root_index, &resume.after), owed)?
+        {
+            // Entries up to the resume point were not rescanned, so they are
+            // still only checked through the unchanged cursor.
+            return Ok(ScanOutcome {
+                resume: self.resume_point(owed),
+                advance_cursor: false,
+            });
+        }
+        self.last = start;
+        Ok(
+            match self.scan(ScanRange::UpTo(resume.root_index, &resume.after), current)? {
+                ScanStop::Complete => ScanOutcome {
+                    resume: None,
+                    advance_cursor: true,
+                },
+                ScanStop::Stopped => ScanOutcome {
+                    resume: self.resume_point(current),
+                    advance_cursor: true,
+                },
+            },
+        )
+    }
+
+    fn resume_point(&self, owed: Bound) -> Option<ScanResume> {
+        self.last.clone().map(|(root_index, after)| ScanResume {
+            roots: self.options.roots.clone(),
+            root_index,
+            after,
+            tail_since: UtcTimestamp::from_system_time(owed.at),
+        })
+    }
+
+    fn scan(&mut self, range: ScanRange<'_>, bound: Bound) -> Result<ScanStop> {
+        let options = self.options;
+        let upper = options.through.as_system_time();
+        for (root_index, root) in options.roots.iter().enumerate() {
+            let marker = match range {
+                ScanRange::All => None,
+                ScanRange::After(index, _) if root_index < index => continue,
+                ScanRange::UpTo(index, _) if root_index > index => break,
+                ScanRange::After(index, marker) | ScanRange::UpTo(index, marker) => {
+                    (root_index == index).then_some(marker)
                 }
             };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let modified = match entry.metadata() {
-                Ok(metadata) => match metadata.modified() {
-                    Ok(modified) => modified,
+            let after_marker = matches!(range, ScanRange::After(..)) && marker.is_some();
+            let walker = WalkDir::new(root.as_std_path())
+                .follow_links(false)
+                .sort_by_file_name()
+                .into_iter()
+                .filter_entry(|entry| {
+                    should_descend(
+                        entry,
+                        &options.ignored_directory_names,
+                        &options.excluded_roots,
+                    ) && !(after_marker
+                        && marker.is_some_and(|marker| entirely_before(entry.path(), marker)))
+                });
+            for entry in walker {
+                let entry_path = match &entry {
+                    Ok(entry) => Some(entry.path()),
+                    Err(error) => error.path(),
+                };
+                if let (Some(marker), Some(path)) = (marker, entry_path) {
+                    let order = path.cmp(marker.as_std_path());
+                    match range {
+                        ScanRange::After(..) if order != Ordering::Greater => continue,
+                        ScanRange::UpTo(..) if order == Ordering::Greater => {
+                            return Ok(ScanStop::Complete);
+                        }
+                        _ => {}
+                    }
+                }
+                if self.report.scanned_entries >= options.max_entries {
+                    self.report.truncated = true;
+                    push_reconciliation_gap(
+                        self.report,
+                        FileActivitySource::FilesystemMtime,
+                        format!(
+                            "filesystem fallback stopped after {} entries; the remainder is scanned first next time",
+                            options.max_entries
+                        ),
+                    );
+                    return Ok(ScanStop::Stopped);
+                }
+                self.report.scanned_entries += 1;
+                if let Some(path) = entry_path.and_then(|path| utf8_path(path).ok()) {
+                    self.last = Some((root_index, path));
+                }
+                let entry = match entry {
+                    Ok(entry) => entry,
                     Err(error) => {
                         push_reconciliation_gap(
-                            report,
+                            self.report,
                             FileActivitySource::FilesystemMtime,
-                            format!("{}: {error}", entry.path().display()),
+                            error.to_string(),
                         );
                         continue;
                     }
-                },
-                Err(error) => {
-                    push_reconciliation_gap(
-                        report,
-                        FileActivitySource::FilesystemMtime,
-                        format!("{}: {error}", entry.path().display()),
-                    );
-                    continue;
-                }
-            };
-            let before_window = if is_bootstrap {
-                modified < lower
-            } else {
-                modified <= lower
-            };
-            if before_window || modified > upper {
-                continue;
+                };
+                self.examine(&entry, bound, upper);
             }
-            let path = match utf8_path(entry.path()) {
-                Ok(path) => path,
-                Err(error) => {
-                    push_reconciliation_gap(
-                        report,
-                        FileActivitySource::FilesystemMtime,
-                        error.to_string(),
-                    );
-                    continue;
-                }
-            };
-            if !seen.insert(path.clone()) {
-                continue;
+        }
+        Ok(ScanStop::Complete)
+    }
+
+    fn examine(&mut self, entry: &DirEntry, bound: Bound, upper: SystemTime) {
+        if !entry.file_type().is_file() {
+            return;
+        }
+        let modified = match entry
+            .metadata()
+            .map_err(std::io::Error::from)
+            .and_then(|metadata| metadata.modified())
+        {
+            Ok(modified) => modified,
+            Err(error) => {
+                push_reconciliation_gap(
+                    self.report,
+                    FileActivitySource::FilesystemMtime,
+                    format!("{}: {error}", entry.path().display()),
+                );
+                return;
             }
-            if fallback_matches_handled(&path, handled) {
-                report.suppressed_filesystem_files += 1;
-                continue;
+        };
+        if !bound.admits(modified) || modified > upper {
+            return;
+        }
+        let path = match utf8_path(entry.path()) {
+            Ok(path) => path,
+            Err(error) => {
+                push_reconciliation_gap(
+                    self.report,
+                    FileActivitySource::FilesystemMtime,
+                    error.to_string(),
+                );
+                return;
             }
-            events.push(FileActivityEvent::Evidence(metadata.evidence(
+        };
+        if !self.seen.insert(path.clone()) {
+            return;
+        }
+        if fallback_matches_handled(&path, self.handled) {
+            self.report.suppressed_filesystem_files += 1;
+            return;
+        }
+        self.events
+            .push(FileActivityEvent::Evidence(self.metadata.evidence(
                 FileActivityTarget::exact(path),
                 FileActivityEffect::MaybeWrite,
                 FileActivitySource::FilesystemMtime,
                 ActivityCertainty::Heuristic,
                 Some(format!(
                     "mtime between {} and {}",
-                    since.unix_milliseconds(),
-                    options.through.unix_milliseconds()
+                    UtcTimestamp::from_system_time(bound.at).unix_milliseconds(),
+                    self.options.through.unix_milliseconds()
                 )),
             )));
-            report.filesystem_files += 1;
-        }
+        self.report.filesystem_files += 1;
     }
-    Ok(())
+}
+
+/// Whether `path` and its whole subtree precede `marker` in sorted walk
+/// order. Path ordering compares components, which matches a depth-first
+/// walk with children sorted by file name.
+fn entirely_before(path: &Path, marker: &Utf8Path) -> bool {
+    path < marker.as_std_path() && !marker.as_std_path().starts_with(path)
 }
 
 fn should_descend(
@@ -1054,9 +1435,27 @@ fn should_descend(
         || !ignored.contains(&entry.file_name().to_string_lossy().into_owned())
 }
 
+fn git_command(root: &Utf8Path) -> Command {
+    let mut command = Command::new("git");
+    // Reconciliation must not contend with the agent's own git commands for
+    // `index.lock`.
+    command
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(root.as_str());
+    command
+}
+
+/// Collects dirty paths under each root.
+///
+/// `git status --porcelain` prints paths relative to the repository top
+/// level, whichever directory `-C` names, and lists the whole repository
+/// unless given a pathspec. The scan is therefore limited to the root with a
+/// `.` pathspec, and each path is re-rooted by stripping the root's own
+/// repository prefix (`git rev-parse --show-prefix`). Paths are streamed and
+/// charged to the entry budget.
 fn collect_git_dirty_activity(
-    roots: &[Utf8PathBuf],
-    excluded_roots: &BTreeSet<Utf8PathBuf>,
+    options: &ReconciliationOptions,
     metadata: &ObservationMetadata,
     handled: &HandledBaselines,
     events: &mut Vec<FileActivityEvent>,
@@ -1064,32 +1463,36 @@ fn collect_git_dirty_activity(
 ) -> Result<()> {
     let mut seen = BTreeSet::new();
     let mut collector = GitActivityCollector {
-        excluded_roots,
+        excluded_roots: &options.excluded_roots,
         metadata,
         handled,
         events,
         report,
         seen: &mut seen,
     };
-    for root in roots {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(root.as_str())
-            .args([
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=all",
-                "--ignored=no",
-            ])
-            .output();
-        let output = match output {
-            Ok(output) if output.status.success() => output,
+    let mut remaining = options.max_entries;
+    for root in &options.roots {
+        let prefix = match git_command(root)
+            .args(["rev-parse", "--show-prefix"])
+            .stderr(Stdio::null())
+            .output()
+        {
+            Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
+                Ok(prefix) => prefix.trim_end_matches(['\n', '\r']).to_owned(),
+                Err(_) => {
+                    push_reconciliation_gap(
+                        collector.report,
+                        FileActivitySource::VcsDirty,
+                        format!("git reported a non-UTF-8 prefix for {root}"),
+                    );
+                    continue;
+                }
+            },
             Ok(output) => {
                 push_reconciliation_gap(
                     collector.report,
                     FileActivitySource::VcsDirty,
-                    format!("git status failed in {} with {}", root, output.status),
+                    format!("git rev-parse failed in {} with {}", root, output.status),
                 );
                 continue;
             }
@@ -1103,21 +1506,77 @@ fn collect_git_dirty_activity(
             }
             Err(error) => return Err(error.into()),
         };
-        let fields = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
-        let mut index = 0;
-        while index < fields.len() {
-            let field = fields[index];
-            index += 1;
-            if field.len() < 4 {
+        let mut child = match git_command(root)
+            .args([
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                "--ignored=no",
+                "--",
+                ".",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                push_reconciliation_gap(
+                    collector.report,
+                    FileActivitySource::VcsDirty,
+                    "git executable is unavailable",
+                );
                 continue;
             }
-            let status = &field[..2];
-            let path = &field[3..];
-            collector.append(root, path)?;
-            if status.iter().any(|byte| matches!(*byte, b'R' | b'C')) && index < fields.len() {
-                collector.append(root, fields[index])?;
-                index += 1;
+            Err(error) => return Err(error.into()),
+        };
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            continue;
+        };
+        let mut records = BufReader::new(stdout).split(0);
+        let mut stopped = false;
+        while let Some(record) = records.next() {
+            let record = record?;
+            if record.len() < 4 {
+                continue;
             }
+            if remaining == 0 {
+                stopped = true;
+                break;
+            }
+            remaining -= 1;
+            let renamed = record[..2].iter().any(|byte| matches!(*byte, b'R' | b'C'));
+            collector.append(root, &prefix, &record[3..])?;
+            if renamed {
+                if let Some(source) = records.next() {
+                    collector.append(root, &prefix, &source?)?;
+                }
+            }
+        }
+        if stopped {
+            let _ = child.kill();
+            let _ = child.wait();
+            collector.report.vcs_truncated = true;
+            push_reconciliation_gap(
+                collector.report,
+                FileActivitySource::VcsDirty,
+                format!(
+                    "git dirty fallback stopped after {} paths",
+                    options.max_entries
+                ),
+            );
+            break;
+        }
+        let status = child.wait()?;
+        if !status.success() {
+            push_reconciliation_gap(
+                collector.report,
+                FileActivitySource::VcsDirty,
+                format!("git status failed in {root} with {status}"),
+            );
         }
     }
     Ok(())
@@ -1133,7 +1592,9 @@ struct GitActivityCollector<'a> {
 }
 
 impl GitActivityCollector<'_> {
-    fn append(&mut self, root: &Utf8Path, raw: &[u8]) -> Result<()> {
+    /// Appends one repository-relative porcelain path under `root`, whose
+    /// repository-relative prefix is `prefix`.
+    fn append(&mut self, root: &Utf8Path, prefix: &str, raw: &[u8]) -> Result<()> {
         let relative = match std::str::from_utf8(raw) {
             Ok(relative) => relative,
             Err(_) => {
@@ -1144,6 +1605,11 @@ impl GitActivityCollector<'_> {
                 );
                 return Ok(());
             }
+        };
+        // The pathspec limits status to the root, but a rename's other side
+        // may lie elsewhere in the repository.
+        let Some(relative) = relative.strip_prefix(prefix) else {
+            return Ok(());
         };
         let path = normalize_utf8_path(root.join(relative));
         if self
@@ -1216,6 +1682,8 @@ fn normalize_handled_path(path: &Utf8Path) -> Utf8PathBuf {
     lexical
 }
 
+/// Fingerprints a path, streaming regular-file content through SHA-256 so
+/// memory use does not grow with file size.
 fn fingerprint(path: &Utf8Path) -> Result<HandledFingerprint> {
     let metadata = match std::fs::symlink_metadata(path.as_std_path()) {
         Ok(metadata) => metadata,
@@ -1235,14 +1703,21 @@ fn fingerprint(path: &Utf8Path) -> Result<HandledFingerprint> {
         });
     }
     if file_type.is_file() {
-        let digest = Sha256::digest(std::fs::read(path.as_std_path())?);
-        let content_sha256 = digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let mut file = std::fs::File::open(path.as_std_path())?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0; 64 * 1024];
+        loop {
+            let read = match file.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.into()),
+            };
+            hasher.update(&buffer[..read]);
+        }
         return Ok(HandledFingerprint {
             kind: HandledFileKind::File,
-            content_sha256: Some(content_sha256),
+            content_sha256: Some(hex(&hasher.finalize())),
         });
     }
     Ok(HandledFingerprint {
@@ -1255,16 +1730,29 @@ fn fingerprint(path: &Utf8Path) -> Result<HandledFingerprint> {
     })
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// Bounds for materializing pending activity into existing files.
+///
+/// Construct with [`ResolveOptions::new`] and assign fields. Relative roots
+/// and excluded roots are resolved against the process working directory.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ResolveOptions {
     /// Workspace roots used for unrooted workspace and relative glob targets.
     pub roots: Vec<Utf8PathBuf>,
-    /// Maximum directory entries visited across all targets.
+    /// Maximum directory entries visited across all scoped targets.
     pub max_entries: usize,
-    /// Directory basenames pruned from recursive traversal.
+    /// Directory basenames pruned from recursive traversal. Exact files
+    /// inside such a directory (relative to a root) are not applicable.
     pub ignored_directory_names: BTreeSet<String>,
-    /// Roots excluded from results and traversal.
+    /// Roots excluded from results and traversal, including exact files.
     pub excluded_roots: BTreeSet<Utf8PathBuf>,
 }
 
@@ -1282,16 +1770,32 @@ impl ResolveOptions {
 
 /// Existing files materialized from a pending activity window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ResolvedFileActivity {
     /// Deterministic set of existing regular files.
     pub files: BTreeSet<Utf8PathBuf>,
-    /// Existing files that were deliberately classified as not applicable.
+    /// Exact targets deliberately classified as not applicable: missing or
+    /// non-file paths (for example after a deletion), and files inside an
+    /// excluded root or an ignored directory.
     pub not_applicable_files: BTreeSet<Utf8PathBuf>,
-    /// The single target whose traversal exhausted the entry budget, if any; it
-    /// may be partially resolved (files found before exhaustion are still
-    /// included in `files`). Targets ordered after it in the window are skipped
-    /// and are not listed here.
+    /// Scoped targets that may still contain unchecked files, in resolution
+    /// order: each target whose traversal hit a failure such as an I/O error,
+    /// and, once the entry budget is exhausted, the target being walked
+    /// ([`Self::exhausted_target`]) followed by every scoped target never
+    /// attempted ([`Self::unattempted_targets`]), so the unattempted targets
+    /// are always this list's suffix. A scope whose root no longer exists, or
+    /// lies in an ignored or excluded directory, has nothing left to check
+    /// and is not retained.
     pub unresolved_targets: Vec<FileActivityTarget>,
+    /// The scoped target whose walk exhausted the budget partway through, or
+    /// `None` when resolution was not truncated or the budget ran out
+    /// exactly between two targets. Retrying it with the same budget would
+    /// stop at the same point.
+    pub exhausted_target: Option<FileActivityTarget>,
+    /// Scoped targets never attempted because the budget ran out before
+    /// them, in resolution order. Unlike [`Self::exhausted_target`], each
+    /// can make progress on a later attempt.
+    pub unattempted_targets: Vec<FileActivityTarget>,
     /// Directory entries charged to the shared traversal budget.
     pub scanned_entries: usize,
     /// Whether resolution stopped at `ResolveOptions::max_entries`.
@@ -1300,84 +1804,168 @@ pub struct ResolvedFileActivity {
 
 /// Materializes pending targets into existing regular files within explicit bounds.
 ///
-/// Directory symlinks are not followed. Exact regular-file probes are retained
-/// for backward compatibility and do not consume the traversal-entry budget.
-/// Invalid glob syntax is returned as an error; other target-local traversal
-/// failures are ignored by this compatibility API.
+/// Exact targets are resolved first; these probes are cheap and do not
+/// consume the traversal-entry budget, so budget exhaustion can never drop a
+/// directly observed file. Scoped targets are then walked in
+/// [`PendingFileActivity::targets`] order without following directory
+/// symlinks. Invalid glob syntax is returned as an error; other target-local
+/// traversal failures retain the target in
+/// [`ResolvedFileActivity::unresolved_targets`]. When the budget runs out,
+/// the target being walked is reported as
+/// [`ResolvedFileActivity::exhausted_target`] and every later scoped target
+/// as [`ResolvedFileActivity::unattempted_targets`].
 pub fn resolve_files(
     activity: &PendingFileActivity,
     options: &ResolveOptions,
 ) -> Result<ResolvedFileActivity> {
+    let working_directory = current_utf8_dir();
+    let roots = options
+        .roots
+        .iter()
+        .map(|root| absolute_path(root, working_directory.as_deref()))
+        .collect::<Vec<_>>();
+    let excluded_roots = options
+        .excluded_roots
+        .iter()
+        .map(|root| absolute_path(root, working_directory.as_deref()))
+        .collect::<BTreeSet<_>>();
     let mut resolved = ResolvedFileActivity::default();
+    let mut scoped = Vec::new();
     for target in activity.targets() {
         match target {
             FileActivityTarget::Path {
                 path,
-                scope: FileActivityScope::Exact,
-            }
-            | FileActivityTarget::Path {
-                path,
-                scope: FileActivityScope::ExactOrDescendants,
+                scope: FileActivityScope::Exact | FileActivityScope::ExactOrDescendants,
             } if path.is_file() => {
-                // Compatibility: exact-file probes were never charged against
-                // the traversal entry budget.
-                resolved.files.insert(path.clone());
-                continue;
+                if is_pruned_file(
+                    path,
+                    &roots,
+                    &excluded_roots,
+                    &options.ignored_directory_names,
+                ) {
+                    resolved.not_applicable_files.insert(path.clone());
+                } else {
+                    resolved.files.insert(path.clone());
+                }
             }
             FileActivityTarget::Path {
                 path,
                 scope: FileActivityScope::Exact,
             } => {
                 // Deleted, missing, or non-file exact targets are resolved as
-                // not applicable. Scoped targets remain unresolved because
-                // they may still denote unchecked descendants.
+                // not applicable.
                 resolved.not_applicable_files.insert(path.clone());
-                continue;
             }
-            _ => {}
-        }
-
-        let access_target = activity_target_to_access(target);
-        let resolution_options = TargetResolutionOptions {
-            workspace_roots: options.roots.clone(),
-            ignored_directory_names: options.ignored_directory_names.clone(),
-            excluded_roots: options.excluded_roots.clone(),
-            max_entries: options.max_entries.saturating_sub(resolved.scanned_entries),
-            symlinks: SymlinkPolicy::DoNotFollow,
-            exact_paths: ExactPathPolicy::ExistingOnly,
-            // The compatibility API historically ignored traversal errors but
-            // returned invalid glob syntax as an error.
-            io_errors: ResolutionIssuePolicy::Report,
-            invalid_globs: ResolutionIssuePolicy::Abort,
-        };
-        let materialized =
-            resolve_targets([&access_target], &resolution_options).map_err(|error| match error
-                .reason
+            FileActivityTarget::Path {
+                path,
+                scope: FileActivityScope::ExactOrDescendants,
+            } if std::fs::symlink_metadata(path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
             {
-                TargetResolutionReason::InvalidGlob { pattern, message } => {
-                    FileActivityError::InvalidGlob { pattern, message }
-                }
-                reason => FileActivityError::Io(std::io::Error::other(format!(
-                    "target resolution failed: {reason:?}"
-                ))),
-            })?;
+                resolved.not_applicable_files.insert(path.clone());
+            }
+            _ => scoped.push(target),
+        }
+    }
+
+    for (index, target) in scoped.iter().enumerate() {
+        let remaining = options.max_entries.saturating_sub(resolved.scanned_entries);
+        if remaining == 0 {
+            resolved.truncated = true;
+            resolved.unattempted_targets = scoped[index..]
+                .iter()
+                .map(|target| (*target).clone())
+                .collect();
+            resolved
+                .unresolved_targets
+                .extend(resolved.unattempted_targets.iter().cloned());
+            break;
+        }
+        let mut resolution_options = TargetResolutionOptions::new(roots.clone());
+        resolution_options.ignored_directory_names = options.ignored_directory_names.clone();
+        resolution_options.excluded_roots = excluded_roots.clone();
+        resolution_options.max_entries = remaining;
+        resolution_options.symlinks = SymlinkPolicy::DoNotFollow;
+        resolution_options.exact_paths = ExactPathPolicy::ExistingOnly;
+        resolution_options.io_errors = ResolutionIssuePolicy::Report;
+        resolution_options.invalid_globs = ResolutionIssuePolicy::Abort;
+        let materialized =
+            resolve_targets([activity_target_to_access(target)], &resolution_options).map_err(
+                |error| match error.reason {
+                    TargetResolutionReason::InvalidGlob { pattern, message } => {
+                        FileActivityError::InvalidGlob { pattern, message }
+                    }
+                    reason => FileActivityError::Io(std::io::Error::other(format!(
+                        "target resolution failed: {reason:?}"
+                    ))),
+                },
+            )?;
         resolved.scanned_entries += materialized.scanned_entries;
-        let target_unresolved = !materialized.unresolved.is_empty();
         resolved
             .files
             .extend(materialized.paths.into_iter().filter(|path| path.is_file()));
-        if target_unresolved && !resolved.unresolved_targets.contains(target) {
-            resolved.unresolved_targets.push(target.clone());
-        }
         if materialized.budget_exhausted {
+            // The walk stopped partway through this target: retain it and
+            // every later scope rather than silently dropping the tail.
             resolved.truncated = true;
-            if !resolved.unresolved_targets.contains(target) {
-                resolved.unresolved_targets.push(target.clone());
-            }
+            resolved.exhausted_target = Some((*target).clone());
+            resolved.unattempted_targets = scoped[index + 1..]
+                .iter()
+                .map(|target| (*target).clone())
+                .collect();
+            resolved.unresolved_targets.push((*target).clone());
+            resolved
+                .unresolved_targets
+                .extend(resolved.unattempted_targets.iter().cloned());
             break;
+        }
+        if materialized
+            .unresolved
+            .iter()
+            .any(|unresolved| retains_scope(&unresolved.reason))
+        {
+            resolved.unresolved_targets.push((*target).clone());
         }
     }
     Ok(resolved)
+}
+
+/// Whether a resolution issue may hide unchecked files. A missing root has
+/// nothing left to check, and ignored or excluded roots are pruned on purpose.
+fn retains_scope(reason: &TargetResolutionReason) -> bool {
+    !matches!(
+        reason,
+        TargetResolutionReason::NonexistentExactPath
+            | TargetResolutionReason::NonexistentTraversalRoot { .. }
+            | TargetResolutionReason::IgnoredDirectory { .. }
+            | TargetResolutionReason::ExcludedRoot { .. }
+    )
+}
+
+/// Whether an exact file lies in an excluded root, or in an ignored directory
+/// below the workspace root that contains it.
+fn is_pruned_file(
+    path: &Utf8Path,
+    roots: &[Utf8PathBuf],
+    excluded_roots: &BTreeSet<Utf8PathBuf>,
+    ignored_directory_names: &BTreeSet<String>,
+) -> bool {
+    let path = normalize_utf8_path(path);
+    if excluded_roots
+        .iter()
+        .any(|excluded| path.starts_with(excluded))
+    {
+        return true;
+    }
+    roots
+        .iter()
+        .find_map(|root| path.strip_prefix(root).ok())
+        .and_then(Utf8Path::parent)
+        .is_some_and(|directories| {
+            directories
+                .components()
+                .any(|component| ignored_directory_names.contains(component.as_str()))
+        })
 }
 
 fn activity_target_to_access(target: &FileActivityTarget) -> AccessTarget {
@@ -1399,10 +1987,46 @@ fn activity_target_to_access(target: &FileActivityTarget) -> AccessTarget {
     }
 }
 
+/// Directory basenames pruned by default from reconciliation and target
+/// resolution ([`ReconciliationOptions::new`] and [`ResolveOptions::new`]):
+/// version-control metadata, HookKit's `.context` state and
+/// `.agent-hook-kit` configuration and diagnostics, and common dependency,
+/// virtual-environment, cache, and build-tool output directories that agents
+/// rarely edit and that would dominate a scan.
+///
+/// `hookkit-pkl-config` uses the same names as its default
+/// `fileActivity.ignoredDirectoryNames`, so the bundled runners and direct
+/// library callers prune the same directories.
+pub const DEFAULT_IGNORED_DIRECTORY_NAMES: &[&str] = &[
+    ".agent-hook-kit",
+    ".context",
+    ".direnv",
+    ".git",
+    ".gradle",
+    ".hg",
+    ".mypy_cache",
+    ".next",
+    ".nox",
+    ".nuxt",
+    ".parcel-cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svelte-kit",
+    ".svn",
+    ".terraform",
+    ".tox",
+    ".turbo",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+    "venv",
+];
+
 fn default_ignored_directory_names() -> BTreeSet<String> {
-    [".context", ".git", ".hg", ".svn", "node_modules", "target"]
-        .into_iter()
-        .map(str::to_owned)
+    DEFAULT_IGNORED_DIRECTORY_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
         .collect()
 }
 
@@ -1410,6 +2034,20 @@ fn utf8_path(path: &Path) -> Result<Utf8PathBuf> {
     Utf8PathBuf::from_path_buf(path.to_path_buf())
         .map_err(FileActivityError::NonUtf8Path)
         .map(normalize_utf8_path)
+}
+
+fn current_utf8_dir() -> Option<Utf8PathBuf> {
+    std::env::current_dir()
+        .ok()
+        .and_then(|directory| Utf8PathBuf::from_path_buf(directory).ok())
+}
+
+/// Resolves a relative path against the process working directory, when known.
+fn absolute_path(path: &Utf8Path, working_directory: Option<&Utf8Path>) -> Utf8PathBuf {
+    match working_directory {
+        Some(directory) if path.is_relative() => resolve_utf8_path(directory, path),
+        _ => normalize_utf8_path(path),
+    }
 }
 
 #[cfg(test)]
@@ -1487,21 +2125,191 @@ mod tests {
 
     #[test]
     fn patch_observation_retains_direct_provenance() {
+        // Codex's native apply_patch hook input is `{"command": "<patch>"}`.
         let report = analyze_activity(&codex_post_tool(
             "apply_patch",
             serde_json::json!({
-                "patch": "*** Update File: src/lib.rs\n*** Add File: src/new.rs"
+                "command": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** Add File: src/new.rs\n+new\n*** End Patch"
             }),
         ));
 
         let evidence = report.evidence().collect::<Vec<_>>();
         assert_eq!(evidence.len(), 2);
+        assert!(report.gaps().next().is_none());
         assert!(evidence.iter().all(|item| {
             item.source == FileActivitySource::Patch && item.certainty == ActivityCertainty::Direct
         }));
         assert!(evidence.iter().any(|item| {
             item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/lib.rs"))
         }));
+    }
+
+    #[test]
+    fn antigravity_post_tool_use_without_a_tool_call_records_a_gap() {
+        // The `ide-reference-example` fixture of antigravity/docs-2026-09-30-r1:
+        // the documented IDE payload omits `toolCall`, so which files the tool
+        // wrote is unknown and must not be reported as "nothing written".
+        let input = PostToolUseInput::Antigravity(
+            serde_json::from_value(serde_json::json!({
+                "stepIdx": 5,
+                "error": "exit status 1",
+                "conversationId": "ec33ebf9-0cba-4100-8142-c61503f6c587",
+                "workspacePaths": ["/workspace/project"],
+                "transcriptPath": "~/.gemini/antigravity-ide/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl",
+                "artifactDirectoryPath": "~/.gemini/antigravity-ide/brain/ec33ebf9-0cba-4100-8142-c61503f6c587"
+            }))
+            .unwrap(),
+        );
+        let report = analyze_activity(&input);
+        assert_eq!(report.evidence().count(), 0);
+        let gaps = report.gaps().collect::<Vec<_>>();
+        assert_eq!(gaps.len(), 1, "{report:?}");
+        assert!(
+            gaps[0].detail.contains("originating tool call"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn antigravity_relative_writes_without_a_workspace_are_gaps() {
+        let input = PostToolUseInput::Antigravity(
+            serde_json::from_value(serde_json::json!({
+                "conversationId": "conversation",
+                "workspacePaths": [],
+                "transcriptPath": "/tmp/transcript.jsonl",
+                "artifactDirectoryPath": "/tmp/artifacts",
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {"CommandLine": "printf x > src/generated.txt"}
+                },
+                "stepIdx": 2
+            }))
+            .unwrap(),
+        );
+        let report = analyze_activity(&input);
+        assert_eq!(report.evidence().count(), 0, "{report:?}");
+        assert!(report.gaps().next().is_some(), "{report:?}");
+    }
+
+    #[test]
+    fn session_relative_writes_are_heuristic_with_a_gap() {
+        // Codex's `Bash` hook payload omits the `workdir` the command may have
+        // run in, so a relative write is only a guess at the file it changed.
+        let report = analyze_activity(&codex_post_tool(
+            "Bash",
+            serde_json::json!({"command": "echo x > out.txt; echo y > /repo/abs.txt"}),
+        ));
+        let evidence = report.evidence().collect::<Vec<_>>();
+        let relative = evidence
+            .iter()
+            .find(|item| {
+                item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/out.txt"))
+            })
+            .unwrap_or_else(|| panic!("{report:?}"));
+        assert_eq!(relative.certainty, ActivityCertainty::Heuristic);
+        assert!(
+            relative
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.ends_with("resolved against the session directory")),
+            "{relative:?}"
+        );
+        // An absolute path does not depend on the working directory.
+        assert!(evidence.iter().any(|item| {
+            item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/abs.txt"))
+                && item.certainty == ActivityCertainty::Direct
+        }));
+        let gaps = report.gaps().collect::<Vec<_>>();
+        assert_eq!(gaps.len(), 1, "{report:?}");
+        assert!(gaps[0].detail.contains("`out.txt`"), "{report:?}");
+        assert_eq!(gaps[0].source, FileActivitySource::ShellInference);
+
+        // Claude reports the command's own directory.
+        let claude = activity_report(
+            ToolAccessAnalyzer::default().analyze_post_tool(&PostToolUseInput::Claude(
+                serde_json::from_value(serde_json::json!({
+                    "session_id": "session",
+                    "transcript_path": "/tmp/transcript.jsonl",
+                    "cwd": "/repo",
+                    "hook_event_name": "PostToolUse",
+                    "permission_mode": "default",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "echo x > out.txt"},
+                    "tool_response": {"stdout": "", "stderr": ""},
+                    "tool_use_id": "toolu_1"
+                }))
+                .unwrap(),
+            )),
+            &observation_metadata(),
+        );
+        assert!(claude.gaps().next().is_none(), "{claude:?}");
+        assert!(
+            claude
+                .evidence()
+                .all(|item| item.certainty == ActivityCertainty::Direct),
+            "{claude:?}"
+        );
+    }
+
+    #[test]
+    fn file_free_tools_record_no_gaps() {
+        for tool in ["update_plan", "spawn_agent", "web_search"] {
+            let report = analyze_activity(&codex_post_tool(tool, serde_json::json!({})));
+            assert!(report.is_empty(), "{tool}: {report:?}");
+        }
+    }
+
+    #[test]
+    fn claude_post_tool_use_failure_is_observed_like_post_tool_use() {
+        let input: hookkit_claude::catalog::CatalogInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "session",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": "/repo",
+                "hook_event_name": "PostToolUseFailure",
+                "tool_name": "Bash",
+                "tool_input": {"command": "sed -i 's/a/b/' src/x.py && pytest"},
+                "tool_use_id": "toolu_1",
+                "error": "Exit code 1"
+            }))
+            .unwrap();
+        let report = activity_report(
+            ToolAccessAnalyzer::default().analyze_native(&input),
+            &observation_metadata(),
+        );
+        assert!(report.evidence().any(|item| {
+            item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/x.py"))
+                && item.effect == FileActivityEffect::CreateOrModify
+        }));
+    }
+
+    #[test]
+    fn append_report_persists_a_digest_of_large_key_prefixes() {
+        let project = temporary_directory("append-key");
+        let state = SessionState::open(
+            HarnessId::CODEX,
+            SessionIdentity::Session("session".to_owned()),
+            StateRoot::new(project.join("state")),
+        )
+        .unwrap();
+        let store = FileActivityStore::from_state(state).unwrap();
+        let prefix = "x".repeat(100_000);
+        let report = ActivityReport {
+            events: vec![FileActivityEvent::Gap(
+                observation_metadata().gap(FileActivitySource::ShellInference, "gap"),
+            )],
+        };
+        store.append_report(&prefix, &report).unwrap();
+        store
+            .pending()
+            .with_entity(|view| {
+                let key = view.events()[0].event_key();
+                assert!(key.len() < 100, "{}", key.len());
+                assert_eq!(key, format!("{}\0{}", sha256_hex(prefix.as_bytes()), 0));
+                Ok(EntityOutcome::retain(()))
+            })
+            .unwrap();
+        std::fs::remove_dir_all(project).unwrap();
     }
 
     #[test]
@@ -1601,45 +2409,190 @@ mod tests {
         std::fs::remove_dir_all(project).unwrap();
     }
 
-    #[test]
-    fn exact_deleted_target_is_not_applicable_while_scope_is_retained() {
-        let project = temporary_directory("resolve-deleted");
-        let missing = Utf8PathBuf::from_path_buf(project.join("deleted.rs")).unwrap();
-        let scope = FileActivityTarget::Path {
-            path: Utf8PathBuf::from_path_buf(project.join("missing-scope")).unwrap(),
-            scope: FileActivityScope::Descendants,
-        };
+    fn pending_with(targets: impl IntoIterator<Item = FileActivityTarget>) -> PendingFileActivity {
         let mut activity = PendingFileActivity::empty();
-        activity.apply(&FileActivityEvent::Evidence(FileActivityEvidence {
-            target: FileActivityTarget::exact(missing.clone()),
-            effect: FileActivityEffect::Delete,
-            source: FileActivitySource::StructuredToolInput,
-            certainty: ActivityCertainty::Direct,
-            observed_at: UtcTimestamp::now(),
-            event: None,
-            tool_call_id: None,
-            turn_id: None,
-            detail: None,
-        }));
-        activity.apply(&FileActivityEvent::Evidence(FileActivityEvidence {
-            target: scope.clone(),
-            effect: FileActivityEffect::MaybeWrite,
-            source: FileActivitySource::ShellInference,
-            certainty: ActivityCertainty::Heuristic,
-            observed_at: UtcTimestamp::now(),
-            event: None,
-            tool_call_id: None,
-            turn_id: None,
-            detail: None,
-        }));
+        for target in targets {
+            activity.apply(&FileActivityEvent::Evidence(FileActivityEvidence {
+                target,
+                effect: FileActivityEffect::MaybeWrite,
+                source: FileActivitySource::ShellInference,
+                certainty: ActivityCertainty::Heuristic,
+                observed_at: UtcTimestamp::now(),
+                event: None,
+                tool_call_id: None,
+                turn_id: None,
+                detail: None,
+            }));
+        }
+        activity
+    }
 
-        let resolved = resolve_files(
-            &activity,
-            &ResolveOptions::new(vec![Utf8PathBuf::from_path_buf(project.clone()).unwrap()]),
-        )
-        .unwrap();
+    fn scoped(path: PathBuf, scope: FileActivityScope) -> FileActivityTarget {
+        FileActivityTarget::Path {
+            path: Utf8PathBuf::from_path_buf(path).unwrap(),
+            scope,
+        }
+    }
+
+    fn utf8(path: PathBuf) -> Utf8PathBuf {
+        Utf8PathBuf::from_path_buf(path).unwrap()
+    }
+
+    #[test]
+    fn deleted_ignored_and_excluded_roots_resolve_as_empty_scopes() {
+        let project = temporary_directory("resolve-deleted");
+        std::fs::create_dir_all(project.join("node_modules/pkg")).unwrap();
+        std::fs::write(project.join("node_modules/pkg/index.js"), "x").unwrap();
+        std::fs::create_dir_all(project.join("state/v1")).unwrap();
+        let missing = utf8(project.join("deleted.rs"));
+        let activity = pending_with([
+            FileActivityTarget::exact(missing.clone()),
+            scoped(
+                project.join("missing-scope"),
+                FileActivityScope::Descendants,
+            ),
+            scoped(project.join("build"), FileActivityScope::ExactOrDescendants),
+            scoped(project.join("dist/*.js"), FileActivityScope::Glob),
+            scoped(
+                project.join("node_modules"),
+                FileActivityScope::ExactOrDescendants,
+            ),
+            scoped(project.join("state"), FileActivityScope::Descendants),
+        ]);
+        let mut options = ResolveOptions::new(vec![utf8(project.clone())]);
+        options.excluded_roots.insert(utf8(project.join("state")));
+
+        let resolved = resolve_files(&activity, &options).unwrap();
         assert!(resolved.not_applicable_files.contains(&missing));
-        assert!(resolved.unresolved_targets.contains(&scope));
+        assert!(
+            resolved
+                .not_applicable_files
+                .contains(&utf8(project.join("build")))
+        );
+        assert!(
+            resolved.unresolved_targets.is_empty(),
+            "{:?}",
+            resolved.unresolved_targets
+        );
+        assert!(resolved.files.is_empty());
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn budget_exhaustion_retains_every_later_scope_and_never_drops_exact_files() {
+        let project = temporary_directory("resolve-tail");
+        std::fs::create_dir_all(project.join("a_scope")).unwrap();
+        std::fs::create_dir_all(project.join("b_scope")).unwrap();
+        for index in 0..10 {
+            std::fs::write(project.join(format!("a_scope/f{index}")), "x").unwrap();
+        }
+        std::fs::write(project.join("b_scope/g"), "x").unwrap();
+        std::fs::write(project.join("z_edited.rs"), "x").unwrap();
+        let a_scope = scoped(project.join("a_scope"), FileActivityScope::Descendants);
+        let b_scope = scoped(project.join("b_scope"), FileActivityScope::Descendants);
+        let exact = utf8(project.join("z_edited.rs"));
+        let activity = pending_with([
+            a_scope.clone(),
+            b_scope.clone(),
+            FileActivityTarget::exact(exact.clone()),
+        ]);
+        let mut options = ResolveOptions::new(vec![utf8(project.clone())]);
+        options.max_entries = 5;
+
+        let resolved = resolve_files(&activity, &options).unwrap();
+        assert!(resolved.truncated);
+        assert!(resolved.files.contains(&exact));
+        assert_eq!(
+            resolved.unresolved_targets,
+            vec![a_scope.clone(), b_scope.clone()]
+        );
+        // Only the scope the budget never reached can progress on a retry.
+        assert_eq!(resolved.exhausted_target, Some(a_scope));
+        assert_eq!(resolved.unattempted_targets, vec![b_scope]);
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn budget_exhausted_between_targets_leaves_no_exhausted_target() {
+        let project = temporary_directory("resolve-boundary");
+        for scope in ["a_scope", "b_scope", "c_scope"] {
+            std::fs::create_dir_all(project.join(scope)).unwrap();
+            std::fs::write(project.join(scope).join("f"), "x").unwrap();
+        }
+        let a_scope = scoped(project.join("a_scope"), FileActivityScope::Descendants);
+        let b_scope = scoped(project.join("b_scope"), FileActivityScope::Descendants);
+        let c_scope = scoped(project.join("c_scope"), FileActivityScope::Descendants);
+        let activity = pending_with([a_scope, b_scope.clone(), c_scope.clone()]);
+        let mut options = ResolveOptions::new(vec![utf8(project.clone())]);
+        // Walking `a_scope` visits its root and one file, which uses the
+        // whole budget without cutting that walk short.
+        options.max_entries = 2;
+
+        let resolved = resolve_files(&activity, &options).unwrap();
+        assert!(resolved.truncated);
+        assert!(resolved.files.contains(&utf8(project.join("a_scope/f"))));
+        assert_eq!(resolved.exhausted_target, None);
+        assert_eq!(
+            resolved.unattempted_targets,
+            vec![b_scope.clone(), c_scope.clone()]
+        );
+        assert_eq!(resolved.unresolved_targets, vec![b_scope, c_scope]);
+
+        let complete =
+            resolve_files(&activity, &ResolveOptions::new(vec![utf8(project.clone())])).unwrap();
+        assert!(!complete.truncated);
+        assert_eq!(complete.exhausted_target, None);
+        assert!(complete.unattempted_targets.is_empty());
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn default_ignored_directories_cover_caches_and_hook_configuration() {
+        let names = default_ignored_directory_names();
+        for name in [
+            ".agent-hook-kit",
+            ".git",
+            ".venv",
+            "venv",
+            "__pycache__",
+            "node_modules",
+        ] {
+            assert!(names.contains(name), "{name}");
+        }
+        assert_eq!(names.len(), DEFAULT_IGNORED_DIRECTORY_NAMES.len());
+        assert_eq!(
+            ResolveOptions::new(Vec::new()).ignored_directory_names,
+            names
+        );
+    }
+
+    #[test]
+    fn exact_files_in_excluded_or_ignored_directories_are_not_applicable() {
+        let project = temporary_directory("resolve-exact-filters");
+        std::fs::create_dir_all(project.join("node_modules/pkg")).unwrap();
+        std::fs::create_dir_all(project.join("state")).unwrap();
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        let vendored = utf8(project.join("node_modules/pkg/index.js"));
+        let journal = utf8(project.join("state/journal.json"));
+        let source = utf8(project.join("src/target"));
+        for path in [&vendored, &journal, &source] {
+            std::fs::write(path, "x").unwrap();
+        }
+        let activity = pending_with(
+            [&vendored, &journal, &source].map(|path| FileActivityTarget::exact(path.clone())),
+        );
+        let mut options = ResolveOptions::new(vec![utf8(project.clone())]);
+        options
+            .excluded_roots
+            .insert(journal.parent().unwrap().to_path_buf());
+
+        let resolved = resolve_files(&activity, &options).unwrap();
+        // A file named like an ignored directory is still a candidate.
+        assert_eq!(resolved.files, BTreeSet::from([source]));
+        assert_eq!(
+            resolved.not_applicable_files,
+            BTreeSet::from([journal, vendored])
+        );
         std::fs::remove_dir_all(project).unwrap();
     }
 
@@ -2095,14 +3048,13 @@ mod tests {
             .unwrap();
 
         let second_through = UtcTimestamp::now();
-        let report = reconcile(
-            &store,
-            ReconciliationOptions::new(
-                vec![Utf8PathBuf::from_path_buf(project.clone()).unwrap()],
-                second_through,
-            ),
-        )
-        .unwrap();
+        let mut options = ReconciliationOptions::new(
+            vec![Utf8PathBuf::from_path_buf(project.clone()).unwrap()],
+            second_through,
+        );
+        // Without clock slack, the incremental window starts exactly at the cursor.
+        options.timestamp_tolerance = Duration::ZERO;
+        let report = reconcile(&store, options).unwrap();
         assert_eq!(report.filesystem_files, 0);
         assert_eq!(store.reconciled_through().unwrap(), Some(second_through));
         store
@@ -2113,6 +3065,241 @@ mod tests {
             })
             .unwrap();
 
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    fn codex_store(project: &Path) -> FileActivityStore {
+        let state = SessionState::open(
+            HarnessId::CODEX,
+            SessionIdentity::Session("session".to_owned()),
+            StateRoot::new(project.join("state")),
+        )
+        .unwrap();
+        FileActivityStore::from_state(state).unwrap()
+    }
+
+    fn pending_targets(store: &FileActivityStore) -> BTreeSet<FileActivityTarget> {
+        store
+            .pending()
+            .with_entity(|view| Ok(EntityOutcome::retain(view.state().targets().clone())))
+            .unwrap()
+    }
+
+    #[test]
+    fn incremental_scans_overlap_the_cursor_by_the_tolerance() {
+        let project = temporary_directory("reconcile-tolerance");
+        let store = codex_store(&project);
+        let root = vec![utf8(project.clone())];
+        let mut first = ReconciliationOptions::new(root.clone(), UtcTimestamp::now());
+        first.fallback_since = Some(UtcTimestamp::now());
+        reconcile(&store, first).unwrap();
+        let cursor = store.reconciled_through().unwrap().unwrap();
+
+        // A coarse filesystem clock stamps a later write at or before the cursor.
+        let late = project.join("late.rs");
+        std::fs::write(&late, "late").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&late)
+            .unwrap()
+            .set_modified(cursor.as_system_time() - Duration::from_millis(500))
+            .unwrap();
+
+        let report = reconcile(
+            &store,
+            ReconciliationOptions::new(root, UtcTimestamp::now()),
+        )
+        .unwrap();
+        assert_eq!(report.filesystem_files, 1);
+        assert!(pending_targets(&store).contains(&FileActivityTarget::exact(utf8(late))));
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn truncated_mtime_scan_resumes_where_it_stopped() {
+        let project = temporary_directory("reconcile-resume");
+        for index in 0..10 {
+            std::fs::write(project.join(format!("f{index}.rs")), "x").unwrap();
+        }
+        let store = codex_store(&project);
+        let root = vec![utf8(project.clone())];
+        let mut first = ReconciliationOptions::new(root.clone(), UtcTimestamp::now());
+        first.fallback_since = Some(UtcTimestamp::from_system_time(UNIX_EPOCH));
+        first.timestamp_tolerance = Duration::ZERO;
+        first.max_entries = 4;
+        let report = reconcile(&store, first).unwrap();
+        assert!(report.truncated);
+        // The root directory is the first of the four entries.
+        assert_eq!(report.filesystem_files, 3);
+        let resume = store.scan_resume().unwrap().unwrap();
+        assert_eq!(resume.after, utf8(project.join("f2.rs")));
+
+        let mut second = ReconciliationOptions::new(root, UtcTimestamp::now());
+        second.timestamp_tolerance = Duration::ZERO;
+        let report = reconcile(&store, second).unwrap();
+        assert!(!report.truncated);
+        assert_eq!(report.filesystem_files, 7);
+        assert_eq!(store.scan_resume().unwrap(), None);
+        let expected = (0..10)
+            .map(|index| FileActivityTarget::exact(utf8(project.join(format!("f{index}.rs")))))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(pending_targets(&store), expected);
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn a_scan_truncated_while_resuming_keeps_the_cursor_and_advances_the_resume_point() {
+        let project = temporary_directory("reconcile-resume-twice");
+        for index in 0..10 {
+            std::fs::write(project.join(format!("f{index}.rs")), "x").unwrap();
+        }
+        let store = codex_store(&project);
+        let root = vec![utf8(project.clone())];
+        let mut first = ReconciliationOptions::new(root.clone(), UtcTimestamp::now());
+        first.fallback_since = Some(UtcTimestamp::from_system_time(UNIX_EPOCH));
+        first.max_entries = 4;
+        reconcile(&store, first).unwrap();
+        let cursor = store.reconciled_through().unwrap();
+
+        let mut second = ReconciliationOptions::new(root.clone(), UtcTimestamp::now());
+        second.max_entries = 3;
+        let report = reconcile(&store, second).unwrap();
+        assert!(report.truncated);
+        assert_eq!(report.filesystem_files, 3);
+        assert_eq!(store.reconciled_through().unwrap(), cursor);
+        let resume = store.scan_resume().unwrap().unwrap();
+        assert_eq!(resume.after, utf8(project.join("f5.rs")));
+        // The unscanned tail still owes the first scan's (widened) lower bound.
+        assert!(resume.tail_since <= UtcTimestamp::from_system_time(UNIX_EPOCH));
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn a_relative_state_directory_is_excluded_from_the_mtime_scan() {
+        let project = temporary_directory("reconcile-relative-state");
+        std::fs::write(project.join("source.rs"), "x").unwrap();
+        // Express the state root relative to the test's working directory.
+        let working_directory = std::env::current_dir().unwrap();
+        let mut relative = PathBuf::new();
+        for _ in working_directory.components().skip(1) {
+            relative.push("..");
+        }
+        relative.push(project.join("state").strip_prefix("/").unwrap());
+        let state = SessionState::open(
+            HarnessId::CODEX,
+            SessionIdentity::Session("session".to_owned()),
+            StateRoot::new(relative),
+        )
+        .unwrap();
+        assert!(state.directory().is_relative());
+        let store = FileActivityStore::from_state(state).unwrap();
+        let mut options =
+            ReconciliationOptions::new(vec![utf8(project.clone())], UtcTimestamp::now());
+        options.fallback_since = Some(UtcTimestamp::from_system_time(UNIX_EPOCH));
+        let report = reconcile(&store, options).unwrap();
+        assert_eq!(report.filesystem_files, 1, "{:?}", pending_targets(&store));
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn git_dirty_fallback_reroots_paths_from_a_repository_subdirectory() {
+        let project = temporary_directory("git-subdirectory");
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&project)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::create_dir_all(project.join("packages/web/src")).unwrap();
+        std::fs::create_dir_all(project.join("packages/other")).unwrap();
+        std::fs::write(project.join("packages/web/src/a.ts"), "a").unwrap();
+        std::fs::write(project.join("packages/other/b.ts"), "b").unwrap();
+        let store = codex_store(&project);
+        let root = utf8(project.join("packages/web"));
+        let mut options = ReconciliationOptions::new(vec![root.clone()], UtcTimestamp::now());
+        options.filesystem_mtime = false;
+        options.vcs = VcsFallback::GitDirty;
+
+        let report = reconcile(&store, options).unwrap();
+        assert_eq!(report.vcs_files, 1, "{:?}", report.gaps);
+        assert_eq!(
+            pending_targets(&store),
+            BTreeSet::from([FileActivityTarget::exact(root.join("src/a.ts"))])
+        );
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn git_dirty_fallback_charges_paths_to_the_entry_budget() {
+        let project = temporary_directory("git-budget");
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&project)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        for index in 0..5 {
+            std::fs::write(project.join(format!("dirty{index}.rs")), "x").unwrap();
+        }
+        let store = codex_store(&project);
+        let mut options =
+            ReconciliationOptions::new(vec![utf8(project.clone())], UtcTimestamp::now());
+        options.filesystem_mtime = false;
+        options.vcs = VcsFallback::GitDirty;
+        options.max_entries = 2;
+
+        let report = reconcile(&store, options).unwrap();
+        assert!(report.vcs_truncated);
+        assert_eq!(report.vcs_files, 2);
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn compaction_does_not_move_the_bootstrap_bound_past_the_session_start() {
+        let project = temporary_directory("bootstrap-compact");
+        let root = StateRoot::new(project.join("state"));
+        let raw = hookkit_core::RawInvocation::parse(b"{}".to_vec()).unwrap();
+        let ensure = |kind, timestamp: &str, key: &str| {
+            let context = RuntimeContext::new(
+                HarnessId::CLAUDE_CODE,
+                hookkit_core::SnapshotId::builtin("test"),
+                hookkit_core::EventId::builtin(HarnessId::CLAUDE_CODE, "SessionStart"),
+                hookkit_core::ContractId::builtin("test"),
+                hookkit_core::ResolutionProvenance::TypedStatic,
+                &raw,
+                hookkit_core::NativeContext {
+                    workspace_roots: vec![utf8(project.clone())],
+                    session_id: hookkit_core::SessionId::new("session-1").ok(),
+                    session_boundary: Some(
+                        hookkit_core::SessionBoundaryContext::observed(kind)
+                            .with_native_timestamp(timestamp)
+                            .with_occurrence_key(key),
+                    ),
+                    ..hookkit_core::NativeContext::default()
+                },
+                &hookkit_core::DISABLED_DIAGNOSTICS,
+            )
+            .unwrap();
+            FileActivityStore::ensure(&context, root.clone()).unwrap()
+        };
+        ensure(
+            hookkit_core::SessionBoundaryKind::Startup,
+            "2026-07-12T10:00:00Z",
+            "start",
+        );
+        let store = ensure(
+            hookkit_core::SessionBoundaryKind::Compact,
+            "2026-07-12T10:20:00Z",
+            "compact",
+        );
+        assert_eq!(
+            store.state().metadata().unwrap().current_session.kind,
+            SessionEpochKind::Compact
+        );
+        assert_eq!(
+            store.bootstrap_started_at().unwrap(),
+            UtcTimestamp::parse_rfc3339("2026-07-12T10:00:00Z").unwrap()
+        );
         std::fs::remove_dir_all(project).unwrap();
     }
 

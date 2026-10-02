@@ -13,23 +13,57 @@ class Settings {
   jobs: UInt?
 
   /// Stop after an operational failure (missing tool, configured failure code).
+  /// The immediate runner stops running later tools; the Stop-time runner
+  /// skips the failing tool's remaining remedies but still repairs files for
+  /// unrelated tools. Default: true.
   failFast: Boolean?
 
   /// Continue running later tools after an earlier tool reports issues.
   continueAfterIssues: Boolean?
 
-  /// Global file exclusions applied before per-tool selection.
+  /// Global file exclusions applied before per-tool selection, matched
+  /// against project-relative paths. Replaces the default
+  /// `**/.git/**` and `**/node_modules/**` when set.
   exclude: Listing<String>?
 
-  /// How to handle optional common-output intents the harness cannot represent.
+  /// How to handle configured messages the harness cannot represent: fail the
+  /// hook (`strict`), drop them (`best-effort`), or drop them with a warning
+  /// where one can be delivered (`best-effort-with-warnings`, the default).
+  /// Built-in default Stop text without a channel is always dropped silently.
   loweringPolicy: ("strict" | "best-effort" | "best-effort-with-warnings")?
 
-  /// Default directory for diagnostic artifacts. Relative paths resolve from
-  /// the project root.
+  /// Directory for the immediate runner's full diagnostic artifacts. Relative
+  /// paths resolve from the project root. Default:
+  /// `.agent-hook-kit/post-tool-use`. The Stop-time runner writes its artifacts
+  /// to session state instead and never treats this directory as a candidate.
   diagnosticsDirectory: String?
 
-  /// What to do when a configured tool executable is missing.
+  /// What to do when a configured tool executable is missing. After a tool
+  /// call, `user-notice` warns and runs the remaining tools, `hard-failure`
+  /// stops the run and reports an error (through `systemMessage` on Claude
+  /// Code and Codex, as a hook error on Antigravity), and `harness-block`
+  /// blocks with the notice as the reason. At Stop, `user-notice` reports the
+  /// tool to the user without blocking or re-queueing its files; the other
+  /// policies block completion. Default: "user-notice".
   missingToolPolicy: ("user-notice" | "hard-failure" | "harness-block")?
+
+  /// Deadline in seconds for each external tool command; 0 disables it.
+  /// A command that runs longer is killed together with its process group
+  /// and reported as an operational failure. It bounds one command only:
+  /// phases, jobs, and tools run one after another, each with its own
+  /// deadline, and runTimeoutSeconds bounds their sum. Tools never outlive
+  /// the hook: if the harness kills the hook first, their process groups are
+  /// killed too. Default: 300.
+  commandTimeoutSeconds: UInt?
+
+  /// Budget in seconds for all external tool commands of one hook invocation
+  /// together; 0 disables it. Each command gets the smaller of
+  /// commandTimeoutSeconds and the budget left, and a command that would
+  /// start after the budget is spent is reported as an operational failure
+  /// instead of running. Default: 540, below the 600-second default hook
+  /// timeout of Claude Code and Codex. Set it below the hook timeout you
+  /// configure (Antigravity defaults to 30 seconds).
+  runTimeoutSeconds: UInt?
 
   /// Optional stop-time file-activity fallback overrides. Omit to use the
   /// runtime defaults represented by FileActivity.
@@ -54,45 +88,71 @@ class FileGroup {
 /// A patch over the built-in deferred reporting contract. Empty strings
 /// intentionally suppress that audience. Set merge.resetDeferredReporting to
 /// restore all defaults before applying this patch.
+///
+/// Every bucket pair renders against the whole run: `counts`, `files`,
+/// `clean_files`, `auto_fixed_files`, `manual_fix_files`, `groups`,
+/// `operational_problems`, `coverage_gaps`, `unavailable_tools`, `artifacts`,
+/// and `run` (`id`, `summary_path`, ...). The master templates also receive
+/// `rendered_buckets` and `rendered_bucket_lists` (`user` and `agent`: the
+/// non-empty bucket texts in bucket order). Built-in default text that a
+/// harness cannot deliver at a Stop (for example agent text on an allowed
+/// Stop) is omitted without a warning or a strict failure; configured text
+/// follows `settings.loweringPolicy`.
 class DeferredReporting {
   groups: Listing<FileGroup>?
   clean: TemplatePair?
   autoFixed: TemplatePair?
   manualFixesNeeded: TemplatePair?
   operationalError: TemplatePair?
+  /// Rendered when a configured tool's executable is missing under
+  /// `missingToolPolicy = "user-notice"`; `unavailable_tools` lists each
+  /// tool's `message`, `toolId`, `toolName`, `executable`, `installHint`, and
+  /// `affectedFiles`.
+  unavailableTool: TemplatePair?
   masterUser: String?
   masterAgent: String?
   renderEmptyBuckets: Boolean?
 }
 
+/// A field-preserving patch over the stop-time file-activity settings. Every
+/// field is optional: a layer that sets one field inherits the others from
+/// earlier layers (or the runtime defaults noted below).
 class FileActivity {
   /// Infer candidates from project files whose mtimes fall in the unreconciled
   /// interval. This is noisy but useful when tool inspection has gaps.
-  filesystemMtime: Boolean = true
+  /// Default: true.
+  filesystemMtime: Boolean?
 
   /// `git-dirty` is deliberately broad: it can include changes that predate
-  /// the agent session. It is disabled unless explicitly selected.
-  vcs: "disabled" | "git-dirty" = "disabled"
+  /// the agent session. Default: "disabled".
+  vcs: ("disabled" | "git-dirty")?
 
-  /// Applied only to the first timestamp scan, whose session-start observation
-  /// may occur just after an early edit.
-  timestampToleranceMillis: UInt = 2000
+  /// Clock-resolution slack subtracted from every mtime scan's lower bound,
+  /// so writes on coarse or skewed filesystem clocks near the previous cursor
+  /// (or just before the session-start observation) are not lost. Default:
+  /// 2000.
+  timestampToleranceMillis: UInt?
 
   /// Bound recursive scans and record a coverage gap when the limit is hit.
-  maxEntries: UInt = 100000
+  /// Default: 100000.
+  maxEntries: UInt?
 
-  /// Best effort retains and reports incomplete targets without blocking a
-  /// stop solely for coverage. Strict also asks the harness to continue.
-  coverageGapPolicy: "best-effort" | "strict" = "best-effort"
+  /// Gaps are reported once, in the Stop that first observes them; a gap that
+  /// reconciliation observes again at every Stop (an unreadable directory, a
+  /// scan that hit maxEntries, a root that is not a Git repository) is
+  /// reported once per session. Best effort reports gaps without blocking;
+  /// strict also blocks that Stop. Default: "best-effort".
+  coverageGapPolicy: ("best-effort" | "strict")?
 
-  ignoredDirectoryNames: Listing<String> = new Listing<String> {
-    ".context"
-    ".git"
-    ".hg"
-    ".svn"
-    "node_modules"
-    "target"
-  }
+  /// Directory basenames pruned from reconciliation, target resolution, and
+  /// snapshot walks. Snapshot walks always also prune ".agent-hook-kit",
+  /// ".git", ".hg", ".jj", ".svn", "node_modules", and "target". Replaces the
+  /// whole default list when set:
+  /// ".agent-hook-kit", ".context", ".direnv", ".git", ".gradle", ".hg",
+  /// ".mypy_cache", ".next", ".nox", ".nuxt", ".parcel-cache", ".pytest_cache",
+  /// ".ruff_cache", ".svelte-kit", ".svn", ".terraform", ".tox", ".turbo",
+  /// ".venv", "__pycache__", "node_modules", "target", and "venv".
+  ignoredDirectoryNames: Listing<String>?
 }
 
 class Merge {
@@ -159,6 +219,12 @@ class Phase {
   writes: "none" | "target-files" | "matching-globs" | "workspace" = "none"
   enabled: Boolean = true
   extraArgs: Listing<String> = new Listing<String> {}
+  /// `batch` passes every selected file of a job to one invocation;
+  /// `per-file` runs the phase once for each file, for tools that read
+  /// several file arguments as one input stream (jq parses its files as one
+  /// concatenated JSON stream). The Stop-time compatibility translation of a
+  /// tool with any per-file phase also invokes it per file.
+  invocation: "batch" | "per-file" = "batch"
 }
 
 /// One command in a deferred check/remedy workflow.
@@ -196,14 +262,18 @@ class ToolSpec {
   /// runner compatibility-translates `phases`; immediate PostToolUse continues
   /// to execute `phases` exactly as before.
   workflows: Mapping<String, Workflow> = new Mapping<String, Workflow> {}
+  /// Optional explicit workflow ordering. Workflows not listed run afterwards
+  /// in alphabetical order of their ids; Pkl mapping order is not preserved.
   workflowOrder: Listing<String> = new Listing<String> {}
   /// Nonempty only when a catalog entry has no authoritative read-only check
   /// and must retain the legacy mutator-first compatibility behavior. Built-in
   /// validation rejects such entries unless this limitation is explicit.
   unverifiedRemedyFallback: String?
   phases: Mapping<String, Phase> = new Mapping<String, Phase> {}
-  /// Optional explicit phase ordering. If empty, runtime iterates `phases`
-  /// in insertion order (Pkl mappings preserve order).
+  /// Optional explicit phase ordering. Phases not listed run afterwards,
+  /// sorted by mode ("format", then "fix", "verify", "check-only") and then
+  /// alphabetically by id; Pkl mapping insertion order is not preserved.
+  /// List same-mode phases here when their relative order matters.
   phaseOrder: Listing<String> = new Listing<String> {}
   messages: Messages = new Messages {}
   diagnostics: Diagnostics = new Diagnostics {}

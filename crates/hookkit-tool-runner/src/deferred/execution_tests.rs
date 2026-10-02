@@ -1,9 +1,13 @@
 use super::FileStatus;
-use super::execution::{DeferredExecution, ScheduledWorkflow, execute_deferred_workflows};
-use crate::{
-    CheckScope, CommandArgTemplate, ExitCodePolicy, InvocationGranularity, PhaseMode, ToolJob,
-    ToolPhase, ToolSpec, UnexpectedExitPolicy, WriteBehavior,
+use super::execution::{
+    DeferredExecution, ScheduledWorkflow, WorkflowExecutionPolicy, execute_deferred_workflows,
 };
+use crate::exec::{ExecutionSettings, ToolJob};
+use crate::spec::{
+    CheckScope, CommandArgTemplate, ExitCodePolicy, InvocationGranularity, PhaseMode, ToolPhase,
+    ToolSpec, UnexpectedExitPolicy, WriteBehavior,
+};
+use hookkit_pkl_config::schema::MissingToolPolicy;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -171,6 +175,7 @@ fn command(
         writes,
         extra_args: Vec::new(),
         enabled: true,
+        per_file: false,
     }
 }
 
@@ -230,6 +235,15 @@ fn scheduled_with_scope(
             files,
         },
         project_root: fixture.root.clone(),
+        settings: Arc::new(ExecutionSettings::default()),
+    }
+}
+
+fn policy(jobs: u32, fail_fast: bool) -> WorkflowExecutionPolicy {
+    WorkflowExecutionPolicy {
+        jobs,
+        fail_fast,
+        missing_tool_policy: MissingToolPolicy::UserNotice,
     }
 }
 
@@ -242,7 +256,7 @@ fn initially_clean_skips_remedy() {
     let fixture = Fixture::new("clean");
     let file = fixture.file("clean.rs", "CLEAN\n");
     let plan = vec![scheduled(&fixture, 0, file.clone(), "check", Some("fix"))];
-    let execution = execute_deferred_workflows(&plan, 1, true);
+    let execution = execute_deferred_workflows(&plan, policy(1, true));
     assert_eq!(only_status(&execution, &file), Some(FileStatus::Clean));
     assert_eq!(fixture.trace_lines(), vec!["check"]);
 }
@@ -256,7 +270,7 @@ fn dirty_fixable_and_partly_fixable_use_one_remedy_then_final_check() {
         scheduled(&fixture, 0, fixed.clone(), "check", Some("fix")),
         scheduled(&fixture, 1, partial.clone(), "check", Some("partial")),
     ];
-    let execution = execute_deferred_workflows(&plan, 2, true);
+    let execution = execute_deferred_workflows(&plan, policy(2, true));
     assert_eq!(only_status(&execution, &fixed), Some(FileStatus::AutoFixed));
     assert_eq!(
         only_status(&execution, &partial),
@@ -274,7 +288,7 @@ fn stdout_only_check_can_trigger_remedy_and_final_verification() {
     let mut workflow = scheduled(&fixture, 0, file.clone(), "stdout-check", Some("fix"));
     workflow.check.as_mut().expect("check").issues_on_stdout = true;
 
-    let execution = execute_deferred_workflows(&[workflow], 1, true);
+    let execution = execute_deferred_workflows(&[workflow], policy(1, true));
 
     assert_eq!(only_status(&execution, &file), Some(FileStatus::AutoFixed));
     assert_eq!(
@@ -317,6 +331,7 @@ fn shell_comparator_uses_configured_tool_and_preserves_source_during_check() {
         writes: WriteBehavior::None,
         extra_args: Vec::new(),
         enabled: true,
+        per_file: false,
     };
     let remedy = ToolPhase {
         id: "format.remedy".into(),
@@ -332,6 +347,7 @@ fn shell_comparator_uses_configured_tool_and_preserves_source_during_check() {
         writes: WriteBehavior::TargetFiles,
         extra_args: Vec::new(),
         enabled: true,
+        per_file: false,
     };
     let plan = [ScheduledWorkflow {
         tool_index: 0,
@@ -350,9 +366,10 @@ fn shell_comparator_uses_configured_tool_and_preserves_source_during_check() {
             files: vec![file.clone()],
         },
         project_root: fixture.root.clone(),
+        settings: Arc::new(ExecutionSettings::default()),
     }];
 
-    let execution = execute_deferred_workflows(&plan, 1, true);
+    let execution = execute_deferred_workflows(&plan, policy(1, true));
 
     assert_eq!(only_status(&execution, &file), Some(FileStatus::AutoFixed));
     assert_eq!(
@@ -370,7 +387,7 @@ fn dirty_without_remedy_and_noop_remedy_are_manual() {
         scheduled(&fixture, 0, no_remedy.clone(), "check", None),
         scheduled(&fixture, 1, no_change.clone(), "check", Some("nochange")),
     ];
-    let execution = execute_deferred_workflows(&plan, 1, true);
+    let execution = execute_deferred_workflows(&plan, policy(1, true));
     assert_eq!(
         only_status(&execution, &no_remedy),
         Some(FileStatus::ManualFixesNeeded)
@@ -394,36 +411,111 @@ fn operational_initial_check_never_runs_remedy() {
     let fixture = Fixture::new("initial-failure");
     let file = fixture.file("file.rs", "DIRTY\n");
     let plan = vec![scheduled(&fixture, 0, file, "crash", Some("fix"))];
-    let execution = execute_deferred_workflows(&plan, 1, true);
+    let execution = execute_deferred_workflows(&plan, policy(1, true));
     assert!(execution.result.files.is_empty());
     assert!(execution.result.has_operational_problems());
     assert_eq!(fixture.trace_lines(), vec!["crash"]);
 }
 
 #[test]
-fn operational_initial_check_stops_later_remedies_under_fail_fast() {
-    let fixture = Fixture::new("initial-failure-stops-remedies");
-    let earlier = fixture.file("earlier.rs", "DIRTY\n");
+fn fail_fast_skips_only_the_failing_tools_remaining_remedies() {
+    let fixture = Fixture::new("fail-fast-is-tool-scoped");
+    let unrelated = fixture.file("unrelated.rs", "DIRTY\n");
     let failed = fixture.file("failed.rs", "DIRTY\n");
-    let later = fixture.file("later.rs", "DIRTY\n");
+    let sibling = fixture.file("sibling.rs", "DIRTY\n");
+    let mut sibling_job = scheduled(&fixture, 1, sibling.clone(), "check", Some("fix"));
+    sibling_job.job_index = 1;
     let plan = vec![
-        scheduled(&fixture, 0, earlier.clone(), "check", Some("fix")),
+        scheduled(&fixture, 0, unrelated.clone(), "check", Some("fix")),
         scheduled(&fixture, 1, failed, "crash", Some("fix")),
-        scheduled(&fixture, 2, later.clone(), "check", Some("fix")),
+        sibling_job,
     ];
 
-    let execution = execute_deferred_workflows(&plan, 1, true);
+    let execution = execute_deferred_workflows(&plan, policy(1, true));
 
     assert!(execution.result.has_operational_problems());
     assert_eq!(
-        std::fs::read_to_string(earlier).expect("read skipped earlier candidate"),
-        "DIRTY\n"
+        only_status(&execution, &unrelated),
+        Some(FileStatus::AutoFixed),
+        "an unrelated tool still repairs its files"
     );
     assert_eq!(
-        std::fs::read_to_string(later).expect("read skipped candidate"),
-        "DIRTY\n"
+        std::fs::read_to_string(&unrelated).expect("read unrelated candidate"),
+        "CLEAN\n"
     );
-    assert_eq!(fixture.trace_lines(), vec!["check", "crash", "check"]);
+    assert_eq!(
+        std::fs::read_to_string(&sibling).expect("read skipped sibling candidate"),
+        "DIRTY\n",
+        "the failing tool's other remedies are skipped"
+    );
+    assert!(
+        execution
+            .result
+            .operational_problems
+            .values()
+            .any(|problem| problem.message.contains("remedy skipped")
+                && problem.affected_files == vec![sibling.clone()])
+    );
+    assert_eq!(
+        fixture.trace_lines(),
+        vec!["check", "crash", "check", "fix", "check"]
+    );
+}
+
+#[test]
+fn missing_executables_follow_the_missing_tool_policy() {
+    let fixture = Fixture::new("missing-tool");
+    let file = fixture.file("file.rs", "DIRTY\n");
+    let other = fixture.file("other.rs", "DIRTY\n");
+    let missing = |fixture: &Fixture| {
+        let mut workflow = scheduled(fixture, 0, file.clone(), "check", Some("fix"));
+        for command in [workflow.check.as_mut(), workflow.remedy.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            command.program = Some(
+                fixture
+                    .root
+                    .join("definitely-missing-tool")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        workflow
+    };
+    let plan = vec![
+        missing(&fixture),
+        scheduled(&fixture, 1, other.clone(), "check", Some("fix")),
+    ];
+
+    let notice = execute_deferred_workflows(&plan, policy(1, true));
+    assert!(
+        !notice.result.has_operational_problems(),
+        "user-notice reports a missing tool without an operational failure"
+    );
+    let unavailable = notice
+        .result
+        .unavailable_tools
+        .get("tool-0")
+        .expect("unavailable tool");
+    assert_eq!(unavailable.affected_files, vec![file.clone()]);
+    assert!(!notice.result.files.contains_key(&file));
+    assert_eq!(
+        only_status(&notice, &other),
+        Some(FileStatus::AutoFixed),
+        "a missing tool does not trigger failFast for other tools"
+    );
+
+    std::fs::write(&other, "DIRTY\n").expect("reset other candidate");
+    let strict = execute_deferred_workflows(
+        &plan,
+        WorkflowExecutionPolicy {
+            missing_tool_policy: MissingToolPolicy::HardFailure,
+            ..policy(1, true)
+        },
+    );
+    assert!(strict.result.has_operational_problems());
+    assert!(strict.result.unavailable_tools.is_empty());
 }
 
 #[test]
@@ -438,7 +530,7 @@ fn operational_initial_check_allows_later_remedies_without_fail_fast() {
         scheduled(&fixture, 2, later.clone(), "check", Some("fix")),
     ];
 
-    let execution = execute_deferred_workflows(&plan, 1, false);
+    let execution = execute_deferred_workflows(&plan, policy(1, false));
 
     assert!(execution.result.has_operational_problems());
     assert_eq!(
@@ -471,7 +563,7 @@ fn failed_remedy_keeps_changed_files_and_operational_problem() {
         "check",
         Some("failfix"),
     )];
-    let execution = execute_deferred_workflows(&plan, 1, true);
+    let execution = execute_deferred_workflows(&plan, policy(1, true));
     assert!(execution.result.has_operational_problems());
     let report = execution.result.reports.values().next().expect("report");
     assert_eq!(report.changed_files, vec![file]);
@@ -485,7 +577,7 @@ fn legacy_mutating_only_workflow_is_operationally_unverifiable() {
     let mut scheduled = scheduled(&fixture, 0, file.clone(), "check", Some("fix"));
     scheduled.check = None;
     scheduled.compatibility_translation = true;
-    let execution = execute_deferred_workflows(&[scheduled], 1, true);
+    let execution = execute_deferred_workflows(&[scheduled], policy(1, true));
     assert!(execution.result.files.is_empty());
     assert!(execution.result.has_operational_problems());
     let report = execution.result.reports.values().next().expect("report");
@@ -504,7 +596,7 @@ fn later_write_invalidates_prior_check_but_unrelated_write_does_not() {
         scheduled(&fixture, 1, shared.clone(), "check-b", Some("fix-b")),
         scheduled(&fixture, 2, unrelated, "check-b", Some("fix-b")),
     ];
-    let execution = execute_deferred_workflows(&plan, 3, true);
+    let execution = execute_deferred_workflows(&plan, policy(3, true));
     assert_eq!(
         only_status(&execution, &shared),
         Some(FileStatus::ManualFixesNeeded)
@@ -526,7 +618,7 @@ fn later_write_invalidates_prior_check_but_unrelated_write_does_not() {
         scheduled(&fixture, 0, clean, "check-a", None),
         scheduled(&fixture, 1, dirty, "check-b", Some("fix-b")),
     ];
-    let _ = execute_deferred_workflows(&plan, 2, true);
+    let _ = execute_deferred_workflows(&plan, policy(2, true));
     assert_eq!(
         fixture
             .trace_lines()
@@ -558,7 +650,7 @@ fn workspace_check_is_conservatively_invalidated() {
             workflow
         },
     ];
-    let execution = execute_deferred_workflows(&plan, 2, true);
+    let execution = execute_deferred_workflows(&plan, policy(2, true));
     assert_eq!(
         only_status(&execution, &workspace_candidate),
         Some(FileStatus::ManualFixesNeeded)
@@ -584,10 +676,10 @@ fn parallel_and_serial_jobs_produce_the_same_ordered_result() {
         .enumerate()
         .map(|(index, file)| scheduled(&fixture, index, file.clone(), "check", Some("fix")))
         .collect::<Vec<_>>();
-    let serial = execute_deferred_workflows(&plan, 1, true).result;
+    let serial = execute_deferred_workflows(&plan, policy(1, true)).result;
     for file in &files {
         std::fs::write(file, "DIRTY\n").expect("reset candidate");
     }
-    let parallel = execute_deferred_workflows(&plan, 4, true).result;
+    let parallel = execute_deferred_workflows(&plan, policy(4, true)).result;
     assert_eq!(serial, parallel);
 }

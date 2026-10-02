@@ -1,9 +1,10 @@
+use crate::failure::{RunOptions, catch_panic, read_stdin, report_run_failure};
 use hookkit_core::{
     CommandEnvironmentSpec, ContractId, DISABLED_DIAGNOSTICS, DiagnosticsSink,
     EnvironmentVariables, EventSpec, HandlerKind, ProcessEmission, RawInvocation,
     ResolutionProvenance, RuntimeContext,
 };
-use std::io::{Read, Write};
+use std::io::Write;
 
 /// Parse and execute one exact event. Harness and event resolution are absent by
 /// construction: `E` supplies both identities and its associated output type.
@@ -49,7 +50,24 @@ where
     ) -> hookkit_core::Result<E::CommandOutput>,
 {
     let invocation = RawInvocation::parse(bytes)?;
-    let input = E::parse(&invocation)?;
+    execute_typed_invocation::<E, _>(&invocation, variables, diagnostics, handler)
+}
+
+fn execute_typed_invocation<E, F>(
+    invocation: &RawInvocation,
+    variables: &EnvironmentVariables,
+    diagnostics: &dyn DiagnosticsSink,
+    handler: F,
+) -> hookkit_core::Result<ProcessEmission>
+where
+    E: EventSpec,
+    F: FnOnce(
+        E::Input,
+        &E::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<E::CommandOutput>,
+{
+    let input = E::parse(invocation)?;
     let environment =
         <E::CommandEnvironment as CommandEnvironmentSpec>::from_variables(&E::EVENT, variables)?;
     E::validate_command_environment(&input, &environment)?;
@@ -59,7 +77,7 @@ where
         E::EVENT,
         E::CONTRACT,
         ResolutionProvenance::TypedStatic,
-        &invocation,
+        invocation,
         E::context(&input),
         diagnostics,
     )?;
@@ -70,6 +88,14 @@ where
 }
 
 /// Stdin/stdout adapter for one exact command event.
+///
+/// Reads the payload from stdin, captures `E`'s declared environment, runs
+/// [`execute_typed`], and writes the emission. On any failure it writes one
+/// `hookkit: <program> <event> failed: ...` line to stderr and exits 1, which
+/// Claude Code and Codex treat as a non-blocking error: the pending action
+/// proceeds (Claude Code `WorktreeCreate` and `WorktreeRemove` fail on any
+/// non-zero exit). Policy hooks that must deny when they cannot decide should
+/// use [`run_event_with_options`] with [`RunOptions::fail_closed`].
 pub fn run_event<E, F>(handler: F) -> std::process::ExitCode
 where
     E: EventSpec,
@@ -79,10 +105,14 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<E::CommandOutput>,
 {
-    run_event_with_diagnostics::<E, _>(&DISABLED_DIAGNOSTICS, handler)
+    run_event_with_options::<E, _>(RunOptions::new(), handler)
 }
 
 /// Stdin/stdout adapter with a configured out-of-band diagnostics sink.
+///
+/// Equivalent to [`run_event_with_options`] with
+/// [`RunOptions::with_diagnostics`]. Runner failures are recorded in the sink
+/// as well as reported on stderr.
 pub fn run_event_with_diagnostics<E, F>(
     diagnostics: &dyn DiagnosticsSink,
     handler: F,
@@ -95,18 +125,61 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<E::CommandOutput>,
 {
-    let mut bytes = Vec::new();
-    if let Err(error) = std::io::stdin().read_to_end(&mut bytes) {
-        return crate::report::report_io_failure(E::EVENT, error);
-    }
-    let variables = match crate::environment::capture_command_environment::<E::CommandEnvironment>()
+    run_event_with_options::<E, _>(RunOptions::new().with_diagnostics(diagnostics), handler)
+}
+
+/// Stdin/stdout adapter for one exact command event with explicit options.
+///
+/// `options` selects the diagnostics sink handed to the handler and the
+/// [`crate::failure::FailurePolicy`] applied when stdin, the environment,
+/// parsing, the handler (including a panic), or emission fails. Every failure
+/// is recorded in the sink and reported on stderr; see [`crate::failure`] for
+/// the native response each policy produces.
+///
+/// A failure is lowered for `E`'s event unless the payload's authoritative
+/// discriminator names another event of the same harness: the harness reads
+/// the exit code for the event it sent, so a hook registered under the wrong
+/// event gets that event's semantics.
+pub fn run_event_with_options<E, F>(options: RunOptions<'_>, handler: F) -> std::process::ExitCode
+where
+    E: EventSpec,
+    F: FnOnce(
+        E::Input,
+        &E::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<E::CommandOutput>,
+{
+    let fail = |invocation: Option<&RawInvocation>, error: &dyn std::error::Error| {
+        let event =
+            crate::selected::builtin_payload_event(&E::HARNESS, invocation).unwrap_or(E::EVENT);
+        report_run_failure(&options, &E::HARNESS, Some(&event), &E::EVENT, error)
+    };
+    let bytes = match read_stdin() {
+        Ok(bytes) => bytes,
+        Err(error) => return fail(None, &error),
+    };
+    let parsed = RawInvocation::parse(bytes);
+    let variables = match crate::environment::capture_command_environment_with_diagnostics::<
+        E::CommandEnvironment,
+    >(options.diagnostics())
     {
         Ok(variables) => variables,
-        Err(error) => return crate::report::report_failure(E::EVENT, &error),
+        Err(error) => return fail(parsed.as_ref().ok(), &error),
     };
-    match execute_typed_with_diagnostics::<E, _>(bytes, &variables, diagnostics, handler) {
-        Ok(emission) => write_emission(&emission),
-        Err(error) => crate::report::report_failure(E::EVENT, &error),
+    let invocation = match parsed {
+        Ok(invocation) => invocation,
+        Err(error) => return fail(None, &error),
+    };
+    let executed = catch_panic(|| {
+        execute_typed_invocation::<E, _>(&invocation, &variables, options.diagnostics(), handler)
+    });
+    match executed {
+        Ok(Ok(emission)) => match try_write_emission(&emission) {
+            Ok(code) => code,
+            Err(error) => fail(Some(&invocation), &error),
+        },
+        Ok(Err(error)) => fail(Some(&invocation), &error),
+        Err(panic) => fail(Some(&invocation), &panic),
     }
 }
 
@@ -123,17 +196,17 @@ where
     run_event::<E, _>(handler)
 }
 
-pub(crate) fn write_emission(emission: &ProcessEmission) -> std::process::ExitCode {
+/// Writes an emission to the process streams and returns its exit code.
+pub(crate) fn try_write_emission(
+    emission: &ProcessEmission,
+) -> std::io::Result<std::process::ExitCode> {
     let mut stdout = std::io::stdout().lock();
     let mut stderr = std::io::stderr().lock();
-    if stdout.write_all(emission.stdout()).is_err()
-        || stderr.write_all(emission.stderr()).is_err()
-        || stdout.flush().is_err()
-        || stderr.flush().is_err()
-    {
-        return std::process::ExitCode::from(1);
-    }
-    std::process::ExitCode::from(emission.exit_code())
+    stdout.write_all(emission.stdout())?;
+    stderr.write_all(emission.stderr())?;
+    stdout.flush()?;
+    stderr.flush()?;
+    Ok(std::process::ExitCode::from(emission.exit_code()))
 }
 
 pub(crate) fn validate_command_emission(
@@ -227,10 +300,10 @@ mod tests {
         let error = execute_typed::<Echo, _>(
             br#"{}"#.to_vec(),
             &EnvironmentVariables::new(),
-            |_, _, _| Err(HookkitError::InvalidIdentity("handler failed")),
+            |_, _, _| Err(HookkitError::handler("handler failed")),
         )
         .unwrap_err();
-        assert!(matches!(error, HookkitError::InvalidIdentity(_)));
+        assert!(matches!(error, HookkitError::Handler(_)));
     }
 
     #[test]

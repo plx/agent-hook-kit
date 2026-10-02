@@ -1,9 +1,17 @@
 //! Executable conformance registry for every built-in native event adapter.
+//!
+//! Fixture locations are derived from each implementing [`EventSpec`]: its
+//! harness, snapshot, and wire event name select the frozen snapshot event
+//! directory through that snapshot's `snapshot.yaml` index. The snapshot must
+//! be the one `contracts/registry.yaml` currently selects for the harness, so
+//! a crate cannot be checked against stale fixtures after a snapshot switch.
 #![deny(missing_docs)]
 
 use base64::Engine as _;
 use hookkit_core::{EventSpec, NativeEventDescriptor, ProcessEmission, RawInvocation};
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 /// One conformance fixture that was executed successfully.
@@ -18,9 +26,24 @@ pub struct ExecutedCase {
 
 /// Execute every case advertised by the implementation registry and reject any
 /// declared/executed mismatch before the registry can be generated.
+///
+/// Every implemented contract must also have had all of its input fixtures
+/// checked against the native parser; see [`verify_all_inputs`].
 pub fn verified_descriptors() -> Result<Vec<NativeEventDescriptor>, String> {
     let descriptors = implementation_descriptors();
-    verify_all_negative_inputs()?;
+    let implemented: BTreeSet<_> = descriptors
+        .iter()
+        .map(|descriptor| descriptor.contract().as_str())
+        .collect();
+    let input_verified = verify_all_inputs()?;
+    if input_verified != implemented {
+        return Err(format!(
+            "input fixtures were not verified for {:?}, or were verified for unregistered contracts {:?}",
+            implemented.difference(&input_verified).collect::<Vec<_>>(),
+            input_verified.difference(&implemented).collect::<Vec<_>>()
+        ));
+    }
+
     let executed = execute_all_cases()?;
     let executed_by_contract = executed.iter().fold(
         BTreeMap::<&str, BTreeSet<&str>>::new(),
@@ -43,11 +66,10 @@ pub fn verified_descriptors() -> Result<Vec<NativeEventDescriptor>, String> {
             ));
         }
     }
-    let known: BTreeSet<_> = descriptors
+    if let Some(case) = executed
         .iter()
-        .map(|descriptor| descriptor.contract().as_str())
-        .collect();
-    if let Some(case) = executed.iter().find(|case| !known.contains(case.contract)) {
+        .find(|case| !implemented.contains(case.contract))
+    {
         return Err(format!(
             "executed conformance case references unregistered contract {}",
             case.contract
@@ -56,755 +78,922 @@ pub fn verified_descriptors() -> Result<Vec<NativeEventDescriptor>, String> {
     Ok(descriptors)
 }
 
-fn verify_all_negative_inputs() -> Result<(), String> {
-    verify_claude_catalog_negative_inputs()?;
-    verify_codex_catalog_negative_inputs()?;
-    verify_negative_inputs::<hookkit_claude::protocol::SessionStart>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "session-start",
-    )?;
-    verify_negative_inputs::<hookkit_claude::protocol::PostToolUse>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "post-tool-use",
-    )?;
-    verify_negative_inputs::<hookkit_claude::protocol::WorktreeCreate>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "worktree-create",
-    )?;
-    verify_negative_inputs::<hookkit_codex::protocol::PreToolUse>(
-        "codex",
-        "commit-1e59dc5-r1",
-        "pre-tool-use",
-    )?;
-    verify_negative_inputs::<hookkit_codex::protocol::PostToolUse>(
-        "codex",
-        "commit-1e59dc5-r1",
-        "post-tool-use",
-    )?;
-    verify_negative_inputs::<hookkit_antigravity::PreInvocation>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "pre-invocation",
-    )?;
-    verify_negative_inputs::<hookkit_antigravity::PostInvocation>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "post-invocation",
-    )?;
-    verify_negative_inputs::<hookkit_antigravity::PreToolUse>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "pre-tool-use",
-    )?;
-    verify_negative_inputs::<hookkit_antigravity::PostToolUse>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "post-tool-use",
-    )?;
-    verify_negative_inputs::<hookkit_antigravity::Stop>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "stop",
-    )?;
-    Ok(())
+/// Parses every input fixture of every implemented event with its native
+/// parser and returns the contracts that were checked.
+///
+/// Every positive fixture (not only the `representative` one) must parse, so
+/// a relaxed or optional field the harness may omit cannot silently become
+/// required. Every negative fixture must be rejected, except the negatives in
+/// [`OPEN_VALUE_SET_NEGATIVES`], which only close a harness-sent value set
+/// that the native crate deliberately reads into an `Unknown(String)` arm:
+/// those must be *accepted*, which locks in that forward compatibility. Every
+/// allowlist entry must match such a negative.
+pub fn verify_all_inputs() -> Result<BTreeSet<&'static str>, String> {
+    let mut verified = BTreeSet::new();
+    let mut open_value_sets = BTreeSet::new();
+    macro_rules! verify {
+        ($($event:ty),+ $(,)?) => {
+            $(verified.insert(verify_inputs::<$event>(
+                OPEN_VALUE_SET_NEGATIVES,
+                &mut open_value_sets,
+            )?);)+
+        };
+    }
+    {
+        use hookkit_claude::events::*;
+        verify!(
+            ConfigChange,
+            CwdChanged,
+            DirectoryAdded,
+            Elicitation,
+            ElicitationResult,
+            FileChanged,
+            InstructionsLoaded,
+            MessageDisplay,
+            Notification,
+            PermissionDenied,
+            PermissionRequest,
+            PostCompact,
+            PostModelSwitch,
+            PostToolBatch,
+            PostToolUse,
+            PostToolUseFailure,
+            PreCompact,
+            PreModelSwitch,
+            PreToolUse,
+            SessionEnd,
+            SessionStart,
+            Setup,
+            Stop,
+            StopFailure,
+            SubagentStart,
+            SubagentStop,
+            TaskCompleted,
+            TaskCreated,
+            TeammateIdle,
+            UserPromptExpansion,
+            UserPromptSubmit,
+            WorktreeCreate,
+            WorktreeRemove,
+        );
+    }
+    {
+        use hookkit_codex::catalog::*;
+        use hookkit_codex::protocol::{PostToolUse, PreToolUse};
+        verify!(
+            Interrupt,
+            PermissionRequest,
+            PostCompact,
+            PostToolUse,
+            PreCompact,
+            PreToolUse,
+            SessionEnd,
+            SessionStart,
+            Stop,
+            SubagentStart,
+            SubagentStop,
+            UserPromptSubmit,
+        );
+    }
+    {
+        use hookkit_antigravity::*;
+        verify!(PreInvocation, PostInvocation, PreToolUse, PostToolUse, Stop);
+    }
+    if let Some((contract, pointer)) = OPEN_VALUE_SET_NEGATIVES
+        .iter()
+        .find(|entry| !open_value_sets.contains(*entry))
+    {
+        return Err(format!(
+            "{contract} has no enum or const negative input fixture at {pointer}; remove it from OPEN_VALUE_SET_NEGATIVES"
+        ));
+    }
+    Ok(verified)
 }
 
-/// Executes every positive conformance fixture and returns their identities.
+/// Negative input fixtures, as `(contract, JSON Pointer)`, that only close a
+/// harness-sent value set the native crate parses into an `Unknown(String)`
+/// arm, so a value a newer harness release sends cannot fail the hook.
 ///
-/// This covers the shared-envelope `catalog` events (via
-/// `execute_catalog_cases`), the contract-first `protocol` events for Claude
-/// Claude Code, Codex, and the native Antigravity events.
+/// Conformance requires the native parser to *accept* each of these
+/// negatives. Each entry must name an `enum`, or a `const` on a pointer other
+/// than the `/hook_event_name` discriminator; every other negative, including
+/// a value-set negative missing from this list, must be rejected. The
+/// contracts name their snapshot, so each snapshot update reviews the list.
+pub const OPEN_VALUE_SET_NEGATIVES: &[(&str, &str)] = &[
+    // `SessionEnd.reason` reads into `SessionEndReason::Unknown`.
+    ("codex/commit-ff6aec9-r2/SessionEnd", "/reason"),
+    // `SessionStart.source` reads into `SessionStartSource::Unknown`.
+    ("codex/commit-ff6aec9-r2/SessionStart", "/source"),
+];
+
+/// Executes every declared process conformance case and returns their
+/// identities.
 ///
-/// The function stops at the first parse, emission, or exact-byte mismatch and
+/// Each case emits a typed command output and compares the exit code and
+/// stderr byte for byte, and stdout byte for byte or, for JSON, as an equal
+/// value with the same trailing-newline framing.
+///
+/// The function stops at the first emission or exact-byte mismatch and
 /// returns a human-readable error suitable for the conformance CLI.
 pub fn execute_all_cases() -> Result<Vec<ExecutedCase>, String> {
-    let mut executed = execute_catalog_cases()?;
-
-    executed.push(verify_case::<hookkit_claude::protocol::SessionStart>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "session-start",
-        "command-structured",
-        hookkit_claude::protocol::SessionStartOutput::structured(
-            Some("Read conventions.".into()),
-            Some(true),
-            Some("Review".into()),
-            vec!["/repo/.env".into()],
-        )
-        .map_err(|error| error.to_string())?,
-    )?);
-    executed.push(verify_case::<hookkit_claude::protocol::SessionStart>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "session-start",
-        "command-text",
-        hookkit_claude::protocol::SessionStartOutput::text_context("Hook-provided context."),
-    )?);
-    executed.push(verify_case::<hookkit_claude::protocol::PostToolUse>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "post-tool-use",
-        "command-structured",
-        hookkit_claude::protocol::PostToolUseOutput::with_context("Generated files changed.")
-            .with_block("Review result.")
-            .map_err(|error| error.to_string())?
-            .with_updated_tool_output(serde_json::json!({"status":"redacted"}))
-            .map_err(|error| error.to_string())?,
-    )?);
-    executed.push(verify_case::<hookkit_claude::protocol::PostToolUse>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "post-tool-use",
-        "command-exit-2",
-        hookkit_claude::protocol::PostToolUseOutput::feedback_error("blocked by hook"),
-    )?);
-    executed.push(verify_case::<hookkit_claude::protocol::WorktreeCreate>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "worktree-create",
-        "command-created",
-        hookkit_claude::protocol::WorktreeCreateOutput::path_with_newline(
-            "/tmp/hookkit-worktree".into(),
-        )
-        .map_err(|error| error.to_string())?,
-    )?);
-    executed.push(verify_case::<hookkit_claude::protocol::WorktreeCreate>(
-        "claude-code",
-        "docs-2026-08-05-r1",
-        "worktree-create",
-        "command-failed",
-        hookkit_claude::protocol::WorktreeCreateOutput::failed("", 1)
-            .map_err(|error| error.to_string())?,
-    )?);
-
-    executed.push(verify_case::<hookkit_codex::protocol::PreToolUse>(
-        "codex",
-        "commit-1e59dc5-r1",
-        "pre-tool-use",
-        "no-op",
-        hookkit_codex::protocol::PreToolUseOutput::no_op(),
-    )?);
-    executed.push(verify_case::<hookkit_codex::protocol::PreToolUse>(
-        "codex",
-        "commit-1e59dc5-r1",
-        "pre-tool-use",
-        "deny-json",
-        hookkit_codex::protocol::PreToolUseOutput::deny("blocked"),
-    )?);
-    executed.push(verify_case::<hookkit_codex::protocol::PreToolUse>(
-        "codex",
-        "commit-1e59dc5-r1",
-        "pre-tool-use",
-        "deny-stderr",
-        hookkit_codex::protocol::PreToolUseOutput::deny_stderr("blocked"),
-    )?);
-    executed.push(verify_case::<hookkit_codex::protocol::PostToolUse>(
-        "codex",
-        "commit-1e59dc5-r1",
-        "post-tool-use",
-        "structured",
-        hookkit_codex::protocol::PostToolUseOutput::with_context("Generated files changed.")
-            .with_block("Review the output.")
-            .map_err(|error| error.to_string())?,
-    )?);
-    executed.push(verify_case::<hookkit_codex::protocol::PostToolUse>(
-        "codex",
-        "commit-1e59dc5-r1",
-        "post-tool-use",
-        "exit-2",
-        hookkit_codex::protocol::PostToolUseOutput::blocking_error("blocked by hook"),
-    )?);
-
-    executed.push(verify_case::<hookkit_antigravity::PreInvocation>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "pre-invocation",
-        "inject-reminder",
-        hookkit_antigravity::PreInvocationOutput::inject(
-            hookkit_antigravity::InjectStep::EphemeralMessage {
-                ephemeral_message: "Remember to lint".into(),
-            },
-        ),
-    )?);
-    executed.push(verify_case::<hookkit_antigravity::PostInvocation>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "post-invocation",
-        "default",
-        hookkit_antigravity::PostInvocationOutput {
-            inject_steps: Vec::new(),
-            termination_behavior: Some(hookkit_antigravity::TerminationBehavior::Default),
-        },
-    )?);
-    executed.push(verify_case::<hookkit_antigravity::PostInvocation>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "post-invocation",
-        "force-continue",
-        hookkit_antigravity::PostInvocationOutput {
-            inject_steps: Vec::new(),
-            termination_behavior: Some(hookkit_antigravity::TerminationBehavior::ForceContinue),
-        },
-    )?);
-    executed.push(verify_case::<hookkit_antigravity::PreToolUse>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "pre-tool-use",
-        "ask",
-        hookkit_antigravity::PreToolUseOutput {
-            decision: hookkit_antigravity::ToolDecision::Ask,
-            reason: Some("Requires confirmation.".into()),
-            permission_overrides: vec!["command(npm test)".into()],
-        },
-    )?);
-    executed.push(verify_case::<hookkit_antigravity::PostToolUse>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "post-tool-use",
-        "no-op",
-        hookkit_antigravity::PostToolUseOutput::default(),
-    )?);
-    executed.push(verify_case::<hookkit_antigravity::Stop>(
-        "antigravity",
-        "docs-2026-08-04-r1",
-        "stop",
-        "continue",
-        hookkit_antigravity::StopOutput {
-            decision: "continue".into(),
-            reason: Some("Not done yet".into()),
-        },
-    )?);
-
+    let mut executed = execute_claude_cases()?;
+    executed.extend(execute_codex_cases()?);
+    executed.extend(execute_antigravity_cases()?);
     Ok(executed)
 }
 
-fn verify_claude_catalog_negative_inputs() -> Result<(), String> {
-    macro_rules! verify {
-        ($event:ident, $path:literal) => {
-            verify_negative_inputs::<hookkit_claude::catalog::$event>(
-                "claude-code",
-                "docs-2026-08-05-r1",
-                $path,
-            )?;
-        };
-    }
-    verify!(ConfigChange, "config-change");
-    verify!(CwdChanged, "cwd-changed");
-    verify!(DirectoryAdded, "directory-added");
-    verify!(Elicitation, "elicitation");
-    verify!(ElicitationResult, "elicitation-result");
-    verify!(FileChanged, "file-changed");
-    verify!(InstructionsLoaded, "instructions-loaded");
-    verify!(MessageDisplay, "message-display");
-    verify!(Notification, "notification");
-    verify!(PermissionDenied, "permission-denied");
-    verify!(PermissionRequest, "permission-request");
-    verify!(PostCompact, "post-compact");
-    verify!(PostToolBatch, "post-tool-batch");
-    verify!(PostToolUseFailure, "post-tool-use-failure");
-    verify!(PreCompact, "pre-compact");
-    verify!(PreToolUse, "pre-tool-use");
-    verify!(SessionEnd, "session-end");
-    verify!(Setup, "setup");
-    verify!(Stop, "stop");
-    verify!(StopFailure, "stop-failure");
-    verify!(SubagentStart, "subagent-start");
-    verify!(SubagentStop, "subagent-stop");
-    verify!(TaskCompleted, "task-completed");
-    verify!(TaskCreated, "task-created");
-    verify!(TeammateIdle, "teammate-idle");
-    verify!(UserPromptExpansion, "user-prompt-expansion");
-    verify!(UserPromptSubmit, "user-prompt-submit");
-    verify!(WorktreeRemove, "worktree-remove");
-    Ok(())
+/// Converts a builder error into the conformance error type.
+fn built<T>(result: hookkit_core::Result<T>) -> Result<T, String> {
+    result.map_err(|error| error.to_string())
 }
 
-fn verify_codex_catalog_negative_inputs() -> Result<(), String> {
-    macro_rules! verify {
-        ($event:ident, $path:literal) => {
-            verify_negative_inputs::<hookkit_codex::catalog::$event>(
-                "codex",
-                "commit-1e59dc5-r1",
-                $path,
-            )?;
-        };
-    }
-    verify!(PermissionRequest, "permission-request");
-    verify!(PostCompact, "post-compact");
-    verify!(PreCompact, "pre-compact");
-    verify!(SessionEnd, "session-end");
-    verify!(SessionStart, "session-start");
-    verify!(Stop, "stop");
-    verify!(SubagentStart, "subagent-start");
-    verify!(SubagentStop, "subagent-stop");
-    verify!(UserPromptSubmit, "user-prompt-submit");
-    Ok(())
-}
-
-fn execute_catalog_cases() -> Result<Vec<ExecutedCase>, String> {
+fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
+    use hookkit_claude::events::*;
     let mut executed = Vec::new();
-    macro_rules! claude_case {
-        ($event:ident, $path:literal, $case:literal, $output:expr) => {
-            executed.push(verify_case::<hookkit_claude::catalog::$event>(
-                "claude-code",
-                "docs-2026-08-05-r1",
-                $path,
-                $case,
-                $output,
-            )?);
+    macro_rules! case {
+        ($event:ty, $case:literal, $output:expr) => {
+            executed.push(verify_case::<$event>($case, $output)?);
         };
     }
-    macro_rules! codex_case {
-        ($event:ident, $path:literal, $case:literal, $output:expr) => {
-            executed.push(verify_case::<hookkit_codex::catalog::$event>(
-                "codex",
-                "commit-1e59dc5-r1",
-                $path,
-                $case,
-                $output,
-            )?);
-        };
-    }
-    claude_case!(
+    const BLOCKED: &str = "blocked by hook";
+    const FAILED: &str = "hook failed";
+    const OPEN_BRACE: &str = "{ context without a closing brace";
+
+    case!(
         ConfigChange,
-        "config-change",
         "command-structured",
-        hookkit_claude::catalog::ConfigChangeOutput::block("Configuration change rejected.")
+        ConfigChangeOutput::block("Configuration change rejected.")
     );
-    claude_case!(
+    case!(
         ConfigChange,
-        "config-change",
         "command-exit-2",
-        hookkit_claude::catalog::ConfigChangeOutput::blocking_error("blocked by hook")
+        ConfigChangeOutput::blocking_error(BLOCKED)
     );
-    claude_case!(
+    case!(
+        ConfigChange,
+        "command-exit-2-structured",
+        built(
+            ConfigChangeOutput::block("Configuration change rejected.")
+                .into_blocking_error(BLOCKED)
+        )?
+    );
+    case!(
+        ConfigChange,
+        "command-nonzero-unstructured",
+        ConfigChangeOutput::nonblocking_error(FAILED)
+    );
+    case!(
         CwdChanged,
-        "cwd-changed",
         "command-structured",
-        hookkit_claude::catalog::CwdChangedOutput::with_system_message(
-            "Working directory changed.",
-        )
-        .with_watch_paths(vec!["/repo/crate/.env".into()])
-        .map_err(|error| error.to_string())?
+        built(
+            CwdChangedOutput::system_message("Working directory changed.")
+                .with_watch_paths(vec!["/repo/crate/.env".into()])
+        )?
     );
-    claude_case!(
+    case!(
+        CwdChanged,
+        "command-nonzero-unstructured",
+        CwdChangedOutput::nonblocking_error(FAILED)
+    );
+    case!(
         DirectoryAdded,
-        "directory-added",
         "command-structured",
-        hookkit_claude::catalog::DirectoryAddedOutput::with_system_message(
-            "Working directory added.",
-        )
+        DirectoryAddedOutput::system_message("Working directory added.")
     );
-    claude_case!(
+    case!(
         Elicitation,
-        "elicitation",
         "command-structured",
-        hookkit_claude::catalog::ElicitationOutput::accept(serde_json::Map::from_iter([(
+        ElicitationOutput::accept(serde_json::Map::from_iter([(
             "name".into(),
             serde_json::json!("Ada"),
         )]))
     );
-    claude_case!(
+    case!(
         Elicitation,
-        "elicitation",
-        "command-exit-2",
-        hookkit_claude::catalog::ElicitationOutput::blocking_error("blocked by hook")
+        "command-decision-block",
+        ElicitationOutput::block("Declined by policy.")
     );
-    claude_case!(
+    case!(
+        Elicitation,
+        "command-exit-2",
+        ElicitationOutput::blocking_error(BLOCKED)
+    );
+    case!(
+        Elicitation,
+        "command-nonzero-unstructured",
+        ElicitationOutput::nonblocking_error(FAILED)
+    );
+    case!(
         ElicitationResult,
-        "elicitation-result",
         "command-structured",
-        hookkit_claude::catalog::ElicitationResultOutput::decline()
+        ElicitationResultOutput::decline()
     );
-    claude_case!(
+    case!(
         ElicitationResult,
-        "elicitation-result",
-        "command-exit-2",
-        hookkit_claude::catalog::ElicitationResultOutput::blocking_error("blocked by hook")
+        "command-decision-block",
+        ElicitationResultOutput::block("Declined by policy.")
     );
-    claude_case!(
+    case!(
+        ElicitationResult,
+        "command-exit-2",
+        ElicitationResultOutput::blocking_error(BLOCKED)
+    );
+    case!(
+        ElicitationResult,
+        "command-nonzero-unstructured",
+        ElicitationResultOutput::nonblocking_error(FAILED)
+    );
+    case!(
         FileChanged,
-        "file-changed",
         "command-structured",
-        hookkit_claude::catalog::FileChangedOutput::with_system_message("Watched file changed.")
-            .with_watch_paths(vec!["/repo/.env".into(), "/repo/.env.local".into()])
-            .map_err(|error| error.to_string())?
+        built(
+            FileChangedOutput::system_message("Watched file changed.")
+                .with_watch_paths(vec!["/repo/.env".into(), "/repo/.env.local".into()])
+        )?
     );
-    claude_case!(
+    case!(
+        FileChanged,
+        "command-nonzero-unstructured",
+        FileChangedOutput::nonblocking_error(FAILED)
+    );
+    // Claude Code discards InstructionsLoaded, Setup, SessionEnd, and
+    // PostCompact JSON output, so the structured case is an empty object.
+    case!(
         InstructionsLoaded,
-        "instructions-loaded",
         "command-structured",
-        hookkit_claude::catalog::InstructionsLoadedOutput::no_op()
+        InstructionsLoadedOutput::no_op()
     );
-    claude_case!(
+    case!(
         MessageDisplay,
-        "message-display",
         "command-structured",
-        hookkit_claude::catalog::MessageDisplayOutput::display("Here is the plan:")
+        MessageDisplayOutput::display("Here is the plan:")
     );
-    claude_case!(
+    // Notification honors only the terminal sequence.
+    case!(
         Notification,
-        "notification",
         "command-structured",
-        hookkit_claude::catalog::NotificationOutput::with_system_message(
-            "Permission notification emitted.",
-        )
-        .with_continue(true)
-        .map_err(|error| error.to_string())?
-        .with_suppress_output(true)
-        .map_err(|error| error.to_string())?
-        .with_terminal_sequence("\u{7}")
-        .map_err(|error| error.to_string())?
+        NotificationOutput::terminal_sequence("\u{7}")
     );
-    claude_case!(
+    case!(
         PermissionDenied,
-        "permission-denied",
         "command-structured",
-        hookkit_claude::catalog::PermissionDeniedOutput::retry(true)
+        PermissionDeniedOutput::retry(true)
     );
-    claude_case!(
+    // PermissionRequest ignores exit 2, so there is no blocking-error case.
+    case!(
         PermissionRequest,
-        "permission-request",
         "command-structured",
-        hookkit_claude::catalog::PermissionRequestOutput::decide(
-            hookkit_claude::catalog::PermissionRequestBehavior::Deny,
-            Some("Blocked by policy.".into()),
-            Some(false),
-        )
+        built(PermissionRequestOutput::deny("Blocked by policy.").with_interrupt(false))?
     );
-    claude_case!(
+    case!(
         PermissionRequest,
-        "permission-request",
-        "command-exit-2",
-        hookkit_claude::catalog::PermissionRequestOutput::blocking_error("blocked by hook")
+        "command-nonzero-unstructured",
+        PermissionRequestOutput::nonblocking_error(FAILED)
     );
-    claude_case!(
+    case!(
         PostCompact,
-        "post-compact",
         "command-structured",
-        hookkit_claude::catalog::PostCompactOutput::with_system_message("Compaction complete.")
+        PostCompactOutput::no_op()
     );
-    claude_case!(
+    case!(
+        PostCompact,
+        "command-nonzero",
+        PostCompactOutput::nonblocking_error(FAILED)
+    );
+    case!(
+        PostModelSwitch,
+        "command-structured",
+        PostModelSwitchOutput::with_context("On Opus, delegate implementation work to subagents.")
+    );
+    case!(
+        PostModelSwitch,
+        "command-text",
+        PostModelSwitchOutput::text_context("Hook-provided context.")
+    );
+    case!(
+        PostModelSwitch,
+        "command-text-open-brace",
+        PostModelSwitchOutput::text_context(OPEN_BRACE)
+    );
+    case!(
+        PostModelSwitch,
+        "command-nonzero-unstructured",
+        PostModelSwitchOutput::nonblocking_error(FAILED)
+    );
+    case!(
         PostToolBatch,
-        "post-tool-batch",
         "command-structured",
-        hookkit_claude::catalog::PostToolBatchOutput::with_context("Hook-provided context.")
+        PostToolBatchOutput::with_context("Hook-provided context.")
     );
-    claude_case!(
+    case!(
         PostToolBatch,
-        "post-tool-batch",
         "command-exit-2",
-        hookkit_claude::catalog::PostToolBatchOutput::blocking_error("blocked by hook")
+        PostToolBatchOutput::blocking_error(BLOCKED)
     );
-    claude_case!(
+    case!(
+        PostToolBatch,
+        "command-exit-2-structured",
+        built(
+            PostToolBatchOutput::block("Stop before the next model call.")
+                .into_blocking_error(BLOCKED)
+        )?
+    );
+    case!(
+        PostToolBatch,
+        "command-nonzero-unstructured",
+        PostToolBatchOutput::nonblocking_error(FAILED)
+    );
+    case!(
+        PostToolUse,
+        "command-structured",
+        built(
+            PostToolUseOutput::with_context("Generated files changed.")
+                .with_updated_tool_output(serde_json::json!({"status": "redacted"}))
+                .and_then(|output| output.with_block("Review result."))
+        )?
+    );
+    case!(
+        PostToolUse,
+        "command-classifier-context",
+        built(PostToolUseOutput::no_op().with_classifier_context(
+            "This query ran against the staging database, not production.",
+        ))?
+    );
+    case!(
+        PostToolUse,
+        "command-exit-2",
+        PostToolUseOutput::feedback_error(BLOCKED)
+    );
+    case!(
+        PostToolUse,
+        "command-exit-2-structured",
+        built(
+            PostToolUseOutput::with_context("Generated files changed.")
+                .into_feedback_error(BLOCKED)
+        )?
+    );
+    case!(
+        PostToolUse,
+        "command-nonzero-unstructured",
+        PostToolUseOutput::nonblocking_error(FAILED)
+    );
+    case!(
         PostToolUseFailure,
-        "post-tool-use-failure",
         "command-structured",
-        hookkit_claude::catalog::PostToolUseFailureOutput::with_context("Hook-provided context.",)
+        PostToolUseFailureOutput::with_context("Hook-provided context.")
     );
-    claude_case!(
+    case!(
         PostToolUseFailure,
-        "post-tool-use-failure",
         "command-exit-2",
-        hookkit_claude::catalog::PostToolUseFailureOutput::feedback_error("blocked by hook")
+        PostToolUseFailureOutput::feedback_error(BLOCKED)
     );
-    claude_case!(
+    case!(
+        PostToolUseFailure,
+        "command-exit-2-structured",
+        built(
+            PostToolUseFailureOutput::with_context("Retry with --offline.")
+                .into_feedback_error(BLOCKED)
+        )?
+    );
+    case!(
+        PostToolUseFailure,
+        "command-nonzero-unstructured",
+        PostToolUseFailureOutput::nonblocking_error(FAILED)
+    );
+    case!(
         PreCompact,
-        "pre-compact",
         "command-structured",
-        hookkit_claude::catalog::PreCompactOutput::block("Save state first.")
+        PreCompactOutput::block("Save state first.")
     );
-    claude_case!(
+    case!(
         PreCompact,
-        "pre-compact",
         "command-exit-2",
-        hookkit_claude::catalog::PreCompactOutput::blocking_error("blocked by hook")
+        PreCompactOutput::blocking_error(BLOCKED)
     );
-    let updated_input = serde_json::Map::from_iter([(
-        "command".into(),
-        serde_json::Value::String("cargo test".into()),
-    )]);
-    claude_case!(
-        PreToolUse,
-        "pre-tool-use",
+    case!(
+        PreCompact,
+        "command-exit-2-structured",
+        built(PreCompactOutput::block("Save state first.").into_blocking_error(BLOCKED))?
+    );
+    case!(
+        PreCompact,
+        "command-nonzero-unstructured",
+        PreCompactOutput::nonblocking_error(FAILED)
+    );
+    case!(
+        PreModelSwitch,
         "command-structured",
-        hookkit_claude::catalog::PreToolUseOutput::decide(
-            hookkit_claude::catalog::PreToolPermissionDecision::Ask,
-            Some("Review command.".into()),
-            Some(updated_input),
-            Some("Production environment.".into()),
+        PreModelSwitchOutput::ask(
+            "Switching now re-sends about 180k tokens to the new model. Continue?"
         )
     );
-    claude_case!(
-        PreToolUse,
-        "pre-tool-use",
+    case!(
+        PreModelSwitch,
+        "command-block",
+        PreModelSwitchOutput::block("Opus 4.6 is retired for this project.")
+    );
+    case!(
+        PreModelSwitch,
         "command-exit-2",
-        hookkit_claude::catalog::PreToolUseOutput::blocking_error("blocked by hook")
+        PreModelSwitchOutput::blocking_error(BLOCKED)
     );
-    claude_case!(
+    case!(
+        PreModelSwitch,
+        "command-exit-2-structured",
+        built(PreModelSwitchOutput::allow().into_blocking_error(BLOCKED))?
+    );
+    case!(
+        PreModelSwitch,
+        "command-nonzero-unstructured",
+        PreModelSwitchOutput::nonblocking_error(FAILED)
+    );
+    case!(
+        PreToolUse,
+        "command-structured",
+        built(
+            PreToolUseOutput::ask("Review command.")
+                .with_updated_input(serde_json::Map::from_iter([(
+                    "command".into(),
+                    serde_json::Value::String("cargo test".into()),
+                )]))
+                .and_then(|output| output.with_additional_context("Production environment."))
+        )?
+    );
+    case!(
+        PreToolUse,
+        "command-exit-2",
+        PreToolUseOutput::blocking_error(BLOCKED)
+    );
+    case!(
+        PreToolUse,
+        "command-exit-2-structured",
+        built(PreToolUseOutput::allow().into_blocking_error(BLOCKED))?
+    );
+    case!(
+        PreToolUse,
+        "command-nonzero-unstructured",
+        PreToolUseOutput::nonblocking_error(FAILED)
+    );
+    case!(SessionEnd, "command-structured", SessionEndOutput::no_op());
+    case!(
         SessionEnd,
-        "session-end",
-        "command-structured",
-        hookkit_claude::catalog::SessionEndOutput::with_system_message("Session ended.")
+        "command-nonzero",
+        SessionEndOutput::nonblocking_error(FAILED)
     );
-    claude_case!(
-        Setup,
-        "setup",
+    case!(
+        SessionStart,
         "command-structured",
-        hookkit_claude::catalog::SetupOutput::with_context("Hook-provided context.")
+        built(
+            SessionStartOutput::with_context("Read conventions.")
+                .with_reload_skills(true)
+                .and_then(|output| output.with_session_title("Review"))
+                .and_then(|output| output.with_watch_paths(vec!["/repo/.env".into()]))
+        )?
     );
-    claude_case!(
+    case!(
+        SessionStart,
+        "command-text",
+        SessionStartOutput::text_context("Hook-provided context.")
+    );
+    case!(
+        SessionStart,
+        "command-text-open-brace",
+        SessionStartOutput::text_context(OPEN_BRACE)
+    );
+    case!(
+        SessionStart,
+        "command-nonzero-unstructured",
+        SessionStartOutput::nonblocking_error(FAILED)
+    );
+    case!(Setup, "command-structured", SetupOutput::no_op());
+    case!(
+        Stop,
+        "command-structured",
+        StopOutput::block_with_context("Run tests again.", "Focus on failures.")
+    );
+    case!(Stop, "command-exit-2", StopOutput::blocking_error(BLOCKED));
+    case!(
+        Stop,
+        "command-exit-2-structured",
+        built(StopOutput::block("Run tests again.").into_blocking_error(BLOCKED))?
+    );
+    case!(
+        Stop,
+        "command-nonzero-unstructured",
+        StopOutput::nonblocking_error(FAILED)
+    );
+    case!(
         StopFailure,
-        "stop-failure",
         "command-structured",
-        hookkit_claude::catalog::StopFailureOutput::no_op()
+        StopFailureOutput::no_op()
     );
-    claude_case!(
-        Stop,
-        "stop",
-        "command-structured",
-        hookkit_claude::catalog::StopOutput::block_with_context(
-            "Run tests again.",
-            "Focus on failures.",
-        )
+    case!(
+        StopFailure,
+        "command-terminal-sequence",
+        StopFailureOutput::terminal_sequence("\u{7}")
     );
-    claude_case!(
-        Stop,
-        "stop",
-        "command-exit-2",
-        hookkit_claude::catalog::StopOutput::blocking_error("blocked by hook")
-    );
-    claude_case!(
+    case!(
         SubagentStart,
-        "subagent-start",
         "command-structured",
-        hookkit_claude::catalog::SubagentStartOutput::with_context("Hook-provided context.")
+        SubagentStartOutput::with_context("Hook-provided context.")
     );
-    claude_case!(
+    case!(
+        SubagentStart,
+        "command-nonzero-unstructured",
+        SubagentStartOutput::nonblocking_error(FAILED)
+    );
+    case!(
         SubagentStop,
-        "subagent-stop",
         "command-structured",
-        hookkit_claude::catalog::SubagentStopOutput::block_with_context(
-            "Run another pass.",
-            "Check edge cases.",
-        )
+        built(
+            SubagentStopOutput::with_context("Check edge cases.").with_block("Run another pass.")
+        )?
     );
-    claude_case!(
+    case!(
         SubagentStop,
-        "subagent-stop",
         "command-exit-2",
-        hookkit_claude::catalog::SubagentStopOutput::blocking_error("blocked by hook")
+        SubagentStopOutput::blocking_error(BLOCKED)
     );
-    claude_case!(
+    case!(
+        SubagentStop,
+        "command-exit-2-structured",
+        built(SubagentStopOutput::block("Run another pass.").into_blocking_error(BLOCKED))?
+    );
+    case!(
+        SubagentStop,
+        "command-nonzero-unstructured",
+        SubagentStopOutput::nonblocking_error(FAILED)
+    );
+    case!(
         TaskCompleted,
-        "task-completed",
         "command-structured",
-        hookkit_claude::catalog::TaskCompletedOutput::no_op()
-            .with_continue(false)
-            .map_err(|error| error.to_string())?
-            .with_stop_reason("Verification is incomplete.")
-            .map_err(|error| error.to_string())?
+        built(
+            TaskCompletedOutput::no_op()
+                .with_continue(false)
+                .and_then(|output| output.with_stop_reason("Verification is incomplete."))
+        )?
     );
-    claude_case!(
+    case!(
         TaskCompleted,
-        "task-completed",
         "command-exit-2",
-        hookkit_claude::catalog::TaskCompletedOutput::blocking_error("blocked by hook")
+        TaskCompletedOutput::blocking_error(BLOCKED)
     );
-    claude_case!(
+    case!(
+        TaskCompleted,
+        "command-exit-2-structured",
+        built(
+            TaskCompletedOutput::no_op()
+                .with_system_message("Tests are still failing.")
+                .and_then(|output| output.into_blocking_error(BLOCKED))
+        )?
+    );
+    case!(
+        TaskCompleted,
+        "command-nonzero-unstructured",
+        TaskCompletedOutput::nonblocking_error(FAILED)
+    );
+    // TaskCreated discards `continue`; it blocks through `decision: "block"`.
+    case!(
         TaskCreated,
-        "task-created",
         "command-structured",
-        hookkit_claude::catalog::TaskCreatedOutput::no_op()
-            .with_continue(false)
-            .map_err(|error| error.to_string())?
-            .with_stop_reason("Task needs an owner.")
-            .map_err(|error| error.to_string())?
+        TaskCreatedOutput::block("Task needs an owner.")
     );
-    claude_case!(
+    case!(
         TaskCreated,
-        "task-created",
         "command-exit-2",
-        hookkit_claude::catalog::TaskCreatedOutput::blocking_error("blocked by hook")
+        TaskCreatedOutput::blocking_error(BLOCKED)
     );
-    claude_case!(
+    case!(
+        TaskCreated,
+        "command-exit-2-structured",
+        built(TaskCreatedOutput::block("Task needs an owner.").into_blocking_error(BLOCKED))?
+    );
+    case!(
+        TaskCreated,
+        "command-nonzero-unstructured",
+        TaskCreatedOutput::nonblocking_error(FAILED)
+    );
+    case!(
         TeammateIdle,
-        "teammate-idle",
         "command-structured",
-        hookkit_claude::catalog::TeammateIdleOutput::no_op()
-            .with_continue(false)
-            .map_err(|error| error.to_string())?
-            .with_stop_reason("Continue reviewing.")
-            .map_err(|error| error.to_string())?
+        built(
+            TeammateIdleOutput::no_op()
+                .with_continue(false)
+                .and_then(|output| output.with_stop_reason("Continue reviewing."))
+        )?
     );
-    claude_case!(
+    case!(
         TeammateIdle,
-        "teammate-idle",
         "command-exit-2",
-        hookkit_claude::catalog::TeammateIdleOutput::blocking_error("blocked by hook")
+        TeammateIdleOutput::blocking_error(BLOCKED)
     );
-    claude_case!(
+    case!(
+        TeammateIdle,
+        "command-exit-2-structured",
+        built(
+            TeammateIdleOutput::no_op()
+                .with_system_message("Teammate kept working.")
+                .and_then(|output| output.into_blocking_error(BLOCKED))
+        )?
+    );
+    case!(
+        TeammateIdle,
+        "command-nonzero-unstructured",
+        TeammateIdleOutput::nonblocking_error(FAILED)
+    );
+    case!(
         UserPromptExpansion,
-        "user-prompt-expansion",
         "command-structured",
-        hookkit_claude::catalog::UserPromptExpansionOutput::block_with_context(
-            "Unavailable.",
-            "Use the team checklist.",
-        )
+        UserPromptExpansionOutput::block_with_context("Unavailable.", "Use the team checklist.")
     );
-    claude_case!(
+    case!(
         UserPromptExpansion,
-        "user-prompt-expansion",
         "command-text",
-        hookkit_claude::catalog::UserPromptExpansionOutput::text_context("Hook-provided context.",)
+        UserPromptExpansionOutput::text_context("Hook-provided context.")
     );
-    claude_case!(
+    case!(
         UserPromptExpansion,
-        "user-prompt-expansion",
-        "command-exit-2",
-        hookkit_claude::catalog::UserPromptExpansionOutput::blocking_error("blocked by hook")
+        "command-text-open-brace",
+        UserPromptExpansionOutput::text_context(OPEN_BRACE)
     );
-    claude_case!(
+    case!(
+        UserPromptExpansion,
+        "command-exit-2",
+        UserPromptExpansionOutput::blocking_error(BLOCKED)
+    );
+    case!(
+        UserPromptExpansion,
+        "command-exit-2-structured",
+        built(
+            UserPromptExpansionOutput::block("Blocked by JSON reason.")
+                .into_blocking_error(BLOCKED)
+        )?
+    );
+    case!(
+        UserPromptExpansion,
+        "command-nonzero-unstructured",
+        UserPromptExpansionOutput::nonblocking_error(FAILED)
+    );
+    case!(
         UserPromptSubmit,
-        "user-prompt-submit",
         "command-structured",
-        hookkit_claude::catalog::UserPromptSubmitOutput::block_with_context(
-            "Confirmation required.",
-            "Clarify scope.",
-            Some("Clarify".into()),
-            Some(true),
-        )
+        built(
+            UserPromptSubmitOutput::block("Confirmation required.")
+                .with_additional_context("Clarify scope.")
+                .and_then(|output| output.with_session_title("Clarify"))
+                .and_then(|output| output.with_suppress_original_prompt(true))
+        )?
     );
-    claude_case!(
+    case!(
         UserPromptSubmit,
-        "user-prompt-submit",
         "command-text",
-        hookkit_claude::catalog::UserPromptSubmitOutput::text_context("Hook-provided context.")
+        UserPromptSubmitOutput::text_context("Hook-provided context.")
     );
-    claude_case!(
+    case!(
         UserPromptSubmit,
-        "user-prompt-submit",
-        "command-exit-2",
-        hookkit_claude::catalog::UserPromptSubmitOutput::blocking_error("blocked by hook")
+        "command-text-open-brace",
+        UserPromptSubmitOutput::text_context(OPEN_BRACE)
     );
-    claude_case!(
+    case!(
+        UserPromptSubmit,
+        "command-exit-2",
+        UserPromptSubmitOutput::blocking_error(BLOCKED)
+    );
+    case!(
+        UserPromptSubmit,
+        "command-exit-2-structured",
+        built(
+            UserPromptSubmitOutput::block("Blocked by JSON reason.").into_blocking_error(BLOCKED)
+        )?
+    );
+    // Exit 2 with JSON that only sets suppressOriginalPrompt: the prompt is
+    // blocked and the block message leaves its text out.
+    case!(
+        UserPromptSubmit,
+        "command-exit-2-suppress-original-prompt",
+        built(
+            UserPromptSubmitOutput::no_op()
+                .with_suppress_original_prompt(true)
+                .and_then(|output| output.into_blocking_error(BLOCKED))
+        )?
+    );
+    case!(
+        UserPromptSubmit,
+        "command-nonzero-unstructured",
+        UserPromptSubmitOutput::nonblocking_error(FAILED)
+    );
+    case!(
+        WorktreeCreate,
+        "command-created",
+        built(WorktreeCreateOutput::path_with_newline(
+            "/tmp/hookkit-worktree".into()
+        ))?
+    );
+    case!(
+        WorktreeCreate,
+        "command-failed",
+        built(WorktreeCreateOutput::failed("", 1))?
+    );
+    // WorktreeRemove has no JSON output: only the exit code matters.
+    case!(
         WorktreeRemove,
-        "worktree-remove",
-        "command-structured",
-        hookkit_claude::catalog::WorktreeRemoveOutput::no_op()
+        "command-removed",
+        WorktreeRemoveOutput::removed()
     );
+    case!(
+        WorktreeRemove,
+        "command-failed",
+        built(WorktreeRemoveOutput::failed("worktree is still in use", 1))?
+    );
+    case!(
+        WorktreeRemove,
+        "command-exit-2",
+        built(WorktreeRemoveOutput::failed("worktree is still in use", 2))?
+    );
+    Ok(executed)
+}
 
-    codex_case!(
-        PermissionRequest,
-        "permission-request",
+fn execute_codex_cases() -> Result<Vec<ExecutedCase>, String> {
+    use hookkit_codex::catalog::*;
+    use hookkit_codex::protocol::{PostToolUse, PostToolUseOutput, PreToolUse, PreToolUseOutput};
+    let mut executed = Vec::new();
+    macro_rules! case {
+        ($event:ty, $case:literal, $output:expr) => {
+            executed.push(verify_case::<$event>($case, $output)?);
+        };
+    }
+    const BLOCKED: &str = "blocked by hook";
+    // Codex shows failure stderr only for PreCompact, PostCompact, and
+    // SessionEnd, and prints it verbatim.
+    const FAILED: &str = "hook failed\n";
+    const DEVELOPER_CONTEXT: &str = "Hook-provided developer context.";
+
+    // `no_op()` is empty stdout on every Codex event.
+    case!(PreToolUse, "no-op", PreToolUseOutput::no_op());
+    case!(PreToolUse, "deny-json", PreToolUseOutput::deny("blocked"));
+    case!(
+        PreToolUse,
+        "deny-stderr",
+        PreToolUseOutput::deny_stderr("blocked")
+    );
+    case!(
+        PostToolUse,
         "structured",
-        hookkit_codex::catalog::PermissionRequestOutput::deny("Blocked by policy.")
+        built(
+            PostToolUseOutput::with_context("Generated files changed.")
+                .with_block("Review the output.")
+        )?
     );
-    codex_case!(
-        PermissionRequest,
-        "permission-request",
+    case!(PostToolUse, "no-op", PostToolUseOutput::no_op());
+    case!(
+        PostToolUse,
         "exit-2",
-        hookkit_codex::catalog::PermissionRequestOutput::blocking_error("blocked by hook")
+        PostToolUseOutput::blocking_error(BLOCKED)
     );
-    codex_case!(
+    case!(
+        Interrupt,
+        "structured",
+        InterruptOutput::system_message("Saved the interrupted turn to the local audit log.")
+    );
+    case!(Interrupt, "no-op", InterruptOutput::no_op());
+    case!(
+        PermissionRequest,
+        "structured",
+        PermissionRequestOutput::deny("Blocked by policy.")
+    );
+    case!(
+        PermissionRequest,
+        "structured-allow",
+        PermissionRequestOutput::allow()
+    );
+    case!(PermissionRequest, "no-op", PermissionRequestOutput::no_op());
+    case!(
+        PermissionRequest,
+        "exit-2",
+        PermissionRequestOutput::blocking_error(BLOCKED)
+    );
+    case!(
         PostCompact,
-        "post-compact",
         "structured",
-        hookkit_codex::catalog::PostCompactOutput::no_op()
-            .with_system_message("Compaction completed.")
-            .map_err(|error| error.to_string())?
+        built(PostCompactOutput::no_op().with_system_message("Compaction completed."))?
     );
-    codex_case!(
+    case!(PostCompact, "no-op", PostCompactOutput::no_op());
+    case!(PostCompact, "failure", PostCompactOutput::failure(FAILED));
+    case!(
         PreCompact,
-        "pre-compact",
         "structured",
-        hookkit_codex::catalog::PreCompactOutput::stop("Save state before compacting.")
+        PreCompactOutput::stop("Save state before compacting.")
     );
-    codex_case!(
-        SessionEnd,
-        "session-end",
-        "no-op",
-        hookkit_codex::catalog::SessionEndOutput::no_op()
-    );
-    codex_case!(
+    case!(PreCompact, "no-op", PreCompactOutput::no_op());
+    case!(PreCompact, "failure", PreCompactOutput::failure(FAILED));
+    case!(SessionEnd, "no-op", SessionEndOutput::no_op());
+    case!(SessionEnd, "failure", SessionEndOutput::failure(FAILED));
+    case!(
         SessionStart,
-        "session-start",
         "structured",
-        hookkit_codex::catalog::SessionStartOutput::with_context("Load repository conventions.")
+        SessionStartOutput::with_context("Load repository conventions.")
     );
-    codex_case!(
+    case!(SessionStart, "no-op", SessionStartOutput::no_op());
+    case!(
         SessionStart,
-        "session-start",
         "text-context",
-        hookkit_codex::catalog::SessionStartOutput::text_context(
-            "Hook-provided developer context.",
-        )
+        SessionStartOutput::text_context(DEVELOPER_CONTEXT)
     );
-    codex_case!(
+    case!(
         Stop,
-        "stop",
         "structured",
-        hookkit_codex::catalog::StopOutput::block("Run the failing tests again.")
+        StopOutput::block("Run the failing tests again.")
     );
-    codex_case!(
-        Stop,
-        "stop",
-        "exit-2",
-        hookkit_codex::catalog::StopOutput::blocking_error("blocked by hook")
-    );
-    codex_case!(
+    case!(Stop, "no-op", StopOutput::no_op());
+    case!(Stop, "exit-2", StopOutput::blocking_error(BLOCKED));
+    case!(
         SubagentStart,
-        "subagent-start",
         "structured",
-        hookkit_codex::catalog::SubagentStartOutput::with_context("Review test conventions.")
+        SubagentStartOutput::with_context("Review test conventions.")
     );
-    codex_case!(
+    case!(SubagentStart, "no-op", SubagentStartOutput::no_op());
+    case!(
         SubagentStart,
-        "subagent-start",
         "text-context",
-        hookkit_codex::catalog::SubagentStartOutput::text_context(
-            "Hook-provided developer context.",
-        )
+        SubagentStartOutput::text_context(DEVELOPER_CONTEXT)
     );
-    codex_case!(
+    case!(
         SubagentStop,
-        "subagent-stop",
         "structured",
-        hookkit_codex::catalog::SubagentStopOutput::block("Run another focused pass.")
+        SubagentStopOutput::block("Run another focused pass.")
     );
-    codex_case!(
+    case!(SubagentStop, "no-op", SubagentStopOutput::no_op());
+    case!(
         SubagentStop,
-        "subagent-stop",
         "exit-2",
-        hookkit_codex::catalog::SubagentStopOutput::blocking_error("blocked by hook")
+        SubagentStopOutput::blocking_error(BLOCKED)
     );
-    codex_case!(
+    case!(
         UserPromptSubmit,
-        "user-prompt-submit",
         "structured",
-        hookkit_codex::catalog::UserPromptSubmitOutput::block_with_context(
+        UserPromptSubmitOutput::block_with_context(
             "Ask for confirmation.",
-            "Clarify the reproduction.",
+            "Clarify the reproduction."
         )
     );
-    codex_case!(
+    case!(
         UserPromptSubmit,
-        "user-prompt-submit",
+        "structured-context",
+        UserPromptSubmitOutput::with_context(
+            "Ask for a clearer reproduction before editing files."
+        )
+    );
+    case!(
+        UserPromptSubmit,
+        "structured-block",
+        UserPromptSubmitOutput::block("Ask for confirmation before doing that.")
+    );
+    case!(UserPromptSubmit, "no-op", UserPromptSubmitOutput::no_op());
+    case!(
+        UserPromptSubmit,
         "text-context",
-        hookkit_codex::catalog::UserPromptSubmitOutput::text_context(
-            "Hook-provided developer context.",
-        )
+        UserPromptSubmitOutput::text_context(DEVELOPER_CONTEXT)
     );
-    codex_case!(
+    case!(
         UserPromptSubmit,
-        "user-prompt-submit",
         "exit-2",
-        hookkit_codex::catalog::UserPromptSubmitOutput::blocking_error("blocked by hook")
+        UserPromptSubmitOutput::blocking_error(BLOCKED)
     );
+    Ok(executed)
+}
 
+fn execute_antigravity_cases() -> Result<Vec<ExecutedCase>, String> {
+    use hookkit_antigravity::*;
+    let mut executed = Vec::new();
+    macro_rules! case {
+        ($event:ty, $case:literal, $output:expr) => {
+            executed.push(verify_case::<$event>($case, $output)?);
+        };
+    }
+    case!(
+        PreInvocation,
+        "inject-reminder",
+        PreInvocationOutput::inject(InjectStep::ephemeral_message("Remember to lint"))
+    );
+    case!(
+        PostInvocation,
+        "default",
+        PostInvocationOutput::no_op().with_termination_behavior(TerminationBehavior::Default)
+    );
+    case!(
+        PostInvocation,
+        "force-continue",
+        PostInvocationOutput::no_op().with_termination_behavior(TerminationBehavior::ForceContinue)
+    );
+    case!(
+        PreToolUse,
+        "ask",
+        PreToolUseOutput::ask()
+            .with_reason("Requires confirmation for test execution.")
+            .with_permission_override("command(npm test)")
+    );
+    case!(PostToolUse, "no-op", PostToolUseOutput::no_op());
+    case!(Stop, "continue", StopOutput::continue_with("Not done yet"));
     Ok(executed)
 }
 
@@ -817,26 +1006,12 @@ fn implementation_descriptors() -> Vec<NativeEventDescriptor> {
 }
 
 fn verify_case<E: EventSpec>(
-    harness: &str,
-    snapshot: &str,
-    event: &str,
     case: &'static str,
     output: E::CommandOutput,
 ) -> Result<ExecutedCase, String> {
-    let fixture = fixture(harness, snapshot, event)?;
-    let representative = positive_value(&fixture, "representative")?;
-    let raw = RawInvocation::parse(
-        serde_json::to_vec(&representative).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    E::parse(&raw).map_err(|error| {
-        format!(
-            "{} representative input failed native parse: {error}",
-            E::CONTRACT
-        )
-    })?;
-    let emission = E::emit(output).map_err(|error| error.to_string())?;
-    assert_emission::<E>(&emission, process_case(&fixture, case)?)?;
+    let fixture = event_fixtures::<E>()?;
+    let emission = E::emit(output).map_err(|error| format!("{} {case}: {error}", E::CONTRACT))?;
+    assert_emission::<E>(case, &emission, process_case(&fixture, case)?)?;
     Ok(ExecutedCase {
         contract: E::CONTRACT.as_str(),
         binding: "command",
@@ -844,57 +1019,185 @@ fn verify_case<E: EventSpec>(
     })
 }
 
-fn verify_negative_inputs<E: EventSpec>(
-    harness: &str,
-    snapshot: &str,
-    event: &str,
-) -> Result<(), String> {
-    let fixture = fixture(harness, snapshot, event)?;
-    let negatives = fixture["input"]["negative"]
-        .as_sequence()
-        .ok_or_else(|| format!("{} has no negative input fixtures", E::CONTRACT))?;
-    for negative in negatives {
-        let id = negative["id"]
-            .as_str()
-            .ok_or_else(|| format!("{} has an unnamed negative fixture", E::CONTRACT))?;
-        let value =
-            serde_json::to_value(negative["value"].clone()).map_err(|error| error.to_string())?;
-        let raw =
-            RawInvocation::parse(serde_json::to_vec(&value).map_err(|error| error.to_string())?)
-                .map_err(|error| error.to_string())?;
-        if E::parse(&raw).is_ok() {
-            return Err(format!(
-                "{} negative input fixture {id} was accepted by the native parser",
+/// Checks every input fixture of `E` against its native parser and returns
+/// the contract that was checked. Negatives in `allowlist` must be open
+/// value-set negatives the parser accepts; each one checked is added to
+/// `open_value_sets`.
+fn verify_inputs<E: EventSpec>(
+    allowlist: &[(&'static str, &'static str)],
+    open_value_sets: &mut BTreeSet<(&'static str, &'static str)>,
+) -> Result<&'static str, String> {
+    let fixture = event_fixtures::<E>()?;
+    let positives = fixture_list(&fixture, "positive", E::CONTRACT.as_str())?;
+    for positive in positives {
+        let id = fixture_id(positive, E::CONTRACT.as_str())?;
+        let input = E::parse(&invocation(&positive["value"])?).map_err(|error| {
+            format!(
+                "{} positive input fixture {id} failed native parse: {error}",
                 E::CONTRACT
+            )
+        })?;
+        // Context extraction must succeed for every accepted payload.
+        let _ = E::context(&input);
+    }
+    let negatives = fixture_list(&fixture, "negative", E::CONTRACT.as_str())?;
+    for negative in negatives {
+        let id = fixture_id(negative, E::CONTRACT.as_str())?;
+        let pointer = negative["expected_pointer"].as_str();
+        let exemption = allowlist.iter().find(|(contract, allowed)| {
+            *contract == E::CONTRACT.as_str() && Some(*allowed) == pointer
+        });
+        let Some(exemption) = exemption else {
+            if E::parse(&invocation(&negative["value"])?).is_ok() {
+                return Err(format!(
+                    "{} negative input fixture {id} was accepted by the native parser",
+                    E::CONTRACT
+                ));
+            }
+            continue;
+        };
+        if !closes_value_set(negative) {
+            return Err(format!(
+                "{} negative input fixture {id} at {} is not an enum or const negative, so it cannot be an open value set",
+                E::CONTRACT,
+                exemption.1
             ));
         }
+        // The native crate reads values it does not know into an
+        // `Unknown(String)` arm; the forward-compatible parse must succeed.
+        let input = E::parse(&invocation(&negative["value"])?).map_err(|error| {
+            format!(
+                "{} negative input fixture {id} closes the open value set at {}, but the native parser rejected it: {error}",
+                E::CONTRACT,
+                exemption.1
+            )
+        })?;
+        let _ = E::context(&input);
+        open_value_sets.insert(*exemption);
     }
-    Ok(())
+    Ok(E::CONTRACT.as_str())
 }
 
-fn fixture(harness: &str, snapshot: &str, event: &str) -> Result<serde_yaml_ng::Value, String> {
-    let path = workspace_root()
+/// Reports whether a negative fixture closes a value set: an `enum`, or a
+/// `const` on any pointer other than the `/hook_event_name` discriminator.
+fn closes_value_set(negative: &serde_yaml_ng::Value) -> bool {
+    match negative["expected_keyword"].as_str() {
+        Some("enum") => true,
+        Some("const") => negative["expected_pointer"].as_str() != Some("/hook_event_name"),
+        _ => false,
+    }
+}
+
+#[derive(Deserialize)]
+struct Registry {
+    harnesses: BTreeMap<String, SelectedSnapshot>,
+}
+
+#[derive(Deserialize)]
+struct SelectedSnapshot {
+    current: String,
+}
+
+#[derive(Deserialize)]
+struct SnapshotIndex {
+    id: String,
+    harness: String,
+    events: Vec<SnapshotEvent>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotEvent {
+    wire_name: String,
+    path: String,
+}
+
+/// Loads the fixtures of the snapshot event that `E` implements.
+///
+/// The snapshot directory comes from `E::HARNESS` and `E::SNAPSHOT`, which
+/// must be the registry-selected snapshot for the harness, and the event
+/// directory from that snapshot's index. The event's `contract.yaml` must
+/// name `E::CONTRACT`.
+fn event_fixtures<E: EventSpec>() -> Result<serde_yaml_ng::Value, String> {
+    let harness_id = E::HARNESS;
+    let harness = harness_id.as_str();
+    let snapshot = E::SNAPSHOT.as_str();
+    let registry: Registry = read_yaml(&workspace_root().join("contracts/registry.yaml"))?;
+    let selected = registry
+        .harnesses
+        .get(harness)
+        .ok_or_else(|| format!("{}: harness {harness} is not in the registry", E::CONTRACT))?;
+    if selected.current != snapshot {
+        return Err(format!(
+            "{} implements {harness}/{snapshot}, but the registry selects {harness}/{}",
+            E::CONTRACT,
+            selected.current
+        ));
+    }
+
+    let snapshot_dir = workspace_root()
         .join("contracts/harnesses")
         .join(harness)
         .join("snapshots")
-        .join(snapshot)
-        .join("events")
-        .join(event)
-        .join("fixtures.yaml");
-    serde_yaml_ng::from_slice(&std::fs::read(&path).map_err(|error| error.to_string())?)
-        .map_err(|error| format!("{}: {error}", path.display()))
+        .join(snapshot);
+    let index: SnapshotIndex = read_yaml(&snapshot_dir.join("snapshot.yaml"))?;
+    if index.id != snapshot || index.harness != harness {
+        return Err(format!(
+            "{}: snapshot index identity mismatch",
+            snapshot_dir.display()
+        ));
+    }
+    let event = index
+        .events
+        .iter()
+        .find(|event| event.wire_name == E::EVENT.name())
+        .ok_or_else(|| {
+            format!(
+                "{} names event {}, which {harness}/{snapshot} does not index",
+                E::CONTRACT,
+                E::EVENT.name()
+            )
+        })?;
+    let event_dir = snapshot_dir.join(&event.path);
+
+    let contract: serde_yaml_ng::Value = read_yaml(&event_dir.join("contract.yaml"))?;
+    if contract["id"].as_str() != Some(E::CONTRACT.as_str()) {
+        return Err(format!(
+            "{}: contract id {:?} differs from the native contract {}",
+            event_dir.display(),
+            contract["id"].as_str(),
+            E::CONTRACT
+        ));
+    }
+    read_yaml(&event_dir.join("fixtures.yaml"))
 }
 
-fn positive_value(document: &serde_yaml_ng::Value, id: &str) -> Result<serde_json::Value, String> {
-    let fixtures = document["input"]["positive"]
+fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    serde_yaml_ng::from_slice(&bytes).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn fixture_list<'a>(
+    document: &'a serde_yaml_ng::Value,
+    kind: &str,
+    contract: &str,
+) -> Result<&'a [serde_yaml_ng::Value], String> {
+    document["input"][kind]
         .as_sequence()
-        .ok_or_else(|| "missing positive input fixtures".to_string())?;
-    let value = fixtures
-        .iter()
-        .find(|fixture| fixture["id"].as_str() == Some(id))
-        .ok_or_else(|| format!("missing positive fixture {id}"))?["value"]
-        .clone();
-    serde_json::to_value(value).map_err(|error| error.to_string())
+        .map(Vec::as_slice)
+        .filter(|fixtures| !fixtures.is_empty())
+        .ok_or_else(|| format!("{contract} has no {kind} input fixtures"))
+}
+
+fn fixture_id<'a>(fixture: &'a serde_yaml_ng::Value, contract: &str) -> Result<&'a str, String> {
+    fixture["id"]
+        .as_str()
+        .ok_or_else(|| format!("{contract} has an unnamed input fixture"))
+}
+
+fn invocation(value: &serde_yaml_ng::Value) -> Result<RawInvocation, String> {
+    let json = serde_json::to_value(value).map_err(|error| error.to_string())?;
+    RawInvocation::parse(serde_json::to_vec(&json).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())
 }
 
 fn process_case(
@@ -908,25 +1211,31 @@ fn process_case(
         .iter()
         .find(|case| case["id"].as_str() == Some(id))
         .ok_or_else(|| format!("missing process fixture {id}"))?;
+    if case["binding"].as_str() != Some("command") {
+        return Err(format!("process fixture {id} is not a command case"));
+    }
     let decode = |field: &str| {
         base64::engine::general_purpose::STANDARD
             .decode(
                 case[field]
                     .as_str()
-                    .ok_or_else(|| format!("missing {field}"))?,
+                    .ok_or_else(|| format!("process fixture {id} is missing {field}"))?,
             )
             .map_err(|error| error.to_string())
     };
+    let exit_code = case["exit_code"]
+        .as_u64()
+        .and_then(|code| u8::try_from(code).ok())
+        .ok_or_else(|| format!("process fixture {id} has no valid exit_code"))?;
     Ok((
         decode("stdout_base64")?,
         decode("stderr_base64")?,
-        case["exit_code"]
-            .as_u64()
-            .ok_or_else(|| "missing exit_code".to_string())? as u8,
+        exit_code,
     ))
 }
 
 fn assert_emission<E: EventSpec>(
+    case: &str,
     actual: &ProcessEmission,
     expected: (Vec<u8>, Vec<u8>, u8),
 ) -> Result<(), String> {
@@ -950,12 +1259,12 @@ fn assert_emission<E: EventSpec>(
         || actual.exit_code() != expected.2
     {
         return Err(format!(
-            "{} emission mismatch: stdout={:?}/{:?}, stderr={:?}/{:?}, exit={}/{}",
+            "{} {case} emission mismatch: stdout={:?}/{:?}, stderr={:?}/{:?}, exit={}/{}",
             E::CONTRACT,
-            actual.stdout(),
-            expected.0,
-            actual.stderr(),
-            expected.1,
+            String::from_utf8_lossy(actual.stdout()),
+            String::from_utf8_lossy(&expected.0),
+            String::from_utf8_lossy(actual.stderr()),
+            String::from_utf8_lossy(&expected.1),
             actual.exit_code(),
             expected.2
         ));
@@ -963,10 +1272,47 @@ fn assert_emission<E: EventSpec>(
     Ok(())
 }
 
-fn workspace_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .and_then(std::path::Path::parent)
+        .and_then(Path::parent)
         .expect("crate lives under workspace/crates")
         .to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hookkit_codex::catalog::SessionStart;
+
+    #[test]
+    fn open_value_set_negatives_are_accepted_only_when_allowlisted() {
+        let contract = SessionStart::CONTRACT.as_str();
+        let mut used = BTreeSet::new();
+        verify_inputs::<SessionStart>(OPEN_VALUE_SET_NEGATIVES, &mut used).unwrap();
+        assert_eq!(used, BTreeSet::from([(contract, "/source")]));
+
+        // The Codex parser reads an unknown `source` into `Unknown`, so the
+        // negative is accepted and fails conformance unless allowlisted.
+        let error = verify_inputs::<SessionStart>(&[], &mut BTreeSet::new()).unwrap_err();
+        assert!(
+            error.contains("unknown-source") && error.contains("was accepted"),
+            "{error}"
+        );
+
+        // Only an enum or non-discriminator const negative can be exempted.
+        let error =
+            verify_inputs::<SessionStart>(&[(contract, "")], &mut BTreeSet::new()).unwrap_err();
+        assert!(error.contains("not an enum or const negative"), "{error}");
+        let error =
+            verify_inputs::<SessionStart>(&[(contract, "/hook_event_name")], &mut BTreeSet::new())
+                .unwrap_err();
+        assert!(error.contains("not an enum or const negative"), "{error}");
+    }
+
+    #[test]
+    fn every_open_value_set_negative_matches_a_selected_fixture() {
+        // `verify_all_inputs` fails on an allowlist entry no fixture used.
+        verify_all_inputs().unwrap();
+    }
 }

@@ -1,0 +1,50 @@
+format_version: 1
+id: antigravity/docs-2026-09-30-r1/PostToolUse
+harness: antigravity
+snapshot: docs-2026-09-30-r1
+event:
+  wire_name: PostToolUse
+  rust_key: post_tool_use
+  category: tool
+  identification:
+    inferability: ambiguous
+    overlaps: [PreToolUse]
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-ide-hooks-redirect, antigravity-ide-hooks-archive-2026-09-16, antigravity-hooks-archive-2026-07-21, antigravity-hooks-archive-2026-08-16, antigravity-changelog, antigravity-cli-changelog]
+    assurance: { confidence: low, verification: source-reviewed }
+  outputs:
+    - id: command-response
+      file: output.command.schema.json
+      origin: derived
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+      assurance: { confidence: low, verification: source-reviewed }
+bindings:
+  command:
+    kind: process
+    request: { channel: stdin, framing: single-document-at-eof, content_kind: json }
+    outcomes:
+      - id: no-op
+        effect: continue
+        exit: { exact: 0 }
+        stdout: { presence: required, role: protocol-value, content_kind: json }
+        stderr: { presence: optional, role: diagnostics, content_kind: text, encoding: utf-8 }
+        output_schema: command-response
+        sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+        assurance: { confidence: low, verification: source-reviewed }
+handler_kinds: [command]
+fixtures: fixtures.yaml
+uncertainties:
+  - "The reference still does not specify nonzero-exit, timeout, or invalid-stdout behavior, so no failure outcome is modelled. Antigravity 2.0 v2.12.0 release notes say a failing custom hook no longer ends the session and is reported as an error while the conversation continues; 'failing' is undefined, the CLI and IDE notes have no counterpart, and earlier 2.0 builds ended the session."
+  - "Surfaces disagree on toolCall. The unified reference documents toolCall for Antigravity 2.0, CLI, and IDE alike, and /docs/ide/hooks now redirects to it. The IDE-specific reference, however, documented PostToolUse input and its example without toolCall in every archived copy through 2026-09-16, although the IDE build it described (v2.5.5, 2026-08-13) has not been re-released since. The generic reference also omitted toolCall on 2026-07-21, and CLI builds before 1.1.9 fired PostToolUse on non-tool steps. toolCall is therefore optional pending a live IDE observation; current 2.0 and CLI payloads are expected to carry it."
+  - "modelName is listed among the common input fields and appears in every official example, but it was first documented between the 2026-07-21 and 2026-08-16 archive captures, was absent from docs-2026-08-04-r1 and from every IDE-specific copy, and no release note dates it. It is optional so that payloads from earlier builds, and possibly the IDE v2.5.5 build, still validate."
+  - "workspacePaths may be an empty array. The reference sets no minimum, and release notes describe conversations without a workspace (CLI 1.2.2, 2.0 v2.14.0 standalone conversations) while global hooks load from ~/.gemini/config/hooks.json. Whether such payloads send [] or omit the field is undocumented, so the field stays required."
+  - "transcriptPath and artifactDirectoryPath are described as absolute paths, but every official example uses a literal ~/ prefix; the schema does not require an absolute or expanded path."
+  - "stepIdx is the 0-based index of the completed step in the whole conversation trajectory, not an index within the current model invocation."
+  - "error is optional, and the reference says it is empty if the tool call succeeded, so an empty string and absence both mean success. CLI 1.2.5 records signal-killed commands as canceled rather than as successful exit-0 runs, which can change the reported error."
+  - "toolCall.args is typed as an object, but the reference also documents a tool without arguments (list_permissions, Arguments: None) and never shows how such a call encodes them. Whether Antigravity then sends {}, null, or no args member is undocumented, so args is optional and nullable; a hook should treat a missing or null args as an empty object."
+  - "toolCall.name and toolCall.args stay open. The reference lists 20 built-in tools, but release notes mention others (manage_inbox, read_resource, browser_* tools), Antigravity 2.0 v2.11.0 added StartPage, EndPage, and MediaResolution arguments to view_file that the reference does not list, and CLI 1.2.7 retired find_by_name, grep_search, and list_dir from the default toolset."
+  - "The response is exactly {}. The reference defines no feedback channel, so exit-zero stderr is treated only as diagnostics and has no documented effect."
+  - "The reference supports only command handlers. Release notes mention prompt hooks (CLI 1.1.23) and hooks that call a model (2.0 v2.6.0) that the reference does not document, so they are not inventoried."

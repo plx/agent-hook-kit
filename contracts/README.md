@@ -17,6 +17,24 @@ supplement. Frozen snapshot and supplement evidence is immutable. Implementation
 targets and later observations live under `status/` and can evolve without
 rewriting protocol history.
 
+## Current selection
+
+<!-- markdownlint-disable MD013 -->
+
+| Harness | Selected snapshot | Events | Audit |
+| --- | --- | --- | --- |
+| Claude Code | [`docs-2026-09-30-r1`](harnesses/claude-code/snapshots/docs-2026-09-30-r1/) (Claude Code 2.1.285) | 33, including `PreModelSwitch` and `PostModelSwitch` | [`2026-09-30-claude-code-hooks.md`](../planning/audits/2026-09-30-claude-code-hooks.md) |
+| Codex | [`commit-ff6aec9-r2`](harnesses/codex/snapshots/commit-ff6aec9-r2/) (`rust-v0.159.2`) | 12, including `Interrupt` | [`2026-09-30-codex-hooks.md`](../planning/audits/2026-09-30-codex-hooks.md) |
+| Antigravity | [`docs-2026-09-30-r1`](harnesses/antigravity/snapshots/docs-2026-09-30-r1/) | 5 | [`2026-09-30-antigravity-hooks.md`](../planning/audits/2026-09-30-antigravity-hooks.md) |
+
+<!-- markdownlint-enable MD013 -->
+
+The selected command-environment supplement is
+[`command-environments-2026-09-30-r2`](supplements/command-environments/command-environments-2026-09-30-r2/),
+which maps all 50 events; [`docs/command-environments.md`](../docs/command-environments.md)
+summarizes it. [`status/support.md`](status/support.md) is the generated
+support matrix.
+
 ## Implementation scope
 
 Catalog breadth is not implementation scope. Snapshots preserve every binding
@@ -42,6 +60,16 @@ cargo xtask contracts verify-vendor
 Checks are offline. Remote URIs in provenance are never fetched during normal
 validation. JSON schemas are self-contained or vendored under approved catalog
 roots; a network resolver is not enabled in the validator.
+
+`contracts check` also requires every registry-selected snapshot to be frozen
+and rejects a draft retrieved before its harness's selected snapshot.
+`verify-vendor`, which `check` runs too, rejects a vendored file that no
+`MANIFEST.sha256` lists, an empty manifest, duplicate entries, and symlinks.
+`cargo xtask contracts diff <old> <new>` reports added, removed, and changed
+events one by one, ignoring the snapshot id embedded in every file.
+`cargo xtask contracts upstream-sources` lists the selected snapshots' and
+supplement's upstream sources for the drift check described in
+[`MAINTENANCE.md`](MAINTENANCE.md).
 
 Every catalog snapshot is validated on each check, including deterministic
 manifest recomputation for historical frozen snapshots. The current v1 metadata

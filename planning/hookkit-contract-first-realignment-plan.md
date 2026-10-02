@@ -587,10 +587,13 @@ identifying.
 Add a small non-published workspace tool with:
 
     cargo xtask contracts check
-    cargo xtask contracts check --snapshot current
     cargo xtask contracts report
     cargo xtask contracts diff <old> <new>
     cargo xtask contracts verify-vendor
+
+(A `contracts check --snapshot current` flag was originally planned here. It
+never changed behavior and was removed on 2026-09-29: `contracts check` always
+validates every catalog snapshot.)
 
 `contracts check` must:
 

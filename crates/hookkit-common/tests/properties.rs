@@ -48,6 +48,7 @@ proptest! {
             NoticeLevel::Info => "info",
             NoticeLevel::Warning => "warning",
             NoticeLevel::Error => "error",
+            other => panic!("unexpected notice level {other:?}"),
         };
 
         prop_assert_eq!(value["text"].as_str(), Some(text.as_str()));

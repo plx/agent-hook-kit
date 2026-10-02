@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-09-29-r1:post-invocation:input",
+  "type": "object",
+  "required": ["conversationId", "workspacePaths", "transcriptPath", "artifactDirectoryPath", "invocationNum", "initialNumSteps"],
+  "properties": {
+    "conversationId": { "type": "string", "description": "Unique UUID of the active agent conversation." },
+    "workspacePaths": { "type": "array", "items": { "type": "string" }, "description": "Absolute directory paths of the user's mounted workspaces; may be empty for a conversation without a workspace." },
+    "transcriptPath": { "type": "string", "description": "Path to the conversation's transcript.jsonl under <app_data_dir>/brain/<conversationId>/.system_generated/logs/." },
+    "artifactDirectoryPath": { "type": "string", "description": "Path to the directory containing the conversation's artifacts and screenshots." },
+    "modelName": { "type": "string", "description": "Name or identifier of the model handling the invocation; optional because earlier builds did not document or send it." },
+    "invocationNum": { "type": "integer", "minimum": 0, "description": "0-indexed sequence number of the current model invocation, as for PreInvocation; the first invocation is 0." },
+    "initialNumSteps": { "type": "integer", "minimum": 0, "description": "Number of steps currently in the trajectory, as for PreInvocation." }
+  },
+  "additionalProperties": true
+}

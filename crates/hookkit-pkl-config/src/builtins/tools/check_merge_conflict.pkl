@@ -1,12 +1,13 @@
 /// check-merge-conflict — detect leftover Git merge conflict markers.
 ///
 /// `hk` ships this behind `hk util check-merge-conflict --assume-in-merge`,
-/// which is a small native scanner. The semantics are simple enough that a
-/// portable `grep -lE` invocation produces the same result for the standard
-/// markers (`<<<<<<< `, `=======`, `>>>>>>> `, plus the rarer `||||||| `
-/// hunk separator), so we translate this one directly. grep's exit codes
-/// map cleanly: `0` = matches found (issues), `1` = no matches (clean),
-/// `2` = read or regex error (failure).
+/// which is a small native scanner. A portable `grep -lE` invocation matches
+/// the opening (`<<<<<<< `), closing (`>>>>>>> `), and diff3 base (`||||||| `)
+/// markers. The bare `=======` separator is deliberately not matched outside
+/// a merge: it is also a reStructuredText or setext Markdown heading
+/// underline, and every real conflict still carries an opening and closing
+/// marker. grep's exit codes map cleanly: `0` = matches found (issues),
+/// `1` = no matches (clean), `2` = read or regex error (failure).
 
 module agent_hook_kit.builtins.tools.CheckMergeConflict
 
@@ -27,7 +28,7 @@ spec: Config.ToolSpec = new Config.ToolSpec {
       mode = "verify"
       argv = new Listing<String | Config.ArgToken> {
         "-lE"
-        #"^(<{7} |\|{7} |={7}$|>{7} )"#
+        #"^(<{7} |\|{7} |>{7} )"#
         new Config.ExtraArgs {}
         new Config.Files {}
       }

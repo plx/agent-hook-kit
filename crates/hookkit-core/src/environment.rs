@@ -111,7 +111,20 @@ pub trait CommandEnvironmentSpec: Sized {
     const VARIABLE_NAMES: &'static [&'static str];
 
     /// Dynamic native prefixes, such as Claude plugin option variables.
+    ///
+    /// Prefixes match whatever the parent process happened to export, so the
+    /// runtime skips a prefix-matched variable whose value is not UTF-8
+    /// instead of failing the invocation.
     const VARIABLE_PREFIXES: &'static [&'static str] = &[];
+
+    /// Names from [`Self::VARIABLE_NAMES`] that unrelated software may also
+    /// export, such as generic `PLUGIN_ROOT`-style names.
+    ///
+    /// The runtime skips one of these whose value is not UTF-8, as it does
+    /// for prefix-matched variables, so stray inherited state cannot disable
+    /// every hook. Any other declared name with a non-UTF-8 value is an
+    /// error. The default is empty.
+    const LENIENT_VARIABLE_NAMES: &'static [&'static str] = &[];
 
     /// Parses a captured variable set for `event`.
     ///

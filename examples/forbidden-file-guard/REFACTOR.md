@@ -9,8 +9,9 @@ its shell handling onto `hookkit-shell`.
 The implementation has since moved again, from direct `hookkit-shell` use to
 the phase-agnostic `hookkit-tool-access` analyzer and bounded target resolver.
 One aligned `hookkit-common::PreToolUse` handler now covers Claude Code, Codex,
-and Antigravity while preserving each harness's native allow/deny
-output.
+and Antigravity while preserving each harness's native deny output. Calls
+the guard does not object to get the aligned pass-through, which leaves them
+to each harness's normal permission flow instead of auto-approving them.
 
 Structured fields, patch operations, shell inference, fallback evidence, and
 typed analysis gaps now flow through the same public API. Directory and glob

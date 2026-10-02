@@ -6,13 +6,17 @@
 //! gaps, but executables may still perform accesses that are not visible in
 //! structured input or statically recoverable Bash syntax.
 
+mod builtin;
 mod call;
 mod model;
 mod patch;
 mod resolver;
 mod structured;
 
-pub use call::{JsonRef, ToolCallObservation, ToolCallRef, observe_post_tool, observe_pre_tool};
+pub use call::{
+    JsonRef, ObservableToolCall, ToolCallObservation, ToolCallRef, observe_post_tool,
+    observe_pre_tool,
+};
 pub use hookkit_shell::ToolPhase;
 pub use model::{
     AccessCandidate, AccessCertainty, AccessIntent, AccessProvenance, AccessScope, AccessSource,
@@ -26,27 +30,47 @@ pub use resolver::{
 pub use structured::{StructuredFieldAnalyzer, StructuredFieldConfigError};
 
 use hookkit_common::{PostToolUseInput, PreToolUseInput};
+use hookkit_core::Utf8PathBuf;
 use hookkit_shell::{
     BashAnalyzer, FileAccessAnalyzer, FileAccessCandidate as ShellCandidate,
     FileAccessCertainty as ShellCertainty, FileAccessKind as ShellIntent, FileInferenceContext,
     FileTarget as ShellTarget, FileTargetScope as ShellScope, PathBase as ShellPathBase,
-    ShellToolCallMatch, ShellToolProfile,
+    ShellCwdOrigin, ShellToolCallMatch, ShellToolProfile,
 };
 
 /// Stateless structured, patch, and shell access analyzer.
-#[derive(Default)]
+///
+/// Documented harness built-in tools (for example Claude Code `Read`, `Grep`,
+/// and `NotebookEdit`, Codex `view_image`, and Antigravity `view_file` and
+/// `write_to_file`) are analyzed from exact per-harness argument contracts,
+/// and tools documented not to touch files (for example `WebFetch`,
+/// `TodoWrite`, `update_plan`, and `search_web`) yield an empty, complete
+/// report. Other tools fall back to [`StructuredFieldAnalyzer`] heuristics.
 pub struct ToolAccessAnalyzer {
     bash: BashAnalyzer,
     shell: FileAccessAnalyzer,
     structured: StructuredFieldAnalyzer,
     shell_profiles: Vec<ShellToolProfile>,
+    builtin_tools: bool,
+    home: Option<Utf8PathBuf>,
+}
+
+impl Default for ToolAccessAnalyzer {
+    fn default() -> Self {
+        Self::new(
+            BashAnalyzer::default(),
+            FileAccessAnalyzer::default(),
+            StructuredFieldAnalyzer::default(),
+        )
+    }
 }
 
 impl ToolAccessAnalyzer {
     /// Creates an analyzer from explicit Bash, shell-semantics, and structured-field components.
     ///
     /// No additional shell tool profiles are registered; native profiles
-    /// supplied by aligned event adapters remain available.
+    /// supplied by aligned event adapters and built-in tool contracts remain
+    /// available.
     pub fn new(
         bash: BashAnalyzer,
         shell: FileAccessAnalyzer,
@@ -57,7 +81,32 @@ impl ToolAccessAnalyzer {
             shell,
             structured,
             shell_profiles: Vec::new(),
+            builtin_tools: true,
+            home: None,
         }
+    }
+
+    /// Enables or disables the per-harness built-in tool contracts, returning
+    /// the analyzer. When disabled, every non-shell, non-patch tool is
+    /// analyzed by the structured-field heuristics alone.
+    pub fn with_builtin_tools(mut self, enabled: bool) -> Self {
+        self.builtin_tools = enabled;
+        self
+    }
+
+    /// Sets the home directory against which shell `~` paths resolve and
+    /// returns the analyzer.
+    ///
+    /// The shell expands a leading `~` to `$HOME` at run time. Without a
+    /// home directory (the default), such a path is still reported, with
+    /// its raw `~/...` text and [`PathBase::Home`], but is not resolved. A
+    /// hook process usually inherits the harness's `$HOME`, so passing it
+    /// here is a reasonable choice; the analyzer never reads it implicitly.
+    /// Structured tool arguments that begin with `~` are unaffected, because
+    /// their expansion is up to the tool.
+    pub fn with_home(mut self, home: Option<Utf8PathBuf>) -> Self {
+        self.home = home;
+        self
     }
 
     /// Registers an exact opt-in shell tool shape. Later registrations are
@@ -106,6 +155,13 @@ impl ToolAccessAnalyzer {
         self.analyze_observation(observe_post_tool(input))
     }
 
+    /// Analyzes a borrowed native or aligned input, such as a typed Codex
+    /// `PreToolUseInput` or a Claude `PostToolUseFailure` catalog input,
+    /// without cloning it into an aligned wrapper.
+    pub fn analyze_native<T: ObservableToolCall + ?Sized>(&self, input: &T) -> ToolAccessReport {
+        self.analyze_observation(input.observe_tool_call())
+    }
+
     /// Analyzes a successfully adapted call or preserves its adaptation gap.
     pub fn analyze_observation(&self, observation: ToolCallObservation<'_>) -> ToolAccessReport {
         match observation {
@@ -119,9 +175,10 @@ impl ToolAccessAnalyzer {
 
     /// Analyzes one borrowed tool call without invoking the tool.
     ///
-    /// Shell and patch shapes take precedence over generic structured-field
-    /// analysis. The report retains both recovered candidates and every known
-    /// gap; it does not claim to be a complete runtime I/O trace.
+    /// Shell and patch shapes take precedence over built-in tool contracts,
+    /// which take precedence over generic structured-field analysis. The
+    /// report retains both recovered candidates and every known gap; it does
+    /// not claim to be a complete runtime I/O trace.
     pub fn analyze_call(&self, call: &ToolCallRef<'_>) -> ToolAccessReport {
         match &call.shell_call {
             ShellToolCallMatch::Matched(shell_call) => self.analyze_shell(call, shell_call),
@@ -159,7 +216,7 @@ impl ToolAccessAnalyzer {
                 let mut report = ToolAccessReport::default();
                 if patch::is_patch_tool(call.tool_name) {
                     patch::analyze_patch(call, &mut report);
-                } else {
+                } else if !(self.builtin_tools && builtin::analyze(call, &mut report)) {
                     self.structured.analyze(call, &mut report);
                 }
                 report
@@ -212,13 +269,17 @@ impl ToolAccessAnalyzer {
             .workspace_roots
             .first()
             .map(hookkit_core::Utf8PathBuf::as_path);
-        let inference =
-            FileInferenceContext::new(shell_call.cwd).with_workspace_root(workspace_root);
+        // The effective cwd includes a relative Codex `workdir` or
+        // Antigravity `Cwd` joined onto the fallback directory.
+        let inference = FileInferenceContext::for_call(shell_call)
+            .with_workspace_root(workspace_root)
+            .with_home(self.home.as_deref());
         let shell_report = self.shell.infer(&analysis, inference);
+        let relative_base = shell_relative_base(tool_call, shell_call);
         let mut report = ToolAccessReport::default();
 
         for candidate in &shell_report.candidates {
-            match map_shell_candidate(candidate) {
+            match map_shell_candidate(candidate, relative_base) {
                 Some(candidate) => report.candidates.push(candidate),
                 None => report.push_gap(
                     AccessSource::Shell,
@@ -227,7 +288,18 @@ impl ToolAccessAnalyzer {
             }
         }
         if let Some(analysis) = analysis.analysis() {
-            patch::analyze_shell_patches(analysis, shell_call.cwd, &mut report);
+            // Codex applies some `apply_patch` scripts of its `Bash` tool
+            // itself instead of running them.
+            let codex_intercepts = shell_call.harness == hookkit_core::HarnessId::CODEX
+                && shell_call.tool_name == hookkit_shell::CODEX_BASH_PROFILE.tool_name();
+            patch::analyze_shell_patches(
+                analysis,
+                shell_call.command,
+                shell_call.effective_cwd(),
+                relative_base,
+                codex_intercepts,
+                &mut report,
+            );
         }
         report.gaps.extend(
             shell_report
@@ -242,7 +314,32 @@ impl ToolAccessAnalyzer {
     }
 }
 
-fn map_shell_candidate(candidate: &ShellCandidate) -> Option<AccessCandidate> {
+/// Labels shell paths resolved relative to the shell's working directory.
+///
+/// A cwd read from the tool's own arguments (such as Antigravity
+/// `run_command.Cwd` or a Codex `workdir`, absolute or joined onto the hook
+/// directory) is the invocation directory. A fallback the profile marks as
+/// unverified ([`ShellCwdOrigin::UnverifiedFallback`], as for Codex `Bash`,
+/// whose payload omits the `workdir` that can move the command) yields
+/// [`PathBase::SessionCwd`]. Any other fallback takes the call's
+/// [`ToolCallRef::cwd_base`].
+fn shell_relative_base(
+    tool_call: &ToolCallRef<'_>,
+    shell_call: &hookkit_shell::ShellToolCallRef<'_>,
+) -> PathBase {
+    match shell_call.cwd_origin {
+        ShellCwdOrigin::ToolInput | ShellCwdOrigin::ToolInputRelativeToFallback => {
+            PathBase::InvocationCwd
+        }
+        ShellCwdOrigin::UnverifiedFallback => PathBase::SessionCwd,
+        _ => tool_call.cwd_base,
+    }
+}
+
+fn map_shell_candidate(
+    candidate: &ShellCandidate,
+    relative_base: PathBase,
+) -> Option<AccessCandidate> {
     let target = match &candidate.target {
         ShellTarget::Path { expression, scope } => AccessTarget::Path {
             expression: PathExpression {
@@ -250,10 +347,11 @@ fn map_shell_candidate(candidate: &ShellCandidate) -> Option<AccessCandidate> {
                 resolved: expression.resolved.clone(),
                 base: match expression.base {
                     ShellPathBase::Absolute => PathBase::Absolute,
-                    ShellPathBase::InvocationCwd => PathBase::InvocationCwd,
+                    ShellPathBase::InvocationCwd => relative_base,
                     ShellPathBase::UnknownAfterDirectoryChange => {
                         PathBase::UnknownAfterDirectoryChange
                     }
+                    ShellPathBase::Home => PathBase::Home,
                     _ => return None,
                 },
             },

@@ -1,20 +1,21 @@
 //! Stderr diagnostics for the stdin/stdout runtime adapters.
 //!
-//! [`crate::aligned::run_aligned_event`], [`crate::typed::run_event_with_diagnostics`]
-//! (and therefore [`crate::typed::run_typed`]), [`crate::selected::run_harness`], and
-//! [`crate::selected::dispatch_builtin_harness`] each read stdin, resolve the hook
-//! environment, and execute a handler, folding every failure along the way into a
-//! bare `exit 1`. Hook protocols require a clean, machine-parseable stdout on every
-//! exit path, so these adapters must never write anything else there — but stderr
-//! carries no such constraint, and writing nothing to it turned every misconfigured
-//! environment variable, malformed payload, or handler bug into an unexplained,
-//! byte-for-byte silent failure. This module gives every one of those adapters a
-//! single, concise stderr line identifying the running program and the hook it was
-//! invoked for, plus the failing error's full cause chain, before they return that
-//! same `exit 1`.
+//! [`crate::aligned::run_aligned_event_with_options`],
+//! [`crate::typed::run_event_with_options`] (and therefore their convenience
+//! spellings such as [`crate::aligned::run_aligned_event`],
+//! [`crate::typed::run_event`], and [`crate::typed::run_typed`]),
+//! [`crate::selected::run_harness_with_options`], and
+//! [`crate::selected::dispatch_builtin_harness_with_options`] each read stdin,
+//! capture the hook environment, and execute a handler. Hook protocols require
+//! clean, machine-parseable stdout, so a failure anywhere along the way never
+//! writes a partial response there. Instead every adapter writes one concise
+//! stderr line, `hookkit: <program> <hook> failed: <cause chain>`, naming the
+//! running program, the hook it was invoked for, and the error's full cause
+//! chain. By default the adapter then exits 1, which Claude Code and Codex treat
+//! as a non-blocking hook error: the pending action proceeds. See
+//! [`crate::failure`] for the fail-closed alternative.
 
 use std::fmt::Display;
-use std::io::Write;
 
 /// Renders `error` and its full [`std::error::Error::source`] chain, most specific
 /// cause last, the way `anyhow`'s alternate (`{:#}`) `Display` does.
@@ -39,10 +40,14 @@ pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
 }
 
 /// Best-effort file-name portion of the running program's `argv[0]`, falling back
-/// to `"hookkit"` when it is unavailable or not valid Unicode.
+/// to `"hookkit"` when it is unavailable. A name that is not valid Unicode is
+/// rendered lossily; it never panics.
 fn program_name() -> String {
-    std::env::args()
-        .next()
+    program_name_from(std::env::args_os().next())
+}
+
+fn program_name_from(argv0: Option<std::ffi::OsString>) -> String {
+    argv0
         .as_deref()
         .map(std::path::Path::new)
         .and_then(std::path::Path::file_name)
@@ -50,41 +55,18 @@ fn program_name() -> String {
         .unwrap_or_else(|| "hookkit".to_string())
 }
 
-/// Writes the one-block failure diagnostic (program identity, hook identity, and
-/// the error's full cause chain) to `sink`. Split out from [`report_failure`] so
-/// tests can assert on the rendered bytes without touching real process stderr.
-pub(crate) fn write_failure_diagnostic(
-    sink: &mut dyn Write,
-    hook: impl Display,
-    error: &dyn std::error::Error,
-) -> std::io::Result<()> {
-    writeln!(
-        sink,
+/// Renders the one-line failure diagnostic, without a trailing newline.
+///
+/// Line breaks inside the cause chain (a multi-line error or panic message)
+/// become spaces, so the report stays one line: Claude Code shows only the
+/// first stderr line of a non-blocking error.
+pub(crate) fn failure_line(hook: impl Display, error: &dyn std::error::Error) -> String {
+    let line = format!(
         "hookkit: {program} {hook} failed: {chain}",
         program = program_name(),
         chain = error_chain(error),
-    )
-}
-
-/// Writes the failure diagnostic to real stderr, then returns the `exit 1` the
-/// caller was already going to return. Never touches stdout.
-pub(crate) fn report_failure(
-    hook: impl Display,
-    error: &dyn std::error::Error,
-) -> std::process::ExitCode {
-    // Best effort: if stderr itself is broken there is nowhere left to report to,
-    // but the process must still exit non-zero.
-    let _ = write_failure_diagnostic(&mut std::io::stderr(), hook, error);
-    std::process::ExitCode::from(1)
-}
-
-/// Same as [`report_failure`] for a bare [`std::io::Error`] (for example, reading
-/// stdin) that never became a [`hookkit_core::HookkitError`].
-pub(crate) fn report_io_failure(
-    hook: impl Display,
-    error: std::io::Error,
-) -> std::process::ExitCode {
-    report_failure(hook, &error)
+    );
+    line.replace("\r\n", " ").replace(['\r', '\n'], " ")
 }
 
 #[cfg(test)]
@@ -147,12 +129,39 @@ mod tests {
         assert_eq!(rendered, format!("invalid JSON: {expected_leaf}"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn write_failure_diagnostic_names_the_program_and_hook_and_carries_the_chain() {
+    fn non_unicode_program_names_render_lossily_instead_of_panicking() {
+        use std::os::unix::ffi::OsStringExt;
+        let argv0 = std::ffi::OsString::from_vec(b"/opt/hooks/bad\xff-guard".to_vec());
+        assert_eq!(program_name_from(Some(argv0)), "bad\u{FFFD}-guard");
+        assert_eq!(program_name_from(None), "hookkit");
+    }
+
+    #[derive(Debug)]
+    struct MultiLine;
+    impl std::fmt::Display for MultiLine {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "first\r\nsecond\nthird\rfourth")
+        }
+    }
+    impl std::error::Error for MultiLine {}
+
+    #[test]
+    fn failure_line_collapses_line_breaks() {
+        let rendered = failure_line("codex/PreToolUse", &MultiLine);
+        assert!(
+            rendered.ends_with("failed: first second third fourth"),
+            "{rendered:?}"
+        );
+        assert!(!rendered.contains(['\r', '\n']));
+    }
+
+    #[test]
+    fn failure_line_names_the_program_and_hook_and_carries_the_chain() {
         let error = Enriching(Leaf);
-        let mut buffer = Vec::new();
-        write_failure_diagnostic(&mut buffer, "codex/PreToolUse", &error).unwrap();
-        let rendered = String::from_utf8(buffer).unwrap();
+        let rendered = failure_line("codex/PreToolUse", &error);
+        assert!(!rendered.contains('\n'));
         assert!(rendered.starts_with("hookkit: "));
         assert!(rendered.contains("codex/PreToolUse"));
         assert!(rendered.contains("failed: enriching context: leaf cause"));

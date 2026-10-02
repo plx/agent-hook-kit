@@ -64,7 +64,7 @@ proptest! {
     /// path-safe grammar, while their positive version remains exact.
     #[test]
     fn versioned_identifiers_preserve_path_safe_names(
-        name in "[A-Za-z0-9][A-Za-z0-9._-]{0,30}",
+        name in "[a-z0-9][a-z0-9._-]{0,30}",
         version in 1u32..=u32::MAX,
     ) {
         let family = FamilyId::new(name.clone(), version).unwrap();
@@ -74,6 +74,19 @@ proptest! {
         prop_assert_eq!(entity.name(), name.as_str());
         prop_assert_eq!(family.version(), version);
         prop_assert_eq!(entity.version(), version);
+    }
+
+    /// Property: names that differ only in ASCII case would share one
+    /// directory on case-insensitive filesystems, so uppercase is rejected.
+    #[test]
+    fn identifiers_with_uppercase_letters_are_rejected(
+        prefix in "[a-z0-9._-]{0,10}",
+        upper in "[A-Z]",
+        suffix in "[A-Za-z0-9._-]{0,10}",
+    ) {
+        let name = format!("{prefix}{upper}{suffix}");
+        prop_assert!(FamilyId::new(name.clone(), 1).is_err());
+        prop_assert!(EntityId::new(name, 1).is_err());
     }
 }
 

@@ -23,7 +23,7 @@ claimed through the shared session-scoped `ClaimSet`, then its markdown body is
 returned through `PreToolUseOutput::with_context`. Atomic claims mean concurrent
 hook processes cannot both decide one rule is new. By default, state lives in
 the versioned `agent-hook-kit.codex-claude-rules` family below
-`$TMPDIR/agent-hook-kit/session-state/`; `--state-dir` overrides the common
+the per-user `$TMPDIR/agent-hook-kit-<uid>/session-state/` root; `--state-dir` overrides the common
 state root. Session identifiers are hashed rather than used as path components.
 
 Build and inspect the CLI:

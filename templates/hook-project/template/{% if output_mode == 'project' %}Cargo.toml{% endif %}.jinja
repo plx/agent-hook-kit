@@ -1,5 +1,7 @@
 [workspace]
-resolver = "2"
+# The MSRV-aware resolver selects dependency versions whose `rust-version`
+# fits the workspace MSRV, so a fresh lockfile still builds on Rust {{ compatibility.rust_msrv }}.
+resolver = "3"
 members = [{{ crate_path | tojson }}]
 
 [workspace.package]

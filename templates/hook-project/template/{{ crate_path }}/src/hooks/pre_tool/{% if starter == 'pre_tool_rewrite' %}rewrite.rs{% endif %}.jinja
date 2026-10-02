@@ -1,15 +1,20 @@
 //! User-owned pre-tool input rewrite policy.
 
-/// Return a complete replacement object for a Claude Code or Codex tool call.
+/// Return a complete replacement object for a Claude Code or Codex tool call,
+/// or `None` to leave the call untouched.
 ///
-/// The safe starter preserves the native object unchanged. Edit this pure
-/// function to make a deliberate transformation; returning `None` leaves the
-/// call untouched.
+/// The safe starter never rewrites: every call passes through to the
+/// harness's normal permission flow. A rewrite is not neutral. Claude Code
+/// asks the user to confirm each rewritten call (see
+/// `scaffold::dispatch::pre_tool_output`), and echoing the input unchanged
+/// would still turn every call into a confirmation prompt. Return
+/// `Some(object)` only for calls this policy deliberately transforms, and
+/// include every field the tool needs: the object replaces the whole input.
 pub fn transform(
-    input: Option<hookkit_common::ToolInputRef<'_>>,
+    _input: Option<hookkit_common::ToolInputRef<'_>>,
     _state_dir: Option<&std::path::Path>,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
-    input.and_then(|value| value.as_object().cloned())
+    None
 }
 
 #[cfg(test)]
@@ -18,9 +23,9 @@ mod tests {
 
     #[test]
     #[rustfmt::skip]
-    fn starter_rewrite_preserves_the_complete_object() {
+    fn starter_rewrite_leaves_every_call_untouched() {
         let value = serde_json::json!({"path": "src/lib.rs", "line": 12});
-        let rewritten = transform(Some(hookkit_common::ToolInputRef::Value(&value)), None);
-        assert_eq!(rewritten, value.as_object().cloned());
+        assert_eq!(transform(Some(hookkit_common::ToolInputRef::Value(&value)), None), None);
+        assert_eq!(transform(None, None), None);
     }
 }

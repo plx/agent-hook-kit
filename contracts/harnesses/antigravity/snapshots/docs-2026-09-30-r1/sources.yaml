@@ -1,0 +1,94 @@
+format_version: 1
+sources:
+  - id: antigravity-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/hooks
+    retrieved: 2026-09-30
+    revision: 'site build ETag "_KFTNQ"'
+    content_sha256: 051967919edfb9904511c9a47e65115cb3def61c34f6f7e14924710df215f180
+    reproducibility: content-hash-only
+    limitations:
+      - The unified Antigravity 2.0, CLI, and IDE hook reference is a mutable rendered page with site chrome and no checked-in capture; the hash covers the decoded 141741-byte HTML body returned by `curl --fail --silent --show-error --location --compressed` on 2026-09-30, byte-identical to the docs-2026-09-29-r1 evidence.
+      - The ETag is shared by every page of the documentation site, so it identifies a site build rather than a page revision.
+      - The `?tab=ide` variant returns identical bytes; the surface tabs differ only in hook configuration locations and the `<app_data_dir>` value, not in the input/output contract.
+  - id: antigravity-hooks-markdown
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/hooks.md
+    retrieved: 2026-09-30
+    revision: 'site build ETag "_KFTNQ"'
+    content_sha256: c1ce644786c46a666379af40e3983081887fa29245ead461be4235a92ffc80c3
+    reproducibility: content-hash-only
+    limitations:
+      - Official Markdown source of the unified hook reference, with no checked-in capture. The server intermittently applies gzip content encoding even when no Accept-Encoding header is sent; the hash covers the decoded 16795-byte identity body, which `curl --compressed` reproduces.
+      - 'It types `toolCall.args` as an object but documents `list_permissions` with "Arguments: None" and shows no payload for an argument-less call, which the PreToolUse and PostToolUse contracts record.'
+  - id: antigravity-ide-hooks-redirect
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/ide/hooks
+    retrieved: 2026-09-30
+    revision: 'site build ETag "_KFTNQ"'
+    content_sha256: 9570816c39c7cef1314bcbac2beca0e9c604634bc3dffafb6cc953f3ea714288
+    reproducibility: content-hash-only
+    limitations:
+      - The former IDE-specific hook reference is a 371-byte meta-refresh redirect to /docs/hooks?tab=ide. The server sends it gzip-encoded; the recorded hash covers the decoded body.
+  - id: antigravity-changelog
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/changelog.md
+    retrieved: 2026-09-30
+    revision: 'site build ETag "_KFTNQ"'
+    content_sha256: 404ef735cb652cefd51649855e83809b0f17d50d91926d5b0bf3d27acb681b8a
+    reproducibility: content-hash-only
+    limitations:
+      - Combined release notes for Antigravity 2.0 through v2.18.1, CLI through v1.2.11, SDK through v0.1.18, and IDE through v2.5.5 (2026-08-13), with no checked-in capture; the hash covers the decoded 268410-byte body returned by `curl --compressed`.
+      - Release notes describe runtime behavior in prose only and define neither hook exit codes nor payload schemas.
+  - id: antigravity-cli-changelog
+    kind: official-documentation
+    authority: primary
+    url: https://raw.githubusercontent.com/google-antigravity/antigravity-cli/eaf9e06660d2ca8f20f1474ed03f10e3dbfd35e5/CHANGELOG.md
+    retrieved: 2026-09-30
+    revision: eaf9e06660d2ca8f20f1474ed03f10e3dbfd35e5
+    content_sha256: 09edf2e8af87f1788348e4ec62e9d2ab26f9f90cfc48fca54dc0e14fe9c31d2b
+    reproducibility: pinned-revision
+    limitations:
+      - CLI release notes through 1.2.14, not vendored. The URL names the raw file at the pinned commit, so `curl --compressed <url>` reproduces the recorded hash; docs-2026-09-29-r1 recorded the GitHub blob page for the same file, whose HTML never hashes the same twice.
+      - The pinned commit was still the head of main on 2026-09-30.
+  - id: antigravity-permissions-reference
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/permissions.md
+    retrieved: 2026-09-30
+    revision: 'site build ETag "_KFTNQ"'
+    content_sha256: f2dc8d81a16b037fb1493eb8976fa0b55fa9453cb156bbb872f7850ce9aad4bd
+    reproducibility: content-hash-only
+    limitations:
+      - Defines the `action(target)` permission-resource vocabulary used by PreToolUse `permissionOverrides`; no checked-in capture. The hash covers the decoded 26356-byte body returned by `curl --compressed`.
+  - id: antigravity-hooks-archive-2026-07-21
+    kind: archived-official-documentation
+    authority: secondary
+    url: https://web.archive.org/web/20260721131156id_/https://antigravity.google/docs/hooks
+    retrieved: 2026-09-30
+    content_sha256: f80ee1810455129ddb7033e8efe8799b9a5cd2a758b22daab02109339c18f0d4
+    reproducibility: content-hash-only
+    limitations:
+      - Internet Archive capture (original bytes, 140496) of the generic reference as last archived before docs-2026-08-04-r1. It documents no modelName, no PostToolUse toolCall, and no deny_unless_prior_grant, and says PostInvocation fires after tool calls finish.
+  - id: antigravity-hooks-archive-2026-08-16
+    kind: archived-official-documentation
+    authority: secondary
+    url: https://web.archive.org/web/20260816124320id_/https://antigravity.google/docs/hooks/
+    retrieved: 2026-09-30
+    content_sha256: b66c78e47c9378716f0b220de2996af380c6c2fd008ab4e10646d623859f8c62
+    reproducibility: content-hash-only
+    limitations:
+      - Internet Archive capture (original bytes, 126873) and the first archived generic reference that lists modelName; no capture exists between 2026-07-21 and this one, so the day modelName was documented is unknown.
+  - id: antigravity-ide-hooks-archive-2026-09-16
+    kind: archived-official-documentation
+    authority: secondary
+    url: https://web.archive.org/web/20260916032838id_/https://antigravity.google/docs/ide/hooks
+    retrieved: 2026-09-30
+    content_sha256: 52752e77383aa12d06bd70e875deff15e2c562833cf31322946677d3be709dce
+    reproducibility: content-hash-only
+    limitations:
+      - Internet Archive capture (original bytes, 128311) and the last archived IDE-specific reference before it became a redirect. Like every IDE copy archived from 2026-07-21 onward, it documents PostToolUse input without toolCall, PreToolUse decisions without deny_unless_prior_grant, and no modelName, although the latest IDE release (v2.5.5) predates it.

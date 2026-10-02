@@ -23,6 +23,15 @@ jobs:
           - macos-latest
 {% endif %}
     runs-on: {% raw %}${{ matrix.os }}{% endraw %}
+{%- if output_mode == "crate" %}
+    env:
+      # The crate may be a host-workspace member or a standalone package, so
+      # pin one build directory for the cache below.
+      CARGO_TARGET_DIR: {% raw %}${{ github.workspace }}/target{% endraw %}
+      # Resolve dependency versions that fit the declared rust-version even
+      # when the host workspace still uses resolver "2".
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+{%- endif %}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -39,7 +48,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: {{ (package_name ~ "-hook") | tojson }}
-          workspaces: {{ (crate_path ~ " -> target") | tojson }}
+{%- if output_mode == "project" %}
+          workspaces: ". -> target"
+{%- else %}
+          workspaces: "{{ crate_path }} -> {{ "../" * (crate_path.split("/") | length) }}target"
+{%- endif %}
 
 {% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
       - name: Install Pkl {{ compatibility.pkl_version }}

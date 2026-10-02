@@ -5,6 +5,7 @@ use crate::{
 
 /// Cross-harness lifecycle category. This is never an exact protocol identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum EventCategory {
     /// Session lifecycle activity.
     Session,
@@ -26,6 +27,7 @@ pub enum EventCategory {
 
 /// Native mechanism used to invoke a hook handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HandlerKind {
     /// A local process using stdin, stdout, stderr, and an exit code.
     Command,
@@ -236,22 +238,6 @@ impl NativeEventDescriptor {
         self.snapshot
     }
 
-    /// Reports whether the descriptor has a native input implementation.
-    ///
-    /// A [`NativeEventDescriptor`] can only be constructed from an
-    /// [`EventSpec`], so this currently always returns `true`.
-    pub fn native_input(&self) -> bool {
-        true
-    }
-
-    /// Reports whether the descriptor has a native output implementation.
-    ///
-    /// A [`NativeEventDescriptor`] can only be constructed from an
-    /// [`EventSpec`], so this currently always returns `true`.
-    pub fn native_output(&self) -> bool {
-        true
-    }
-
     /// Returns all implemented native handler mechanisms.
     pub fn bindings(&self) -> &[HandlerKind] {
         &self.bindings
@@ -264,7 +250,8 @@ impl NativeEventDescriptor {
 }
 
 /// Confidence with which payload shape can identify a native event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum IdentificationStrength {
     /// A documented discriminator uniquely names the event.
     Definitive,
@@ -293,6 +280,21 @@ pub struct IdentificationDescriptor {
 
 fn validate_event<E: EventSpec>(raw: &RawInvocation) -> crate::Result<()> {
     E::parse(raw).map(|_| ())
+}
+
+impl std::fmt::Debug for IdentificationDescriptor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IdentificationDescriptor")
+            .field("event", &self.event)
+            .field("contract", &self.contract)
+            .field("snapshot", &self.snapshot)
+            .field("strength", &self.strength)
+            .field("discriminator", &self.discriminator)
+            .field("overlaps", &self.overlaps)
+            .field("native_parser", &self.validate.is_some())
+            .finish()
+    }
 }
 
 impl IdentificationDescriptor {
