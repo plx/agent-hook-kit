@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -98,7 +98,15 @@ fn run_with(
             .env("CLAUDE_PROJECT_DIR", project_dir);
     }
     let mut child = command.spawn().unwrap();
-    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    if let Err(error) = child.stdin.take().unwrap().write_all(stdin) {
+        // Argument errors can exit before reading stdin. Still collect the
+        // native response so callers verify its status, stdout, and stderr.
+        assert_eq!(
+            error.kind(),
+            ErrorKind::BrokenPipe,
+            "writing guard stdin: {error}"
+        );
+    }
     child.wait_with_output().unwrap()
 }
 
@@ -253,6 +261,10 @@ fn argument_errors_block_the_call() {
     let temporary = TempDirectory::new("usage");
     let config = temporary.0.join("policy.yaml");
     std::fs::write(&config, "patterns: ['.env']\n").unwrap();
+    // Exceed the stdin pipe buffer so argument rejection exercises the child
+    // closing stdin before the parent finishes writing, regardless of scheduling.
+    let mut stdin = b"{}".to_vec();
+    stdin.resize(1024 * 1024, b' ');
     // Clap's own usage status would be 2 as well; exiting 1 instead, a
     // non-blocking hook error, would let every call through on a typo.
     for args in [
@@ -265,7 +277,7 @@ fn argument_errors_block_the_call() {
             "x".to_owned(),
         ],
     ] {
-        let output = run_with(&args, "codex", &temporary.0, &temporary.0, b"{}");
+        let output = run_with(&args, "codex", &temporary.0, &temporary.0, &stdin);
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         assert!(output.stdout.is_empty(), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -283,7 +295,7 @@ fn argument_errors_block_the_call() {
         "antigravity",
         &temporary.0,
         &temporary.0,
-        b"{}",
+        &stdin,
     );
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(decision(&output), "deny");
