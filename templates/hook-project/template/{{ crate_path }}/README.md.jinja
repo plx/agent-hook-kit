@@ -40,33 +40,70 @@ It never guesses the hook from input JSON.
 {% for event in event_catalog.events -%}
 {% if event.harness == harness and event.stable_id in native_hooks and event.starter.strategy == "must_implement" -%}
 > `{{ event.stable_id | replace('_', '-') }}` is scaffold-only: its safe
-> starter fails explicitly instead of inventing a required native value.
+> starter fails explicitly instead of inventing a required native value{% if event.stable_id == "worktree_remove" %} or
+> reporting cleanup it did not do. Registering it replaces Claude Code's own
+> `git worktree remove` cleanup, and exit 0 counts the worktree as removed{% endif %}.
 > Implement and test its protected handler before registering this command.
 
 {% endif -%}
 {% endfor -%}
 {% endif -%}
+{% if starter == "policy_guard" -%}
+{% if aligned_hooks | length == 1 -%}
+The guard fails closed: when it cannot decide, including when a registration
+passes arguments it cannot parse, it blocks the tool call with exit status 2
+on Claude Code and Codex and a `deny` decision on Antigravity.
+{% else -%}
+The guard fails closed once it runs. Because this package also serves other
+aligned families, arguments it cannot parse exit with the non-blocking status
+1 instead, so a misregistered guard lets tool calls run; check each
+registration.
+{% endif %}
+{% endif -%}
 Use only the harnesses recorded in `hookkit-template.manifest.yml`. Register
 the complete command line for the matching native hook event. The template
 does not edit live Claude Code, Codex, or Antigravity configuration.
+{% if "file_activity" in state_capabilities and starter != "immediate_quality"
+      and ((harness_mode == "cross" and "post_tool" in aligned_hooks and "claude-code" in harnesses)
+           or (harness_mode == "single" and harness == "claude-code" and "post_tool_use" in native_hooks)) %}
+On Claude Code, register the
+`{{ "post-tool" if harness_mode == "cross" else "post-tool-use" }}` command for both `PostToolUse` and
+`PostToolUseFailure`. It runs HookKit's file-activity observer, which also
+records the writes of a tool call that failed afterwards (for example
+`sed -i … && pytest`), so the Stop runner still checks those files.
+{% endif -%}
 {% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
 The runner requires `pkl` {{ compatibility.pkl_version }}. The generated package
 owns this policy:
 
 `{{ quality_config_path }}`
 
-Hook processes do not necessarily start in this repository, so use an absolute
-policy path in live registration while retaining this package-owned file. The
+Hook processes do not necessarily start in this repository. A relative
+`--config` path, including this default, is resolved against Claude Code's
+`CLAUDE_PROJECT_DIR` (the project root where the session started), because
+Claude Code runs hooks in the agent's current directory, which follows `cd`.
+Codex and Antigravity resolve it against the hook's working directory, so an
+absolute policy path remains the most robust live registration. The
 concrete tools and lowering policy are recorded in both the Pkl file and
 `hookkit-template.manifest.yml`.
 {% endif -%}
 {% if state_capabilities %}
-All selected state helpers share this package-specific default root:
+All selected state helpers share this package-specific default root, beside
+HookKit's per-user default state root:
 
-`$TMPDIR/agent-hook-kit/generated/{{ package_name }}/`
+`$TMPDIR/agent-hook-kit-<uid>/generated/{{ package_name }}/` (Unix)
 
-Use `--state-dir` to override it. Every coordinated producer and consumer must
-receive the same override. Persisted family/entity versions are visible in
+HookKit creates `agent-hook-kit-<uid>` owner-only, refuses one that another
+user owns, and requires every directory from it down to this package's root
+to be yours, so users who share a temporary directory cannot tamper with each
+other's state, and a directory another user created first fails loudly
+instead of being trusted. Use `--state-dir` to override the default, for
+example to keep state out of a shared temporary directory altogether. Every
+coordinated producer and consumer must receive the same override. A relative
+`--state-dir` is resolved against Claude Code's `CLAUDE_PROJECT_DIR`, or the
+event's working directory on Codex and Antigravity, by both the generated
+state helpers and HookKit's runners, so it names one directory even after the
+agent runs `cd`. Persisted family/entity versions are visible in
 `src/scaffold/state.rs`.
 
 Every generated event-handler seam receives the parsed state directory as its
@@ -125,6 +162,11 @@ this crate believes it belongs to the surrounding workspace, add this member:
 [workspace]
 members = [{{ crate_path | tojson }}]
 ```
+
+If that workspace still uses `resolver = "2"`, adopt `resolver = "3"` or set
+`CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback`{% if github_actions %}, as
+the generated workflow does,{% endif %} so a fresh lockfile keeps the Rust
+{{ compatibility.rust_msrv }} check on dependency versions that support it.
 
 This instance uses `.copier-answers.{{ package_name }}.yml`:
 

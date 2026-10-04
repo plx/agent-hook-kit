@@ -8,7 +8,7 @@ patterns:
 
 # inspect_known: inspect recovered candidates and allow unresolved gaps
 # deny_unresolved: deny analyzer/resolver gaps as well as concrete matches
-# deny_all_shell: deny exact native shell calls
+# deny_all_shell: deny native shell calls (including Claude Code PowerShell and Monitor)
 access_policy: deny_unresolved
 
 # Legacy compatibility: true maps to deny_all_shell; false maps to inspect_known.

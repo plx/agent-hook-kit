@@ -1,0 +1,72 @@
+format_version: 1
+id: codex/commit-ff6aec9-r2/PreToolUse
+harness: codex
+snapshot: commit-ff6aec9-r2
+event:
+  wire_name: PreToolUse
+  rust_key: pre_tool_use
+  category: tool
+  identification:
+    inferability: definitive
+    discriminator: { json_pointer: /hook_event_name, const: PreToolUse }
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources: [codex-hooks-reference, codex-generated-schemas, codex-core-source]
+    assurance: { confidence: high, verification: source-reviewed }
+  outputs:
+    - id: command-response
+      file: output.command.schema.json
+      origin: derived
+      sources: [codex-hooks-reference, codex-generated-schemas, codex-hooks-source]
+      assurance: { confidence: high, verification: source-reviewed }
+bindings:
+  command:
+    kind: process
+    request: { channel: stdin, framing: single-document-at-eof, content_kind: json }
+    outcomes:
+      - id: no-op
+        effect: none
+        exit: { exact: 0 }
+        stdout: { presence: optional, role: none, content_kind: empty }
+        stderr: { presence: optional, role: ignored, content_kind: opaque }
+        sources: [codex-hooks-reference, codex-hooks-source]
+        assurance: { confidence: high, verification: source-reviewed }
+      - id: control
+        effect: control
+        exit: { exact: 0 }
+        stdout: { presence: required, role: protocol-value, content_kind: json }
+        stderr: { presence: optional, role: ignored, content_kind: opaque }
+        output_schema: command-response
+        sources: [codex-hooks-reference, codex-generated-schemas, codex-hooks-source]
+        assurance: { confidence: high, verification: source-reviewed }
+      - id: block-stderr
+        effect: deny
+        exit: { exact: 2 }
+        stdout: { presence: optional, role: ignored, content_kind: opaque }
+        stderr: { presence: required, role: agent-context, content_kind: text, encoding: utf-8 }
+        sources: [codex-hooks-reference, codex-hooks-source]
+        assurance: { confidence: high, verification: source-reviewed }
+      - id: failure
+        effect: nonblocking-error
+        exit: { range: { min: 1, max: 255 } }
+        stdout: { presence: optional, role: ignored, content_kind: opaque }
+        stderr: { presence: optional, role: ignored, content_kind: opaque }
+        sources: [codex-hooks-reference, codex-hooks-source]
+        assurance: { confidence: high, verification: source-reviewed }
+handler_kinds: [command, mcp_tool]
+fixtures: fixtures.yaml
+uncertainties:
+  - Since Codex 0.157.0 `cwd` and the process working directory are the step's local-environment cwd when one is selected (falling back to the turn cwd), so they can differ from the cwd reported by turn-scoped events; the hooks reference still says the session cwd. Since 0.156.0 `model` and `permission_mode` come from the step's captured settings and can change within a turn.
+  - Exit 2 selects the block-stderr outcome only when stderr is non-empty after trimming; exit 2 with empty or whitespace-only stderr is a failed run (failure outcome) and does not block the tool call.
+  - "`permissionDecision: deny` needs a `permissionDecisionReason`, and legacy `decision: block` (honored only when hookSpecificOutput carries no permissionDecision, permissionDecisionReason, or updatedInput) needs a `reason`, each non-empty after trimming; otherwise Codex fails the synchronous run without blocking. The output schema adds both runtime rules."
+  - "The Draft 2020-12 root otherwise preserves the complete vendored output surface; contextual restrictions described by hook documentation are enforced by typed output constructors rather than by narrowing the catalog schema. `permissionDecision: ask`, legacy `decision: approve`, `allow` without `updatedInput`, `updatedInput` without `allow`, `permissionDecisionReason` without `permissionDecision`, a legacy `reason` without `decision`, and `continue: false`, `stopReason`, or `suppressOutput` (the ask, approve, and common-controls output examples) are parsed but fail the run; Codex reports the error and continues the tool call."
+  - For Bash and apply_patch, `updatedInput` must include a string `command` field; for MCP and other local function tools it is the replacement arguments object (hooks reference).
+  - Plain text on stdout is ignored at exit 0. A synchronous handler's additionalContext is dropped when the rest of its output is invalid.
+  - Codex never reads stderr from a command that exits 0, so exit-0 outcomes model stderr as ignored rather than as diagnostics.
+  - For non-zero exits that do not select a blocking outcome Codex records only `hook exited with code N`, discards stderr, and continues (fail-open); a process that dies without an exit status is also a failed run.
+  - "Command handlers with `async: true` (Codex >= 0.148.0) run in the background: Codex ignores every control effect (decision, permissionDecision, updatedInput, PermissionRequest decisions, continue:false, stopReason, and exit 2), treats exit 2 as a plain failure, and delivers only additionalContext and systemMessage at the next safe point. The stdin payload carries no execution-mode marker, so these outcomes describe synchronous handlers."
+  - "Codex >= 0.148.0 also runs `mcp_tool` handlers, always synchronously, and parses a successful tool result like exit-0 stdout; `prompt` and `agent` handlers are parsed but skipped. Only the command binding is modeled."
+  - Since Codex 0.149.0 command hooks receive a replay of the environment Codex captured when the session hook registry was created, not the live environment; since 0.155.0 they start in a new session without a controlling terminal and their timeout also covers stdin delivery. On timeout, I/O failure, or turn abort Codex SIGKILLs the hook's whole process group.
+  - Codex does not dispatch command hooks for Work threads that use cloud orchestration, even when tools execute locally; only admin-managed remote mcp_tool hooks run there.

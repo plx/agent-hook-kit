@@ -1,0 +1,44 @@
+format_version: 1
+id: commit-ff6aec9-r2
+harness: codex
+state: frozen
+retrieved: 2026-09-30
+sources_file: sources.yaml
+manifest_file: MANIFEST.sha256
+events:
+- wire_name: SessionStart
+  rust_key: session_start
+  path: events/session-start
+- wire_name: SessionEnd
+  rust_key: session_end
+  path: events/session-end
+- wire_name: SubagentStart
+  rust_key: subagent_start
+  path: events/subagent-start
+- wire_name: PreToolUse
+  rust_key: pre_tool_use
+  path: events/pre-tool-use
+- wire_name: PermissionRequest
+  rust_key: permission_request
+  path: events/permission-request
+- wire_name: PostToolUse
+  rust_key: post_tool_use
+  path: events/post-tool-use
+- wire_name: PreCompact
+  rust_key: pre_compact
+  path: events/pre-compact
+- wire_name: PostCompact
+  rust_key: post_compact
+  path: events/post-compact
+- wire_name: UserPromptSubmit
+  rust_key: user_prompt_submit
+  path: events/user-prompt-submit
+- wire_name: SubagentStop
+  rust_key: subagent_stop
+  path: events/subagent-stop
+- wire_name: Stop
+  rust_key: stop
+  path: events/stop
+- wire_name: Interrupt
+  rust_key: interrupt
+  path: events/interrupt

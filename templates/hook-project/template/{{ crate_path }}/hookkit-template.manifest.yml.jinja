@@ -112,7 +112,7 @@ state_capabilities:
 state:
   family: {{ package_name | tojson }}
   family_version: 1
-  default_root: {{ ("$TMPDIR/agent-hook-kit/generated/" ~ package_name ~ "/") | tojson }}
+  default_root: {{ ("$TMPDIR/agent-hook-kit-<uid>/generated/" ~ package_name ~ "/") | tojson }}
 lowering_policy: {% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}{{ lowering_policy | tojson }}{% else %}null{% endif %}
 {% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
 runner:

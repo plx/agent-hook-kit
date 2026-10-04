@@ -14,4 +14,5 @@ path = "src/main.rs"
 hookkit-core = { workspace = true }
 hookkit-codex = { workspace = true }
 hookkit-runtime = { workspace = true }
+hookkit-shell = { workspace = true }
 serde_json = { workspace = true }

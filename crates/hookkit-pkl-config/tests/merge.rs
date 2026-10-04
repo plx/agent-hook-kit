@@ -18,9 +18,19 @@ fn pkl_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether Pkl-dependent tests must run instead of skipping. CI installs Pkl
+/// and sets `HOOKKIT_REQUIRE_PKL=1`, so a missing binary fails the test.
+fn pkl_required() -> bool {
+    std::env::var_os("HOOKKIT_REQUIRE_PKL").is_some_and(|value| !value.is_empty() && value != "0")
+}
+
 macro_rules! require_pkl {
     () => {
         if !pkl_available() {
+            assert!(
+                !pkl_required(),
+                "HOOKKIT_REQUIRE_PKL is set, but the pkl binary is not on PATH"
+            );
             eprintln!("skipping test: pkl binary not on PATH");
             return;
         }
@@ -158,6 +168,121 @@ settings {
     assert_eq!(activity.max_entries, 1234);
     assert_eq!(activity.coverage_gap_policy, CoverageGapPolicy::Strict);
     assert_eq!(activity.ignored_directory_names, vec![".git", "vendor"]);
+}
+
+#[test]
+fn file_activity_layers_merge_field_by_field() {
+    require_pkl!();
+    let project = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+
+settings {
+  fileActivity = new FileActivity {
+    vcs = "git-dirty"
+    ignoredDirectoryNames = new Listing<String> { ".git"; "dist" }
+  }
+}
+"#,
+    )
+    .expect("project file activity");
+    let local = evaluate_pkl_source_patch(
+        r#"
+amends "Config.pkl"
+
+settings {
+  fileActivity { coverageGapPolicy = "strict" }
+}
+"#,
+    )
+    .expect("local file activity");
+    let merged = merge_patch_chain([project, local].into_iter());
+
+    let activity = merged.settings.file_activity.expect("file activity");
+    assert_eq!(
+        activity.coverage_gap_policy,
+        CoverageGapPolicy::Strict,
+        "the later layer's field applies"
+    );
+    assert_eq!(
+        activity.vcs,
+        FileActivityVcsFallback::GitDirty,
+        "an earlier layer's field survives a later partial override"
+    );
+    assert_eq!(activity.ignored_directory_names, vec![".git", "dist"]);
+    let defaults = hookkit_pkl_config::FileActivitySettings::default();
+    assert_eq!(activity.max_entries, defaults.max_entries);
+    assert_eq!(activity.filesystem_mtime, defaults.filesystem_mtime);
+}
+
+#[test]
+fn empty_file_activity_block_keeps_runtime_defaults() {
+    require_pkl!();
+    let config = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+
+settings {
+  fileActivity = new FileActivity {}
+}
+"#,
+    )
+    .expect("empty file activity");
+    let activity = config.settings.file_activity.expect("file activity");
+    let defaults = hookkit_pkl_config::FileActivitySettings::default();
+    assert_eq!(
+        activity.ignored_directory_names,
+        defaults.ignored_directory_names
+    );
+    assert!(
+        activity
+            .ignored_directory_names
+            .iter()
+            .any(|name| name == ".agent-hook-kit"),
+        "the hook's own directory is pruned by default"
+    );
+    assert_eq!(activity.coverage_gap_policy, CoverageGapPolicy::BestEffort);
+}
+
+#[test]
+fn command_timeout_defaults_and_overrides() {
+    require_pkl!();
+    let defaulted = evaluate_pkl_source("amends \"Config.pkl\"\n").expect("defaults");
+    assert_eq!(
+        defaulted.settings.command_timeout_seconds,
+        hookkit_pkl_config::DEFAULT_COMMAND_TIMEOUT_SECONDS
+    );
+    assert_eq!(
+        defaulted.settings.run_timeout_seconds,
+        hookkit_pkl_config::DEFAULT_RUN_TIMEOUT_SECONDS
+    );
+    // The per-invocation budget must fit inside the 600-second default hook
+    // timeout of Claude Code and Codex, and one command inside the budget.
+    const {
+        assert!(hookkit_pkl_config::DEFAULT_RUN_TIMEOUT_SECONDS < 600);
+        assert!(
+            hookkit_pkl_config::DEFAULT_COMMAND_TIMEOUT_SECONDS
+                <= hookkit_pkl_config::DEFAULT_RUN_TIMEOUT_SECONDS
+        );
+    }
+    assert_eq!(
+        defaulted.settings.exclude,
+        vec!["**/.git/**", "**/node_modules/**"]
+    );
+
+    let disabled = evaluate_pkl_source(
+        r#"
+amends "Config.pkl"
+
+settings {
+  commandTimeoutSeconds = 0
+  runTimeoutSeconds = 25
+}
+"#,
+    )
+    .expect("disabled timeout");
+    assert_eq!(disabled.settings.command_timeout_seconds, 0);
+    assert_eq!(disabled.settings.run_timeout_seconds, 25);
 }
 
 #[test]

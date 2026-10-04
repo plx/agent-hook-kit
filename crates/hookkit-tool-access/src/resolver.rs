@@ -1,4 +1,4 @@
-use crate::{AccessScope, AccessTarget};
+use crate::{AccessScope, AccessTarget, PathExpression};
 use globset::{GlobBuilder, GlobMatcher};
 use hookkit_core::{Utf8Path, Utf8PathBuf, normalize_utf8_path};
 use std::borrow::Borrow;
@@ -23,7 +23,8 @@ pub enum ExactPathPolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SymlinkPolicy {
-    /// Do not descend into directory symlinks.
+    /// Do not descend into directory symlinks. A symlinked traversal root is
+    /// reported as the link itself rather than walked.
     #[default]
     DoNotFollow,
     /// Allow the filesystem walker to descend through directory symlinks.
@@ -42,17 +43,26 @@ pub enum ResolutionIssuePolicy {
 }
 
 /// Explicit controls for bounded filesystem materialization.
+///
+/// Construct with [`TargetResolutionOptions::new`] and assign fields.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TargetResolutionOptions {
-    /// Roots used for unrooted workspace and relative glob targets.
+    /// Roots used for unrooted workspace targets and for relative glob targets
+    /// whose base is observable but was not lexically resolved.
     pub workspace_roots: Vec<Utf8PathBuf>,
     /// Directory basenames pruned from recursive traversal.
+    ///
+    /// They apply to traversal roots and walked directories only; an exact
+    /// target (or an exact-or-descendants target naming a file) is never
+    /// pruned by name, so `/repo/.git/hooks/pre-commit` still materializes.
     pub ignored_directory_names: BTreeSet<String>,
     /// Lexically normalized roots excluded from results and traversal.
     pub excluded_roots: BTreeSet<Utf8PathBuf>,
     /// Maximum directory entries and exact-path metadata probes.
     pub max_entries: usize,
-    /// Whether recursive traversal follows directory symlinks.
+    /// Whether recursive traversal follows directory symlinks, including a
+    /// traversal root that is itself a symlink.
     pub symlinks: SymlinkPolicy,
     /// Whether nonexistent exact paths are retained.
     pub exact_paths: ExactPathPolicy,
@@ -225,11 +235,7 @@ impl Resolver<'_> {
         match target {
             AccessTarget::Path { expression, scope } => {
                 if *scope == AccessScope::Glob {
-                    self.resolve_glob(
-                        target,
-                        expression.raw.as_str(),
-                        expression.resolved.as_deref(),
-                    )
+                    self.resolve_glob(target, expression)
                 } else {
                     let Some(path) = expression.resolved.as_deref() else {
                         self.unresolved(target, TargetResolutionReason::UnresolvedPathExpression);
@@ -238,14 +244,16 @@ impl Resolver<'_> {
                     self.resolve_path(target, path, *scope)
                 }
             }
-            AccessTarget::Workspace { root: Some(root) } => self.walk(target, root, None, false),
+            AccessTarget::Workspace { root: Some(root) } => {
+                self.walk(target, root, None, Walk::workspace())
+            }
             AccessTarget::Workspace { root: None } => {
                 if self.options.workspace_roots.is_empty() {
                     self.unresolved(target, TargetResolutionReason::MissingWorkspaceRoots);
                     return Ok(false);
                 }
                 for root in &self.options.workspace_roots {
-                    if self.walk(target, root, None, false)? {
+                    if self.walk(target, root, None, Walk::workspace())? {
                         return Ok(true);
                     }
                 }
@@ -261,21 +269,47 @@ impl Resolver<'_> {
         scope: AccessScope,
     ) -> Result<bool, TargetResolutionError> {
         let path = normalize_utf8_path(path);
-        if let Some(reason) = self.filtered_root(&path) {
+        if let Some(reason) = self.excluded(&path) {
             self.unresolved(target, reason);
             return Ok(false);
         }
+        let follow_root = self.options.symlinks == SymlinkPolicy::Follow;
         match scope {
             AccessScope::Exact => self.exact(target, &path),
-            AccessScope::Descendants => self.walk(target, &path, None, false),
+            AccessScope::Descendants => self.walk(
+                target,
+                &path,
+                None,
+                Walk {
+                    include_root: false,
+                    follow_root,
+                },
+            ),
             AccessScope::ExactOrDescendants => {
-                if path.is_dir() {
-                    self.walk(target, &path, None, true)
+                if self.is_traversable_directory(&path) {
+                    self.walk(
+                        target,
+                        &path,
+                        None,
+                        Walk {
+                            include_root: true,
+                            follow_root,
+                        },
+                    )
                 } else {
                     self.exact(target, &path)
                 }
             }
             AccessScope::Glob => unreachable!("glob handled separately"),
+        }
+    }
+
+    /// Whether `path` is a directory to walk. Under
+    /// [`SymlinkPolicy::DoNotFollow`], a symlink to a directory is not.
+    fn is_traversable_directory(&self, path: &Utf8Path) -> bool {
+        match self.options.symlinks {
+            SymlinkPolicy::Follow => path.is_dir(),
+            _ => std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()),
         }
     }
 
@@ -311,28 +345,48 @@ impl Resolver<'_> {
         Ok(false)
     }
 
+    /// Materializes a glob target.
+    ///
+    /// A relative glob is anchored to the workspace roots only when its base
+    /// is observable; after an unknown directory change, without a working
+    /// directory, or in another environment it is reported as an unresolved
+    /// expression rather than guessed. Syntax is validated first, so an
+    /// invalid glob is always reported as such.
     fn resolve_glob(
         &mut self,
         target: &AccessTarget,
-        raw: &str,
-        resolved: Option<&Utf8Path>,
+        expression: &PathExpression,
     ) -> Result<bool, TargetResolutionError> {
-        let patterns = if let Some(resolved) = resolved.filter(|path| path.is_absolute()) {
-            vec![normalize_utf8_path(resolved)]
+        let resolved = expression.resolved.as_deref();
+        let raw = resolved.unwrap_or_else(|| Utf8Path::new(&expression.raw));
+        if let Err(error) = GlobBuilder::new(raw.as_str())
+            .literal_separator(true)
+            .build()
+        {
+            self.issue(
+                target,
+                TargetResolutionReason::InvalidGlob {
+                    pattern: raw.to_string(),
+                    message: error.to_string(),
+                },
+                self.options.invalid_globs,
+            )?;
+            return Ok(false);
+        }
+        let patterns = if raw.is_absolute() {
+            vec![normalize_utf8_path(raw)]
+        } else if !expression.base.is_observable() {
+            self.unresolved(target, TargetResolutionReason::UnresolvedPathExpression);
+            return Ok(false);
+        } else if self.options.workspace_roots.is_empty() {
+            self.unresolved(target, TargetResolutionReason::MissingWorkspaceRoots);
+            return Ok(false);
         } else {
-            let raw = resolved.unwrap_or_else(|| Utf8Path::new(raw));
-            if raw.is_absolute() {
-                vec![normalize_utf8_path(raw)]
-            } else if self.options.workspace_roots.is_empty() {
-                self.unresolved(target, TargetResolutionReason::MissingWorkspaceRoots);
-                return Ok(false);
-            } else {
-                self.options
-                    .workspace_roots
-                    .iter()
-                    .map(|root| normalize_utf8_path(root.join(raw)))
-                    .collect()
-            }
+            self.options
+                .workspace_roots
+                .iter()
+                .map(|root| normalize_utf8_path(root.join(raw)))
+                .collect()
         };
 
         for pattern in patterns {
@@ -354,7 +408,17 @@ impl Resolver<'_> {
                 }
             };
             let root = literal_glob_root(&pattern);
-            if self.walk(target, &root, Some(&matcher), true)? {
+            // A shell expands a glob's literal prefix through symlinks, so the
+            // prefix is followed even when nested links are not.
+            if self.walk(
+                target,
+                &root,
+                Some(&matcher),
+                Walk {
+                    include_root: true,
+                    follow_root: true,
+                },
+            )? {
                 return Ok(true);
             }
         }
@@ -366,10 +430,17 @@ impl Resolver<'_> {
         target: &AccessTarget,
         root: &Utf8Path,
         matcher: Option<&GlobMatcher>,
-        include_root: bool,
+        walk: Walk,
     ) -> Result<bool, TargetResolutionError> {
+        let Walk {
+            include_root,
+            follow_root,
+        } = walk;
         let root = normalize_utf8_path(root);
-        if let Some(reason) = self.filtered_root(&root) {
+        if let Some(reason) = self
+            .excluded(&root)
+            .or_else(|| self.ignored_traversal_root(&root))
+        {
             self.unresolved(target, reason);
             return Ok(false);
         }
@@ -402,8 +473,10 @@ impl Resolver<'_> {
             .iter()
             .map(normalize_utf8_path)
             .collect::<BTreeSet<_>>();
+        let follow_links = self.options.symlinks == SymlinkPolicy::Follow;
         let walker = WalkDir::new(root.as_std_path())
-            .follow_links(self.options.symlinks == SymlinkPolicy::Follow)
+            .follow_links(follow_links)
+            .follow_root_links(follow_links || follow_root)
             .sort_by_file_name()
             .into_iter()
             .filter_entry(|entry| !entry_is_filtered(entry, &ignored, &excluded));
@@ -494,41 +567,58 @@ impl Resolver<'_> {
         });
     }
 
-    fn filtered_root(&self, path: &Utf8Path) -> Option<TargetResolutionReason> {
-        if let Some(excluded) = self
-            .options
+    /// Reports a path inside a configured excluded root.
+    fn excluded(&self, path: &Utf8Path) -> Option<TargetResolutionReason> {
+        self.options
             .excluded_roots
             .iter()
             .map(normalize_utf8_path)
-            .find(|excluded| path == excluded || path.starts_with(excluded))
-        {
-            return Some(TargetResolutionReason::ExcludedRoot { path: excluded });
-        }
+            .find(|excluded| path.starts_with(excluded))
+            .map(|path| TargetResolutionReason::ExcludedRoot { path })
+    }
+
+    /// Reports a traversal root that lies in, or is, an ignored directory.
+    ///
+    /// Inside a workspace root, every component relative to that root is
+    /// checked, matching what a walk from the workspace root would prune.
+    /// Outside every workspace root only the directory's own name is
+    /// checked, so ignored names in unrelated ancestors do not apply.
+    fn ignored_traversal_root(&self, path: &Utf8Path) -> Option<TargetResolutionReason> {
+        let ignored = &self.options.ignored_directory_names;
         let relative = self
             .options
             .workspace_roots
             .iter()
             .map(normalize_utf8_path)
-            .find_map(|root| path.strip_prefix(root).ok());
-        let ignored = relative.map_or_else(
-            || {
-                path.file_name()
-                    .is_some_and(|name| self.options.ignored_directory_names.contains(name))
-            },
-            |relative| {
-                relative.components().any(|component| {
-                    self.options
-                        .ignored_directory_names
-                        .contains(component.as_str())
-                })
-            },
-        );
-        if ignored {
-            return Some(TargetResolutionReason::IgnoredDirectory {
-                path: path.to_path_buf(),
-            });
+            .find_map(|root| path.strip_prefix(root).ok().map(Utf8Path::to_path_buf));
+        let is_ignored = match relative {
+            Some(relative) => relative
+                .components()
+                .any(|component| ignored.contains(component.as_str())),
+            None => path.file_name().is_some_and(|name| ignored.contains(name)),
+        };
+        is_ignored.then(|| TargetResolutionReason::IgnoredDirectory {
+            path: path.to_path_buf(),
+        })
+    }
+}
+
+/// Traversal behavior for one walk.
+#[derive(Debug, Clone, Copy)]
+struct Walk {
+    /// Whether the root itself is materialized.
+    include_root: bool,
+    /// Whether a root that is a directory symlink is walked through.
+    follow_root: bool,
+}
+
+impl Walk {
+    /// Configured workspace roots are walked through a root symlink.
+    const fn workspace() -> Self {
+        Self {
+            include_root: false,
+            follow_root: true,
         }
-        None
     }
 }
 
@@ -548,10 +638,15 @@ fn entry_is_filtered(
     ignored || excluded
 }
 
+/// Returns the longest literal directory prefix of a glob. Any component with
+/// wildcard, class, alternation (`{a,b}`), or escape syntax ends the prefix.
 fn literal_glob_root(pattern: &Utf8Path) -> Utf8PathBuf {
     let mut prefix = Utf8PathBuf::new();
     for component in pattern.components() {
-        if component.as_str().contains(['*', '?', '[', ']']) {
+        if component
+            .as_str()
+            .contains(['*', '?', '[', ']', '{', '}', '\\'])
+        {
             break;
         }
         prefix.push(component.as_str());

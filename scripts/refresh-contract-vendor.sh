@@ -8,12 +8,18 @@ case "$mode" in
 esac
 
 root="$(git rev-parse --show-toplevel)"
-revision="9e552e9d15ba52bed7077d5357f3e18e330f8f38"
+# Latest stable Codex release (tag rust-v0.159.2) pinned by the newest Codex
+# contract snapshot. Older vendored revisions stay in place because frozen
+# snapshots were derived from them; this script only refreshes this revision.
+revision="ff6aec96948b70d94983af2641a6b67c94faeff5"
 destination="$root/contracts/vendor/codex/$revision/generated"
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 
+# The complete codex-rs/hooks/schema/generated listing at $revision.
 files=(
+  interrupt.command.input.schema.json
+  interrupt.command.output.schema.json
   permission-request.command.input.schema.json
   permission-request.command.output.schema.json
   post-compact.command.input.schema.json
@@ -24,6 +30,7 @@ files=(
   pre-compact.command.output.schema.json
   pre-tool-use.command.input.schema.json
   pre-tool-use.command.output.schema.json
+  session-end.command.input.schema.json
   session-start.command.input.schema.json
   session-start.command.output.schema.json
   stop.command.input.schema.json

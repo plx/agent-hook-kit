@@ -1,0 +1,63 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0 }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+      value: { invocationNum: 3, initialNumSteps: 10, conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, modelName: gemini-3.6-flash-medium }
+  negative:
+    - id: missing-workspaces
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0 }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-invocation
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: first, initialNumSteps: 0 }
+      expected_pointer: /invocationNum
+      expected_keyword: type
+    - id: invalid-model-name
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0, modelName: 36 }
+      expected_pointer: /modelName
+      expected_keyword: type
+output:
+  - id: no-op
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: {}
+  - id: inject-reminder
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: { injectSteps: [{ ephemeralMessage: Remember to lint }] }
+  - id: inject-user-message
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { injectSteps: [{ userMessage: Run the linter before continuing. }] }
+output_negative:
+  - id: inject-step-mutually-exclusive
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference]
+    value: { injectSteps: [{ userMessage: Remember to lint, ephemeralMessage: Hidden reminder }] }
+    expected_pointer: /injectSteps/0
+    expected_keyword: oneOf
+process:
+  - id: inject-reminder
+    binding: command
+    outcome: inject
+    exit_code: 0
+    stdout_base64: eyJpbmplY3RTdGVwcyI6W3siZXBoZW1lcmFsTWVzc2FnZSI6IlJlbWVtYmVyIHRvIGxpbnQifV19
+    stdout_sha256: c5c7b4277acb77c3f374a7cc895a32295bb737e40935c2f070a0291eb651b905
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

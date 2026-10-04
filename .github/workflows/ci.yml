@@ -20,9 +20,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
+      # --locked keeps this check on the committed, MSRV-compatible lockfile.
       - name: Check supported packages on the declared MSRV
         run: >-
           cargo check
+          --locked
           -p hookkit-core
           -p hookkit-claude
           -p hookkit-codex
@@ -49,20 +51,51 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install Pkl from the template compatibility catalog
+        shell: bash
+        run: |
+          pkl_version="$(sed -n 's/^pkl_version: *//p' templates/hook-project/catalog/compatibility.yml)"
+          test -n "$pkl_version"
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) pkl_asset=pkl-linux-amd64 ;;
+            Linux-aarch64) pkl_asset=pkl-linux-aarch64 ;;
+            Darwin-arm64) pkl_asset=pkl-macos-aarch64 ;;
+            Darwin-x86_64) pkl_asset=pkl-macos-amd64 ;;
+            *) echo "unsupported Pkl runner platform" >&2; exit 1 ;;
+          esac
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/pkl" \
+            "https://github.com/apple/pkl/releases/download/${pkl_version}/${pkl_asset}"
+          chmod +x "$RUNNER_TEMP/pkl"
+          "$RUNNER_TEMP/pkl" --version | grep -F "Pkl ${pkl_version} "
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Format check
         run: cargo fmt --check
       - name: Contract catalog
+        shell: bash
         run: |
           cargo run --quiet -p hookkit-conformance
           cargo run --quiet -p xtask --bin generate-claude-contracts
           cargo run --quiet -p xtask --bin generate-codex-contracts
-          cargo xtask contracts check --snapshot current
+          cargo xtask contracts check
           cargo xtask contracts report --check
           cargo xtask contracts verify-vendor
-          git diff --exit-code -- contracts
+          # The generators must reproduce the committed catalog exactly,
+          # including never leaving untracked files behind.
+          changes="$(git status --porcelain --untracked-files=all -- contracts)"
+          if [[ -n "$changes" ]]; then
+            printf '%s\n' "$changes"
+            git diff -- contracts
+            echo "::error::Contract generators changed or created files under contracts/. Regenerate and commit them." >&2
+            exit 1
+          fi
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Hermetic workspace tests
+        # Pkl is installed above, so Pkl-dependent tests must run rather than
+        # skip; HOOKKIT_REQUIRE_PKL turns a missing Pkl into a test failure.
+        env:
+          HOOKKIT_REQUIRE_PKL: "1"
         run: cargo test --workspace
       - name: Hermetic runner fake-tool smoke
         if: runner.os != 'Windows'
@@ -74,11 +107,26 @@ jobs:
           done
           cargo package -p hookkit-core
 
+  docs:
+    name: Rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build workspace documentation with warnings denied
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+
   template:
     name: Copier catalog and generated-project matrix
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The pinned-revision reachability check needs main's history.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -90,16 +138,31 @@ jobs:
           version: "0.11.16"
       - name: Validate template catalogs
         run: cargo xtask template-catalog check
-      - name: Install Pkl 0.31.1
+      - name: Verify the template's pinned HookKit revision is on main
+        shell: bash
         run: |
+          revision="$(sed -n 's/^  git_revision: *//p' templates/hook-project/catalog/compatibility.yml)"
+          test -n "$revision"
+          git fetch --no-tags --quiet origin main
+          if ! git merge-base --is-ancestor "$revision" FETCH_HEAD; then
+            echo "::error file=templates/hook-project/catalog/compatibility.yml::git_revision $revision is not reachable from main. Git-mode projects must pin a commit that is already on main." >&2
+            exit 1
+          fi
+      - name: Install Pkl from the template compatibility catalog
+        shell: bash
+        run: |
+          pkl_version="$(sed -n 's/^pkl_version: *//p' templates/hook-project/catalog/compatibility.yml)"
+          test -n "$pkl_version"
           curl --fail --location --retry 3 \
             --output "$RUNNER_TEMP/pkl" \
-            https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+            "https://github.com/apple/pkl/releases/download/${pkl_version}/pkl-linux-amd64"
           chmod +x "$RUNNER_TEMP/pkl"
+          "$RUNNER_TEMP/pkl" --version | grep -F "Pkl ${pkl_version} "
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Validate the full Copier matrix
-        # Generated projects have no lockfile; resolve dependencies that honor
-        # their declared rust-version so upstream MSRV bumps don't break CI.
+        # Generated projects use resolver "3", but crate-mode cells are also
+        # rendered into a host workspace that still uses resolver "2"; resolve
+        # dependencies that honor rust-version there too.
         env:
           CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
         run: templates/hook-project/tests/run.sh --validation full

@@ -5,20 +5,41 @@
 //! load configuration, follow symlinks, evaluate generated code, or perform
 //! arbitrary I/O that is not represented in their argv.
 
+use std::fmt;
+
 use hookkit_core::{Utf8Path, Utf8PathBuf, normalize_utf8_path};
 
 use crate::bash::{
-    BashAnalysis, BashAnalysisOutcome, CommandOccurrence, DynamicReason, ExecutionContext,
-    IncompleteReason, RedirectionOperator, ShellWord, SourceSpan, UnavailableReason,
+    ArgvStatus, BashAnalysis, BashAnalysisOutcome, CommandOccurrence, ConstructKind, DynamicReason,
+    ExecutionContext, IncompleteReason, Redirection, RedirectionOperator, ShellWord, SourceSpan,
+    UnavailableReason,
 };
+use crate::call::{ShellDialect, ShellToolCallRef};
+
+/// Identifier recorded on candidates derived from shell redirections.
+const REDIRECTION_RULE: &str = "shell-redirection";
+/// Identifier recorded on candidates from the literal-operand fallback.
+const FALLBACK_RULE: &str = "hookkit-literal-operand-fallback";
+/// Maximum nested command wrappers (`sudo env nice ...`) unwrapped.
+const MAX_WRAPPER_DEPTH: usize = 8;
 
 /// Initial path context supplied by the native shell tool call and hook runtime.
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct FileInferenceContext<'a> {
     /// Working directory in effect when the shell invocation begins.
     pub cwd: Option<&'a Utf8Path>,
     /// Workspace root, when the surrounding harness identifies one.
     pub workspace_root: Option<&'a Utf8Path>,
+    /// Home directory used to resolve `~` paths, when the caller knows it.
+    pub home: Option<&'a Utf8Path>,
+    /// Shell language the command runs under.
+    ///
+    /// Unless this is [`ShellDialect::Bash`], syntax whose file effects differ
+    /// in zsh (such as `>! file`) is reported as unresolved in addition to its
+    /// Bash reading, and [`ShellDialect::PowerShell`] marks the whole analysis
+    /// unresolved.
+    pub dialect: ShellDialect,
 }
 
 impl<'a> FileInferenceContext<'a> {
@@ -27,7 +48,23 @@ impl<'a> FileInferenceContext<'a> {
         Self {
             cwd,
             workspace_root: None,
+            home: None,
+            dialect: ShellDialect::Unknown,
         }
+    }
+
+    /// Creates a context from a matched shell call: its
+    /// [`effective_cwd`](ShellToolCallRef::effective_cwd) and dialect.
+    ///
+    /// The context does not carry [`ShellToolCallRef::cwd_origin`]. When it
+    /// is [`ShellCwdOrigin::UnverifiedFallback`](crate::ShellCwdOrigin::UnverifiedFallback)
+    /// (Codex `Bash`, whose payload omits the `workdir` that can move the
+    /// command), relative operands still resolve against that directory with
+    /// [`PathBase::InvocationCwd`] and no unresolved gap, although the command
+    /// may run elsewhere. Callers must check the origin themselves before
+    /// treating such resolved paths as the files the command touches.
+    pub fn for_call(call: &'a ShellToolCallRef<'_>) -> Self {
+        Self::new(call.effective_cwd()).with_dialect(call.dialect)
     }
 
     /// Attaches the optional workspace root used by workspace-wide rules.
@@ -35,11 +72,24 @@ impl<'a> FileInferenceContext<'a> {
         self.workspace_root = workspace_root;
         self
     }
+
+    /// Attaches the optional home directory used to resolve `~` paths.
+    pub const fn with_home(mut self, home: Option<&'a Utf8Path>) -> Self {
+        self.home = home;
+        self
+    }
+
+    /// Sets the shell dialect the command runs under.
+    pub const fn with_dialect(mut self, dialect: ShellDialect) -> Self {
+        self.dialect = dialect;
+        self
+    }
 }
 
 /// An inferred set of possible explicit file accesses plus known blind spots.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct FileAccessReport {
     /// File targets that the analysis could associate with an access kind.
     pub candidates: Vec<FileAccessCandidate>,
@@ -75,6 +125,7 @@ impl FileAccessReport {
 /// A possible access to a statically identified target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct FileAccessCandidate {
     /// Path or workspace region that may be accessed.
     pub target: FileTarget,
@@ -85,7 +136,8 @@ pub struct FileAccessCandidate {
     pub certainty: FileAccessCertainty,
     /// Syntax or command rule from which this candidate was derived.
     pub origin: FileAccessOrigin,
-    /// Source span of the command containing the access.
+    /// Source span of the command or redirected statement containing the
+    /// access.
     pub command_span: SourceSpan,
     /// Identifier of the semantics implementation that emitted the candidate.
     pub inferred_by: String,
@@ -156,14 +208,17 @@ pub enum FileTarget {
 /// A shell path operand and its best-effort lexical resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct PathExpression {
     /// Operand value as a string.
     ///
     /// For a literal operand this is the statically evaluated value (quotes and
-    /// escapes removed); for a glob operand it is the word's exact source slice;
-    /// for a rule- or option-derived operand (such as the working-directory
-    /// default `.`) it is whatever the rule supplied. It is not guaranteed to be
-    /// the exact source text of a shell word.
+    /// escapes removed). For a glob or `~` operand it is the word's
+    /// quote-removed [`ShellWord::pattern`], with a tilde prefix unexpanded and,
+    /// for globs, quoted metacharacters bracket-escaped. For a rule- or
+    /// option-derived operand (such as the working-directory default `.`) it is
+    /// whatever the rule supplied. It is not guaranteed to be the exact source
+    /// text of a shell word.
     pub raw: String,
     /// Lexically normalized absolute path, when a stable base is known.
     ///
@@ -185,6 +240,10 @@ pub enum PathBase {
     InvocationCwd,
     /// A preceding directory-changing command makes the runtime base unknown.
     UnknownAfterDirectoryChange,
+    /// The expression starts with `~` and is relative to the home directory
+    /// (`$HOME` at run time). It is resolved only when
+    /// [`FileInferenceContext::home`] is supplied.
+    Home,
 }
 
 /// Region selected relative to a [`FileTarget::Path`].
@@ -259,15 +318,25 @@ pub enum FileAccessOrigin {
         /// Human-readable description of the rule.
         detail: String,
     },
+    /// A redirection applied to a compound statement, subshell, control-flow
+    /// statement, or function definition.
+    StatementRedirection {
+        /// Zero-based index in [`BashAnalysis::statement_redirections`].
+        statement_index: usize,
+        /// Zero-based redirection index within the statement.
+        redirection_index: usize,
+    },
 }
 
 /// A possible file effect that static inference could not resolve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct UnresolvedFileAccess {
-    /// Command index, or `None` for analysis-wide failures.
+    /// Command index, or `None` for statement-level and analysis-wide records.
     pub command_index: Option<usize>,
-    /// Command span, or `None` for analysis-wide failures.
+    /// Command or redirected-statement span, or `None` for analysis-wide
+    /// failures.
     pub command_span: Option<SourceSpan>,
     /// Relevant source text, when one expression can be identified.
     pub raw: Option<String>,
@@ -306,7 +375,8 @@ pub enum UnresolvedFileAccessReason {
         /// Human-readable description of the ambiguity.
         detail: String,
     },
-    /// The command interprets an operand as additional executable code.
+    /// The command interprets an operand as additional executable code, or is
+    /// an interactive program that can open other files or run commands.
     IndirectEvaluation {
         /// Literal command name that performs the indirect evaluation.
         command: String,
@@ -315,16 +385,29 @@ pub enum UnresolvedFileAccessReason {
     WorkingDirectoryMayHaveChanged,
     /// A relative operand was found but the invocation working directory is unknown.
     MissingWorkingDirectory,
-    /// The redirection form has file effects the analyzer cannot model.
+    /// The redirection form has file effects the analyzer cannot model,
+    /// including forms whose effect depends on the shell dialect.
     UnsupportedRedirection,
+    /// The command runs under a shell dialect the Bash analyzer cannot model.
+    UnsupportedShellDialect {
+        /// Dialect supplied through [`FileInferenceContext::dialect`].
+        dialect: ShellDialect,
+    },
 }
 
 /// Read-only command view supplied to custom semantics implementations.
+///
+/// When the command is run through a wrapper such as `sudo`, `env`, `nice`,
+/// `nohup`, `time`, `timeout`, `command`, `exec`, `builtin`, or `stdbuf`, the
+/// view starts at the wrapped command: [`Self::name`] and [`Self::word`] use
+/// indexes relative to it, and [`Self::argv_offset`] records the skipped
+/// prefix.
 #[derive(Debug, Clone, Copy)]
 pub struct CommandFileContext<'a> {
     command_index: usize,
     command: &'a CommandOccurrence,
     name: &'a str,
+    offset: usize,
 }
 
 impl<'a> CommandFileContext<'a> {
@@ -343,17 +426,22 @@ impl<'a> CommandFileContext<'a> {
         self.name
     }
 
+    /// Returns the position of this view's `argv[0]` in the complete argv:
+    /// zero unless wrapper commands were skipped.
+    pub const fn argv_offset(self) -> usize {
+        self.offset
+    }
+
     /// Number of words including `argv[0]`.
     pub fn argv_len(self) -> usize {
-        self.command.arguments.len() + 1
+        (self.command.arguments.len() + 1).saturating_sub(self.offset)
     }
 
     /// Returns an argv word, treating the command name as `argv[0]`.
     pub fn word(self, argv_index: usize) -> Option<&'a ShellWord> {
-        if argv_index == 0 {
-            self.command.name.as_ref()
-        } else {
-            self.command.arguments.get(argv_index - 1)
+        match argv_index + self.offset {
+            0 => self.command.name.as_ref(),
+            full => self.command.arguments.get(full - 1),
         }
     }
 
@@ -365,6 +453,10 @@ impl<'a> CommandFileContext<'a> {
     /// Returns whether any operand after `argv[0]` equals `value` literally.
     pub fn has_literal(self, value: &str) -> bool {
         (1..self.argv_len()).any(|index| self.literal(index) == Some(value))
+    }
+
+    const fn full_index(self, argv_index: usize) -> usize {
+        argv_index + self.offset
     }
 }
 
@@ -381,6 +473,7 @@ pub trait CommandFileSemantics: Send + Sync {
 /// Candidate emitter made available to [`CommandFileSemantics`].
 pub struct FileAccessSink<'command, 'report> {
     command: CommandFileContext<'command>,
+    statement_index: Option<usize>,
     inference: FileInferenceContext<'command>,
     cwd_may_have_changed: bool,
     cwd_issue_emitted: bool,
@@ -388,24 +481,40 @@ pub struct FileAccessSink<'command, 'report> {
     report: &'report mut FileAccessReport,
 }
 
+impl fmt::Debug for FileAccessSink<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FileAccessSink")
+            .field("command_index", &self.command.command_index)
+            .field("command", &self.command.name)
+            .field("statement_index", &self.statement_index)
+            .field("cwd_may_have_changed", &self.cwd_may_have_changed)
+            .field("inferred_by", &self.inferred_by)
+            .finish_non_exhaustive()
+    }
+}
+
 impl FileAccessSink<'_, '_> {
     /// Emits an access derived from an argv operand.
     ///
-    /// A missing operand, or a non-literal operand other than a pure glob, is
-    /// recorded in [`FileAccessReport::unresolved`] instead; a pure glob operand
-    /// is emitted as a candidate with [`FileTargetScope::Glob`]. `argv_index`
-    /// uses conventional indexing, with the executable at zero.
+    /// A missing operand, or a non-literal operand other than a glob or `~`
+    /// pattern, is recorded in [`FileAccessReport::unresolved`] instead. A glob
+    /// operand is emitted with [`FileTargetScope::Glob`], and a `~` operand is
+    /// emitted with [`PathBase::Home`] while its runtime dependence on `$HOME`
+    /// is also recorded as unresolved. `argv_index` uses conventional indexing,
+    /// with the (possibly unwrapped) executable at zero.
     pub fn emit_argument(
         &mut self,
         argv_index: usize,
         access: FileAccessKind,
         scope: FileTargetScope,
     ) {
+        let full_index = self.command.full_index(argv_index);
         let Some(word) = self.command.word(argv_index) else {
             self.unresolved(
                 None,
                 UnresolvedFileAccessReason::AmbiguousArguments {
-                    detail: format!("missing argv[{argv_index}]"),
+                    detail: format!("missing argv[{full_index}]"),
                 },
             );
             return;
@@ -416,10 +525,10 @@ impl FileAccessSink<'_, '_> {
             scope,
             FileAccessOrigin::Argument {
                 command_index: self.command.command_index,
-                argv_index,
+                argv_index: full_index,
             },
             FileAccessCertainty::Direct,
-            Some(argv_index),
+            Some(full_index),
         );
     }
 
@@ -431,16 +540,11 @@ impl FileAccessSink<'_, '_> {
         scope: FileTargetScope,
         certainty: FileAccessCertainty,
     ) {
-        self.emit_path(
-            raw,
-            access,
-            scope,
-            FileAccessOrigin::Argument {
-                command_index: self.command.command_index,
-                argv_index,
-            },
-            certainty,
-        );
+        let origin = FileAccessOrigin::Argument {
+            command_index: self.command.command_index,
+            argv_index: self.command.full_index(argv_index),
+        };
+        self.emit_pattern(raw, access, scope, origin, certainty);
     }
 
     /// Emits an access to the command's effective working directory.
@@ -499,30 +603,27 @@ impl FileAccessSink<'_, '_> {
     /// Records a recognized effect that cannot be resolved to a candidate.
     pub fn unresolved(&mut self, raw: Option<String>, reason: UnresolvedFileAccessReason) {
         self.report.unresolved.push(UnresolvedFileAccess {
-            command_index: Some(self.command.command_index),
+            command_index: self
+                .statement_index
+                .is_none()
+                .then_some(self.command.command_index),
             command_span: Some(self.command.command.span),
             raw,
             reason,
         });
     }
 
-    fn emit_redirection(
-        &mut self,
-        redirection_index: usize,
-        word: &ShellWord,
-        access: FileAccessKind,
-    ) {
-        self.emit_word(
-            word,
-            access,
-            FileTargetScope::Exact,
-            FileAccessOrigin::Redirection {
+    fn redirection_origin(&self, redirection_index: usize) -> FileAccessOrigin {
+        match self.statement_index {
+            Some(statement_index) => FileAccessOrigin::StatementRedirection {
+                statement_index,
+                redirection_index,
+            },
+            None => FileAccessOrigin::Redirection {
                 command_index: self.command.command_index,
                 redirection_index,
             },
-            FileAccessCertainty::Direct,
-            None,
-        );
+        }
     }
 
     fn emit_word(
@@ -538,9 +639,22 @@ impl FileAccessSink<'_, '_> {
             self.emit_path(literal, access, scope, origin, certainty);
             return;
         }
-        if word.dynamic_reasons.as_slice() == [DynamicReason::Glob] {
-            self.emit_path(&word.raw, access, FileTargetScope::Glob, origin, certainty);
-            return;
+        if let Some(pattern) = &word.pattern {
+            let scope = if word.dynamic_reasons.contains(&DynamicReason::Glob) {
+                FileTargetScope::Glob
+            } else {
+                scope
+            };
+            if !word
+                .dynamic_reasons
+                .contains(&DynamicReason::TildeExpansion)
+            {
+                self.emit_path(pattern, access, scope, origin, certainty);
+                return;
+            }
+            // `~` depends on `$HOME` and `~+` on `$PWD` at run time: keep the
+            // candidate so path policies can match it, and keep the gap.
+            self.emit_tilde_path(pattern, access, scope, origin, certainty);
         }
         self.unresolved(
             Some(word.raw.clone()),
@@ -548,6 +662,68 @@ impl FileAccessSink<'_, '_> {
                 argv_index,
                 reasons: word.dynamic_reasons.clone(),
             },
+        );
+    }
+
+    /// Emits a literal path or a `~`-prefixed home pattern.
+    fn emit_pattern(
+        &mut self,
+        raw: &str,
+        access: FileAccessKind,
+        scope: FileTargetScope,
+        origin: FileAccessOrigin,
+        certainty: FileAccessCertainty,
+    ) {
+        if is_home_pattern(raw) || working_directory_relative(raw).is_some() {
+            self.emit_tilde_path(raw, access, scope, origin, certainty);
+        } else {
+            self.emit_path(raw, access, scope, origin, certainty);
+        }
+    }
+
+    /// Emits a `~` path relative to the home directory or a `~+` path
+    /// relative to the working directory (`$PWD`). Other tilde prefixes, such
+    /// as `~-` (`$OLDPWD`) or `~user`, emit nothing.
+    fn emit_tilde_path(
+        &mut self,
+        pattern: &str,
+        access: FileAccessKind,
+        scope: FileTargetScope,
+        origin: FileAccessOrigin,
+        certainty: FileAccessCertainty,
+    ) {
+        if is_home_pattern(pattern) {
+            self.emit_home_path(pattern, access, scope, origin, certainty);
+        } else if let Some(rest) = working_directory_relative(pattern) {
+            self.emit_relative_path(pattern, rest, access, scope, origin, certainty);
+        }
+    }
+
+    fn emit_home_path(
+        &mut self,
+        pattern: &str,
+        access: FileAccessKind,
+        scope: FileTargetScope,
+        origin: FileAccessOrigin,
+        certainty: FileAccessCertainty,
+    ) {
+        let rest = pattern
+            .strip_prefix("~/")
+            .or_else(|| (pattern == "~").then_some(""))
+            .unwrap_or(pattern);
+        let resolved = self
+            .inference
+            .home
+            .filter(|home| home.is_absolute())
+            .map(|home| normalize_utf8_path(home.join(rest)));
+        self.push_path(
+            pattern,
+            resolved,
+            PathBase::Home,
+            access,
+            scope,
+            origin,
+            certainty,
         );
     }
 
@@ -559,7 +735,21 @@ impl FileAccessSink<'_, '_> {
         origin: FileAccessOrigin,
         certainty: FileAccessCertainty,
     ) {
-        let path = Utf8Path::new(raw);
+        self.emit_relative_path(raw, raw, access, scope, origin, certainty);
+    }
+
+    /// Emits `raw`, which names `path` resolved against the working
+    /// directory unless it is absolute.
+    fn emit_relative_path(
+        &mut self,
+        raw: &str,
+        path: &str,
+        access: FileAccessKind,
+        scope: FileTargetScope,
+        origin: FileAccessOrigin,
+        certainty: FileAccessCertainty,
+    ) {
+        let path = Utf8Path::new(path);
         let (base, resolved) = if path.is_absolute() {
             (PathBase::Absolute, Some(normalize_utf8_path(path)))
         } else if self.cwd_may_have_changed {
@@ -572,7 +762,7 @@ impl FileAccessSink<'_, '_> {
             }
             (PathBase::UnknownAfterDirectoryChange, None)
         } else {
-            match self.inference.cwd {
+            match self.inference.cwd.filter(|cwd| cwd.is_absolute()) {
                 Some(cwd) => (
                     PathBase::InvocationCwd,
                     Some(normalize_utf8_path(cwd.join(path))),
@@ -589,6 +779,20 @@ impl FileAccessSink<'_, '_> {
                 }
             }
         };
+        self.push_path(raw, resolved, base, access, scope, origin, certainty);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_path(
+        &mut self,
+        raw: &str,
+        resolved: Option<Utf8PathBuf>,
+        base: PathBase,
+        access: FileAccessKind,
+        scope: FileTargetScope,
+        origin: FileAccessOrigin,
+        certainty: FileAccessCertainty,
+    ) {
         self.report.candidates.push(FileAccessCandidate {
             target: FileTarget::Path {
                 expression: PathExpression {
@@ -627,11 +831,44 @@ impl FileAccessSink<'_, '_> {
     }
 }
 
+fn is_home_pattern(pattern: &str) -> bool {
+    pattern == "~" || pattern.starts_with("~/")
+}
+
+/// The path after a `~+` prefix, which expands to `$PWD`, relative to the
+/// working directory. `~+//etc` is `$PWD//etc`, not `/etc`.
+fn working_directory_relative(pattern: &str) -> Option<&str> {
+    let rest = pattern
+        .strip_prefix("~+/")
+        .or_else(|| (pattern == "~+").then_some(""))?;
+    Some(match rest.trim_start_matches('/') {
+        "" => ".",
+        rest => rest,
+    })
+}
+
 /// File-access inference engine. Custom rules registered later take precedence
 /// over the bundled command table.
 pub struct FileAccessAnalyzer {
     semantics: Vec<Box<dyn CommandFileSemantics>>,
     unknown_command_fallback: UnknownCommandFallback,
+}
+
+impl fmt::Debug for FileAccessAnalyzer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FileAccessAnalyzer")
+            .field(
+                "semantics",
+                &self
+                    .semantics
+                    .iter()
+                    .map(|semantics| semantics.id())
+                    .collect::<Vec<_>>(),
+            )
+            .field("unknown_command_fallback", &self.unknown_command_fallback)
+            .finish()
+    }
 }
 
 impl Default for FileAccessAnalyzer {
@@ -698,7 +935,7 @@ impl FileAccessAnalyzer {
         outcome: &BashAnalysisOutcome,
         context: FileInferenceContext<'_>,
     ) -> FileAccessReport {
-        match outcome {
+        let mut report = match outcome {
             BashAnalysisOutcome::Complete(analysis) => self.infer_analysis(analysis, context),
             BashAnalysisOutcome::Partial { analysis, reason } => {
                 let mut report = self.infer_analysis(analysis, context);
@@ -719,94 +956,98 @@ impl FileAccessAnalyzer {
                     reason: UnresolvedFileAccessReason::AnalysisUnavailable(reason.clone()),
                 }],
             },
+        };
+        if context.dialect == ShellDialect::PowerShell {
+            report.unresolved.push(UnresolvedFileAccess {
+                command_index: None,
+                command_span: None,
+                raw: None,
+                reason: UnresolvedFileAccessReason::UnsupportedShellDialect {
+                    dialect: context.dialect,
+                },
+            });
         }
+        report
     }
 
     /// Infers file access from a parsed Bash analysis.
     ///
     /// Relative paths following any directory-changing command are intentionally
     /// left unresolved because static analysis cannot know whether that command
-    /// executed or succeeded.
+    /// executed or succeeded. A directory change inside a loop or function body
+    /// affects every command after the start of the outermost enclosing loop or
+    /// function, because later iterations and calls run after it.
     pub fn infer_analysis(
         &self,
         analysis: &BashAnalysis,
         context: FileInferenceContext<'_>,
     ) -> FileAccessReport {
-        let directory_changes = analysis
-            .commands
-            .iter()
-            .filter(|command| {
-                matches!(
-                    command
-                        .name
-                        .as_ref()
-                        .and_then(|name| name.literal.as_deref()),
-                    Some("cd" | "pushd" | "popd")
-                )
-            })
-            .map(|command| command.span.start_byte)
-            .collect::<Vec<_>>();
+        let directory_change = earliest_directory_change(analysis);
+        let cwd_changed_before =
+            |offset: usize| directory_change.is_some_and(|change| change < offset);
 
         let mut report = FileAccessReport::default();
         for (command_index, command) in analysis.commands.iter().enumerate() {
-            let cwd_may_have_changed = directory_changes
-                .iter()
-                .any(|offset| *offset < command.span.start_byte);
-            let name = command
-                .name
-                .as_ref()
-                .and_then(|name| name.literal.as_deref());
-            let command_context = name.map(|name| CommandFileContext {
-                command_index,
-                command,
-                name,
+            let name = command.name.as_ref().map_or("", |name| {
+                name.literal.as_deref().unwrap_or(name.raw.as_str())
             });
-            let fallback_name = command.name.as_ref().map_or("", |name| name.raw.as_str());
             let mut sink = FileAccessSink {
-                command: command_context.unwrap_or(CommandFileContext {
+                command: CommandFileContext {
                     command_index,
                     command,
-                    name: fallback_name,
-                }),
+                    name,
+                    offset: 0,
+                },
+                statement_index: None,
                 inference: context,
-                cwd_may_have_changed,
+                cwd_may_have_changed: cwd_changed_before(command.span.start_byte),
                 cwd_issue_emitted: false,
-                inferred_by: "shell-redirection".to_owned(),
+                inferred_by: REDIRECTION_RULE.to_owned(),
                 report: &mut report,
             };
 
-            infer_redirections(&mut sink);
+            infer_redirections(&command.redirections, &mut sink);
 
-            let Some(command_context) = command_context else {
-                let reasons = command
-                    .name
-                    .as_ref()
-                    .map(|name| name.dynamic_reasons.clone())
-                    .unwrap_or_else(|| vec![DynamicReason::UnsupportedSyntax]);
-                sink.unresolved(
-                    command.name.as_ref().map(|name| name.raw.clone()),
-                    UnresolvedFileAccessReason::DynamicCommandName { reasons },
-                );
+            // A redirection-only command (`> file`, `$(< file)`) runs nothing.
+            let Some(name_word) = &command.name else {
                 continue;
             };
-
-            let mut handled = false;
-            let unresolved_before = sink.report.unresolved.len();
-            for semantics in &self.semantics {
-                sink.inferred_by = semantics.id().to_owned();
-                if semantics.infer(command_context, &mut sink) {
-                    handled = true;
-                    break;
-                }
-            }
-            if !handled {
+            if name_word.literal.is_none() {
                 sink.unresolved(
-                    Some(command_context.name.to_owned()),
-                    UnresolvedFileAccessReason::UnknownCommandSemantics {
-                        command: command_context.name.to_owned(),
+                    Some(name_word.raw.clone()),
+                    UnresolvedFileAccessReason::DynamicCommandName {
+                        reasons: name_word.dynamic_reasons.clone(),
                     },
                 );
+                continue;
             }
+
+            let unresolved_before = sink.report.unresolved.len();
+            match unwrap_wrappers(sink.command) {
+                Unwrapped::Command(target) => {
+                    sink.command = target;
+                    let mut handled = false;
+                    for semantics in &self.semantics {
+                        sink.inferred_by.clear();
+                        sink.inferred_by.push_str(semantics.id());
+                        if semantics.infer(target, &mut sink) {
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if !handled {
+                        sink.unresolved(
+                            Some(target.name.to_owned()),
+                            UnresolvedFileAccessReason::UnknownCommandSemantics {
+                                command: target.name.to_owned(),
+                            },
+                        );
+                    }
+                }
+                Unwrapped::Finished => {}
+                Unwrapped::Unresolved(raw, reason) => sink.unresolved(raw, reason),
+            }
+
             let ambiguous = sink.report.unresolved[unresolved_before..]
                 .iter()
                 .any(|unresolved| {
@@ -814,20 +1055,148 @@ impl FileAccessAnalyzer {
                         unresolved.reason,
                         UnresolvedFileAccessReason::UnknownCommandSemantics { .. }
                             | UnresolvedFileAccessReason::AmbiguousArguments { .. }
+                            | UnresolvedFileAccessReason::IndirectEvaluation { .. }
                     )
                 });
             if ambiguous
                 && self.unknown_command_fallback == UnknownCommandFallback::LiteralPathOperands
             {
-                sink.inferred_by = "hookkit-literal-operand-fallback".to_owned();
-                infer_literal_path_operands(command_context, &mut sink);
+                sink.inferred_by.clear();
+                sink.inferred_by.push_str(FALLBACK_RULE);
+                let view = sink.command;
+                infer_literal_path_operands(view, &mut sink);
             }
+        }
+
+        for (statement_index, statement) in analysis.statement_redirections.iter().enumerate() {
+            let view = CommandOccurrence {
+                span: statement.span,
+                raw: String::new(),
+                name: None,
+                arguments: Vec::new(),
+                argv: ArgvStatus::Literal(Vec::new()),
+                context: statement.context.clone(),
+                redirections: Vec::new(),
+            };
+            let mut sink = FileAccessSink {
+                command: CommandFileContext {
+                    command_index: statement.commands.start,
+                    command: &view,
+                    name: "",
+                    offset: 0,
+                },
+                statement_index: Some(statement_index),
+                inference: context,
+                cwd_may_have_changed: cwd_changed_before(statement.span.start_byte),
+                cwd_issue_emitted: false,
+                inferred_by: REDIRECTION_RULE.to_owned(),
+                report: &mut report,
+            };
+            infer_redirections(&statement.redirections, &mut sink);
         }
         report
     }
 }
 
+/// Returns the earliest byte offset after which a directory change may have
+/// taken effect, or `None` when no command changes directory.
+fn earliest_directory_change(analysis: &BashAnalysis) -> Option<usize> {
+    // Outermost loop and function bodies, sorted and disjoint.
+    let mut deferred = analysis
+        .constructs
+        .iter()
+        .filter(|construct| {
+            matches!(
+                construct.kind,
+                ConstructKind::Loop | ConstructKind::FunctionDefinition
+            )
+        })
+        .map(|construct| construct.span.start_byte..construct.span.end_byte)
+        .collect::<Vec<_>>();
+    deferred.sort_by_key(|range| (range.start, std::cmp::Reverse(range.end)));
+    let mut outermost: Vec<std::ops::Range<usize>> = Vec::with_capacity(deferred.len());
+    for range in deferred {
+        if outermost
+            .last()
+            .is_none_or(|outer| range.start >= outer.end)
+        {
+            outermost.push(range);
+        }
+    }
+
+    let mut earliest: Option<usize> = None;
+    for (command_index, command) in analysis.commands.iter().enumerate() {
+        let Some(name) = command
+            .name
+            .as_ref()
+            .and_then(|name| name.literal.as_deref())
+        else {
+            continue;
+        };
+        let view = CommandFileContext {
+            command_index,
+            command,
+            name,
+            offset: 0,
+        };
+        let Unwrapped::Command(target) = unwrap_wrappers(view) else {
+            continue;
+        };
+        if !matches!(builtin_command_name(target.name), "cd" | "pushd" | "popd") {
+            continue;
+        }
+        let mut offset = command.span.start_byte;
+        if command.context.iter().any(|context| {
+            matches!(
+                context,
+                ExecutionContext::Loop | ExecutionContext::FunctionDefinition
+            )
+        }) {
+            let index = outermost.partition_point(|range| range.start <= offset);
+            if let Some(range) = index
+                .checked_sub(1)
+                .map(|index| &outermost[index])
+                .filter(|range| range.contains(&offset))
+            {
+                offset = range.start;
+            }
+        }
+        earliest = Some(earliest.map_or(offset, |earliest| earliest.min(offset)));
+    }
+    earliest
+}
+
+/// Returns the name that selects bundled semantics: the name itself, or the
+/// basename of an absolute path in a standard system binary directory.
+pub(crate) fn builtin_command_name(name: &str) -> &str {
+    const SYSTEM_BIN_DIRECTORIES: &[&str] = &[
+        "/bin/",
+        "/sbin/",
+        "/usr/bin/",
+        "/usr/sbin/",
+        "/usr/local/bin/",
+        "/opt/homebrew/bin/",
+    ];
+    for directory in SYSTEM_BIN_DIRECTORIES {
+        if let Some(base) = name
+            .strip_prefix(directory)
+            .filter(|base| !base.is_empty() && !base.contains('/'))
+        {
+            return base;
+        }
+    }
+    name
+}
+
 /// Bundled semantics for common inspection and direct file-manipulation tools.
+///
+/// Names match exactly, or as the basename of an absolute path in a standard
+/// system binary directory such as `/usr/bin`.
+///
+/// `apply_patch` is recognized without candidates: its targets are in the
+/// patch body, which `hookkit-tool-access` parses. A standalone consumer must
+/// not read a fully resolved report for an `apply_patch` command as proof that
+/// no file is modified.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BuiltinCommandFileSemantics;
 
@@ -837,10 +1206,25 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
     }
 
     fn infer(&self, command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_>) -> bool {
-        match command.name() {
+        match builtin_command_name(command.name()) {
             "echo" | "printf" | "pwd" | "true" | "false" | ":" | "test" | "[" | "cd" | "pushd"
             | "popd" => true,
-            "cat" | "bat" | "less" | "more" | "nl" => {
+            "cat" | "bat" | "nl" => {
+                emit_operands(
+                    command,
+                    output,
+                    1,
+                    match builtin_command_name(command.name()) {
+                        "cat" => CAT_OPTIONS,
+                        "bat" => BAT_OPTIONS,
+                        _ => NL_OPTIONS,
+                    },
+                    FileAccessKind::Read,
+                    FileTargetScope::Exact,
+                );
+                true
+            }
+            "less" | "more" | "most" => {
                 emit_operands(
                     command,
                     output,
@@ -848,6 +1232,15 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                     Options::none(),
                     FileAccessKind::Read,
                     FileTargetScope::Exact,
+                );
+                // Interactive pagers can open other files (`:e`) and run shell
+                // commands (`!`) from input the hook never sees, for example
+                // through Codex `write_stdin` on a TTY session.
+                output.unresolved(
+                    Some(command.name().to_owned()),
+                    UnresolvedFileAccessReason::IndirectEvaluation {
+                        command: command.name().to_owned(),
+                    },
                 );
                 true
             }
@@ -861,6 +1254,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                         booleans: &["-q", "--quiet", "-v", "--verbose"],
                         short_booleans: "qv",
                         numeric_short: true,
+                        path_values: &[],
                     },
                     FileAccessKind::Read,
                     FileTargetScope::Exact,
@@ -884,6 +1278,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                         ],
                         short_booleans: "aAlhRFrt1",
                         numeric_short: false,
+                        path_values: &[],
                     },
                     FileAccessKind::Enumerate,
                     FileTargetScope::ExactOrDescendants,
@@ -901,7 +1296,11 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                     command,
                     output,
                     1,
-                    Options::none(),
+                    if builtin_command_name(command.name()) == "tree" {
+                        TREE_OPTIONS
+                    } else {
+                        DU_OPTIONS
+                    },
                     FileAccessKind::Enumerate,
                     FileTargetScope::ExactOrDescendants,
                 );
@@ -913,7 +1312,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                 }
                 true
             }
-            "rg" | "grep" => {
+            "rg" | "grep" | "egrep" | "fgrep" => {
                 infer_search(command, output);
                 true
             }
@@ -926,7 +1325,11 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                     command,
                     output,
                     1,
-                    Options::none(),
+                    match builtin_command_name(command.name()) {
+                        "touch" => TOUCH_OPTIONS,
+                        "truncate" => TRUNCATE_OPTIONS,
+                        _ => MKDIR_OPTIONS,
+                    },
                     FileAccessKind::Modify,
                     FileTargetScope::Exact,
                 );
@@ -945,6 +1348,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                         booleans: &["-f", "--force", "-r", "-R", "--recursive", "-d", "--dir"],
                         short_booleans: "frRd",
                         numeric_short: false,
+                        path_values: &[],
                     },
                     FileAccessKind::Delete,
                     if recursive {
@@ -965,6 +1369,7 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                         booleans: &["-a", "--append", "-i", "--ignore-interrupts"],
                         short_booleans: "ai",
                         numeric_short: false,
+                        path_values: &[],
                     },
                     FileAccessKind::Modify,
                     FileTargetScope::Exact,
@@ -993,13 +1398,12 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
                 );
                 true
             }
-            "eval" | "bash" | "sh" | "zsh" | "xargs" => {
-                output.unresolved(
-                    Some(command.command().raw.clone()),
-                    UnresolvedFileAccessReason::IndirectEvaluation {
-                        command: command.name().to_owned(),
-                    },
-                );
+            "find" if finds_and_executes(command) => {
+                indirect_evaluation(command, output);
+                true
+            }
+            name if is_code_interpreter(name) => {
+                indirect_evaluation(command, output);
                 true
             }
             "apply_patch" => true,
@@ -1008,35 +1412,378 @@ impl CommandFileSemantics for BuiltinCommandFileSemantics {
     }
 }
 
+fn indirect_evaluation(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_>) {
+    output.unresolved(
+        Some(command.command().raw.clone()),
+        UnresolvedFileAccessReason::IndirectEvaluation {
+            command: command.name().to_owned(),
+        },
+    );
+}
+
+/// Shells, language runtimes, and command runners whose operands are code or
+/// commands with unknown file effects.
+fn is_code_interpreter(name: &str) -> bool {
+    matches!(
+        name,
+        "eval"
+            | "bash"
+            | "sh"
+            | "zsh"
+            | "dash"
+            | "ksh"
+            | "mksh"
+            | "fish"
+            | "csh"
+            | "tcsh"
+            | "pwsh"
+            | "powershell"
+            | "xargs"
+            | "parallel"
+            | "watch"
+            | "perl"
+            | "ruby"
+            | "node"
+            | "nodejs"
+            | "deno"
+            | "bun"
+            | "php"
+            | "lua"
+            | "tclsh"
+            | "expect"
+            | "Rscript"
+            | "osascript"
+            | "awk"
+            | "gawk"
+            | "mawk"
+            | "nawk"
+    ) || name
+        .strip_prefix("python")
+        .is_some_and(|version| version.chars().all(|c| c.is_ascii_digit() || c == '.'))
+}
+
+fn finds_and_executes(command: CommandFileContext<'_>) -> bool {
+    (1..command.argv_len()).any(|index| {
+        let word = command.word(index);
+        match word.and_then(|word| word.literal.as_deref()) {
+            Some(value) => matches!(value, "-exec" | "-execdir" | "-ok" | "-okdir"),
+            // A dynamic word could expand to an executing action.
+            None => word.is_some(),
+        }
+    })
+}
+
+/// Result of skipping wrapper commands that run another command.
+enum Unwrapped<'a> {
+    /// The command that finally runs.
+    Command(CommandFileContext<'a>),
+    /// The wrapper runs no command (for example `env` alone or `command -v`).
+    Finished,
+    /// The wrapped command could not be identified.
+    Unresolved(Option<String>, UnresolvedFileAccessReason),
+}
+
+/// Option grammar of a command wrapper.
+struct WrapperSpec {
+    /// Options with a separate (`-u root`) or attached (`-uroot`,
+    /// `--user=root`) value.
+    values: &'static [&'static str],
+    /// Options without a value.
+    flags: &'static [&'static str],
+    /// Options after which no command runs.
+    informational: &'static [&'static str],
+    /// Options that run the command through a shell or split a string.
+    indirect: &'static [&'static str],
+    /// Leading `NAME=VALUE` words set environment variables.
+    assignments: bool,
+    /// Operands that precede the command, such as the `timeout` duration.
+    leading_operands: usize,
+    /// Numeric short options such as `nice -10`.
+    numeric_short: bool,
+}
+
+const EMPTY_WRAPPER: WrapperSpec = WrapperSpec {
+    values: &[],
+    flags: &[],
+    informational: &[],
+    indirect: &[],
+    assignments: false,
+    leading_operands: 0,
+    numeric_short: false,
+};
+
+fn wrapper_spec(name: &str) -> Option<WrapperSpec> {
+    Some(match name {
+        "env" => WrapperSpec {
+            values: &["-u", "--unset"],
+            flags: &[
+                "-",
+                "-i",
+                "--ignore-environment",
+                "-0",
+                "--null",
+                "-v",
+                "--debug",
+            ],
+            indirect: &["-S", "--split-string"],
+            assignments: true,
+            ..EMPTY_WRAPPER
+        },
+        "sudo" => WrapperSpec {
+            values: &[
+                "-u",
+                "--user",
+                "-g",
+                "--group",
+                "-p",
+                "--prompt",
+                "-C",
+                "--close-from",
+                "-r",
+                "--role",
+                "-t",
+                "--type",
+                "-T",
+                "--command-timeout",
+                "-U",
+                "--other-user",
+            ],
+            flags: &[
+                "-A",
+                "--askpass",
+                "-b",
+                "--background",
+                "-B",
+                "--bell",
+                "-E",
+                "--preserve-env",
+                "-H",
+                "--set-home",
+                "-k",
+                "--reset-timestamp",
+                "-n",
+                "--non-interactive",
+                "-N",
+                "--no-update",
+                "-P",
+                "--preserve-groups",
+                "-S",
+                "--stdin",
+            ],
+            informational: &[
+                "-l",
+                "--list",
+                "-v",
+                "--validate",
+                "-V",
+                "--version",
+                "-K",
+                "--remove-timestamp",
+            ],
+            indirect: &["-i", "--login", "-s", "--shell"],
+            assignments: true,
+            ..EMPTY_WRAPPER
+        },
+        "doas" => WrapperSpec {
+            values: &["-u", "-C"],
+            flags: &["-n"],
+            indirect: &["-s"],
+            ..EMPTY_WRAPPER
+        },
+        "nice" => WrapperSpec {
+            values: &["-n", "--adjustment"],
+            numeric_short: true,
+            ..EMPTY_WRAPPER
+        },
+        "nohup" | "builtin" => EMPTY_WRAPPER,
+        "time" => WrapperSpec {
+            values: &["-f", "--format"],
+            flags: &["-p", "--portability", "-v", "--verbose", "-q", "--quiet"],
+            ..EMPTY_WRAPPER
+        },
+        "timeout" => WrapperSpec {
+            values: &["-s", "--signal", "-k", "--kill-after"],
+            flags: &["--preserve-status", "--foreground", "-v", "--verbose"],
+            leading_operands: 1,
+            ..EMPTY_WRAPPER
+        },
+        "command" => WrapperSpec {
+            flags: &["-p"],
+            informational: &["-v", "-V"],
+            ..EMPTY_WRAPPER
+        },
+        "exec" => WrapperSpec {
+            values: &["-a"],
+            flags: &["-c", "-l"],
+            ..EMPTY_WRAPPER
+        },
+        "stdbuf" => WrapperSpec {
+            values: &["-i", "-o", "-e", "--input", "--output", "--error"],
+            ..EMPTY_WRAPPER
+        },
+        _ => return None,
+    })
+}
+
+fn unwrap_wrappers(mut command: CommandFileContext<'_>) -> Unwrapped<'_> {
+    for _ in 0..MAX_WRAPPER_DEPTH {
+        let wrapper = builtin_command_name(command.name);
+        let Some(spec) = wrapper_spec(wrapper) else {
+            return Unwrapped::Command(command);
+        };
+        let mut index = 1;
+        // Options.
+        loop {
+            let Some(word) = command.word(index) else {
+                return Unwrapped::Finished;
+            };
+            let Some(value) = word.literal.as_deref() else {
+                return Unwrapped::Unresolved(
+                    Some(word.raw.clone()),
+                    UnresolvedFileAccessReason::AmbiguousArguments {
+                        detail: format!("dynamic argument to {wrapper} may be an option"),
+                    },
+                );
+            };
+            if value == "--" {
+                index += 1;
+                break;
+            }
+            let is_option = spec.flags.contains(&value) || (value.starts_with('-') && value != "-");
+            if !is_option {
+                break;
+            }
+            let name = value.split_once('=').map_or(value, |(name, _)| name);
+            if spec.informational.contains(&value) {
+                return Unwrapped::Finished;
+            }
+            if spec.indirect.contains(&name)
+                || spec
+                    .indirect
+                    .iter()
+                    .any(|option| option.len() == 2 && value.starts_with(option))
+            {
+                return Unwrapped::Unresolved(
+                    Some(command.command.raw.clone()),
+                    UnresolvedFileAccessReason::IndirectEvaluation {
+                        command: wrapper.to_owned(),
+                    },
+                );
+            }
+            if spec.flags.contains(&value) || (name != value && spec.flags.contains(&name)) {
+                index += 1;
+                continue;
+            }
+            if spec.values.contains(&value) {
+                if command.word(index + 1).is_none() {
+                    return Unwrapped::Finished;
+                }
+                index += 2;
+                continue;
+            }
+            let attached_value = (name != value && value.starts_with("--"))
+                || (!value.starts_with("--") && value.len() > 2);
+            if attached_value
+                && spec.values.iter().any(|option| {
+                    value.starts_with(option) && (option.len() == 2 || name == *option)
+                })
+            {
+                index += 1;
+                continue;
+            }
+            if spec.numeric_short && value[1..].chars().all(|c| c.is_ascii_digit()) {
+                index += 1;
+                continue;
+            }
+            let short_bundle = !value.starts_with("--")
+                && value[1..].chars().all(|letter| {
+                    spec.flags
+                        .iter()
+                        .any(|flag| flag.len() == 2 && flag.ends_with(letter))
+                });
+            if short_bundle {
+                index += 1;
+                continue;
+            }
+            return Unwrapped::Unresolved(
+                Some(value.to_owned()),
+                UnresolvedFileAccessReason::AmbiguousArguments {
+                    detail: format!("unrecognized option {value} for {wrapper}"),
+                },
+            );
+        }
+        if spec.assignments {
+            while command
+                .literal(index)
+                .is_some_and(|value| assignment_value(value).is_some())
+            {
+                index += 1;
+            }
+        }
+        index += spec.leading_operands;
+        let Some(word) = command.word(index) else {
+            return Unwrapped::Finished;
+        };
+        let Some(name) = word.literal.as_deref() else {
+            return Unwrapped::Unresolved(
+                Some(word.raw.clone()),
+                UnresolvedFileAccessReason::DynamicCommandName {
+                    reasons: word.dynamic_reasons.clone(),
+                },
+            );
+        };
+        command = CommandFileContext {
+            name,
+            offset: command.offset + index,
+            ..command
+        };
+    }
+    Unwrapped::Unresolved(
+        Some(command.command.raw.clone()),
+        UnresolvedFileAccessReason::AmbiguousArguments {
+            detail: "too many nested command wrappers".to_owned(),
+        },
+    )
+}
+
 fn infer_literal_path_operands(
     command: CommandFileContext<'_>,
     output: &mut FileAccessSink<'_, '_>,
 ) {
-    if command.command().literal_argv().is_none() {
-        return;
-    }
     let mut operands_only = false;
     for argv_index in 1..command.argv_len() {
-        let Some(literal) = command.literal(argv_index) else {
+        let Some(word) = command.word(argv_index) else {
             return;
         };
-        if !operands_only && literal == "--" {
+        let (value, pattern) = match (&word.literal, &word.pattern) {
+            (Some(literal), _) => (literal.as_str(), false),
+            (None, Some(pattern)) => (pattern.as_str(), true),
+            // A dynamic word may be an option or operand; skip it.
+            (None, None) => continue,
+        };
+        if !operands_only && !pattern && value == "--" {
             operands_only = true;
             continue;
         }
-        if !operands_only && literal.starts_with('-') {
+        if !operands_only && value.starts_with('-') {
             continue;
         }
-        let value = assignment_value(literal).unwrap_or(literal);
-        if is_path_like(value) {
-            output.emit_argument_literal(
-                argv_index,
-                value,
-                FileAccessKind::ReadModify,
-                FileTargetScope::ExactOrDescendants,
-                FileAccessCertainty::Heuristic,
-            );
+        let value = assignment_value(value).unwrap_or(value);
+        if !is_path_like(value) {
+            continue;
         }
+        let glob = pattern && word.dynamic_reasons.contains(&DynamicReason::Glob);
+        output.emit_argument_literal(
+            argv_index,
+            value,
+            FileAccessKind::ReadModify,
+            if glob {
+                FileTargetScope::Glob
+            } else {
+                FileTargetScope::ExactOrDescendants
+            },
+            FileAccessCertainty::Heuristic,
+        );
     }
 }
 
@@ -1058,6 +1805,7 @@ fn is_path_like(value: &str) -> bool {
     }
     value == "."
         || value == ".."
+        || value == "~"
         || value.starts_with('/')
         || value.starts_with("./")
         || value.starts_with("../")
@@ -1069,12 +1817,21 @@ fn is_path_like(value: &str) -> bool {
             .is_some_and(|component| component.contains('.'))
 }
 
+/// Option grammar of a simple file command.
 #[derive(Debug, Clone, Copy)]
 struct Options {
+    /// Options with a separate (`-n 5`) or attached (`-n5`, `--lines=5`)
+    /// value.
     values: &'static [&'static str],
+    /// Options without a value.
     booleans: &'static [&'static str],
+    /// Short options without a value, which may be bundled (`-la`).
     short_booleans: &'static str,
+    /// Numeric short options such as `head -5`.
     numeric_short: bool,
+    /// Value options whose value names a file the command reads
+    /// (`touch -r FILE`, `--reference=FILE`).
+    path_values: &'static [&'static str],
 }
 
 impl Options {
@@ -1084,10 +1841,196 @@ impl Options {
             booleans: &[],
             short_booleans: "",
             numeric_short: false,
+            path_values: &[],
         }
     }
 }
 
+// Option tables of the GNU and BSD (macOS) forms of simple file commands.
+// Options that write or read other files (`tree -o`, `tree --fromfile`,
+// `tree -R`, `tree --gitignore`) and options whose value is optional stay
+// unrecognized, which leaves the command unresolved.
+
+const CAT_OPTIONS: Options = Options {
+    booleans: &[
+        "--show-all",
+        "--number-nonblank",
+        "--show-ends",
+        "--number",
+        "--squeeze-blank",
+        "--show-tabs",
+        "--show-nonprinting",
+    ],
+    short_booleans: "AbeEnstTuvl",
+    ..Options::none()
+};
+
+const BAT_OPTIONS: Options = Options {
+    values: &[
+        "-l",
+        "--language",
+        "-H",
+        "--highlight-line",
+        "-r",
+        "--line-range",
+        "-m",
+        "--map-syntax",
+        "--style",
+        "--theme",
+        "--paging",
+        "--color",
+        "--decorations",
+        "--italic-text",
+        "--tabs",
+        "--wrap",
+        "--terminal-width",
+        "--file-name",
+        "--diff-context",
+        "--ignored-suffix",
+    ],
+    booleans: &[
+        "--show-all",
+        "--plain",
+        "--number",
+        "--unbuffered",
+        "--diff",
+        "--force-colorization",
+        "--no-paging",
+    ],
+    short_booleans: "ApnudfP",
+    ..Options::none()
+};
+
+const NL_OPTIONS: Options = Options {
+    values: &[
+        "-b",
+        "--body-numbering",
+        "-d",
+        "--section-delimiter",
+        "-f",
+        "--footer-numbering",
+        "-h",
+        "--header-numbering",
+        "-i",
+        "--line-increment",
+        "-l",
+        "--join-blank-lines",
+        "-n",
+        "--number-format",
+        "-s",
+        "--number-separator",
+        "-v",
+        "--starting-line-number",
+        "-w",
+        "--number-width",
+    ],
+    booleans: &["--no-renumber"],
+    short_booleans: "p",
+    ..Options::none()
+};
+
+const TREE_OPTIONS: Options = Options {
+    values: &[
+        "-L",
+        "-P",
+        "-I",
+        "-H",
+        "-T",
+        "--timefmt",
+        "--sort",
+        "--charset",
+        "--filelimit",
+    ],
+    booleans: &[
+        "--noreport",
+        "--dirsfirst",
+        "--filesfirst",
+        "--prune",
+        "--ignore-case",
+        "--matchdirs",
+        "--metafirst",
+        "--si",
+        "--du",
+        "--inodes",
+        "--device",
+        "--nolinks",
+    ],
+    short_booleans: "adlfxiASnCQNqpugshDFvtcUrJX",
+    ..Options::none()
+};
+
+const DU_OPTIONS: Options = Options {
+    values: &[
+        "-d",
+        "--max-depth",
+        "-B",
+        "--block-size",
+        "-t",
+        "--threshold",
+        "-I",
+        "--exclude",
+    ],
+    booleans: &[
+        "--all",
+        "--total",
+        "--human-readable",
+        "--summarize",
+        "--dereference",
+        "--dereference-args",
+        "--one-file-system",
+        "--apparent-size",
+        "--bytes",
+        "--count-links",
+        "--null",
+        "--si",
+        "--inodes",
+    ],
+    short_booleans: "acshHkLmPxbl0AD",
+    path_values: &["-X", "--exclude-from", "--files0-from"],
+    ..Options::none()
+};
+
+const TOUCH_OPTIONS: Options = Options {
+    values: &["-d", "--date", "-t", "-A", "--time"],
+    booleans: &["--no-create", "--no-dereference"],
+    short_booleans: "acfhm",
+    path_values: &["-r", "--reference"],
+    ..Options::none()
+};
+
+const TRUNCATE_OPTIONS: Options = Options {
+    values: &["-s", "--size"],
+    booleans: &["--no-create", "--io-blocks"],
+    short_booleans: "co",
+    path_values: &["-r", "--reference"],
+    ..Options::none()
+};
+
+const MKDIR_OPTIONS: Options = Options {
+    values: &["-m", "--mode"],
+    booleans: &["--parents", "--verbose"],
+    short_booleans: "pvZ",
+    ..Options::none()
+};
+
+/// Operands of a simple command and the files its options name.
+#[derive(Debug, Default)]
+struct ParsedOperands {
+    /// Operand indexes, reading options anywhere before `--` as GNU tools
+    /// do.
+    operands: Vec<usize>,
+    /// Files named by [`Options::path_values`]: the argv index of the file
+    /// word, or of the option word together with its attached file name.
+    option_files: Vec<(usize, Option<String>)>,
+    /// Words after the first operand that GNU tools read as options or option
+    /// values but BSD tools, which stop reading options at the first operand
+    /// (`touch x -r ref` on macOS touches `-r` and `ref`), read as operands.
+    trailing_operands: Vec<usize>,
+}
+
+/// Emits the operands of a simple file command with `access` and `scope`,
+/// and files named by path-valued options as reads. Returns the number of
+/// operands under GNU option parsing.
 fn emit_operands(
     command: CommandFileContext<'_>,
     output: &mut FileAccessSink<'_, '_>,
@@ -1096,22 +2039,49 @@ fn emit_operands(
     access: FileAccessKind,
     scope: FileTargetScope,
 ) -> Option<usize> {
-    let indexes = operand_indexes(command, output, start, options)?;
-    for index in &indexes {
+    let parsed = parse_operands(command, output, start, options)?;
+    for index in parsed.operands.iter().chain(&parsed.trailing_operands) {
         output.emit_argument(*index, access, scope);
     }
-    Some(indexes.len())
+    for (index, attached) in &parsed.option_files {
+        match attached {
+            Some(file) => output.emit_argument_literal(
+                *index,
+                file,
+                FileAccessKind::Read,
+                FileTargetScope::Exact,
+                FileAccessCertainty::Direct,
+            ),
+            None => output.emit_argument(*index, FileAccessKind::Read, FileTargetScope::Exact),
+        }
+    }
+    Some(parsed.operands.len())
 }
 
+/// Operand indexes under GNU option parsing, for commands whose operand
+/// roles depend on their position.
 fn operand_indexes(
     command: CommandFileContext<'_>,
     output: &mut FileAccessSink<'_, '_>,
     start: usize,
     options: Options,
 ) -> Option<Vec<usize>> {
-    let mut indexes = Vec::new();
+    parse_operands(command, output, start, options).map(|parsed| parsed.operands)
+}
+
+/// Parses options like `getopt_long`, recording an unresolved gap and
+/// returning `None` for an unrecognized or dynamic option.
+fn parse_operands(
+    command: CommandFileContext<'_>,
+    output: &mut FileAccessSink<'_, '_>,
+    start: usize,
+    options: Options,
+) -> Option<ParsedOperands> {
+    let mut parsed = ParsedOperands::default();
     let mut index = start;
     let mut operands_only = false;
+    let mut first_operand = None;
+    let mut option_after_operand = false;
     while index < command.argv_len() {
         let Some(word) = command.word(index) else {
             break;
@@ -1124,40 +2094,27 @@ fn operand_indexes(
         }
         if !operands_only && literal.is_some_and(|value| value.starts_with('-') && value != "-") {
             let value = literal.expect("checked as Some above");
-            if options.values.contains(&value) {
-                if index + 1 >= command.argv_len() {
-                    output.unresolved(
-                        Some(value.to_owned()),
-                        UnresolvedFileAccessReason::AmbiguousArguments {
-                            detail: format!("option {value} is missing its value"),
-                        },
-                    );
-                    return None;
-                }
-                index += 2;
-                continue;
+            option_after_operand |= first_operand.is_some();
+            let Some(consumed) = parse_option(index, value, options, &mut parsed) else {
+                output.unresolved(
+                    Some(value.to_owned()),
+                    UnresolvedFileAccessReason::AmbiguousArguments {
+                        detail: format!("unrecognized option {value} for {}", command.name()),
+                    },
+                );
+                return None;
+            };
+            if index + consumed > command.argv_len() {
+                output.unresolved(
+                    Some(value.to_owned()),
+                    UnresolvedFileAccessReason::AmbiguousArguments {
+                        detail: format!("option {value} is missing its value"),
+                    },
+                );
+                return None;
             }
-            let short_bundle = value.starts_with('-')
-                && !value.starts_with("--")
-                && value.len() > 1
-                && value[1..]
-                    .chars()
-                    .all(|character| options.short_booleans.contains(character));
-            let numeric_short = options.numeric_short
-                && value[1..]
-                    .chars()
-                    .all(|character| character.is_ascii_digit());
-            if options.booleans.contains(&value) || short_bundle || numeric_short {
-                index += 1;
-                continue;
-            }
-            output.unresolved(
-                Some(value.to_owned()),
-                UnresolvedFileAccessReason::AmbiguousArguments {
-                    detail: format!("unrecognized option {value} for {}", command.name()),
-                },
-            );
-            return None;
+            index += consumed;
+            continue;
         }
         if !operands_only && literal.is_none() && word.raw.starts_with('-') {
             output.unresolved(
@@ -1168,77 +2125,230 @@ fn operand_indexes(
             );
             return None;
         }
+        first_operand.get_or_insert(index);
         if literal != Some("-") {
-            indexes.push(index);
+            parsed.operands.push(index);
         }
         index += 1;
     }
-    Some(indexes)
+    if option_after_operand {
+        let first = first_operand.expect("an operand preceded the option");
+        parsed.trailing_operands = (first + 1..command.argv_len())
+            .filter(|index| {
+                !parsed.operands.contains(index) && command.literal(*index) != Some("-")
+            })
+            .collect();
+    }
+    Some(parsed)
 }
 
+/// Parses one option word at `index`, recording any file it names. Returns
+/// the number of words it consumes, or `None` when it is not recognized.
+fn parse_option(
+    index: usize,
+    value: &str,
+    options: Options,
+    parsed: &mut ParsedOperands,
+) -> Option<usize> {
+    if value.starts_with("--") {
+        let (name, attached) = match value.split_once('=') {
+            Some((name, attached)) => (name, Some(attached)),
+            None => (value, None),
+        };
+        let path = options.path_values.contains(&name);
+        if !path && !options.values.contains(&name) {
+            return (attached.is_none() && options.booleans.contains(&value)).then_some(1);
+        }
+        return Some(match attached {
+            Some(file) => {
+                if path && !file.is_empty() {
+                    parsed.option_files.push((index, Some(file.to_owned())));
+                }
+                1
+            }
+            None => {
+                if path {
+                    parsed.option_files.push((index + 1, None));
+                }
+                2
+            }
+        });
+    }
+    if options.booleans.contains(&value)
+        || (options.numeric_short
+            && value[1..]
+                .chars()
+                .all(|character| character.is_ascii_digit()))
+    {
+        return Some(1);
+    }
+    // A short-option cluster: booleans, then at most one value option whose
+    // value is the rest of the word or the next word.
+    for (offset, character) in value[1..].char_indices() {
+        if options.short_booleans.contains(character) {
+            continue;
+        }
+        let flag = format!("-{character}");
+        let path = options.path_values.contains(&flag.as_str());
+        if !path && !options.values.contains(&flag.as_str()) {
+            return None;
+        }
+        let rest = &value[1 + offset + character.len_utf8()..];
+        if rest.is_empty() {
+            if path {
+                parsed.option_files.push((index + 1, None));
+            }
+            return Some(2);
+        }
+        if path {
+            parsed.option_files.push((index, Some(rest.to_owned())));
+        }
+        return Some(1);
+    }
+    Some(1)
+}
+
+/// Whether the command's standard input is a pipe or an input redirection.
+fn stdin_is_redirected(command: &CommandOccurrence) -> bool {
+    command.context.contains(&ExecutionContext::PipelineInput)
+        || command.redirections.iter().any(|redirection| {
+            matches!(
+                redirection.operator,
+                Some(
+                    RedirectionOperator::Input
+                        | RedirectionOperator::ReadWrite
+                        | RedirectionOperator::DuplicateInput
+                        | RedirectionOperator::HereDocument
+                        | RedirectionOperator::HereDocumentStripTabs
+                        | RedirectionOperator::HereString
+                )
+            ) && redirection
+                .descriptor
+                .as_deref()
+                .is_none_or(|descriptor| descriptor == "0")
+        })
+}
+
+/// Models `grep`, `egrep`, `fgrep`, and `rg`. GNU grep, BSD grep, and
+/// ripgrep permute options, so a `-e`/`--regexp`/`-f`/`--file` anywhere
+/// before `--` supplies the pattern and every positional operand, including
+/// the first, is a path; otherwise the first positional operand is the query.
 fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_>) {
+    let ripgrep = builtin_command_name(command.name()) == "rg";
     let mut index = 1;
-    let mut query_seen = false;
+    let mut pattern_option = false;
     let mut operands_only = false;
-    let mut paths = Vec::new();
+    let mut recursive = false;
+    let mut ambiguous = false;
+    let mut positionals = Vec::new();
     while index < command.argv_len() {
         let Some(word) = command.word(index) else {
             break;
         };
-        let literal = word.literal.as_deref();
-        if !operands_only && literal == Some("--") {
+        let Some(literal) = word.literal.as_deref() else {
+            // Before `--`, an expansion may be an option such as `-f FILE`;
+            // an unquoted query expansion may split into a query and paths.
+            // After `--`, no option can supply the pattern any more.
+            let may_be_query = !pattern_option && positionals.is_empty();
+            if (!operands_only || may_be_query) && !ambiguous {
+                ambiguous = true;
+                output.unresolved(
+                    Some(word.raw.clone()),
+                    UnresolvedFileAccessReason::AmbiguousArguments {
+                        detail: format!(
+                            "dynamic {} argument may be an option or several words",
+                            command.name()
+                        ),
+                    },
+                );
+            }
+            positionals.push(index);
+            index += 1;
+            continue;
+        };
+        if !operands_only && literal == "--" {
             operands_only = true;
             index += 1;
             continue;
         }
-        if !operands_only && matches!(literal, Some("-e" | "--regexp")) {
-            if index + 1 >= command.argv_len() {
+        if !operands_only {
+            if matches!(literal, "-e" | "--regexp") {
+                if index + 1 >= command.argv_len() {
+                    output.unresolved(
+                        Some(literal.to_owned()),
+                        UnresolvedFileAccessReason::AmbiguousArguments {
+                            detail: "search pattern option is missing its value".to_owned(),
+                        },
+                    );
+                    return;
+                }
+                pattern_option = true;
+                index += 2;
+                continue;
+            }
+            if literal.starts_with("--regexp=") {
+                pattern_option = true;
+                index += 1;
+                continue;
+            }
+            if matches!(literal, "-f" | "--file") {
+                if index + 1 >= command.argv_len() {
+                    output.unresolved(
+                        Some(literal.to_owned()),
+                        UnresolvedFileAccessReason::AmbiguousArguments {
+                            detail: "search pattern-file option is missing its value".to_owned(),
+                        },
+                    );
+                    return;
+                }
+                output.emit_argument(index + 1, FileAccessKind::Read, FileTargetScope::Exact);
+                pattern_option = true;
+                index += 2;
+                continue;
+            }
+            if is_search_boolean(literal) {
+                recursive |= matches!(literal, "-r" | "-R" | "--recursive");
+                index += 1;
+                continue;
+            }
+            if is_search_value_option(literal) {
+                if index + 1 >= command.argv_len() {
+                    output.unresolved(
+                        Some(literal.to_owned()),
+                        UnresolvedFileAccessReason::AmbiguousArguments {
+                            detail: "search option is missing its value".to_owned(),
+                        },
+                    );
+                    return;
+                }
+                index += 2;
+                continue;
+            }
+            if literal.starts_with('-') && literal != "-" {
                 output.unresolved(
-                    literal.map(str::to_owned),
+                    Some(literal.to_owned()),
                     UnresolvedFileAccessReason::AmbiguousArguments {
-                        detail: "search pattern option is missing its value".to_owned(),
+                        detail: format!("unrecognized search option for {}", command.name()),
                     },
                 );
                 return;
             }
-            query_seen = true;
-            index += 2;
-            continue;
         }
-        if !operands_only && is_search_boolean(literal) {
-            index += 1;
-            continue;
-        }
-        if !operands_only && is_search_value_option(literal) {
-            if index + 1 >= command.argv_len() {
-                output.unresolved(
-                    literal.map(str::to_owned),
-                    UnresolvedFileAccessReason::AmbiguousArguments {
-                        detail: "search option is missing its value".to_owned(),
-                    },
-                );
-                return;
-            }
-            index += 2;
-            continue;
-        }
-        if !operands_only && literal.is_some_and(|value| value.starts_with('-')) {
-            output.unresolved(
-                literal.map(str::to_owned),
-                UnresolvedFileAccessReason::AmbiguousArguments {
-                    detail: format!("unrecognized search option for {}", command.name()),
-                },
-            );
-            return;
-        }
-        if !query_seen {
-            query_seen = true;
-        } else {
-            paths.push(index);
-        }
+        positionals.push(index);
         index += 1;
     }
-    if !query_seen {
+    let operands = if pattern_option {
+        &positionals[..]
+    } else {
+        positionals.get(1..).unwrap_or_default()
+    };
+    // `-` names standard input.
+    let paths = operands
+        .iter()
+        .copied()
+        .filter(|path| command.literal(*path) != Some("-"))
+        .collect::<Vec<_>>();
+    if !pattern_option && positionals.is_empty() {
         output.unresolved(
             Some(command.command().raw.clone()),
             UnresolvedFileAccessReason::AmbiguousArguments {
@@ -1246,7 +2356,16 @@ fn infer_search(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_,
             },
         );
     } else if paths.is_empty() {
-        output.emit_working_directory(FileAccessKind::Read, FileTargetScope::Descendants);
+        // Without a path, grep reads stdin unless it is recursive; ripgrep
+        // searches the working directory unless stdin is piped or redirected.
+        let searches_cwd = if ripgrep {
+            !stdin_is_redirected(command.command())
+        } else {
+            recursive
+        };
+        if searches_cwd {
+            output.emit_working_directory(FileAccessKind::Read, FileTargetScope::Descendants);
+        }
     } else {
         for path in paths {
             output.emit_argument(
@@ -1263,6 +2382,9 @@ fn infer_sed(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_
     let mut operands_only = false;
     let mut script_configured = false;
     let mut in_place = false;
+    let mut sandbox = false;
+    let mut script_file = false;
+    let mut scripts: Vec<(usize, &str)> = Vec::new();
     let mut input_files = Vec::new();
 
     while index < command.argv_len() {
@@ -1291,40 +2413,50 @@ fn infer_sed(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_
                     | "--silent"
                     | "-E"
                     | "-r"
+                    | "--regexp-extended"
                     | "-s"
                     | "--separate"
                     | "-u"
                     | "--unbuffered"
                     | "-z"
                     | "--null-data"
-                    | "--sandbox"
+                    | "--posix"
+                    | "--debug"
             )
         {
             index += 1;
             continue;
         }
+        if !operands_only && literal == "--sandbox" {
+            sandbox = true;
+            index += 1;
+            continue;
+        }
         if !operands_only && matches!(literal, "-e" | "--expression") {
-            if index + 1 >= command.argv_len() {
+            let Some(script) = command.literal(index + 1) else {
                 sed_ambiguous(
                     output,
                     literal,
                     "sed expression option is missing its script",
                 );
                 return;
-            }
+            };
+            scripts.push((index + 1, script));
             script_configured = true;
             index += 2;
             continue;
         }
-        if !operands_only
-            && (literal
-                .strip_prefix("-e")
-                .is_some_and(|script| !script.is_empty())
-                || literal.starts_with("--expression="))
-        {
-            script_configured = true;
-            index += 1;
-            continue;
+        if !operands_only {
+            if let Some(script) = literal.strip_prefix("--expression=").or_else(|| {
+                literal
+                    .strip_prefix("-e")
+                    .filter(|script| !script.is_empty())
+            }) {
+                scripts.push((index, script));
+                script_configured = true;
+                index += 1;
+                continue;
+            }
         }
         if !operands_only && matches!(literal, "-f" | "--file") {
             if index + 1 >= command.argv_len() {
@@ -1337,23 +2469,25 @@ fn infer_sed(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_
             }
             output.emit_argument(index + 1, FileAccessKind::Read, FileTargetScope::Exact);
             script_configured = true;
+            script_file = true;
             index += 2;
             continue;
         }
         if !operands_only {
-            if let Some(script_file) = literal
+            if let Some(file) = literal
                 .strip_prefix("--file=")
                 .filter(|value| !value.is_empty())
                 .or_else(|| literal.strip_prefix("-f").filter(|value| !value.is_empty()))
             {
                 output.emit_argument_literal(
                     index,
-                    script_file,
+                    file,
                     FileAccessKind::Read,
                     FileTargetScope::Exact,
                     FileAccessCertainty::Direct,
                 );
                 script_configured = true;
+                script_file = true;
                 index += 1;
                 continue;
             }
@@ -1361,6 +2495,11 @@ fn infer_sed(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_
         if !operands_only && matches!(literal, "-i" | "--in-place") {
             in_place = true;
             index += 1;
+            // BSD sed takes the backup suffix as a separate, often empty,
+            // argument (`sed -i '' script file`).
+            if literal == "-i" && command.literal(index) == Some("") {
+                index += 1;
+            }
             continue;
         }
         if !operands_only
@@ -1384,6 +2523,7 @@ fn infer_sed(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_
             }
         } else {
             // Without -e/-f, the first non-option is the sed program.
+            scripts.push((index, literal));
             script_configured = true;
         }
         index += 1;
@@ -1401,6 +2541,52 @@ fn infer_sed(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_
         );
         return;
     }
+    // `--sandbox` makes GNU sed reject the commands that open files or run
+    // programs, so script contents need no inspection.
+    if !sandbox {
+        if script_file {
+            sed_ambiguous(
+                output,
+                command.command().raw.as_str(),
+                "sed script file may read, write, or execute files",
+            );
+        }
+        for (script_index, script) in scripts {
+            match sed_script_effects(script) {
+                Some(effects) => {
+                    for effect in effects {
+                        match effect {
+                            SedEffect::Read(path) => output.emit_argument_literal(
+                                script_index,
+                                path,
+                                FileAccessKind::Read,
+                                FileTargetScope::Exact,
+                                FileAccessCertainty::Direct,
+                            ),
+                            SedEffect::Write(path) => output.emit_argument_literal(
+                                script_index,
+                                path,
+                                FileAccessKind::Modify,
+                                FileTargetScope::Exact,
+                                FileAccessCertainty::Direct,
+                            ),
+                            SedEffect::Execute => output.unresolved(
+                                Some(script.to_owned()),
+                                UnresolvedFileAccessReason::IndirectEvaluation {
+                                    command: command.name().to_owned(),
+                                },
+                            ),
+                        }
+                    }
+                }
+                None => sed_ambiguous(
+                    output,
+                    script,
+                    "sed script could not be checked for commands that read, write, or execute",
+                ),
+            }
+        }
+    }
     for input in input_files {
         output.emit_argument(
             input,
@@ -1414,6 +2600,174 @@ fn infer_sed(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '_
     }
 }
 
+/// A sed command that opens a file or runs a program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SedEffect<'a> {
+    /// `r`/`R` reads a file.
+    Read(&'a str),
+    /// `w`/`W` or the `s///w` flag writes a file.
+    Write(&'a str),
+    /// `e` or the `s///e` flag runs a command.
+    Execute,
+}
+
+/// Scans a sed script for commands that read, write, or execute. Returns
+/// `None` when the script cannot be parsed confidently.
+fn sed_script_effects(script: &str) -> Option<Vec<SedEffect<'_>>> {
+    let bytes = script.as_bytes();
+    let mut effects = Vec::new();
+    let mut index = 0;
+    let skip_blank = |index: &mut usize| {
+        while *index < bytes.len() && matches!(bytes[*index], b' ' | b'\t') {
+            *index += 1;
+        }
+    };
+    let end_of_line = |from: usize| {
+        bytes[from..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |offset| from + offset)
+    };
+    let filename = |index: &mut usize| -> Option<&str> {
+        while *index < bytes.len() && matches!(bytes[*index], b' ' | b'\t') {
+            *index += 1;
+        }
+        let end = end_of_line(*index);
+        let name = script.get(*index..end)?;
+        *index = end;
+        (!name.is_empty()).then_some(name)
+    };
+
+    while index < bytes.len() {
+        while index < bytes.len() && matches!(bytes[index], b' ' | b'\t' | b'\n' | b';') {
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
+        index = skip_sed_address(bytes, index)?;
+        skip_blank(&mut index);
+        if bytes.get(index) == Some(&b',') {
+            index += 1;
+            skip_blank(&mut index);
+            index = skip_sed_address(bytes, index)?;
+            skip_blank(&mut index);
+        }
+        while index < bytes.len() && matches!(bytes[index], b'!' | b' ' | b'\t') {
+            index += 1;
+        }
+        let command = *bytes.get(index)?;
+        index += 1;
+        match command {
+            b'{' | b'}' | b'=' | b'd' | b'D' | b'g' | b'G' | b'h' | b'H' | b'n' | b'N' | b'p'
+            | b'P' | b'x' | b'z' | b'F' => {}
+            b'q' | b'Q' | b'l' | b'L' => {
+                skip_blank(&mut index);
+                while index < bytes.len() && bytes[index].is_ascii_digit() {
+                    index += 1;
+                }
+            }
+            b'#' => index = end_of_line(index),
+            b':' | b'b' | b't' | b'T' | b'v' => {
+                while index < bytes.len() && !matches!(bytes[index], b';' | b'\n') {
+                    index += 1;
+                }
+            }
+            b'a' | b'i' | b'c' => {
+                // Text runs to the end of the line; a trailing backslash
+                // continues it onto the next line.
+                loop {
+                    let end = end_of_line(index);
+                    let continued = end > index && bytes[end - 1] == b'\\';
+                    index = (end + 1).min(bytes.len());
+                    if !continued || end >= bytes.len() {
+                        break;
+                    }
+                }
+            }
+            b'r' | b'R' => effects.push(SedEffect::Read(filename(&mut index)?)),
+            b'w' | b'W' => effects.push(SedEffect::Write(filename(&mut index)?)),
+            b'e' => {
+                effects.push(SedEffect::Execute);
+                index = end_of_line(index);
+            }
+            b'y' => {
+                let delimiter = *bytes.get(index)?;
+                index = skip_sed_delimited(bytes, index + 1, delimiter)?;
+                index = skip_sed_delimited(bytes, index, delimiter)?;
+            }
+            b's' => {
+                let delimiter = *bytes.get(index)?;
+                if matches!(delimiter, b'\n' | b'\\') {
+                    return None;
+                }
+                index = skip_sed_delimited(bytes, index + 1, delimiter)?;
+                index = skip_sed_delimited(bytes, index, delimiter)?;
+                while index < bytes.len() {
+                    match bytes[index] {
+                        b'g' | b'p' | b'i' | b'I' | b'm' | b'M' | b'0'..=b'9' => index += 1,
+                        b'e' => {
+                            effects.push(SedEffect::Execute);
+                            index += 1;
+                        }
+                        b'w' => {
+                            index += 1;
+                            effects.push(SedEffect::Write(filename(&mut index)?));
+                        }
+                        b';' | b'\n' | b'}' | b'#' | b' ' | b'\t' => break,
+                        _ => return None,
+                    }
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(effects)
+}
+
+/// Skips an optional sed address: a line number, `$`, `/regex/`,
+/// `\cregexc`, or a GNU `first~step` or `+N`/`~N` form.
+fn skip_sed_address(bytes: &[u8], mut index: usize) -> Option<usize> {
+    match bytes.get(index) {
+        Some(b'0'..=b'9') => {
+            while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'~') {
+                index += 1;
+            }
+        }
+        Some(b'$') => index += 1,
+        Some(b'+' | b'~') => {
+            index += 1;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+        }
+        Some(b'/') => index = skip_sed_delimited(bytes, index + 1, b'/')?,
+        Some(b'\\') => {
+            let delimiter = *bytes.get(index + 1)?;
+            index = skip_sed_delimited(bytes, index + 2, delimiter)?;
+        }
+        _ => return Some(index),
+    }
+    // Regex address flags.
+    while index < bytes.len() && matches!(bytes[index], b'I' | b'M') {
+        index += 1;
+    }
+    Some(index)
+}
+
+/// Skips past the next unescaped `delimiter`, returning the index after it.
+fn skip_sed_delimited(bytes: &[u8], mut index: usize, delimiter: u8) -> Option<usize> {
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'\n' => return None,
+            byte if byte == delimiter => return Some(index + 1),
+            _ => index += 1,
+        }
+    }
+    None
+}
+
 fn sed_ambiguous(output: &mut FileAccessSink<'_, '_>, raw: &str, detail: &str) {
     output.unresolved(
         Some(raw.to_owned()),
@@ -1423,42 +2777,119 @@ fn sed_ambiguous(output: &mut FileAccessSink<'_, '_>, raw: &str, detail: &str) {
     );
 }
 
-fn is_search_boolean(literal: Option<&str>) -> bool {
+/// Search options without a value that change neither which files are read
+/// nor whether other programs run.
+fn is_search_boolean(literal: &str) -> bool {
     matches!(
         literal,
-        Some(
-            "-n" | "--line-number"
-                | "-i"
-                | "--ignore-case"
-                | "-F"
-                | "--fixed-strings"
-                | "-R"
-                | "-r"
-                | "--recursive"
-                | "--hidden"
-                | "--no-ignore"
-                | "-l"
-                | "--files-with-matches"
-        )
+        "-n" | "--line-number"
+            | "-i"
+            | "--ignore-case"
+            | "-F"
+            | "--fixed-strings"
+            | "-E"
+            | "--extended-regexp"
+            | "-w"
+            | "--word-regexp"
+            | "-x"
+            | "--line-regexp"
+            | "-v"
+            | "--invert-match"
+            | "-c"
+            | "--count"
+            | "-o"
+            | "--only-matching"
+            | "-q"
+            | "--quiet"
+            | "-s"
+            | "--no-messages"
+            | "-h"
+            | "--no-filename"
+            | "-H"
+            | "--with-filename"
+            | "-R"
+            | "-r"
+            | "--recursive"
+            | "--hidden"
+            | "--no-ignore"
+            | "-l"
+            | "--files-with-matches"
     )
 }
 
-fn is_search_value_option(literal: Option<&str>) -> bool {
+fn is_search_value_option(literal: &str) -> bool {
     matches!(
         literal,
-        Some(
-            "-g" | "--glob"
-                | "-t"
-                | "--type"
-                | "--type-add"
-                | "-j"
-                | "--threads"
-                | "-m"
-                | "--max-count"
-                | "--max-depth"
-                | "--encoding"
-        )
+        "-g" | "--glob"
+            | "-t"
+            | "--type"
+            | "--type-add"
+            | "-j"
+            | "--threads"
+            | "-m"
+            | "--max-count"
+            | "--max-depth"
+            | "--encoding"
+            | "-A"
+            | "--after-context"
+            | "-B"
+            | "--before-context"
+            | "-C"
+            | "--context"
     )
+}
+
+/// The final path component of an operand, used when a destination directory
+/// receives a source by name.
+fn operand_basename(path: &str) -> Option<&str> {
+    let trimmed = path.trim_end_matches('/');
+    let base = trimmed.rsplit('/').next()?;
+    (!base.is_empty() && base != "." && base != "..").then_some(base)
+}
+
+fn join_operand(directory: &str, name: &str) -> String {
+    if directory.ends_with('/') {
+        format!("{directory}{name}")
+    } else {
+        format!("{directory}/{name}")
+    }
+}
+
+/// Emits heuristic `destination/basename(source)` candidates: when the
+/// destination is a directory, each source lands inside it under its own name.
+fn emit_destination_children(
+    command: CommandFileContext<'_>,
+    output: &mut FileAccessSink<'_, '_>,
+    sources: &[usize],
+    destination: usize,
+    access: FileAccessKind,
+    source_scope: FileTargetScope,
+) {
+    let Some(directory) = command.literal(destination) else {
+        return;
+    };
+    for source in sources {
+        let Some(word) = command.word(*source) else {
+            continue;
+        };
+        let (value, scope) = match (&word.literal, &word.pattern) {
+            (Some(literal), _) => (literal.as_str(), source_scope),
+            (None, Some(pattern)) if word.dynamic_reasons == [DynamicReason::Glob] => {
+                (pattern.as_str(), FileTargetScope::Glob)
+            }
+            _ => continue,
+        };
+        let Some(base) = operand_basename(value) else {
+            continue;
+        };
+        output.emit_argument_literal(
+            destination,
+            &join_operand(directory, base),
+            access,
+            scope,
+            FileAccessCertainty::Heuristic,
+        );
+    }
 }
 
 fn infer_source_destination(
@@ -1489,6 +2920,7 @@ fn infer_source_destination(
             ],
             short_booleans: "frRap",
             numeric_short: false,
+            path_values: &[],
         },
     ) else {
         return;
@@ -1502,12 +2934,14 @@ fn infer_source_destination(
         );
         return;
     }
-    let scope = if recursive {
+    // `mv` moves whole directories without a flag.
+    let source_scope = if moving || recursive {
         FileTargetScope::ExactOrDescendants
     } else {
         FileTargetScope::Exact
     };
-    for source in &operands[..operands.len() - 1] {
+    let (destination, sources) = operands.split_last().expect("checked nonempty above");
+    for source in sources {
         output.emit_argument(
             *source,
             if moving {
@@ -1515,17 +2949,27 @@ fn infer_source_destination(
             } else {
                 FileAccessKind::Read
             },
-            scope,
+            source_scope,
         );
     }
+    let destination_access = if moving {
+        FileAccessKind::MoveDestination
+    } else {
+        FileAccessKind::Modify
+    };
+    // The destination may be an existing directory that receives the sources.
     output.emit_argument(
-        *operands.last().expect("checked nonempty above"),
-        if moving {
-            FileAccessKind::MoveDestination
-        } else {
-            FileAccessKind::Modify
-        },
-        scope,
+        *destination,
+        destination_access,
+        FileTargetScope::ExactOrDescendants,
+    );
+    emit_destination_children(
+        command,
+        output,
+        sources,
+        *destination,
+        destination_access,
+        source_scope,
     );
 }
 
@@ -1549,6 +2993,7 @@ fn infer_link(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '
             booleans: &["-s", "--symbolic", "-f", "--force"],
             short_booleans: "sf",
             numeric_short: false,
+            path_values: &[],
         },
     ) else {
         return;
@@ -1562,21 +3007,38 @@ fn infer_link(command: CommandFileContext<'_>, output: &mut FileAccessSink<'_, '
         );
         return;
     }
-    for source in &operands[..operands.len() - 1] {
+    let (destination, sources) = operands.split_last().expect("checked nonempty above");
+    for source in sources {
         output.emit_argument(*source, FileAccessKind::Read, FileTargetScope::Exact);
     }
     output.emit_argument(
-        *operands.last().expect("checked nonempty above"),
+        *destination,
+        FileAccessKind::Modify,
+        FileTargetScope::ExactOrDescendants,
+    );
+    emit_destination_children(
+        command,
+        output,
+        sources,
+        *destination,
         FileAccessKind::Modify,
         FileTargetScope::Exact,
     );
 }
 
-fn infer_redirections(output: &mut FileAccessSink<'_, '_>) {
-    let redirections = output.command.command.redirections.clone();
+/// Whether a `>&` target duplicates, moves, or closes a descriptor rather than
+/// naming a file.
+fn is_descriptor_target(value: &str) -> bool {
+    let digits = value.strip_suffix('-').unwrap_or(value);
+    value == "-" || (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn infer_redirections(redirections: &[Redirection], output: &mut FileAccessSink<'_, '_>) {
+    let dialect_sensitive = output.inference.dialect != ShellDialect::Bash;
     for (redirection_index, redirection) in redirections.iter().enumerate() {
         let access = match redirection.operator {
             Some(RedirectionOperator::Input) => Some(FileAccessKind::Read),
+            Some(RedirectionOperator::ReadWrite) => Some(FileAccessKind::ReadModify),
             Some(
                 RedirectionOperator::Output
                 | RedirectionOperator::Append
@@ -1592,21 +3054,18 @@ fn infer_redirections(output: &mut FileAccessSink<'_, '_>) {
                 | RedirectionOperator::HereDocumentStripTabs
                 | RedirectionOperator::HereString,
             ) => None,
-            // With no explicit descriptor, Bash accepts `>&word` as the
-            // legacy spelling of `&>word`. A numeric word still duplicates a
-            // descriptor, and an explicit descriptor always selects the
-            // descriptor-duplication form.
-            Some(RedirectionOperator::DuplicateOutput) => redirection
+            // Without a descriptor, Bash accepts `>&word` as the legacy
+            // spelling of `&>word`; a numeric word, `-`, or `N-` duplicates,
+            // closes, or moves a descriptor. With an explicit descriptor Bash
+            // rejects a filename as an ambiguous redirect, but zsh writes it.
+            Some(RedirectionOperator::DuplicateOutput) => match redirection
                 .target
                 .as_ref()
-                .filter(|target| {
-                    redirection.descriptor.is_none()
-                        && target
-                            .literal
-                            .as_deref()
-                            .is_none_or(|value| value != "-" && value.parse::<u32>().is_err())
-                })
-                .map(|_| FileAccessKind::Modify),
+                .and_then(|target| target.literal.as_deref())
+            {
+                Some(value) if is_descriptor_target(value) => None,
+                _ => Some(FileAccessKind::Modify),
+            },
             None => {
                 output.unresolved(
                     Some(redirection.raw.clone()),
@@ -1615,16 +3074,90 @@ fn infer_redirections(output: &mut FileAccessSink<'_, '_>) {
                 None
             }
         };
-        if let Some(access) = access {
-            if let Some(target) = &redirection.target {
-                output.emit_redirection(redirection_index, target, access);
-            } else {
-                output.unresolved(
-                    Some(redirection.raw.clone()),
-                    UnresolvedFileAccessReason::UnsupportedRedirection,
-                );
-            }
+        let Some(access) = access else {
+            continue;
+        };
+        let Some(target) = &redirection.target else {
+            output.unresolved(
+                Some(redirection.raw.clone()),
+                UnresolvedFileAccessReason::UnsupportedRedirection,
+            );
+            continue;
+        };
+        let origin = output.redirection_origin(redirection_index);
+        output.emit_word(
+            target,
+            access,
+            FileTargetScope::Exact,
+            origin.clone(),
+            FileAccessCertainty::Direct,
+            None,
+        );
+        if dialect_sensitive && access.may_modify() && target.raw.starts_with('!') {
+            // zsh reads `>!`/`>>!` as noclobber-overriding output to the next
+            // word, which Bash treats as a command argument.
+            output.unresolved(
+                Some(redirection.raw.clone()),
+                UnresolvedFileAccessReason::UnsupportedRedirection,
+            );
+            emit_zsh_clobber_target(redirection, target, origin, output);
         }
+    }
+}
+
+fn emit_zsh_clobber_target(
+    redirection: &Redirection,
+    target: &ShellWord,
+    origin: FileAccessOrigin,
+    output: &mut FileAccessSink<'_, '_>,
+) {
+    if target.raw == "!" {
+        // On a statement, the grammar keeps the word after `!` as a trailing
+        // word. On a simple command it is an argument inside the
+        // redirection's span (arguments are in source order), and with no
+        // command at all (`>! file`) the grammar reads it as the command name.
+        let command = output.command.command;
+        let arguments = &command.arguments;
+        let index = arguments.partition_point(|word| word.span.start_byte < target.span.end_byte);
+        let next = redirection
+            .trailing_words
+            .first()
+            .or_else(|| {
+                arguments
+                    .get(index)
+                    .filter(|word| word.span.end_byte <= redirection.span.end_byte)
+            })
+            .or_else(|| {
+                command.name.as_ref().filter(|name| {
+                    name.span.start_byte >= target.span.end_byte
+                        && arguments
+                            .first()
+                            .is_none_or(|first| first.span.start_byte > name.span.start_byte)
+                })
+            });
+        if let Some(word) = next {
+            output.emit_word(
+                word,
+                FileAccessKind::Modify,
+                FileTargetScope::Exact,
+                origin,
+                FileAccessCertainty::Heuristic,
+                None,
+            );
+        }
+    } else if let Some(path) = target
+        .literal
+        .as_deref()
+        .and_then(|literal| literal.strip_prefix('!'))
+        .filter(|path| !path.is_empty())
+    {
+        output.emit_path(
+            path,
+            FileAccessKind::Modify,
+            FileTargetScope::Exact,
+            origin,
+            FileAccessCertainty::Heuristic,
+        );
     }
 }
 
@@ -1635,11 +3168,17 @@ mod tests {
     use proptest::prelude::*;
 
     fn infer(source: &str) -> FileAccessReport {
+        infer_with(
+            source,
+            FileInferenceContext::new(Some(Utf8Path::new("/repo/work"))),
+        )
+    }
+
+    fn infer_with(source: &str, context: FileInferenceContext<'_>) -> FileAccessReport {
         let outcome = BashAnalyzer::default().analyze(source);
         FileAccessAnalyzer::default().infer(
             &outcome,
-            FileInferenceContext::new(Some(Utf8Path::new("/repo/work")))
-                .with_workspace_root(Some(Utf8Path::new("/repo"))),
+            context.with_workspace_root(Some(Utf8Path::new("/repo"))),
         )
     }
 
@@ -1648,6 +3187,24 @@ mod tests {
             FileTarget::Path { expression, scope } => (expression, *scope),
             FileTarget::Workspace { .. } => panic!("expected path candidate"),
         }
+    }
+
+    fn summary(report: &FileAccessReport) -> Vec<(&str, FileAccessKind, FileTargetScope)> {
+        report
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let (expression, scope) = path(candidate);
+                (expression.raw.as_str(), candidate.access, scope)
+            })
+            .collect()
+    }
+
+    fn has_gap(
+        report: &FileAccessReport,
+        matches: impl Fn(&UnresolvedFileAccessReason) -> bool,
+    ) -> bool {
+        report.unresolved.iter().any(|gap| matches(&gap.reason))
     }
 
     #[test]
@@ -1686,7 +3243,7 @@ mod tests {
 
     #[test]
     fn distinguishes_legacy_output_redirection_from_descriptor_duplication() {
-        let report = infer("printf hi >&legacy.log 2>&1");
+        let report = infer("printf hi >&legacy.log 2>&1 3>&2-");
 
         assert_eq!(report.candidates.len(), 1);
         assert_eq!(report.candidates[0].access, FileAccessKind::Modify);
@@ -1695,18 +3252,38 @@ mod tests {
     }
 
     #[test]
+    fn explicit_descriptor_duplication_to_a_word_is_a_write() {
+        // Bash rejects `2>& file`, but zsh writes stderr to the file.
+        let report = infer("echo x 2>& .env");
+        assert_eq!(
+            summary(&report),
+            [(".env", FileAccessKind::Modify, FileTargetScope::Exact)]
+        );
+
+        let dynamic = infer("echo x 2>&$FD");
+        assert!(has_gap(&dynamic, |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::DynamicPath { .. }
+        )));
+    }
+
+    #[test]
     fn assigns_source_destination_and_delete_roles() {
         let copied = infer("cp -R src assets backup");
-        assert_eq!(
-            copied
-                .candidates
-                .iter()
-                .map(|candidate| (
+        let direct = copied
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.certainty != FileAccessCertainty::Heuristic)
+            .map(|candidate| {
+                (
                     path(candidate).0.raw.as_str(),
                     candidate.access,
-                    path(candidate).1
-                ))
-                .collect::<Vec<_>>(),
+                    path(candidate).1,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            direct,
             vec![
                 (
                     "src",
@@ -1725,12 +3302,19 @@ mod tests {
                 ),
             ]
         );
+        let heuristic = copied
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.certainty == FileAccessCertainty::Heuristic)
+            .map(|candidate| path(candidate).0.raw.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(heuristic, ["backup/src", "backup/assets"]);
 
         let moved = infer("mv old new");
         assert_eq!(moved.candidates[0].access, FileAccessKind::MoveSource);
         assert_eq!(moved.candidates[1].access, FileAccessKind::MoveDestination);
         assert_eq!(moved.may_read().count(), 1);
-        assert_eq!(moved.may_modify().count(), 2);
+        assert!(moved.is_fully_resolved());
 
         let removed = infer("rm -rf build");
         assert_eq!(removed.candidates[0].access, FileAccessKind::Delete);
@@ -1738,6 +3322,38 @@ mod tests {
             path(&removed.candidates[0]).1,
             FileTargetScope::ExactOrDescendants
         );
+    }
+
+    #[test]
+    fn moves_and_copies_cover_directory_contents() {
+        let moved = infer("mv secrets /tmp/x");
+        assert_eq!(
+            path(&moved.candidates[0]),
+            (
+                &PathExpression {
+                    raw: "secrets".into(),
+                    resolved: Some("/repo/work/secrets".into()),
+                    base: PathBase::InvocationCwd,
+                },
+                FileTargetScope::ExactOrDescendants
+            )
+        );
+
+        let copied = infer("cp /tmp/.env .");
+        assert!(copied.candidates.iter().any(|candidate| {
+            candidate.access == FileAccessKind::Modify
+                && path(candidate).0.resolved.as_deref() == Some(Utf8Path::new("/repo/work/.env"))
+        }));
+
+        let linked = infer("ln -s /etc/passwd links/");
+        assert!(linked.candidates.iter().any(|candidate| {
+            path(candidate).0.raw == "links/passwd" && candidate.access == FileAccessKind::Modify
+        }));
+
+        let globbed = infer("cp /tmp/*.env dest");
+        assert!(globbed.candidates.iter().any(|candidate| {
+            path(candidate).0.raw == "dest/*.env" && path(candidate).1 == FileTargetScope::Glob
+        }));
     }
 
     #[test]
@@ -1761,6 +3377,80 @@ mod tests {
             candidate.access == FileAccessKind::Read
                 && path(candidate).1 == FileTargetScope::ExactOrDescendants
         }));
+
+        let recursive = infer("grep -r needle");
+        assert_eq!(
+            summary(&recursive),
+            [(".", FileAccessKind::Read, FileTargetScope::Descendants)]
+        );
+
+        let pattern_file = infer("grep -f patterns.txt src");
+        assert_eq!(
+            summary(&pattern_file),
+            [
+                ("patterns.txt", FileAccessKind::Read, FileTargetScope::Exact),
+                (
+                    "src",
+                    FileAccessKind::Read,
+                    FileTargetScope::ExactOrDescendants
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn searches_reading_stdin_do_not_read_the_working_tree() {
+        for source in [
+            "ls | grep foo",
+            "git log | grep -i fix",
+            "echo hi | rg hi",
+            "grep foo",
+            "rg foo < input.txt",
+            "rg foo <<< text",
+        ] {
+            let report = infer(source);
+            assert!(
+                !report.candidates.iter().any(|candidate| {
+                    path(candidate).0.raw == "." && candidate.access == FileAccessKind::Read
+                }),
+                "{source}: {report:?}"
+            );
+        }
+        let piped_explicit = infer("ls | grep foo src");
+        assert_eq!(
+            piped_explicit
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.access == FileAccessKind::Read)
+                .map(|candidate| path(candidate).0.raw.as_str())
+                .collect::<Vec<_>>(),
+            ["src"]
+        );
+    }
+
+    #[test]
+    fn dynamic_search_words_are_ambiguous() {
+        for source in [
+            "O='-f .env'; grep $O foo",
+            "grep \"$O\" foo",
+            "grep -- $Q foo",
+        ] {
+            let report = infer(source);
+            assert!(
+                has_gap(&report, |reason| matches!(
+                    reason,
+                    UnresolvedFileAccessReason::AmbiguousArguments { .. }
+                )),
+                "{source}"
+            );
+            assert!(
+                report
+                    .candidates
+                    .iter()
+                    .any(|candidate| path(candidate).0.raw == "foo"),
+                "{source}"
+            );
+        }
     }
 
     #[test]
@@ -1770,6 +3460,15 @@ mod tests {
         assert!(glob.unresolved.is_empty());
         let (expression, scope) = path(&glob.candidates[0]);
         assert_eq!(expression.raw, "src/*.rs");
+        assert_eq!(scope, FileTargetScope::Glob);
+
+        let quoted = infer("cat \".en\"v*");
+        let (expression, scope) = path(&quoted.candidates[0]);
+        assert_eq!(expression.raw, ".env*");
+        assert_eq!(
+            expression.resolved.as_deref(),
+            Some(Utf8Path::new("/repo/work/.env*"))
+        );
         assert_eq!(scope, FileTargetScope::Glob);
 
         let dynamic = infer("cat \"$INPUT\"");
@@ -1784,6 +3483,38 @@ mod tests {
                 ..
             }] if reasons.contains(&DynamicReason::ParameterExpansion)
         ));
+    }
+
+    #[test]
+    fn tilde_operands_become_home_candidates_and_keep_their_gap() {
+        let unresolved = infer("cat ~/.ssh/id_rsa");
+        let (expression, scope) = path(&unresolved.candidates[0]);
+        assert_eq!(expression.raw, "~/.ssh/id_rsa");
+        assert_eq!(expression.base, PathBase::Home);
+        assert_eq!(expression.resolved, None);
+        assert_eq!(scope, FileTargetScope::Exact);
+        assert!(has_gap(&unresolved, |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::DynamicPath { reasons, .. }
+                if reasons.contains(&DynamicReason::TildeExpansion)
+        )));
+
+        let resolved = infer_with(
+            "cp ~/.ssh/id_rsa /tmp/k; ls ~/.aws/*",
+            FileInferenceContext::new(Some(Utf8Path::new("/repo")))
+                .with_home(Some(Utf8Path::new("/Users/me"))),
+        );
+        assert!(resolved.candidates.iter().any(|candidate| {
+            path(candidate).0.resolved.as_deref() == Some(Utf8Path::new("/Users/me/.ssh/id_rsa"))
+        }));
+        assert!(resolved.candidates.iter().any(|candidate| {
+            path(candidate).0.resolved.as_deref() == Some(Utf8Path::new("/Users/me/.aws/*"))
+                && path(candidate).1 == FileTargetScope::Glob
+        }));
+
+        // A named user's home is not modeled.
+        let other = infer("cat ~root/.profile");
+        assert!(other.candidates.is_empty());
     }
 
     #[test]
@@ -1802,6 +3533,30 @@ mod tests {
             unresolved.reason,
             UnresolvedFileAccessReason::WorkingDirectoryMayHaveChanged
         )));
+    }
+
+    #[test]
+    fn directory_changes_in_loops_functions_and_wrappers_taint_relative_paths() {
+        for source in [
+            "for d in a b; do cat key; cd secrets; done",
+            "f() { cd secrets; }; cat key",
+            "builtin cd secrets; cat key",
+            "command cd secrets; cat key",
+        ] {
+            let report = infer(source);
+            let key = report
+                .candidates
+                .iter()
+                .find(|candidate| path(candidate).0.raw == "key")
+                .unwrap_or_else(|| panic!("{source}"));
+            assert_eq!(
+                path(key).0.base,
+                PathBase::UnknownAfterDirectoryChange,
+                "{source}"
+            );
+        }
+        let before = infer("cat key; for d in a; do cd $d; done");
+        assert_eq!(path(&before.candidates[0]).0.base, PathBase::InvocationCwd);
     }
 
     #[test]
@@ -1839,6 +3594,79 @@ mod tests {
             unresolved.reason,
             UnresolvedFileAccessReason::IndirectEvaluation { .. }
         )));
+
+        for (source, command) in [
+            ("python3 -c 'print(open(\".env\").read())'", "python3"),
+            ("node -e 'x'", "node"),
+            ("awk '{print}' file.txt", "awk"),
+            ("find . -name x -exec cat {} +", "find"),
+            ("less README.md", "less"),
+        ] {
+            let report = infer(source);
+            assert!(
+                has_gap(&report, |reason| matches!(
+                    reason,
+                    UnresolvedFileAccessReason::IndirectEvaluation { command: name } if name == command
+                )),
+                "{source}: {report:?}"
+            );
+        }
+        // Pagers still report the file they open.
+        assert_eq!(summary(&infer("less README.md")).len(), 1);
+    }
+
+    #[test]
+    fn wrapper_commands_are_unwrapped() {
+        let sudo = infer("sudo -u root rm -rf secrets");
+        assert_eq!(
+            summary(&sudo),
+            [(
+                "secrets",
+                FileAccessKind::Delete,
+                FileTargetScope::ExactOrDescendants
+            )]
+        );
+        assert!(matches!(
+            sudo.candidates[0].origin,
+            FileAccessOrigin::Argument { argv_index: 5, .. }
+        ));
+        assert!(sudo.is_fully_resolved());
+
+        for source in [
+            "env -i FOO=1 cat .env",
+            "nice -n 5 cat .env",
+            "nohup cat .env",
+            "timeout -s KILL 5 cat .env",
+            "command cat .env",
+            "exec cat .env",
+            "time cat .env",
+            "stdbuf -oL cat .env",
+            "sudo env cat .env",
+            "/usr/bin/cat .env",
+        ] {
+            assert_eq!(
+                summary(&infer(source)),
+                [(".env", FileAccessKind::Read, FileTargetScope::Exact)],
+                "{source}"
+            );
+        }
+        assert!(infer("command -v cat").is_fully_resolved());
+        assert!(infer("env").is_fully_resolved());
+        assert!(has_gap(&infer("sudo -s cat .env"), |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::IndirectEvaluation { .. }
+        )));
+        assert!(has_gap(&infer("env $CMD .env"), |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::AmbiguousArguments { .. }
+        )));
+        assert!(has_gap(
+            &infer("sudo --mystery cat .env"),
+            |reason| matches!(
+                reason,
+                UnresolvedFileAccessReason::AmbiguousArguments { .. }
+            )
+        ));
     }
 
     #[test]
@@ -1859,11 +3687,160 @@ mod tests {
         );
         assert!(in_place.unresolved.is_empty());
 
+        let bsd = infer("sed -i '' 's/a/b/' file.txt");
+        assert_eq!(
+            summary(&bsd),
+            [(
+                "file.txt",
+                FileAccessKind::ReadModify,
+                FileTargetScope::Exact
+            )]
+        );
+        assert!(bsd.is_fully_resolved());
+
         let ambiguous = infer("sed --mystery 's/a/b/' input.txt");
         assert!(ambiguous.candidates.is_empty());
         assert!(ambiguous.unresolved.iter().any(|unresolved| matches!(
             unresolved.reason,
             UnresolvedFileAccessReason::AmbiguousArguments { .. }
+        )));
+    }
+
+    #[test]
+    fn sed_scripts_that_open_files_or_run_commands_are_reported() {
+        let read = infer("sed 'r .env' README.md");
+        assert!(summary(&read).contains(&(".env", FileAccessKind::Read, FileTargetScope::Exact)));
+
+        for source in [
+            "sed -n '1w .env' x",
+            "sed 's/a/b/w .env' x",
+            "sed -e '/x/,$W .env' x",
+            "sed -i '' '$a\\\nfoo\nw .env' x",
+        ] {
+            let report = infer(source);
+            assert!(
+                summary(&report).contains(&(
+                    ".env",
+                    FileAccessKind::Modify,
+                    FileTargetScope::Exact
+                )),
+                "{source}: {report:?}"
+            );
+        }
+        for source in ["sed '1e cat .env' x", "sed 's/x/date/e' x"] {
+            assert!(
+                has_gap(&infer(source), |reason| matches!(
+                    reason,
+                    UnresolvedFileAccessReason::IndirectEvaluation { .. }
+                )),
+                "{source}"
+            );
+        }
+        assert!(has_gap(&infer("sed 'Z' x"), |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::AmbiguousArguments { .. }
+        )));
+        assert!(has_gap(&infer("sed -f script.sed x"), |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::AmbiguousArguments { .. }
+        )));
+        let sandboxed = infer("sed --sandbox 'w .env' x");
+        assert_eq!(
+            summary(&sandboxed),
+            [("x", FileAccessKind::Read, FileTargetScope::Exact)]
+        );
+    }
+
+    #[test]
+    fn statement_and_bare_redirections_are_inferred() {
+        let group = infer("{ cat; } < .env");
+        assert_eq!(
+            summary(&group),
+            [(".env", FileAccessKind::Read, FileTargetScope::Exact)]
+        );
+        assert!(matches!(
+            group.candidates[0].origin,
+            FileAccessOrigin::StatementRedirection {
+                statement_index: 0,
+                redirection_index: 0
+            }
+        ));
+
+        let function = infer("f() { echo x; } > .env; f");
+        assert_eq!(
+            function.candidates[0].certainty,
+            FileAccessCertainty::Conditional
+        );
+
+        let bare = infer("> .env");
+        assert_eq!(
+            summary(&bare),
+            [(".env", FileAccessKind::Modify, FileTargetScope::Exact)]
+        );
+        assert!(bare.is_fully_resolved());
+
+        let substitution = infer("echo \"$(< .env)\"");
+        assert_eq!(
+            summary(&substitution),
+            [(".env", FileAccessKind::Read, FileTargetScope::Exact)]
+        );
+    }
+
+    #[test]
+    fn zsh_clobber_redirections_are_dialect_gaps() {
+        let report = infer("echo PWNED >! .env");
+        assert!(has_gap(&report, |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::UnsupportedRedirection
+        )));
+        assert!(report.candidates.iter().any(|candidate| {
+            path(candidate).0.raw == ".env"
+                && candidate.access == FileAccessKind::Modify
+                && candidate.certainty == FileAccessCertainty::Heuristic
+        }));
+
+        let attached = infer("echo PWNED >!.env");
+        assert!(
+            attached
+                .candidates
+                .iter()
+                .any(|candidate| path(candidate).0.raw == ".env")
+        );
+
+        let bash = infer_with(
+            "echo PWNED >! .env",
+            FileInferenceContext::new(Some(Utf8Path::new("/repo")))
+                .with_dialect(ShellDialect::Bash),
+        );
+        assert!(bash.is_fully_resolved());
+        assert_eq!(
+            summary(&bash),
+            [("!", FileAccessKind::Modify, FileTargetScope::Exact)]
+        );
+
+        let powershell = infer_with(
+            "Get-Content .env",
+            FileInferenceContext::new(Some(Utf8Path::new("/repo")))
+                .with_dialect(ShellDialect::PowerShell),
+        );
+        assert!(has_gap(&powershell, |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::UnsupportedShellDialect {
+                dialect: ShellDialect::PowerShell
+            }
+        )));
+    }
+
+    #[test]
+    fn relative_cwd_is_never_used_as_a_resolution_base() {
+        let report = infer_with(
+            "cat .env",
+            FileInferenceContext::new(Some(Utf8Path::new("."))),
+        );
+        assert_eq!(path(&report.candidates[0]).0.resolved, None);
+        assert!(has_gap(&report, |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::MissingWorkingDirectory
         )));
     }
 
@@ -1894,6 +3871,46 @@ mod tests {
             unresolved.reason,
             UnresolvedFileAccessReason::UnknownCommandSemantics { .. }
         )));
+    }
+
+    #[test]
+    fn literal_operand_fallback_covers_home_and_dynamic_neighbors() {
+        let analyzer = FileAccessAnalyzer::default()
+            .with_unknown_command_fallback(UnknownCommandFallback::LiteralPathOperands);
+        let context = FileInferenceContext::new(Some(Utf8Path::new("/repo")))
+            .with_home(Some(Utf8Path::new("/Users/me")));
+
+        let dd = analyzer.infer(
+            &BashAnalyzer::default().analyze("dd if=~/.ssh/id_rsa of=/tmp/k"),
+            context,
+        );
+        assert!(dd.candidates.iter().any(|candidate| {
+            path(candidate).0.base == PathBase::Home
+                && path(candidate).0.resolved.as_deref()
+                    == Some(Utf8Path::new("/Users/me/.ssh/id_rsa"))
+        }));
+
+        let mixed = analyzer.infer(
+            &BashAnalyzer::default().analyze("mystery $OPT secrets/key"),
+            context,
+        );
+        assert!(
+            mixed
+                .candidates
+                .iter()
+                .any(|candidate| path(candidate).0.raw == "secrets/key")
+        );
+
+        let interpreter = analyzer.infer(
+            &BashAnalyzer::default().analyze("python3 tool.py .env"),
+            context,
+        );
+        assert!(
+            interpreter
+                .candidates
+                .iter()
+                .any(|candidate| path(candidate).0.raw == ".env")
+        );
     }
 
     #[test]
@@ -1976,6 +3993,18 @@ mod tests {
             report.candidates[0].certainty,
             FileAccessCertainty::Heuristic
         );
+
+        // Custom semantics see the command behind a wrapper.
+        let wrapped = analyzer.infer(
+            &BashAnalyzer::default().analyze("nice project-lint src"),
+            FileInferenceContext::new(Some(Utf8Path::new("/repo"))),
+        );
+        assert_eq!(wrapped.candidates[0].inferred_by, "test-linter");
+        assert!(matches!(
+            wrapped.candidates[0].origin,
+            FileAccessOrigin::Argument { argv_index: 2, .. }
+        ));
+        assert!(format!("{analyzer:?}").contains("test-linter"));
     }
 
     #[cfg(feature = "serde")]
@@ -2006,5 +4035,259 @@ mod tests {
             });
             prop_assert!(has_direct_write);
         }
+
+        /// Property: a word written after a redirection target is still an
+        /// operand of the command, whatever redirection precedes it.
+        #[test]
+        fn words_after_redirections_remain_operands(
+            redirect in prop::sample::select(vec!["2>/dev/null", "2>&1", "</dev/null", ">out", "<<<x"]),
+            name in "[a-z]{1,8}\\.env",
+        ) {
+            let source = format!("rm {redirect} {name}");
+            let report = FileAccessAnalyzer::default().infer(
+                &BashAnalyzer::default().analyze(&source),
+                FileInferenceContext::new(Some(Utf8Path::new("/workspace"))),
+            );
+            let deleted = report.candidates.iter().any(|candidate| {
+                candidate.access == FileAccessKind::Delete
+                    && matches!(&candidate.target, FileTarget::Path { expression, .. } if expression.raw == name)
+            });
+            prop_assert!(deleted);
+        }
+    }
+
+    #[test]
+    fn search_pattern_options_make_every_positional_a_path() {
+        use FileAccessKind::Read;
+        use FileTargetScope::{Exact, ExactOrDescendants};
+        for source in [
+            "grep .env -e ''",
+            "grep -n .env -e ''",
+            "grep .env --regexp=",
+            "egrep .env -e x",
+            "true | rg .env -e ''",
+            "rg .env -e '' < /dev/null",
+        ] {
+            let report = infer(source);
+            assert!(
+                summary(&report).contains(&(".env", Read, ExactOrDescendants)),
+                "{source}: {report:#?}"
+            );
+            assert!(report.is_fully_resolved(), "{source}: {report:#?}");
+        }
+        assert_eq!(
+            summary(&infer("grep .env -f pats")),
+            [("pats", Read, Exact), (".env", Read, ExactOrDescendants)]
+        );
+        // After `--`, `-e` is a path and the first positional the query.
+        assert_eq!(
+            summary(&infer("grep foo -- -e .env")),
+            [
+                ("-e", Read, ExactOrDescendants),
+                (".env", Read, ExactOrDescendants)
+            ]
+        );
+        assert_eq!(
+            summary(&infer("grep -e foo -- .env")),
+            [(".env", Read, ExactOrDescendants)]
+        );
+    }
+
+    #[test]
+    fn zsh_clobber_targets_of_statements_and_bare_redirections_are_candidates() {
+        for source in [
+            "{ echo x; } >! .env",
+            "(echo x) >! .env",
+            "if true; then echo x; fi >! .env",
+            "{ echo x; } >>! .env",
+            ">! .env",
+        ] {
+            let report = infer(source);
+            assert!(
+                report.candidates.iter().any(|candidate| {
+                    path(candidate).0.raw == ".env"
+                        && candidate.access == FileAccessKind::Modify
+                        && candidate.certainty == FileAccessCertainty::Heuristic
+                }),
+                "{source}: {report:#?}"
+            );
+            assert!(has_gap(&report, |reason| matches!(
+                reason,
+                UnresolvedFileAccessReason::UnsupportedRedirection
+            )));
+        }
+    }
+
+    #[test]
+    fn read_write_redirections_read_and_modify() {
+        for source in [
+            "cat <>.env",
+            "cat <> .env",
+            "cat 0<>.env",
+            "{ cat; } <>.env",
+        ] {
+            let report = infer(source);
+            assert!(
+                summary(&report).contains(&(
+                    ".env",
+                    FileAccessKind::ReadModify,
+                    FileTargetScope::Exact
+                )),
+                "{source}: {report:#?}"
+            );
+        }
+        // Standard input opened read-write is not the working tree.
+        let report = infer("rg foo <>input.txt");
+        assert!(
+            !report
+                .candidates
+                .iter()
+                .any(|candidate| path(candidate).0.raw == "."),
+            "{report:#?}"
+        );
+    }
+
+    #[test]
+    fn working_directory_tilde_operands_resolve_against_the_cwd() {
+        let report = infer("cat ~+/.env");
+        let (expression, scope) = path(&report.candidates[0]);
+        assert_eq!(expression.raw, "~+/.env");
+        assert_eq!(expression.base, PathBase::InvocationCwd);
+        assert_eq!(
+            expression.resolved.as_deref(),
+            Some(Utf8Path::new("/repo/work/.env"))
+        );
+        assert_eq!(scope, FileTargetScope::Exact);
+        assert!(has_gap(&report, |reason| matches!(
+            reason,
+            UnresolvedFileAccessReason::DynamicPath { reasons, .. }
+                if reasons.contains(&DynamicReason::TildeExpansion)
+        )));
+
+        for (source, resolved) in [
+            ("ls ~+", "/repo/work"),
+            ("cat ~+//etc/x", "/repo/work/etc/x"),
+            ("rm ~+/../.env", "/repo/.env"),
+        ] {
+            let report = infer(source);
+            assert_eq!(
+                path(&report.candidates[0]).0.resolved.as_deref(),
+                Some(Utf8Path::new(resolved)),
+                "{source}"
+            );
+        }
+
+        let changed = infer("cd sub && cat ~+/.env");
+        assert_eq!(
+            path(&changed.candidates[0]).0.base,
+            PathBase::UnknownAfterDirectoryChange
+        );
+        // `~-` is `$OLDPWD`, which is unknown.
+        let previous = infer("cat ~-/.env");
+        assert!(previous.candidates.is_empty());
+        assert!(!previous.is_fully_resolved());
+    }
+
+    #[test]
+    fn simple_file_commands_parse_their_options() {
+        use FileAccessKind::{Enumerate, Modify, Read};
+        use FileTargetScope::{Exact, ExactOrDescendants};
+        for (source, expected) in [
+            ("cat -n credentials", &[("credentials", Read, Exact)][..]),
+            ("cat -vET -- -n", &[("-n", Read, Exact)][..]),
+            ("nl -ba -nrz -w3 file", &[("file", Read, Exact)][..]),
+            (
+                "bat -p --style=plain -l rs file",
+                &[("file", Read, Exact)][..],
+            ),
+            ("head -n5 file", &[("file", Read, Exact)][..]),
+            ("head --lines=5 file", &[("file", Read, Exact)][..]),
+            (
+                "touch -r ref f",
+                &[("f", Modify, Exact), ("ref", Read, Exact)][..],
+            ),
+            (
+                "touch -c --reference=ref f",
+                &[("f", Modify, Exact), ("ref", Read, Exact)][..],
+            ),
+            (
+                "truncate -rref f",
+                &[("f", Modify, Exact), ("ref", Read, Exact)][..],
+            ),
+            ("truncate -s 0 key", &[("key", Modify, Exact)][..]),
+            ("mkdir -p -m 755 a/b", &[("a/b", Modify, Exact)][..]),
+            ("mkdir -m755 -pv a", &[("a", Modify, Exact)][..]),
+            (
+                "tree -L 2 -a src",
+                &[("src", Enumerate, ExactOrDescendants)][..],
+            ),
+            (
+                "du -sh -X pats dir",
+                &[
+                    ("dir", Enumerate, ExactOrDescendants),
+                    ("pats", Read, Exact),
+                ][..],
+            ),
+        ] {
+            let report = infer(source);
+            assert!(report.is_fully_resolved(), "{source}: {report:#?}");
+            assert_eq!(summary(&report), expected, "{source}");
+        }
+
+        // Unknown options, options that write or read other files, and
+        // abbreviated long options stay unresolved.
+        for source in [
+            "cat -z file",
+            "tree -o out src",
+            "tree --fromfile list",
+            "touch --ref=ref f",
+            "mkdir -m",
+            "du --exclude-from",
+        ] {
+            let report = infer(source);
+            assert!(
+                has_gap(&report, |reason| matches!(
+                    reason,
+                    UnresolvedFileAccessReason::AmbiguousArguments { .. }
+                )),
+                "{source}: {report:#?}"
+            );
+            assert!(report.candidates.is_empty(), "{source}: {report:#?}");
+        }
+    }
+
+    #[test]
+    fn options_after_an_operand_are_also_read_as_bsd_operands() {
+        use FileAccessKind::{Delete, Modify, Read};
+        use FileTargetScope::{Exact, ExactOrDescendants};
+        // macOS touch stops reading options at `x`: it touches `-r` and
+        // `.env`, while GNU touch copies the times of `.env` onto `x`.
+        assert_eq!(
+            summary(&infer("touch x -r .env")),
+            [
+                ("x", Modify, Exact),
+                ("-r", Modify, Exact),
+                (".env", Modify, Exact),
+                (".env", Read, Exact),
+            ]
+        );
+        assert_eq!(
+            summary(&infer("touch x -d .env")),
+            [
+                ("x", Modify, Exact),
+                ("-d", Modify, Exact),
+                (".env", Modify, Exact),
+            ]
+        );
+        assert_eq!(
+            summary(&infer("rm x -rf .env")),
+            [
+                ("x", Delete, ExactOrDescendants),
+                (".env", Delete, ExactOrDescendants),
+                ("-rf", Delete, ExactOrDescendants),
+            ]
+        );
+        // Options before the operands read the same on both.
+        assert_eq!(summary(&infer("cat -n x")), [("x", Read, Exact)]);
     }
 }

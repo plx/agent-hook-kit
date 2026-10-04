@@ -80,13 +80,15 @@ pub fn resolve_utf8_path(
 ///
 /// Only `~` and `~/...` are expanded. Forms such as `~other-user`, non-leading
 /// `~` components, and paths that do not begin with `~` are returned unchanged.
-/// No normalization or filesystem access is performed.
+/// A bare `~` becomes `home` exactly, without a trailing separator. No
+/// normalization or filesystem access is performed.
 pub fn expand_home(path: impl AsRef<Path>, home: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();
-    path.strip_prefix(Path::new("~")).map_or_else(
-        |_| path.to_path_buf(),
-        |relative| home.as_ref().join(relative),
-    )
+    match path.strip_prefix(Path::new("~")) {
+        Ok(relative) if relative.as_os_str().is_empty() => home.as_ref().to_path_buf(),
+        Ok(relative) => home.as_ref().join(relative),
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 /// Losslessly expand a leading current-user `~` component in a UTF-8 path.
@@ -95,10 +97,11 @@ pub fn expand_home(path: impl AsRef<Path>, home: impl AsRef<Path>) -> PathBuf {
 /// the process environment or filesystem.
 pub fn expand_utf8_home(path: impl AsRef<Utf8Path>, home: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref();
-    path.strip_prefix(Utf8Path::new("~")).map_or_else(
-        |_| path.to_path_buf(),
-        |relative| home.as_ref().join(relative),
-    )
+    match path.strip_prefix(Utf8Path::new("~")) {
+        Ok(relative) if relative.as_str().is_empty() => home.as_ref().to_path_buf(),
+        Ok(relative) => home.as_ref().join(relative),
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 /// Render a UTF-8 path with `/` separators for portable glob matching.
@@ -176,7 +179,10 @@ mod tests {
     #[test]
     fn home_expansion_is_explicit_and_current_user_only() {
         let home = Path::new("/home/example");
-        assert_eq!(expand_home("~", home), home);
+        // Compare the rendered text: `PathBuf` equality ignores a trailing
+        // separator, which string-based glob matching does not.
+        assert_eq!(expand_home("~", home).as_os_str(), home.as_os_str());
+        assert_eq!(expand_home("~/", home).as_os_str(), home.as_os_str());
         assert_eq!(expand_home("~/child", home), home.join("child"));
         assert_eq!(expand_home("child/~", home), PathBuf::from("child/~"));
         assert_eq!(
@@ -185,7 +191,12 @@ mod tests {
         );
 
         let utf8_home = Utf8Path::new("/home/example");
-        assert_eq!(expand_utf8_home("~", utf8_home), utf8_home);
+        assert_eq!(expand_utf8_home("~", utf8_home).as_str(), "/home/example");
+        assert_eq!(expand_utf8_home("~/", utf8_home).as_str(), "/home/example");
+        assert_eq!(
+            expand_utf8_home("~/child", utf8_home).as_str(),
+            "/home/example/child"
+        );
         assert_eq!(
             expand_utf8_home("~/child", utf8_home),
             Utf8PathBuf::from("/home/example/child")

@@ -3,7 +3,55 @@
 //! The sealed marker types select only library-defined alignments. Each path
 //! parses, validates, and emits the exact native contract for the explicitly
 //! selected harness, and rejects a handler output arm for another harness.
+//! See [`hookkit_common::aligned`] for what each family's portable helpers
+//! mean on each harness.
+//!
+//! # Failure policy
+//!
+//! [`run_aligned_event`] reports every failure (unreadable stdin, an invalid
+//! environment or payload, a handler error or panic, or an output that cannot
+//! be emitted) as one stderr line and exits 1. Claude Code and Codex treat
+//! exit 1 as a non-blocking hook error, so the pending action proceeds: a
+//! policy hook built on a gating family (`PreToolUse`, `PermissionRequest`,
+//! `UserPromptSubmit`) *fails open* by default.
+//!
+//! A guard that must deny when it cannot decide should run through
+//! [`run_aligned_event_with_options`] with
+//! [`RunOptions::fail_closed`](crate::failure::RunOptions::fail_closed). Every
+//! failure is then lowered to the harness's native blocking response for the
+//! family's native event (or the event the payload names; see below), as
+//! [`crate::failure::failure_response`] describes:
+//!
+//! | Family | Claude Code | Codex | Antigravity |
+//! | :- | :- | :- | :- |
+//! | [`PreToolUse`] | exit 2, reason on stderr | exit 2, reason on stderr | `{"decision":"deny"}` at exit 0 |
+//! | [`PermissionRequest`] | JSON `behavior: "deny"` at exit 0 | exit 2 | not aligned |
+//! | [`UserPromptSubmit`] | exit 2 | exit 2 | not aligned |
+//! | [`PreCompact`] | exit 2: blocks the compaction (see below) | exit 1 (Codex's stop is broader than a compaction block) | not aligned |
+//! | every other family | exit 1 | exit 1 | exit 1 |
+//!
+//! The aligned [`PreCompact`] helpers are observer-only, but fail-closed
+//! lowering follows the native event, which Claude Code lets a hook block. A
+//! blocked automatic compaction that Claude Code started to recover from a
+//! context-limit error makes that error surface and fails the user's current
+//! request, while the same failure on Codex lets compaction proceed. Run a
+//! `PreCompact` observer with the default non-blocking policy, and fail
+//! closed only for a Claude Code guard that means to refuse compaction.
+//!
+//! Observer and turn-completion families keep the non-blocking response under
+//! either policy, because blocking them would keep the agent working rather
+//! than stop an action. A [`crate::failure::RunOptions`] diagnostics sink also
+//! reaches the handler through [`RuntimeContext::diagnostics`] and records
+//! every runner failure.
+//!
+//! A failure is lowered for the event the payload's discriminator names when
+//! it names one (Claude Code and Codex always send `hook_event_name`), and
+//! for the family's native event otherwise, so a runner registered under the
+//! wrong event gets the semantics of the event the harness sent. The `claude`
+//! alias lowers like `claude-code`, even though execution rejects it with
+//! [`HookkitError::UnsupportedHarness`].
 
+use crate::failure::{RunOptions, catch_panic, read_stdin, report_run_failure};
 use hookkit_common::{
     PermissionRequestCommandEnvironment, PermissionRequestInput, PermissionRequestOutput,
     PostCompactCommandEnvironment, PostCompactInput, PostCompactOutput,
@@ -17,60 +65,17 @@ use hookkit_common::{
     UserPromptSubmitCommandEnvironment, UserPromptSubmitInput, UserPromptSubmitOutput,
 };
 use hookkit_core::{
-    CommandEnvironmentSpec, ContractId, DISABLED_DIAGNOSTICS, EnvironmentVariables, EventId,
-    EventSpec, HarnessId, HookkitError, NativeContext, ProcessEmission, RawInvocation,
-    ResolutionProvenance, RuntimeContext, SnapshotId,
+    BuiltinHarness, CommandEnvironmentSpec, ContractId, DISABLED_DIAGNOSTICS, DiagnosticsSink,
+    EnvironmentVariables, EventId, EventSpec, HarnessId, HookkitError, NativeContext,
+    ProcessEmission, RawInvocation, ResolutionProvenance, RuntimeContext, SnapshotId,
 };
-use std::io::Read;
-
-/// Marker for the aligned pre-tool event family.
-pub enum PreToolUse {}
-
-/// Marker for the aligned post-tool event family.
-pub enum PostToolUse {}
-
-/// Marker for the aligned turn-completion event family.
-pub enum TurnCompletion {}
-
-/// Marker for the Claude/Codex aligned permission-request event family.
-pub enum PermissionRequest {}
-
-/// Marker for the Claude/Codex aligned pre-compaction event family.
-pub enum PreCompact {}
-
-/// Marker for the Claude/Codex aligned post-compaction event family.
-pub enum PostCompact {}
-
-/// Marker for the Claude/Codex aligned session-start event family.
-pub enum SessionStart {}
-
-/// Marker for the Claude/Codex aligned session-end event family.
-pub enum SessionEnd {}
-
-/// Marker for the Claude/Codex aligned subagent-start event family.
-pub enum SubagentStart {}
-
-/// Marker for the Claude/Codex aligned subagent-stop event family.
-pub enum SubagentStop {}
-
-/// Marker for the Claude/Codex aligned user-prompt-submit event family.
-pub enum UserPromptSubmit {}
 
 mod sealed {
-    pub trait Sealed {}
+    pub trait Sealed {
+        /// Native event name every harness in the family uses.
+        const NATIVE_EVENT: &'static str;
+    }
 }
-
-impl sealed::Sealed for PreToolUse {}
-impl sealed::Sealed for PostToolUse {}
-impl sealed::Sealed for TurnCompletion {}
-impl sealed::Sealed for PermissionRequest {}
-impl sealed::Sealed for PreCompact {}
-impl sealed::Sealed for PostCompact {}
-impl sealed::Sealed for SessionStart {}
-impl sealed::Sealed for SessionEnd {}
-impl sealed::Sealed for SubagentStart {}
-impl sealed::Sealed for SubagentStop {}
-impl sealed::Sealed for UserPromptSubmit {}
 
 /// Event-specific aligned execution contract.
 pub trait AlignedEventSpec: sealed::Sealed {
@@ -86,15 +91,59 @@ pub trait AlignedEventSpec: sealed::Sealed {
     /// been parsed enough to know its exact native event).
     const FAMILY: &'static str;
 
-    /// Parses, validates, handles, and emits one aligned event for `harness`.
+    /// Parses, validates, handles, and emits one aligned event for `harness`
+    /// with diagnostics disabled.
     ///
-    /// The implementation selects an exact native contract from the explicit
-    /// harness identity. The handler must return the output arm for the same
-    /// harness or execution fails before emission.
+    /// Equivalent to [`Self::execute_with_diagnostics`] with
+    /// [`DISABLED_DIAGNOSTICS`].
     fn execute<F>(
         harness: HarnessId,
         bytes: Vec<u8>,
         variables: &EnvironmentVariables,
+        handler: F,
+    ) -> hookkit_core::Result<ProcessEmission>
+    where
+        F: FnOnce(
+            Self::Input,
+            &Self::CommandEnvironment,
+            &RuntimeContext<'_>,
+        ) -> hookkit_core::Result<Self::Output>,
+    {
+        Self::execute_with_diagnostics(harness, bytes, variables, &DISABLED_DIAGNOSTICS, handler)
+    }
+
+    /// Parses, validates, handles, and emits one aligned event for `harness`.
+    ///
+    /// The implementation selects an exact native contract from the explicit
+    /// harness identity. The handler must return the output arm for the same
+    /// harness or execution fails before emission. `diagnostics` is the sink
+    /// the handler reaches through [`RuntimeContext::diagnostics`]. A harness
+    /// with no adapter for the family fails with
+    /// [`HookkitError::UnsupportedHarness`] before the payload is parsed.
+    fn execute_with_diagnostics<F>(
+        harness: HarnessId,
+        bytes: Vec<u8>,
+        variables: &EnvironmentVariables,
+        diagnostics: &dyn DiagnosticsSink,
+        handler: F,
+    ) -> hookkit_core::Result<ProcessEmission>
+    where
+        F: FnOnce(
+            Self::Input,
+            &Self::CommandEnvironment,
+            &RuntimeContext<'_>,
+        ) -> hookkit_core::Result<Self::Output>;
+
+    /// [`Self::execute_with_diagnostics`] for a payload that is already
+    /// parsed.
+    ///
+    /// A harness with no adapter for the family fails with
+    /// [`HookkitError::UnsupportedHarness`] before the invocation is read.
+    fn execute_invocation_with_diagnostics<F>(
+        harness: HarnessId,
+        invocation: &RawInvocation,
+        variables: &EnvironmentVariables,
+        diagnostics: &dyn DiagnosticsSink,
         handler: F,
     ) -> hookkit_core::Result<ProcessEmission>
     where
@@ -105,100 +154,122 @@ pub trait AlignedEventSpec: sealed::Sealed {
         ) -> hookkit_core::Result<Self::Output>;
 }
 
-impl AlignedEventSpec for PreToolUse {
-    type Input = PreToolUseInput;
-    type CommandEnvironment = PreToolUseCommandEnvironment;
-    type Output = PreToolUseOutput;
-    const FAMILY: &'static str = "PreToolUse";
+/// Harness and event identity shared by every aligned input and output arm.
+trait ArmIdentity {
+    fn arm_harness(&self) -> HarnessId;
+    fn arm_event(&self) -> EventId;
+}
 
-    fn execute<F>(
-        harness: HarnessId,
-        bytes: Vec<u8>,
-        variables: &EnvironmentVariables,
-        handler: F,
-    ) -> hookkit_core::Result<ProcessEmission>
-    where
-        F: FnOnce(
-            Self::Input,
-            &Self::CommandEnvironment,
-            &RuntimeContext<'_>,
-        ) -> hookkit_core::Result<Self::Output>,
-    {
-        execute_pre_tool_use_inner(harness, bytes, variables, handler)
+/// One native invocation parsed and cross-checked against its environment.
+struct Parsed<I, E> {
+    input: I,
+    event: EventId,
+    snapshot: SnapshotId,
+    contract: ContractId,
+    native_context: NativeContext,
+    command_environment: E,
+}
+
+/// Parses `invocation` as native event `N`, captures and cross-checks its
+/// command environment, and wraps both in the family's aligned arms.
+fn parse_arm<N, I, E>(
+    invocation: &RawInvocation,
+    variables: &EnvironmentVariables,
+    wrap_input: fn(N::Input) -> I,
+    wrap_environment: fn(N::CommandEnvironment) -> E,
+) -> hookkit_core::Result<Parsed<I, E>>
+where
+    N: EventSpec,
+{
+    let input = N::parse(invocation)?;
+    let environment =
+        <N::CommandEnvironment as CommandEnvironmentSpec>::from_variables(&N::EVENT, variables)?;
+    N::validate_command_environment(&input, &environment)?;
+    let native_context = N::context(&input);
+    Ok(Parsed {
+        input: wrap_input(input),
+        event: N::EVENT,
+        snapshot: N::SNAPSHOT,
+        contract: N::CONTRACT,
+        native_context,
+        command_environment: wrap_environment(environment),
+    })
+}
+
+/// Runs the handler on a parsed invocation and emits its output, rejecting an
+/// output arm for another harness before emission.
+fn execute_parsed<I, E, O, F>(
+    harness: HarnessId,
+    invocation: &RawInvocation,
+    parsed: Parsed<I, E>,
+    diagnostics: &dyn DiagnosticsSink,
+    handler: F,
+    emit: impl FnOnce(O) -> hookkit_core::Result<ProcessEmission>,
+) -> hookkit_core::Result<ProcessEmission>
+where
+    I: ArmIdentity,
+    O: ArmIdentity,
+    F: FnOnce(I, &E, &RuntimeContext<'_>) -> hookkit_core::Result<O>,
+{
+    let expected_harness = parsed.input.arm_harness();
+    let context = RuntimeContext::new(
+        harness,
+        parsed.snapshot,
+        parsed.event,
+        parsed.contract,
+        ResolutionProvenance::TypedStatic,
+        invocation,
+        parsed.native_context,
+        diagnostics,
+    )?;
+    let output = handler(parsed.input, &parsed.command_environment, &context)?;
+    if output.arm_harness() != expected_harness {
+        return Err(HookkitError::EventHarnessMismatch {
+            harness: expected_harness,
+            event: output.arm_event(),
+        });
+    }
+    crate::typed::validate_command_emission(emit(output)?, context.contract())
+}
+
+fn unsupported_harness(harness: &HarnessId, family: &'static str) -> HookkitError {
+    HookkitError::UnsupportedHarness {
+        harness: harness.clone(),
+        message: format!("no aligned {family} adapter is registered for this harness"),
     }
 }
 
-impl AlignedEventSpec for PostToolUse {
-    type Input = PostToolUseInput;
-    type CommandEnvironment = PostToolUseCommandEnvironment;
-    type Output = PostToolUseOutput;
-    const FAMILY: &'static str = "PostToolUse";
-
-    fn execute<F>(
-        harness: HarnessId,
-        bytes: Vec<u8>,
-        variables: &EnvironmentVariables,
-        handler: F,
-    ) -> hookkit_core::Result<ProcessEmission>
-    where
-        F: FnOnce(
-            Self::Input,
-            &Self::CommandEnvironment,
-            &RuntimeContext<'_>,
-        ) -> hookkit_core::Result<Self::Output>,
-    {
-        execute_post_tool_use_inner(harness, bytes, variables, handler)
-    }
-}
-
-impl AlignedEventSpec for TurnCompletion {
-    type Input = TurnCompletionInput;
-    type CommandEnvironment = TurnCompletionCommandEnvironment;
-    type Output = TurnCompletionOutput;
-    const FAMILY: &'static str = "TurnCompletion";
-
-    fn execute<F>(
-        harness: HarnessId,
-        bytes: Vec<u8>,
-        variables: &EnvironmentVariables,
-        handler: F,
-    ) -> hookkit_core::Result<ProcessEmission>
-    where
-        F: FnOnce(
-            Self::Input,
-            &Self::CommandEnvironment,
-            &RuntimeContext<'_>,
-        ) -> hookkit_core::Result<Self::Output>,
-    {
-        execute_turn_completion_inner(harness, bytes, variables, handler)
-    }
-}
-
-macro_rules! claude_codex_runtime_alignment {
+macro_rules! aligned_family {
     (
+        $(#[$marker_meta:meta])*
         marker: $marker:ident,
         input: $input:ident,
         environment: $environment:ident,
         output: $output:ident,
         execute: $execute:ident,
-        inner: $inner:ident,
-        parsed: $parsed:ident,
-        parse: $parse:ident,
-        emit: $emit:ident,
         family: $family:literal,
-        claude: $claude_event:ty,
-        codex: $codex_event:ty
+        native_event: $native_event:literal,
+        arms: [$($arm:ident($builtin:path, $native:ty)),+ $(,)?]
     ) => {
+        $(#[$marker_meta])*
+        #[derive(Debug)]
+        pub enum $marker {}
+
+        impl sealed::Sealed for $marker {
+            const NATIVE_EVENT: &'static str = $native_event;
+        }
+
         impl AlignedEventSpec for $marker {
             type Input = $input;
             type CommandEnvironment = $environment;
             type Output = $output;
             const FAMILY: &'static str = $family;
 
-            fn execute<F>(
+            fn execute_with_diagnostics<F>(
                 harness: HarnessId,
                 bytes: Vec<u8>,
                 variables: &EnvironmentVariables,
+                diagnostics: &dyn DiagnosticsSink,
                 handler: F,
             ) -> hookkit_core::Result<ProcessEmission>
             where
@@ -208,7 +279,72 @@ macro_rules! claude_codex_runtime_alignment {
                     &RuntimeContext<'_>,
                 ) -> hookkit_core::Result<Self::Output>,
             {
-                $inner(harness, bytes, variables, handler)
+                if !matches!(BuiltinHarness::from_id(&harness), $(Some($builtin))|+) {
+                    return Err(unsupported_harness(&harness, $family));
+                }
+                let invocation = RawInvocation::parse(bytes)?;
+                Self::execute_invocation_with_diagnostics(
+                    harness,
+                    &invocation,
+                    variables,
+                    diagnostics,
+                    handler,
+                )
+            }
+
+            fn execute_invocation_with_diagnostics<F>(
+                harness: HarnessId,
+                invocation: &RawInvocation,
+                variables: &EnvironmentVariables,
+                diagnostics: &dyn DiagnosticsSink,
+                handler: F,
+            ) -> hookkit_core::Result<ProcessEmission>
+            where
+                F: FnOnce(
+                    Self::Input,
+                    &Self::CommandEnvironment,
+                    &RuntimeContext<'_>,
+                ) -> hookkit_core::Result<Self::Output>,
+            {
+                let parsed = match BuiltinHarness::from_id(&harness) {
+                    $(
+                        Some($builtin) => parse_arm::<$native, _, _>(
+                            invocation,
+                            variables,
+                            $input::$arm,
+                            $environment::$arm,
+                        )?,
+                    )+
+                    _ => return Err(unsupported_harness(&harness, $family)),
+                };
+                execute_parsed(harness, invocation, parsed, diagnostics, handler, |output: $output| {
+                    match output {
+                        $($output::$arm(output) => <$native as EventSpec>::emit(output),)+
+                        _ => Err(HookkitError::InvalidProcessEmission(
+                            "unknown aligned output arm cannot be emitted",
+                        )),
+                    }
+                })
+            }
+        }
+
+        impl ArmIdentity for $input {
+            fn arm_harness(&self) -> HarnessId {
+                self.harness()
+            }
+
+            fn arm_event(&self) -> EventId {
+                self.event_id()
+            }
+        }
+
+        impl ArmIdentity for $output {
+            fn arm_harness(&self) -> HarnessId {
+                self.harness()
+            }
+
+            fn arm_event(&self) -> EventId {
+                self.event_id()
             }
         }
 
@@ -224,236 +360,182 @@ macro_rules! claude_codex_runtime_alignment {
         {
             execute_aligned_event::<$marker, _>(harness, bytes, variables, handler)
         }
-
-        fn $inner<F>(
-            harness: HarnessId,
-            bytes: Vec<u8>,
-            variables: &EnvironmentVariables,
-            handler: F,
-        ) -> hookkit_core::Result<ProcessEmission>
-        where
-            F: FnOnce($input, &$environment, &RuntimeContext<'_>) -> hookkit_core::Result<$output>,
-        {
-            let invocation = RawInvocation::parse(bytes)?;
-            let parsed = $parse(&harness, &invocation, variables)?;
-            let expected_harness = parsed.input.harness();
-            let context = RuntimeContext::new(
-                harness,
-                parsed.snapshot,
-                parsed.event.clone(),
-                parsed.contract,
-                ResolutionProvenance::TypedStatic,
-                &invocation,
-                parsed.native_context,
-                &DISABLED_DIAGNOSTICS,
-            )?;
-            let output = handler(parsed.input, &parsed.command_environment, &context)?;
-            if output.harness() != expected_harness {
-                return Err(HookkitError::EventHarnessMismatch {
-                    harness: expected_harness,
-                    event: output.event_id(),
-                });
-            }
-            crate::typed::validate_command_emission($emit(output)?, context.contract())
-        }
-
-        struct $parsed {
-            input: $input,
-            event: EventId,
-            snapshot: SnapshotId,
-            contract: ContractId,
-            native_context: NativeContext,
-            command_environment: $environment,
-        }
-
-        fn $parse(
-            harness: &HarnessId,
-            invocation: &RawInvocation,
-            variables: &EnvironmentVariables,
-        ) -> hookkit_core::Result<$parsed> {
-            match harness.as_str() {
-                "claude-code" => {
-                    let input = <$claude_event as EventSpec>::parse(invocation)?;
-                    let command_environment =
-                        hookkit_claude::ClaudeCommandEnvironment::from_variables(
-                            &<$claude_event as EventSpec>::EVENT,
-                            variables,
-                        )?;
-                    <$claude_event as EventSpec>::validate_command_environment(
-                        &input,
-                        &command_environment,
-                    )?;
-                    let native_context = <$claude_event as EventSpec>::context(&input);
-                    Ok($parsed {
-                        input: $input::Claude(input),
-                        event: <$claude_event as EventSpec>::EVENT,
-                        snapshot: <$claude_event as EventSpec>::SNAPSHOT,
-                        contract: <$claude_event as EventSpec>::CONTRACT,
-                        native_context,
-                        command_environment: $environment::Claude(command_environment),
-                    })
-                }
-                "codex" => {
-                    let input = <$codex_event as EventSpec>::parse(invocation)?;
-                    let command_environment =
-                        hookkit_codex::CodexCommandEnvironment::from_variables(
-                            &<$codex_event as EventSpec>::EVENT,
-                            variables,
-                        )?;
-                    <$codex_event as EventSpec>::validate_command_environment(
-                        &input,
-                        &command_environment,
-                    )?;
-                    let native_context = <$codex_event as EventSpec>::context(&input);
-                    Ok($parsed {
-                        input: $input::Codex(input),
-                        event: <$codex_event as EventSpec>::EVENT,
-                        snapshot: <$codex_event as EventSpec>::SNAPSHOT,
-                        contract: <$codex_event as EventSpec>::CONTRACT,
-                        native_context,
-                        command_environment: $environment::Codex(command_environment),
-                    })
-                }
-                _ => Err(HookkitError::UnrecognizedEvent {
-                    harness: harness.clone(),
-                    message: concat!("no aligned ", $family, " adapter is registered").into(),
-                }),
-            }
-        }
-
-        fn $emit(output: $output) -> hookkit_core::Result<ProcessEmission> {
-            match output {
-                $output::Claude(output) => <$claude_event as EventSpec>::emit(output),
-                $output::Codex(output) => <$codex_event as EventSpec>::emit(output),
-                _ => Err(HookkitError::InvalidProcessEmission(
-                    "unknown aligned output arm cannot be emitted",
-                )),
-            }
-        }
     };
 }
 
-claude_codex_runtime_alignment!(
+aligned_family!(
+    /// Marker for the aligned pre-tool event family (`PreToolUse` on every
+    /// harness).
+    marker: PreToolUse,
+    input: PreToolUseInput,
+    environment: PreToolUseCommandEnvironment,
+    output: PreToolUseOutput,
+    execute: execute_pre_tool_use,
+    family: "PreToolUse",
+    native_event: "PreToolUse",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::PreToolUse),
+        Codex(BuiltinHarness::Codex, hookkit_codex::protocol::PreToolUse),
+        Antigravity(BuiltinHarness::Antigravity, hookkit_antigravity::PreToolUse),
+    ]
+);
+
+aligned_family!(
+    /// Marker for the aligned post-tool event family (`PostToolUse` on every
+    /// harness).
+    marker: PostToolUse,
+    input: PostToolUseInput,
+    environment: PostToolUseCommandEnvironment,
+    output: PostToolUseOutput,
+    execute: execute_post_tool_use,
+    family: "PostToolUse",
+    native_event: "PostToolUse",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::protocol::PostToolUse),
+        Codex(BuiltinHarness::Codex, hookkit_codex::protocol::PostToolUse),
+        Antigravity(BuiltinHarness::Antigravity, hookkit_antigravity::PostToolUse),
+    ]
+);
+
+aligned_family!(
+    /// Marker for the aligned turn-completion event family (`Stop` on every
+    /// harness).
+    marker: TurnCompletion,
+    input: TurnCompletionInput,
+    environment: TurnCompletionCommandEnvironment,
+    output: TurnCompletionOutput,
+    execute: execute_turn_completion,
+    family: "TurnCompletion",
+    native_event: "Stop",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::Stop),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::Stop),
+        Antigravity(BuiltinHarness::Antigravity, hookkit_antigravity::Stop),
+    ]
+);
+
+aligned_family!(
+    /// Marker for the Claude/Codex aligned permission-request event family.
     marker: PermissionRequest,
     input: PermissionRequestInput,
     environment: PermissionRequestCommandEnvironment,
     output: PermissionRequestOutput,
     execute: execute_permission_request,
-    inner: execute_permission_request_inner,
-    parsed: ParsedPermissionRequest,
-    parse: parse_selected_permission_request,
-    emit: emit_permission_request,
     family: "PermissionRequest",
-    claude: hookkit_claude::catalog::PermissionRequest,
-    codex: hookkit_codex::catalog::PermissionRequest
+    native_event: "PermissionRequest",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::PermissionRequest),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::PermissionRequest),
+    ]
 );
 
-claude_codex_runtime_alignment!(
+aligned_family!(
+    /// Marker for the Claude/Codex aligned pre-compaction event family.
     marker: PreCompact,
     input: PreCompactInput,
     environment: PreCompactCommandEnvironment,
     output: PreCompactOutput,
     execute: execute_pre_compact,
-    inner: execute_pre_compact_inner,
-    parsed: ParsedPreCompact,
-    parse: parse_selected_pre_compact,
-    emit: emit_pre_compact,
     family: "PreCompact",
-    claude: hookkit_claude::catalog::PreCompact,
-    codex: hookkit_codex::catalog::PreCompact
+    native_event: "PreCompact",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::PreCompact),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::PreCompact),
+    ]
 );
 
-claude_codex_runtime_alignment!(
+aligned_family!(
+    /// Marker for the Claude/Codex aligned post-compaction event family.
     marker: PostCompact,
     input: PostCompactInput,
     environment: PostCompactCommandEnvironment,
     output: PostCompactOutput,
     execute: execute_post_compact,
-    inner: execute_post_compact_inner,
-    parsed: ParsedPostCompact,
-    parse: parse_selected_post_compact,
-    emit: emit_post_compact,
     family: "PostCompact",
-    claude: hookkit_claude::catalog::PostCompact,
-    codex: hookkit_codex::catalog::PostCompact
+    native_event: "PostCompact",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::PostCompact),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::PostCompact),
+    ]
 );
 
-claude_codex_runtime_alignment!(
+aligned_family!(
+    /// Marker for the Claude/Codex aligned session-start event family.
     marker: SessionStart,
     input: SessionStartInput,
     environment: SessionStartCommandEnvironment,
     output: SessionStartOutput,
     execute: execute_session_start,
-    inner: execute_session_start_inner,
-    parsed: ParsedSessionStart,
-    parse: parse_selected_session_start,
-    emit: emit_session_start,
     family: "SessionStart",
-    claude: hookkit_claude::protocol::SessionStart,
-    codex: hookkit_codex::catalog::SessionStart
+    native_event: "SessionStart",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::protocol::SessionStart),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::SessionStart),
+    ]
 );
 
-claude_codex_runtime_alignment!(
+aligned_family!(
+    /// Marker for the Claude/Codex aligned session-end event family.
     marker: SessionEnd,
     input: SessionEndInput,
     environment: SessionEndCommandEnvironment,
     output: SessionEndOutput,
     execute: execute_session_end,
-    inner: execute_session_end_inner,
-    parsed: ParsedSessionEnd,
-    parse: parse_selected_session_end,
-    emit: emit_session_end,
     family: "SessionEnd",
-    claude: hookkit_claude::catalog::SessionEnd,
-    codex: hookkit_codex::catalog::SessionEnd
+    native_event: "SessionEnd",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::SessionEnd),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::SessionEnd),
+    ]
 );
 
-claude_codex_runtime_alignment!(
+aligned_family!(
+    /// Marker for the Claude/Codex aligned subagent-start event family.
     marker: SubagentStart,
     input: SubagentStartInput,
     environment: SubagentStartCommandEnvironment,
     output: SubagentStartOutput,
     execute: execute_subagent_start,
-    inner: execute_subagent_start_inner,
-    parsed: ParsedSubagentStart,
-    parse: parse_selected_subagent_start,
-    emit: emit_subagent_start,
     family: "SubagentStart",
-    claude: hookkit_claude::catalog::SubagentStart,
-    codex: hookkit_codex::catalog::SubagentStart
+    native_event: "SubagentStart",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::SubagentStart),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::SubagentStart),
+    ]
 );
 
-claude_codex_runtime_alignment!(
+aligned_family!(
+    /// Marker for the Claude/Codex aligned subagent-stop event family.
     marker: SubagentStop,
     input: SubagentStopInput,
     environment: SubagentStopCommandEnvironment,
     output: SubagentStopOutput,
     execute: execute_subagent_stop,
-    inner: execute_subagent_stop_inner,
-    parsed: ParsedSubagentStop,
-    parse: parse_selected_subagent_stop,
-    emit: emit_subagent_stop,
     family: "SubagentStop",
-    claude: hookkit_claude::catalog::SubagentStop,
-    codex: hookkit_codex::catalog::SubagentStop
+    native_event: "SubagentStop",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::SubagentStop),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::SubagentStop),
+    ]
 );
 
-claude_codex_runtime_alignment!(
+aligned_family!(
+    /// Marker for the Claude/Codex aligned user-prompt-submit event family.
     marker: UserPromptSubmit,
     input: UserPromptSubmitInput,
     environment: UserPromptSubmitCommandEnvironment,
     output: UserPromptSubmitOutput,
     execute: execute_user_prompt_submit,
-    inner: execute_user_prompt_submit_inner,
-    parsed: ParsedUserPromptSubmit,
-    parse: parse_selected_user_prompt_submit,
-    emit: emit_user_prompt_submit,
     family: "UserPromptSubmit",
-    claude: hookkit_claude::catalog::UserPromptSubmit,
-    codex: hookkit_codex::catalog::UserPromptSubmit
+    native_event: "UserPromptSubmit",
+    arms: [
+        Claude(BuiltinHarness::ClaudeCode, hookkit_claude::catalog::UserPromptSubmit),
+        Codex(BuiltinHarness::Codex, hookkit_codex::catalog::UserPromptSubmit),
+    ]
 );
 
-/// Execute one aligned event for an explicitly selected harness.
+/// Execute one aligned event for an explicitly selected harness with
+/// diagnostics disabled.
 pub fn execute_aligned_event<K, F>(
     harness: HarnessId,
     bytes: impl Into<Vec<u8>>,
@@ -471,7 +553,33 @@ where
     K::execute(harness, bytes.into(), variables, handler)
 }
 
+/// Execute one aligned event for an explicitly selected harness, handing the
+/// handler `diagnostics` through [`RuntimeContext::diagnostics`].
+pub fn execute_aligned_event_with_diagnostics<K, F>(
+    harness: HarnessId,
+    bytes: impl Into<Vec<u8>>,
+    variables: &EnvironmentVariables,
+    diagnostics: &dyn DiagnosticsSink,
+    handler: F,
+) -> hookkit_core::Result<ProcessEmission>
+where
+    K: AlignedEventSpec,
+    F: FnOnce(
+        K::Input,
+        &K::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<K::Output>,
+{
+    K::execute_with_diagnostics(harness, bytes.into(), variables, diagnostics, handler)
+}
+
 /// Stdin/stdout adapter for an aligned event and explicit harness.
+///
+/// Equivalent to [`run_aligned_event_with_options`] with
+/// [`RunOptions::new`]: diagnostics are disabled and every failure exits 1,
+/// which Claude Code and Codex treat as non-blocking. A guard built on a
+/// gating family therefore fails open; see the
+/// [module documentation](self#failure-policy).
 pub fn run_aligned_event<K, F>(harness: HarnessId, handler: F) -> std::process::ExitCode
 where
     K: AlignedEventSpec,
@@ -481,1039 +589,124 @@ where
         &RuntimeContext<'_>,
     ) -> hookkit_core::Result<K::Output>,
 {
+    run_aligned_event_with_options::<K, _>(harness, RunOptions::new(), handler)
+}
+
+/// Stdin/stdout adapter with a configured out-of-band diagnostics sink.
+///
+/// Equivalent to [`run_aligned_event_with_options`] with
+/// [`RunOptions::with_diagnostics`]. Runner failures are recorded in the sink
+/// as well as reported on stderr.
+pub fn run_aligned_event_with_diagnostics<K, F>(
+    harness: HarnessId,
+    diagnostics: &dyn DiagnosticsSink,
+    handler: F,
+) -> std::process::ExitCode
+where
+    K: AlignedEventSpec,
+    F: FnOnce(
+        K::Input,
+        &K::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<K::Output>,
+{
+    run_aligned_event_with_options::<K, _>(
+        harness,
+        RunOptions::new().with_diagnostics(diagnostics),
+        handler,
+    )
+}
+
+/// Stdin/stdout adapter for an aligned event with explicit options.
+///
+/// Reads the payload from stdin, captures the selected harness's declared
+/// environment, executes the handler, and writes the native emission.
+/// `options` selects the diagnostics sink handed to the handler and the
+/// [`crate::failure::FailurePolicy`] applied when stdin, the environment,
+/// parsing, the handler (including a panic), or emission fails. The failure
+/// is reported for the event the payload names, or else the family's native
+/// event, so [`RunOptions::fail_closed`] denies a pending tool call, prompt,
+/// or permission instead of letting it proceed; see the
+/// [module documentation](self#failure-policy).
+pub fn run_aligned_event_with_options<K, F>(
+    harness: HarnessId,
+    options: RunOptions<'_>,
+    handler: F,
+) -> std::process::ExitCode
+where
+    K: AlignedEventSpec,
+    F: FnOnce(
+        K::Input,
+        &K::CommandEnvironment,
+        &RuntimeContext<'_>,
+    ) -> hookkit_core::Result<K::Output>,
+{
     let hook = format!("{harness}/{}", K::FAMILY);
-    let mut bytes = Vec::new();
-    if let Err(error) = std::io::stdin().read_to_end(&mut bytes) {
-        return crate::report::report_io_failure(&hook, error);
-    }
-    let variables = match capture_aligned_command_environment(&harness) {
-        Ok(variables) => variables,
-        Err(error) => return crate::report::report_failure(&hook, &error),
+    // Lower for the harness a `claude` alias means, even though execution
+    // rejects the alias.
+    let lowering = harness
+        .as_str()
+        .parse::<BuiltinHarness>()
+        .map_or_else(|_| harness.clone(), BuiltinHarness::id);
+    let fail = |invocation: Option<&RawInvocation>, error: &dyn std::error::Error| {
+        let event =
+            crate::selected::builtin_payload_event(&lowering, invocation).unwrap_or_else(|| {
+                EventId::builtin(lowering.clone(), <K as sealed::Sealed>::NATIVE_EVENT)
+            });
+        report_run_failure(&options, &lowering, Some(&event), &hook, error)
     };
-    match execute_aligned_event::<K, _>(harness, bytes, &variables, handler) {
-        Ok(emission) => crate::typed::write_emission(&emission),
-        Err(error) => crate::report::report_failure(&hook, &error),
-    }
-}
-
-/// Convenience spelling for aligned pre-tool execution.
-pub fn execute_pre_tool_use<F>(
-    harness: HarnessId,
-    bytes: impl Into<Vec<u8>>,
-    variables: &EnvironmentVariables,
-    handler: F,
-) -> hookkit_core::Result<ProcessEmission>
-where
-    F: FnOnce(
-        PreToolUseInput,
-        &PreToolUseCommandEnvironment,
-        &RuntimeContext<'_>,
-    ) -> hookkit_core::Result<PreToolUseOutput>,
-{
-    execute_aligned_event::<PreToolUse, _>(harness, bytes, variables, handler)
-}
-
-/// Convenience spelling for aligned post-tool execution.
-pub fn execute_post_tool_use<F>(
-    harness: HarnessId,
-    bytes: impl Into<Vec<u8>>,
-    variables: &EnvironmentVariables,
-    handler: F,
-) -> hookkit_core::Result<ProcessEmission>
-where
-    F: FnOnce(
-        PostToolUseInput,
-        &PostToolUseCommandEnvironment,
-        &RuntimeContext<'_>,
-    ) -> hookkit_core::Result<PostToolUseOutput>,
-{
-    execute_aligned_event::<PostToolUse, _>(harness, bytes, variables, handler)
-}
-
-/// Convenience spelling for aligned turn completion.
-pub fn execute_turn_completion<F>(
-    harness: HarnessId,
-    bytes: impl Into<Vec<u8>>,
-    variables: &EnvironmentVariables,
-    handler: F,
-) -> hookkit_core::Result<ProcessEmission>
-where
-    F: FnOnce(
-        TurnCompletionInput,
-        &TurnCompletionCommandEnvironment,
-        &RuntimeContext<'_>,
-    ) -> hookkit_core::Result<TurnCompletionOutput>,
-{
-    execute_aligned_event::<TurnCompletion, _>(harness, bytes, variables, handler)
-}
-
-fn execute_pre_tool_use_inner<F>(
-    harness: HarnessId,
-    bytes: Vec<u8>,
-    variables: &EnvironmentVariables,
-    handler: F,
-) -> hookkit_core::Result<ProcessEmission>
-where
-    F: FnOnce(
-        PreToolUseInput,
-        &PreToolUseCommandEnvironment,
-        &RuntimeContext<'_>,
-    ) -> hookkit_core::Result<PreToolUseOutput>,
-{
-    let invocation = RawInvocation::parse(bytes)?;
-    let parsed = parse_selected_pre_tool_use(&harness, &invocation, variables)?;
-    let expected_harness = parsed.input.harness();
-    let context = RuntimeContext::new(
-        harness,
-        parsed.snapshot,
-        parsed.event.clone(),
-        parsed.contract,
-        ResolutionProvenance::TypedStatic,
-        &invocation,
-        parsed.native_context,
-        &DISABLED_DIAGNOSTICS,
-    )?;
-    let output = handler(parsed.input, &parsed.command_environment, &context)?;
-    if output.harness() != expected_harness {
-        return Err(HookkitError::EventHarnessMismatch {
-            harness: expected_harness,
-            event: output.event_id(),
-        });
-    }
-    crate::typed::validate_command_emission(emit_pre_tool_use(output)?, context.contract())
-}
-
-fn execute_post_tool_use_inner<F>(
-    harness: HarnessId,
-    bytes: Vec<u8>,
-    variables: &EnvironmentVariables,
-    handler: F,
-) -> hookkit_core::Result<ProcessEmission>
-where
-    F: FnOnce(
-        PostToolUseInput,
-        &PostToolUseCommandEnvironment,
-        &RuntimeContext<'_>,
-    ) -> hookkit_core::Result<PostToolUseOutput>,
-{
-    let invocation = RawInvocation::parse(bytes)?;
-    let parsed = parse_selected(&harness, &invocation, variables)?;
-    let expected_harness = parsed.input.harness();
-    let context = RuntimeContext::new(
-        harness,
-        parsed.snapshot,
-        parsed.event.clone(),
-        parsed.contract,
-        ResolutionProvenance::TypedStatic,
-        &invocation,
-        parsed.native_context,
-        &DISABLED_DIAGNOSTICS,
-    )?;
-    let output = handler(parsed.input, &parsed.command_environment, &context)?;
-    if output.harness() != expected_harness {
-        return Err(HookkitError::EventHarnessMismatch {
-            harness: expected_harness,
-            event: output.event_id(),
-        });
-    }
-    crate::typed::validate_command_emission(emit(output)?, context.contract())
-}
-
-fn execute_turn_completion_inner<F>(
-    harness: HarnessId,
-    bytes: Vec<u8>,
-    variables: &EnvironmentVariables,
-    handler: F,
-) -> hookkit_core::Result<ProcessEmission>
-where
-    F: FnOnce(
-        TurnCompletionInput,
-        &TurnCompletionCommandEnvironment,
-        &RuntimeContext<'_>,
-    ) -> hookkit_core::Result<TurnCompletionOutput>,
-{
-    let invocation = RawInvocation::parse(bytes)?;
-    let parsed = parse_selected_turn_completion(&harness, &invocation, variables)?;
-    let expected_harness = parsed.input.harness();
-    let context = RuntimeContext::new(
-        harness,
-        parsed.snapshot,
-        parsed.event.clone(),
-        parsed.contract,
-        ResolutionProvenance::TypedStatic,
-        &invocation,
-        parsed.native_context,
-        &DISABLED_DIAGNOSTICS,
-    )?;
-    let output = handler(parsed.input, &parsed.command_environment, &context)?;
-    if output.harness() != expected_harness {
-        return Err(HookkitError::EventHarnessMismatch {
-            harness: expected_harness,
-            event: output.event_id(),
-        });
-    }
-    crate::typed::validate_command_emission(emit_turn_completion(output)?, context.contract())
-}
-
-struct Parsed {
-    input: PostToolUseInput,
-    event: EventId,
-    snapshot: SnapshotId,
-    contract: ContractId,
-    native_context: NativeContext,
-    command_environment: PostToolUseCommandEnvironment,
-}
-
-struct ParsedPreToolUse {
-    input: PreToolUseInput,
-    event: EventId,
-    snapshot: SnapshotId,
-    contract: ContractId,
-    native_context: NativeContext,
-    command_environment: PreToolUseCommandEnvironment,
-}
-
-struct ParsedTurnCompletion {
-    input: TurnCompletionInput,
-    event: EventId,
-    snapshot: SnapshotId,
-    contract: ContractId,
-    native_context: NativeContext,
-    command_environment: TurnCompletionCommandEnvironment,
-}
-
-fn parse_selected_pre_tool_use(
-    harness: &HarnessId,
-    invocation: &RawInvocation,
-    variables: &EnvironmentVariables,
-) -> hookkit_core::Result<ParsedPreToolUse> {
-    match harness.as_str() {
-        "claude-code" => {
-            let input = hookkit_claude::catalog::PreToolUse::parse(invocation)?;
-            let command_environment = hookkit_claude::ClaudeCommandEnvironment::from_variables(
-                &hookkit_claude::catalog::PreToolUse::EVENT,
-                variables,
-            )?;
-            hookkit_claude::catalog::PreToolUse::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_claude::catalog::PreToolUse::context(&input);
-            Ok(ParsedPreToolUse {
-                input: PreToolUseInput::Claude(input),
-                event: hookkit_claude::catalog::PreToolUse::EVENT,
-                snapshot: hookkit_claude::catalog::PreToolUse::SNAPSHOT,
-                contract: hookkit_claude::catalog::PreToolUse::CONTRACT,
-                native_context,
-                command_environment: PreToolUseCommandEnvironment::Claude(command_environment),
-            })
-        }
-        "codex" => {
-            let input = hookkit_codex::protocol::PreToolUse::parse(invocation)?;
-            let command_environment = hookkit_codex::CodexCommandEnvironment::from_variables(
-                &hookkit_codex::protocol::PreToolUse::EVENT,
-                variables,
-            )?;
-            hookkit_codex::protocol::PreToolUse::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_codex::protocol::PreToolUse::context(&input);
-            Ok(ParsedPreToolUse {
-                input: PreToolUseInput::Codex(input),
-                event: hookkit_codex::protocol::PreToolUse::EVENT,
-                snapshot: hookkit_codex::protocol::PreToolUse::SNAPSHOT,
-                contract: hookkit_codex::protocol::PreToolUse::CONTRACT,
-                native_context,
-                command_environment: PreToolUseCommandEnvironment::Codex(command_environment),
-            })
-        }
-        "antigravity" => {
-            let input = hookkit_antigravity::PreToolUse::parse(invocation)?;
-            let command_environment =
-                hookkit_antigravity::AntigravityCommandEnvironment::from_variables(
-                    &hookkit_antigravity::PreToolUse::EVENT,
-                    variables,
-                )?;
-            hookkit_antigravity::PreToolUse::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_antigravity::PreToolUse::context(&input);
-            Ok(ParsedPreToolUse {
-                input: PreToolUseInput::Antigravity(input),
-                event: hookkit_antigravity::PreToolUse::EVENT,
-                snapshot: hookkit_antigravity::PreToolUse::SNAPSHOT,
-                contract: hookkit_antigravity::PreToolUse::CONTRACT,
-                native_context,
-                command_environment: PreToolUseCommandEnvironment::Antigravity(command_environment),
-            })
-        }
-        _ => Err(HookkitError::UnrecognizedEvent {
-            harness: harness.clone(),
-            message: "no aligned PreToolUse adapter is registered".into(),
-        }),
-    }
-}
-
-fn parse_selected(
-    harness: &HarnessId,
-    invocation: &RawInvocation,
-    variables: &EnvironmentVariables,
-) -> hookkit_core::Result<Parsed> {
-    match harness.as_str() {
-        "claude-code" => {
-            let input = hookkit_claude::protocol::PostToolUse::parse(invocation)?;
-            let command_environment = hookkit_claude::ClaudeCommandEnvironment::from_variables(
-                &hookkit_claude::protocol::PostToolUse::EVENT,
-                variables,
-            )?;
-            hookkit_claude::protocol::PostToolUse::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_claude::protocol::PostToolUse::context(&input);
-            Ok(Parsed {
-                input: PostToolUseInput::Claude(input),
-                event: hookkit_claude::protocol::PostToolUse::EVENT,
-                snapshot: hookkit_claude::protocol::PostToolUse::SNAPSHOT,
-                contract: hookkit_claude::protocol::PostToolUse::CONTRACT,
-                native_context,
-                command_environment: PostToolUseCommandEnvironment::Claude(command_environment),
-            })
-        }
-        "codex" => {
-            let input = hookkit_codex::protocol::PostToolUse::parse(invocation)?;
-            let command_environment = hookkit_codex::CodexCommandEnvironment::from_variables(
-                &hookkit_codex::protocol::PostToolUse::EVENT,
-                variables,
-            )?;
-            hookkit_codex::protocol::PostToolUse::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_codex::protocol::PostToolUse::context(&input);
-            Ok(Parsed {
-                input: PostToolUseInput::Codex(input),
-                event: hookkit_codex::protocol::PostToolUse::EVENT,
-                snapshot: hookkit_codex::protocol::PostToolUse::SNAPSHOT,
-                contract: hookkit_codex::protocol::PostToolUse::CONTRACT,
-                native_context,
-                command_environment: PostToolUseCommandEnvironment::Codex(command_environment),
-            })
-        }
-        "antigravity" => {
-            let input = hookkit_antigravity::PostToolUse::parse(invocation)?;
-            let command_environment =
-                hookkit_antigravity::AntigravityCommandEnvironment::from_variables(
-                    &hookkit_antigravity::PostToolUse::EVENT,
-                    variables,
-                )?;
-            hookkit_antigravity::PostToolUse::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_antigravity::PostToolUse::context(&input);
-            Ok(Parsed {
-                input: PostToolUseInput::Antigravity(input),
-                event: hookkit_antigravity::PostToolUse::EVENT,
-                snapshot: hookkit_antigravity::PostToolUse::SNAPSHOT,
-                contract: hookkit_antigravity::PostToolUse::CONTRACT,
-                native_context,
-                command_environment: PostToolUseCommandEnvironment::Antigravity(
-                    command_environment,
-                ),
-            })
-        }
-        _ => Err(HookkitError::UnrecognizedEvent {
-            harness: harness.clone(),
-            message: "no aligned PostToolUse adapter is registered".into(),
-        }),
-    }
-}
-
-fn parse_selected_turn_completion(
-    harness: &HarnessId,
-    invocation: &RawInvocation,
-    variables: &EnvironmentVariables,
-) -> hookkit_core::Result<ParsedTurnCompletion> {
-    match harness.as_str() {
-        "claude-code" => {
-            let input = hookkit_claude::catalog::Stop::parse(invocation)?;
-            let command_environment = hookkit_claude::ClaudeCommandEnvironment::from_variables(
-                &hookkit_claude::catalog::Stop::EVENT,
-                variables,
-            )?;
-            hookkit_claude::catalog::Stop::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_claude::catalog::Stop::context(&input);
-            Ok(ParsedTurnCompletion {
-                input: TurnCompletionInput::Claude(input),
-                event: hookkit_claude::catalog::Stop::EVENT,
-                snapshot: hookkit_claude::catalog::Stop::SNAPSHOT,
-                contract: hookkit_claude::catalog::Stop::CONTRACT,
-                native_context,
-                command_environment: TurnCompletionCommandEnvironment::Claude(command_environment),
-            })
-        }
-        "codex" => {
-            let input = hookkit_codex::catalog::Stop::parse(invocation)?;
-            let command_environment = hookkit_codex::CodexCommandEnvironment::from_variables(
-                &hookkit_codex::catalog::Stop::EVENT,
-                variables,
-            )?;
-            hookkit_codex::catalog::Stop::validate_command_environment(
-                &input,
-                &command_environment,
-            )?;
-            let native_context = hookkit_codex::catalog::Stop::context(&input);
-            Ok(ParsedTurnCompletion {
-                input: TurnCompletionInput::Codex(input),
-                event: hookkit_codex::catalog::Stop::EVENT,
-                snapshot: hookkit_codex::catalog::Stop::SNAPSHOT,
-                contract: hookkit_codex::catalog::Stop::CONTRACT,
-                native_context,
-                command_environment: TurnCompletionCommandEnvironment::Codex(command_environment),
-            })
-        }
-        "antigravity" => {
-            let input = hookkit_antigravity::Stop::parse(invocation)?;
-            let command_environment =
-                hookkit_antigravity::AntigravityCommandEnvironment::from_variables(
-                    &hookkit_antigravity::Stop::EVENT,
-                    variables,
-                )?;
-            hookkit_antigravity::Stop::validate_command_environment(&input, &command_environment)?;
-            let native_context = hookkit_antigravity::Stop::context(&input);
-            Ok(ParsedTurnCompletion {
-                input: TurnCompletionInput::Antigravity(input),
-                event: hookkit_antigravity::Stop::EVENT,
-                snapshot: hookkit_antigravity::Stop::SNAPSHOT,
-                contract: hookkit_antigravity::Stop::CONTRACT,
-                native_context,
-                command_environment: TurnCompletionCommandEnvironment::Antigravity(
-                    command_environment,
-                ),
-            })
-        }
-        _ => Err(HookkitError::UnrecognizedEvent {
-            harness: harness.clone(),
-            message: "no aligned TurnCompletion adapter is registered".into(),
-        }),
+    let bytes = match read_stdin() {
+        Ok(bytes) => bytes,
+        Err(error) => return fail(None, &error),
+    };
+    let parsed = RawInvocation::parse(bytes);
+    let variables =
+        match capture_aligned_command_environment(&harness, K::FAMILY, options.diagnostics()) {
+            Ok(variables) => variables,
+            Err(error) => return fail(parsed.as_ref().ok(), &error),
+        };
+    let invocation = match parsed {
+        Ok(invocation) => invocation,
+        Err(error) => return fail(None, &error),
+    };
+    let executed = catch_panic(|| {
+        K::execute_invocation_with_diagnostics(
+            harness.clone(),
+            &invocation,
+            &variables,
+            options.diagnostics(),
+            handler,
+        )
+    });
+    match executed {
+        Ok(Ok(emission)) => match crate::typed::try_write_emission(&emission) {
+            Ok(code) => code,
+            Err(error) => fail(Some(&invocation), &error),
+        },
+        Ok(Err(error)) => fail(Some(&invocation), &error),
+        Err(panic) => fail(Some(&invocation), &panic),
     }
 }
 
 fn capture_aligned_command_environment(
     harness: &HarnessId,
+    family: &'static str,
+    diagnostics: &dyn DiagnosticsSink,
 ) -> hookkit_core::Result<EnvironmentVariables> {
-    match harness.as_str() {
-        "claude-code" => crate::environment::capture_command_environment::<
-            hookkit_claude::ClaudeCommandEnvironment,
-        >(),
-        "codex" => crate::environment::capture_command_environment::<
-            hookkit_codex::CodexCommandEnvironment,
-        >(),
-        "antigravity" => crate::environment::capture_command_environment::<
-            hookkit_antigravity::AntigravityCommandEnvironment,
-        >(),
-        _ => Err(HookkitError::UnrecognizedEvent {
-            harness: harness.clone(),
-            message: "no aligned command environment adapter is registered".into(),
-        }),
-    }
-}
-
-fn emit(output: PostToolUseOutput) -> hookkit_core::Result<ProcessEmission> {
-    match output {
-        PostToolUseOutput::Claude(output) => hookkit_claude::protocol::PostToolUse::emit(output),
-        PostToolUseOutput::Codex(output) => hookkit_codex::protocol::PostToolUse::emit(output),
-        PostToolUseOutput::Antigravity(output) => hookkit_antigravity::PostToolUse::emit(output),
-        _ => Err(HookkitError::InvalidProcessEmission(
-            "unknown aligned output arm cannot be emitted",
-        )),
-    }
-}
-
-fn emit_pre_tool_use(output: PreToolUseOutput) -> hookkit_core::Result<ProcessEmission> {
-    match output {
-        PreToolUseOutput::Claude(output) => hookkit_claude::catalog::PreToolUse::emit(output),
-        PreToolUseOutput::Codex(output) => hookkit_codex::protocol::PreToolUse::emit(output),
-        PreToolUseOutput::Antigravity(output) => hookkit_antigravity::PreToolUse::emit(output),
-        _ => Err(HookkitError::InvalidProcessEmission(
-            "unknown aligned output arm cannot be emitted",
-        )),
-    }
-}
-
-fn emit_turn_completion(output: TurnCompletionOutput) -> hookkit_core::Result<ProcessEmission> {
-    match output {
-        TurnCompletionOutput::Claude(output) => hookkit_claude::catalog::Stop::emit(output),
-        TurnCompletionOutput::Codex(output) => hookkit_codex::catalog::Stop::emit(output),
-        TurnCompletionOutput::Antigravity(output) => hookkit_antigravity::Stop::emit(output),
-        _ => Err(HookkitError::InvalidProcessEmission(
-            "unknown aligned output arm cannot be emitted",
-        )),
+    use crate::environment::capture_command_environment_with_diagnostics as capture;
+    match BuiltinHarness::from_id(harness) {
+        Some(BuiltinHarness::ClaudeCode) => {
+            capture::<hookkit_claude::ClaudeCommandEnvironment>(diagnostics)
+        }
+        Some(BuiltinHarness::Codex) => {
+            capture::<hookkit_codex::CodexCommandEnvironment>(diagnostics)
+        }
+        Some(BuiltinHarness::Antigravity) => {
+            capture::<hookkit_antigravity::AntigravityCommandEnvironment>(diagnostics)
+        }
+        _ => Err(unsupported_harness(harness, family)),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn claude_variables() -> EnvironmentVariables {
-        EnvironmentVariables::from_pairs([
-            ("CLAUDECODE", "1"),
-            ("CLAUDE_CODE_CHILD_SESSION", "1"),
-            ("CLAUDE_CODE_SESSION_ID", "s"),
-            ("CLAUDE_PROJECT_DIR", "/repo"),
-            ("CLAUDE_ENV_FILE", "/tmp/claude-env"),
-        ])
-    }
-
-    fn pre_tool_cases() -> Vec<(HarnessId, &'static [u8], EnvironmentVariables)> {
-        vec![
-            (
-                HarnessId::CLAUDE_CODE,
-                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Read","tool_input":{"path":".env"},"tool_use_id":"u","claude_only":{"retained":true}}"#,
-                claude_variables(),
-            ),
-            (
-                HarnessId::CODEX,
-                br#"{"session_id":"s","transcript_path":null,"cwd":"/repo","hook_event_name":"PreToolUse","model":"gpt-5","turn_id":"t","permission_mode":"default","tool_name":"Read","tool_input":{"path":".env"},"tool_use_id":"u","codex_only":"retained"}"#,
-                EnvironmentVariables::new(),
-            ),
-            (
-                HarnessId::ANTIGRAVITY,
-                br#"{"conversationId":"s","workspacePaths":["/repo","/lib"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"read_file","args":{"path":".env"},"nativeFlag":true},"stepIdx":7,"antigravityOnly":"retained"}"#,
-                EnvironmentVariables::from_pairs([("AMBIENT_ONLY", "ignored")]),
-            ),
-        ]
-    }
-
-    fn pair_inputs(
-        event: &'static str,
-        claude_fields: serde_json::Value,
-        codex_fields: serde_json::Value,
-    ) -> Vec<(HarnessId, Vec<u8>, EnvironmentVariables)> {
-        fn merged(mut base: serde_json::Value, fields: serde_json::Value) -> serde_json::Value {
-            base.as_object_mut()
-                .expect("base is an object")
-                .extend(fields.as_object().expect("fields are an object").clone());
-            base
-        }
-
-        let claude = merged(
-            serde_json::json!({
-                "session_id": "s",
-                "transcript_path": "/tmp/claude.jsonl",
-                "cwd": "/repo",
-                "hook_event_name": event,
-                "native_only": {"claude": true}
-            }),
-            claude_fields,
-        );
-        let mut codex = serde_json::json!({
-            "session_id": "s",
-            "transcript_path": null,
-            "cwd": "/repo",
-            "hook_event_name": event,
-            "native_only": {"codex": true}
-        });
-        if event != "SessionEnd" {
-            codex
-                .as_object_mut()
-                .expect("base is an object")
-                .insert("model".into(), "gpt-test".into());
-        }
-        let codex = merged(codex, codex_fields);
-
-        vec![
-            (
-                HarnessId::CLAUDE_CODE,
-                serde_json::to_vec(&claude).unwrap(),
-                claude_variables(),
-            ),
-            (
-                HarnessId::CODEX,
-                serde_json::to_vec(&codex).unwrap(),
-                EnvironmentVariables::new(),
-            ),
-        ]
-    }
-
-    macro_rules! assert_pair_family {
-        (
-            marker: $marker:ty,
-            input: $input:ident,
-            event: $event:literal,
-            claude: $claude_fields:expr,
-            codex: $codex_fields:expr,
-            output: $output:expr
-        ) => {{
-            let build_output = $output;
-            for (harness, bytes, variables) in pair_inputs($event, $claude_fields, $codex_fields) {
-                let expected_harness = harness.clone();
-                let handler_harness = harness.clone();
-                let emission = execute_aligned_event::<$marker, _>(
-                    harness,
-                    bytes,
-                    &variables,
-                    move |input, environment, context| {
-                        assert_eq!(input.harness(), handler_harness);
-                        assert_eq!(input.event_id().name(), $event);
-                        assert_eq!(input.event_id().harness(), &handler_harness);
-                        assert_eq!(input.session_id(), "s");
-                        assert_eq!(environment.harness(), handler_harness);
-                        assert_eq!(context.harness(), &handler_harness);
-                        assert_eq!(context.event(), &input.event_id());
-                        assert_eq!(input.workspace_roots(), context.workspace_roots());
-                        assert_eq!(input.cwd().as_str(), "/repo");
-                        match input {
-                            $input::Claude(_) => {
-                                assert_eq!(handler_harness, HarnessId::CLAUDE_CODE)
-                            }
-                            $input::Codex(_) => assert_eq!(handler_harness, HarnessId::CODEX),
-                            _ => unreachable!("only Claude and Codex are aligned here"),
-                        }
-                        build_output(&handler_harness)
-                    },
-                )
-                .unwrap();
-                assert_eq!(emission.exit_code(), 0, "{} {}", expected_harness, $event);
-                assert!(emission.stderr().is_empty());
-            }
-        }};
-    }
-
-    #[test]
-    fn claude_codex_pair_families_parse_and_emit_their_portable_floors() {
-        assert_pair_family!(
-            marker: PermissionRequest,
-            input: PermissionRequestInput,
-            event: "PermissionRequest",
-            claude: serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "true"}}),
-            codex: serde_json::json!({
-                "turn_id": "t",
-                "permission_mode": "default",
-                "tool_name": "Bash",
-                "tool_input": {"command": "true"}
-            }),
-            output: |harness: &HarnessId| PermissionRequestOutput::allow(harness)
-        );
-        assert_pair_family!(
-            marker: PreCompact,
-            input: PreCompactInput,
-            event: "PreCompact",
-            claude: serde_json::json!({"trigger": "auto", "custom_instructions": "keep tests"}),
-            codex: serde_json::json!({"turn_id": "t", "trigger": "auto"}),
-            output: |harness: &HarnessId| PreCompactOutput::no_op(harness)
-        );
-        assert_pair_family!(
-            marker: PostCompact,
-            input: PostCompactInput,
-            event: "PostCompact",
-            claude: serde_json::json!({"trigger": "auto", "compact_summary": "summary"}),
-            codex: serde_json::json!({"turn_id": "t", "trigger": "auto"}),
-            output: |harness: &HarnessId| PostCompactOutput::with_system_notice(harness, "done")
-        );
-        assert_pair_family!(
-            marker: SessionStart,
-            input: SessionStartInput,
-            event: "SessionStart",
-            claude: serde_json::json!({"source": "startup"}),
-            codex: serde_json::json!({"permission_mode": "default", "source": "startup"}),
-            output: |harness: &HarnessId| SessionStartOutput::with_context(harness, "context")
-        );
-        assert_pair_family!(
-            marker: SessionEnd,
-            input: SessionEndInput,
-            event: "SessionEnd",
-            claude: serde_json::json!({"reason": "prompt_input_exit"}),
-            codex: serde_json::json!({"reason": "other"}),
-            output: |harness: &HarnessId| SessionEndOutput::no_op(harness)
-        );
-        assert_pair_family!(
-            marker: SubagentStart,
-            input: SubagentStartInput,
-            event: "SubagentStart",
-            claude: serde_json::json!({"agent_id": "a", "agent_type": "Explore"}),
-            codex: serde_json::json!({
-                "turn_id": "t",
-                "permission_mode": "default",
-                "agent_id": "a",
-                "agent_type": "Explore"
-            }),
-            output: |harness: &HarnessId| SubagentStartOutput::with_context(harness, "context")
-        );
-        assert_pair_family!(
-            marker: SubagentStop,
-            input: SubagentStopInput,
-            event: "SubagentStop",
-            claude: serde_json::json!({
-                "stop_hook_active": false,
-                "agent_id": "a",
-                "agent_type": "Explore",
-                "agent_transcript_path": "/tmp/a.jsonl",
-                "last_assistant_message": "done"
-            }),
-            codex: serde_json::json!({
-                "turn_id": "t",
-                "permission_mode": "default",
-                "stop_hook_active": false,
-                "agent_id": "a",
-                "agent_type": "Explore",
-                "agent_transcript_path": "/tmp/a.jsonl",
-                "last_assistant_message": "done"
-            }),
-            output: |harness: &HarnessId| SubagentStopOutput::block(harness, "continue")
-        );
-        assert_pair_family!(
-            marker: UserPromptSubmit,
-            input: UserPromptSubmitInput,
-            event: "UserPromptSubmit",
-            claude: serde_json::json!({"prompt": "ship it"}),
-            codex: serde_json::json!({
-                "turn_id": "t",
-                "permission_mode": "default",
-                "prompt": "ship it"
-            }),
-            output: |harness: &HarnessId| UserPromptSubmitOutput::with_context(harness, "context")
-        );
-    }
-
-    #[test]
-    fn pair_only_portable_block_and_deny_helpers_use_exact_native_shapes() {
-        for (harness, bytes, variables) in pair_inputs(
-            "PermissionRequest",
-            serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "true"}}),
-            serde_json::json!({
-                "turn_id": "t",
-                "permission_mode": "default",
-                "tool_name": "Bash",
-                "tool_input": {"command": "true"}
-            }),
-        ) {
-            let selected = harness.clone();
-            let emission =
-                execute_permission_request(harness, bytes, &variables, move |_, _, _| {
-                    PermissionRequestOutput::deny(&selected, "denied")
-                })
-                .unwrap();
-            let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-            assert_eq!(output["hookSpecificOutput"]["decision"]["behavior"], "deny");
-            assert_eq!(
-                output["hookSpecificOutput"]["decision"]["message"],
-                "denied"
-            );
-        }
-
-        for (harness, bytes, variables) in pair_inputs(
-            "UserPromptSubmit",
-            serde_json::json!({"prompt": "ship it"}),
-            serde_json::json!({
-                "turn_id": "t",
-                "permission_mode": "default",
-                "prompt": "ship it"
-            }),
-        ) {
-            let selected = harness.clone();
-            let emission =
-                execute_user_prompt_submit(harness, bytes, &variables, move |_, _, _| {
-                    UserPromptSubmitOutput::block(&selected, "blocked")
-                })
-                .unwrap();
-            assert_eq!(emission.exit_code(), 2);
-            assert!(emission.stdout().is_empty());
-            assert_eq!(emission.stderr(), b"blocked");
-        }
-    }
-
-    #[test]
-    fn pair_only_markers_reject_antigravity_and_mismatched_output_arms() {
-        let unsupported = execute_aligned_event::<SessionStart, _>(
-            HarnessId::ANTIGRAVITY,
-            br#"{}"#,
-            &EnvironmentVariables::new(),
-            |_, _, _| panic!("unsupported harness must not invoke the handler"),
-        );
-        assert!(matches!(
-            unsupported,
-            Err(HookkitError::UnrecognizedEvent { .. })
-        ));
-
-        let (_, bytes, variables) = pair_inputs(
-            "SessionStart",
-            serde_json::json!({"source": "startup"}),
-            serde_json::json!({"permission_mode": "default", "source": "startup"}),
-        )
-        .remove(1);
-        let mismatched = execute_session_start(HarnessId::CODEX, bytes, &variables, |_, _, _| {
-            Ok(SessionStartOutput::Claude(
-                hookkit_claude::protocol::SessionStartOutput::no_op(),
-            ))
-        });
-        assert!(matches!(
-            mismatched,
-            Err(HookkitError::EventHarnessMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn aligned_pre_tool_parses_and_allows_every_native_contract() {
-        for (harness, bytes, variables) in pre_tool_cases() {
-            let expected_harness = harness.clone();
-            let handler_harness = harness.clone();
-            let emission = execute_pre_tool_use(
-                harness,
-                bytes,
-                &variables,
-                move |input, environment, context| {
-                    assert_eq!(input.harness(), handler_harness);
-                    assert_eq!(environment.harness(), handler_harness);
-                    assert_eq!(context.harness(), &handler_harness);
-                    assert_eq!(input.event_id().harness(), &handler_harness);
-                    assert_eq!(input.workspace_roots(), context.workspace_roots());
-                    assert_eq!(
-                        input.cwd().is_none(),
-                        handler_harness == HarnessId::ANTIGRAVITY
-                    );
-                    assert_eq!(
-                        input.tool_input().and_then(|input| input.get("path")),
-                        Some(&serde_json::json!(".env"))
-                    );
-                    assert!(input.tool_name().is_some());
-
-                    match (&input, environment) {
-                        (
-                            PreToolUseInput::Claude(input),
-                            PreToolUseCommandEnvironment::Claude(environment),
-                        ) => {
-                            assert_eq!(
-                                input.field("claude_only"),
-                                Some(&serde_json::json!({"retained": true}))
-                            );
-                            assert_eq!(environment.project_dir, "/repo");
-                            assert_eq!(input.cwd, "/repo");
-                        }
-                        (
-                            PreToolUseInput::Codex(input),
-                            PreToolUseCommandEnvironment::Codex(environment),
-                        ) => {
-                            assert_eq!(
-                                input.extra.get("codex_only"),
-                                Some(&serde_json::json!("retained"))
-                            );
-                            assert!(environment.plugin.is_none());
-                            assert_eq!(input.cwd, "/repo");
-                        }
-                        (
-                            PreToolUseInput::Antigravity(input),
-                            PreToolUseCommandEnvironment::Antigravity(_),
-                        ) => {
-                            assert_eq!(input.step_idx, 7);
-                            assert_eq!(
-                                input.tool_call.extra.get("nativeFlag"),
-                                Some(&serde_json::json!(true))
-                            );
-                            assert_eq!(
-                                input.extra.get("antigravityOnly"),
-                                Some(&serde_json::json!("retained"))
-                            );
-                            assert!(input.workspace_paths.len() == 2);
-                        }
-                        _ => panic!("input and command-environment arms must match"),
-                    }
-
-                    let output = PreToolUseOutput::allow(&handler_harness)?;
-                    assert_eq!(output.event_id(), input.event_id());
-                    Ok(output)
-                },
-            )
-            .unwrap();
-
-            assert_eq!(emission.exit_code(), 0);
-            assert!(emission.stderr().is_empty());
-            if expected_harness == HarnessId::CODEX {
-                assert!(emission.stdout().is_empty());
-                continue;
-            }
-            let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-            match expected_harness.as_str() {
-                "claude-code" => {
-                    assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
-                    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
-                }
-                "antigravity" => assert_eq!(output, serde_json::json!({"decision": "allow"})),
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    #[test]
-    fn aligned_pre_tool_denies_with_each_native_shape() {
-        for (harness, bytes, variables) in pre_tool_cases() {
-            let expected_harness = harness.clone();
-            let emission = execute_aligned_event::<PreToolUse, _>(
-                harness,
-                bytes,
-                &variables,
-                move |_, _, _| PreToolUseOutput::deny(&expected_harness, "blocked by policy"),
-            )
-            .unwrap();
-
-            assert_eq!(emission.exit_code(), 0);
-            assert!(emission.stderr().is_empty());
-            let output: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-            assert_eq!(
-                output["decision"]
-                    .as_str()
-                    .or_else(|| output["hookSpecificOutput"]["permissionDecision"].as_str()),
-                Some("deny")
-            );
-            assert_eq!(
-                output["reason"]
-                    .as_str()
-                    .or_else(|| output["hookSpecificOutput"]["permissionDecisionReason"].as_str()),
-                Some("blocked by policy")
-            );
-        }
-    }
-
-    #[test]
-    fn aligned_pre_tool_rejects_wrong_output_arm_before_emission() {
-        let (_, bytes, variables) = pre_tool_cases().remove(1);
-        let result =
-            execute_pre_tool_use(HarnessId::CODEX, bytes, &variables, |_, environment, _| {
-                assert!(matches!(
-                    environment,
-                    PreToolUseCommandEnvironment::Codex(_)
-                ));
-                Ok(PreToolUseOutput::Claude(
-                    hookkit_claude::catalog::PreToolUseOutput::no_op(),
-                ))
-            });
-        assert!(matches!(
-            result,
-            Err(HookkitError::EventHarnessMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn aligned_pre_tool_validates_required_native_environments() {
-        let (claude, claude_bytes, _) = pre_tool_cases().remove(0);
-        let claude_result = execute_pre_tool_use(
-            claude,
-            claude_bytes,
-            &EnvironmentVariables::new(),
-            |_, _, _| panic!("handler must not run for an invalid environment"),
-        );
-        assert!(matches!(
-            claude_result,
-            Err(HookkitError::InvalidHookEnvironment { .. })
-        ));
-    }
-
-    #[test]
-    fn mismatched_harness_arms_fail_before_emission() {
-        let bytes = br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{},"tool_use_id":"u","tool_response":{}}"#.to_vec();
-        let result = execute_post_tool_use(
-            HarnessId::CLAUDE_CODE,
-            bytes,
-            &claude_variables(),
-            |_, environment, _| {
-                assert!(matches!(
-                    environment,
-                    PostToolUseCommandEnvironment::Claude(_)
-                ));
-                Ok(PostToolUseOutput::Codex(
-                    hookkit_codex::protocol::PostToolUseOutput::no_op(),
-                ))
-            },
-        );
-        assert!(matches!(
-            result,
-            Err(HookkitError::EventHarnessMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn antigravity_post_tool_preserves_typed_tool_data() {
-        let bytes = br#"{"conversationId":"c","workspacePaths":["/repo","/lib"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"run_command","args":{"CommandLine":"cargo test","Cwd":"/repo"}},"stepIdx":2}"#.to_vec();
-        let emission = execute_post_tool_use(
-            HarnessId::ANTIGRAVITY,
-            bytes,
-            &EnvironmentVariables::new(),
-            |input, environment, context| {
-                assert_eq!(input.workspace_roots().len(), 2);
-                assert_eq!(context.workspace_roots().len(), 2);
-                assert!(matches!(
-                    environment,
-                    PostToolUseCommandEnvironment::Antigravity(_)
-                ));
-                Ok(PostToolUseOutput::Antigravity(Default::default()))
-            },
-        )
-        .unwrap();
-        assert_eq!(emission.stdout(), b"{}");
-    }
-
-    #[test]
-    fn turn_completion_preserves_each_native_contract() {
-        let cases = [
-            (
-                HarnessId::CLAUDE_CODE,
-                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"done"}"#.as_slice(),
-                claude_variables(),
-            ),
-            (
-                HarnessId::CODEX,
-                br#"{"session_id":"s","transcript_path":"/tmp/t","cwd":"/repo","hook_event_name":"Stop","model":"gpt-5","turn_id":"t","permission_mode":"default","stop_hook_active":false,"last_assistant_message":"done"}"#.as_slice(),
-                EnvironmentVariables::new(),
-            ),
-            (
-                HarnessId::ANTIGRAVITY,
-                br#"{"conversationId":"s","workspacePaths":["/repo"],"transcriptPath":"/tmp/t","artifactDirectoryPath":"/tmp/a","executionNum":1,"terminationReason":"completed","fullyIdle":true}"#.as_slice(),
-                EnvironmentVariables::new(),
-            ),
-        ];
-
-        for (harness, bytes, variables) in cases {
-            let expected = harness.clone();
-            let handler_harness = expected.clone();
-            let emission = execute_turn_completion(
-                harness,
-                bytes,
-                &variables,
-                move |input, environment, context| {
-                    assert_eq!(input.harness(), handler_harness);
-                    assert_eq!(environment.harness(), handler_harness);
-                    assert_eq!(context.workspace_roots()[0].as_str(), "/repo");
-                    match input {
-                        TurnCompletionInput::Claude(_) => Ok(TurnCompletionOutput::Claude(
-                            hookkit_claude::catalog::StopOutput::no_op(),
-                        )),
-                        TurnCompletionInput::Codex(_) => Ok(TurnCompletionOutput::Codex(
-                            hookkit_codex::catalog::StopOutput::no_op(),
-                        )),
-                        TurnCompletionInput::Antigravity(_) => Ok(
-                            TurnCompletionOutput::Antigravity(hookkit_antigravity::StopOutput {
-                                decision: "stop".into(),
-                                reason: None,
-                            }),
-                        ),
-                        _ => unreachable!(),
-                    }
-                },
-            )
-            .unwrap();
-            let json: serde_json::Value = serde_json::from_slice(emission.stdout()).unwrap();
-            if expected == HarnessId::ANTIGRAVITY {
-                assert_eq!(json, serde_json::json!({"decision": "stop"}));
-            } else {
-                assert_eq!(json, serde_json::json!({}));
-            }
-        }
-    }
-}
+mod tests;

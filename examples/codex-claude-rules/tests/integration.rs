@@ -93,3 +93,23 @@ fn codex_stdin_injects_once_then_emits_native_no_op() {
     assert!(repeated.status.success(), "{:?}", repeated.stderr);
     assert!(repeated.stdout.is_empty());
 }
+
+#[test]
+fn argument_errors_exit_one_instead_of_the_blocking_status_two() {
+    let bogus = Command::new(env!("CARGO_BIN_EXE_codex-claude-rules"))
+        .arg("--no-such-flag")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(bogus.status.code(), Some(1));
+    assert!(bogus.stdout.is_empty());
+    assert!(!bogus.stderr.is_empty());
+
+    let help = Command::new(env!("CARGO_BIN_EXE_codex-claude-rules"))
+        .arg("--help")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(help.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--project-root"));
+}

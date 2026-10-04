@@ -1,0 +1,13 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:codex:commit-ff6aec9-r2:interrupt:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "interrupt.command.output",
+  "type": "object"
+}

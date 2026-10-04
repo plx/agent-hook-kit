@@ -1,0 +1,82 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-30-r1:directory-added:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "directory": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": true,
+      "properties": {
+        "level": {
+          "description": "Open string: the Agent SDK types it as string; the examples are the documented levels.",
+          "examples": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "hook_event_name": {
+      "const": "DirectoryAdded"
+    },
+    "permission_mode": {
+      "description": "Open string: the Agent SDK types it as string; the examples are the documented modes.",
+      "examples": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "description": "Session scratchpad directory; absent when the session has none or the temp directory is unavailable (Claude Code v2.1.257 or later).",
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "slash_command",
+        "register_repo_root"
+      ]
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "directory",
+    "source"
+  ],
+  "type": "object"
+}

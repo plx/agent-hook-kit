@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-09-29-r1:post-tool-use:input",
+  "type": "object",
+  "required": ["conversationId", "workspacePaths", "transcriptPath", "artifactDirectoryPath", "stepIdx"],
+  "properties": {
+    "conversationId": { "type": "string", "description": "Unique UUID of the active agent conversation." },
+    "workspacePaths": { "type": "array", "items": { "type": "string" }, "description": "Absolute directory paths of the user's mounted workspaces; may be empty for a conversation without a workspace." },
+    "transcriptPath": { "type": "string", "description": "Path to the conversation's transcript.jsonl under <app_data_dir>/brain/<conversationId>/.system_generated/logs/." },
+    "artifactDirectoryPath": { "type": "string", "description": "Path to the directory containing the conversation's artifacts and screenshots." },
+    "modelName": { "type": "string", "description": "Name or identifier of the model handling the invocation; optional because earlier builds did not document or send it." },
+    "toolCall": {
+      "type": "object",
+      "description": "Details of the executed tool call. Documented for every surface by the unified reference, but optional because the superseded IDE reference and earlier generic references omitted it.",
+      "required": ["name", "args"],
+      "properties": {
+        "name": { "type": "string", "description": "Open tool name, for example run_command." },
+        "args": { "type": "object", "description": "Tool arguments exactly as executed." }
+      },
+      "additionalProperties": true
+    },
+    "stepIdx": { "type": "integer", "minimum": 0, "description": "0-based index of the completed step in the whole conversation trajectory." },
+    "error": { "type": "string", "description": "Runtime error message when the tool call failed; empty (or absent) when it succeeded." }
+  },
+  "additionalProperties": true
+}

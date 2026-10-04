@@ -1,0 +1,82 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0 }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 } }, stepIdx: 19, conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, modelName: gemini-3.6-flash-medium }
+    - id: view-file
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: view_file, args: { AbsolutePath: /workspace/project/README.md } }, stepIdx: 4, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: list-permissions-null-args
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: list_permissions, args: null }, stepIdx: 7, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: list-permissions-without-args
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: list_permissions }, stepIdx: 7, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+  negative:
+    - id: missing-tool-call
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, stepIdx: 0 }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-step-index
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: first }
+      expected_pointer: /stepIdx
+      expected_keyword: type
+    - id: invalid-model-name
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, modelName: 36 }
+      expected_pointer: /modelName
+      expected_keyword: type
+output:
+  - id: allow
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { decision: allow }
+  - id: ask
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: { decision: ask, reason: Requires confirmation for test execution., permissionOverrides: [command(npm test)] }
+  - id: deny-unless-prior-grant
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { decision: deny_unless_prior_grant, permissionOverrides: [read_file(/workspace/project/.env)] }
+output_negative:
+  - id: empty-decision
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference, antigravity-cli-changelog]
+    value: { decision: "" }
+    expected_pointer: /decision
+    expected_keyword: enum
+  - id: duplicate-permission-override
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference]
+    value: { decision: ask, permissionOverrides: [command(npm test), command(npm test)] }
+    expected_pointer: /permissionOverrides
+    expected_keyword: uniqueItems
+process:
+  - id: ask
+    binding: command
+    outcome: decision
+    exit_code: 0
+    stdout_base64: eyJkZWNpc2lvbiI6ImFzayIsInJlYXNvbiI6IlJlcXVpcmVzIGNvbmZpcm1hdGlvbiBmb3IgdGVzdCBleGVjdXRpb24uIiwicGVybWlzc2lvbk92ZXJyaWRlcyI6WyJjb21tYW5kKG5wbSB0ZXN0KSJdfQ==
+    stdout_sha256: b8e2a8e4523c79f1e2132ce6533b87d0bb7a6205baeb7eaabcc34ce06afd14ee
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

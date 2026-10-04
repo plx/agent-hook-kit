@@ -1,0 +1,87 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: session
+  identification:
+    discriminator:
+      const: Setup
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: setup
+  wire_name: Setup
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+harness: claude-code
+id: claude-code/docs-2026-09-29-r1/Setup
+schemas:
+  input:
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+  outputs:
+  - assurance:
+      confidence: low
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+snapshot: docs-2026-09-29-r1
+uncertainties:
+- Claude Code discards every Setup JSON output field, including hookSpecificOutput.additionalContext, on every exit code; the Agent SDK output union still types Setup additionalContext, so the schema omits hookSpecificOutput as documented.
+- Only command handlers run on Setup. The handler-support list still names mcp_tool, but a configured mcp_tool Setup hook is always skipped, so it is omitted from handler_kinds.
+- terminalSequence is emitted only by an interactive session with its interface on screen; Setup fires only for --init-only or non-interactive -p runs, so every field is modeled as ignored.
+- Exit code and stderr are ignored; with -p and --output-format stream-json --verbose they appear only as hook_response events.

@@ -1,0 +1,144 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      source: startup
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-source
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionStart
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: SessionStart
+      session_id: s1
+      source: startup
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      agent_type: reviewer
+      context_tokens: 182340
+      cwd: /repo
+      estimated_cache_write_usd: 1.1396
+      hook_event_name: SessionStart
+      model: claude-opus-5
+      prompt_cache_likely_expired: true
+      prompt_id: prompt-1
+      scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+      seconds_since_last_response: 5400
+      session_id: s1
+      session_title: Review
+      source: resume
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      additionalContext: Read conventions.
+      hookEventName: SessionStart
+      reloadSkills: true
+      sessionTitle: Review
+      watchPaths:
+      - /repo/.env
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJSZWFkIGNvbnZlbnRpb25zLiIsImhvb2tFdmVudE5hbWUiOiJTZXNzaW9uU3RhcnQiLCJyZWxvYWRTa2lsbHMiOnRydWUsInNlc3Npb25UaXRsZSI6IlJldmlldyIsIndhdGNoUGF0aHMiOlsiL3JlcG8vLmVudiJdfX0=
+  stdout_sha256: 1196976e11715c65d7c40a4938a30043b720765d17a231d919604b7d0ebbc8da
+- binding: command
+  exit_code: 0
+  id: command-text
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vay1wcm92aWRlZCBjb250ZXh0Lg==
+  stdout_sha256: 5a9a1e0f83d894e72832408640efb2e622b634e35378d402ee8a97c47e5f3456
+- binding: command
+  exit_code: 0
+  id: command-text-json-lines
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7Im5vdGUiOjJ9Cg==
+  stdout_sha256: 3a150299ab73b3e5974ab3aa4823ec51799349ab4a07fa27dfb0e33c57570479
+- binding: command
+  exit_code: 0
+  id: command-text-open-brace
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyBjb250ZXh0IHdpdGhvdXQgYSBjbG9zaW5nIGJyYWNl
+  stdout_sha256: 754820491a3c662f4052600932dfa19c97a606791d819a501cd5c2c9b8d62d73
+- binding: command
+  exit_code: 0
+  id: command-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command
+  exit_code: 0
+  id: command-schema-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command
+  exit_code: 1
+  id: command-nonzero-structured
+  outcome: nonzero-structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJSZWFkIGNvbnZlbnRpb25zLiIsImhvb2tFdmVudE5hbWUiOiJTZXNzaW9uU3RhcnQiLCJyZWxvYWRTa2lsbHMiOnRydWUsInNlc3Npb25UaXRsZSI6IlJldmlldyIsIndhdGNoUGF0aHMiOlsiL3JlcG8vLmVudiJdfX0=
+  stdout_sha256: 1196976e11715c65d7c40a4938a30043b720765d17a231d919604b7d0ebbc8da
+- binding: command
+  exit_code: 1
+  id: command-nonzero-unstructured
+  outcome: nonzero-unstructured
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: nonzero-unstructured
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

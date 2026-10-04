@@ -12,7 +12,7 @@ state_capabilities:
   multiselect: true
   default: >-
     {%- for archetype in archetype_catalog.archetypes -%}
-    {%- if archetype.stable_id == starter -%}{{ archetype.required_state }}{%- endif -%}
+    {%- if archetype.stable_id == starter -%}{{ archetype.required_state or [] }}{%- endif -%}
     {%- endfor -%}
   validator: >-
     {% set selected = namespace(value=none, missing=[]) %}

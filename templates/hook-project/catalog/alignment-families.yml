@@ -6,9 +6,9 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::PreToolUse
     supported_harnesses: [claude-code, codex, antigravity]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/PreToolUse
-      codex: codex/commit-1e59dc5-r1/PreToolUse
-      antigravity: antigravity/docs-2026-08-04-r1/PreToolUse
+      claude-code: claude-code/docs-2026-09-30-r1/PreToolUse
+      codex: codex/commit-ff6aec9-r2/PreToolUse
+      antigravity: antigravity/docs-2026-09-30-r1/PreToolUse
     portable_floor:
       input: "Exact native input arms plus harness, workspace roots, tool name, and tool input views."
       output: "Explicit native allow or deny with a reason; native-only decisions and rewrites remain arm-specific."
@@ -20,9 +20,9 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::PostToolUse
     supported_harnesses: [claude-code, codex, antigravity]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/PostToolUse
-      codex: codex/commit-1e59dc5-r1/PostToolUse
-      antigravity: antigravity/docs-2026-08-04-r1/PostToolUse
+      claude-code: claude-code/docs-2026-09-30-r1/PostToolUse
+      codex: codex/commit-ff6aec9-r2/PostToolUse
+      antigravity: antigravity/docs-2026-09-30-r1/PostToolUse
     portable_floor:
       input: "Exact native input arms plus harness and workspace roots; result and message fidelity is arm-specific."
       output: "Exact native output arm selected by the handler; the universal safe response is no-op."
@@ -34,9 +34,9 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::TurnCompletion
     supported_harnesses: [claude-code, codex, antigravity]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/Stop
-      codex: codex/commit-1e59dc5-r1/Stop
-      antigravity: antigravity/docs-2026-08-04-r1/Stop
+      claude-code: claude-code/docs-2026-09-30-r1/Stop
+      codex: codex/commit-ff6aec9-r2/Stop
+      antigravity: antigravity/docs-2026-09-30-r1/Stop
     portable_floor:
       input: "Exact native stop input arms plus harness and workspace roots."
       output: "Allow completion or continue execution with one portable reason; message audiences remain native-specific."
@@ -48,8 +48,8 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::PermissionRequest
     supported_harnesses: [claude-code, codex]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/PermissionRequest
-      codex: codex/commit-1e59dc5-r1/PermissionRequest
+      claude-code: claude-code/docs-2026-09-30-r1/PermissionRequest
+      codex: codex/commit-ff6aec9-r2/PermissionRequest
     portable_floor:
       input: "Exact native permission-request arms plus harness, workspace roots, tool name, and tool input."
       output: "Allow or deny with a reason; Claude input and permission rewrites are intentionally outside the floor."
@@ -61,8 +61,8 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::PreCompact
     supported_harnesses: [claude-code, codex]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/PreCompact
-      codex: codex/commit-1e59dc5-r1/PreCompact
+      claude-code: claude-code/docs-2026-09-30-r1/PreCompact
+      codex: codex/commit-ff6aec9-r2/PreCompact
     portable_floor:
       input: "Exact native pre-compaction arms plus trigger and shared session context."
       output: "Observer-only no-op: Claude can block compaction specifically while Codex continuation control is broader."
@@ -74,12 +74,12 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::PostCompact
     supported_harnesses: [claude-code, codex]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/PostCompact
-      codex: codex/commit-1e59dc5-r1/PostCompact
+      claude-code: claude-code/docs-2026-09-30-r1/PostCompact
+      codex: codex/commit-ff6aec9-r2/PostCompact
     portable_floor:
       input: "Exact native post-compaction arms plus trigger; only Claude carries the compact summary."
-      output: "No-op or a portable system notice."
-    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: true, tool_result: false, separate_user_agent_messages: false, exact_session_boundary: false }
+      output: "No-op or a portable system notice, which only Codex shows; Claude Code discards PostCompact output."
+    capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, tool_result: false, separate_user_agent_messages: false, exact_session_boundary: false }
 
   - stable_id: session_start
     display_name: Session start
@@ -87,8 +87,8 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::SessionStart
     supported_harnesses: [claude-code, codex]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/SessionStart
-      codex: codex/commit-1e59dc5-r1/SessionStart
+      claude-code: claude-code/docs-2026-09-30-r1/SessionStart
+      codex: codex/commit-ff6aec9-r2/SessionStart
     portable_floor:
       input: "Exact boundary with native input arms plus session, workspace, source, and cwd context."
       output: "No-op or agent context injection; titles, watch paths, initial messages, and skill reloads remain native."
@@ -100,11 +100,11 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::SessionEnd
     supported_harnesses: [claude-code, codex]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/SessionEnd
-      codex: codex/commit-1e59dc5-r1/SessionEnd
+      claude-code: claude-code/docs-2026-09-30-r1/SessionEnd
+      codex: codex/commit-ff6aec9-r2/SessionEnd
     portable_floor:
       input: "Exact session-end boundary with native reason and context."
-      output: "Observer-only no-op; Codex ignores output and therefore emits empty stdout."
+      output: "Observer-only no-op; both harnesses discard SessionEnd output, and Codex's no-op is empty stdout."
     capabilities: { input_rewrite: false, true_pre_action_block: false, post_action_feedback: false, tool_result: false, separate_user_agent_messages: false, exact_session_boundary: true }
 
   - stable_id: subagent_start
@@ -113,8 +113,8 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::SubagentStart
     supported_harnesses: [claude-code, codex]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/SubagentStart
-      codex: codex/commit-1e59dc5-r1/SubagentStart
+      claude-code: claude-code/docs-2026-09-30-r1/SubagentStart
+      codex: codex/commit-ff6aec9-r2/SubagentStart
     portable_floor:
       input: "Exact native arms plus subagent identity and workspace context."
       output: "Observe or append agent context; there is no portable pre-start block."
@@ -126,8 +126,8 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::SubagentStop
     supported_harnesses: [claude-code, codex]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/SubagentStop
-      codex: codex/commit-1e59dc5-r1/SubagentStop
+      claude-code: claude-code/docs-2026-09-30-r1/SubagentStop
+      codex: codex/commit-ff6aec9-r2/SubagentStop
     portable_floor:
       input: "Exact native arms plus subagent identity, transcript, and completion context."
       output: "Observe or block completion with one reason; richer message audiences remain native-specific."
@@ -139,9 +139,9 @@ alignments:
     runtime_marker: hookkit_runtime::aligned::UserPromptSubmit
     supported_harnesses: [claude-code, codex]
     native_members:
-      claude-code: claude-code/docs-2026-08-05-r1/UserPromptSubmit
-      codex: codex/commit-1e59dc5-r1/UserPromptSubmit
+      claude-code: claude-code/docs-2026-09-30-r1/UserPromptSubmit
+      codex: codex/commit-ff6aec9-r2/UserPromptSubmit
     portable_floor:
       input: "Exact native submitted-prompt arms plus prompt and shared session context."
-      output: "No-op, append agent context, or block with a reason; Claude presentation controls remain native."
+      output: "No-op, append agent context, or block with a reason (on Claude Code the reason reaches only the user); Claude presentation controls remain native."
     capabilities: { input_rewrite: false, true_pre_action_block: true, post_action_feedback: false, tool_result: false, separate_user_agent_messages: true, exact_session_boundary: false }

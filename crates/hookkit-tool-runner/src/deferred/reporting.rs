@@ -15,6 +15,8 @@ const MANUAL_USER: &str = "manual.user";
 const MANUAL_AGENT: &str = "manual.agent";
 const OPERATIONAL_USER: &str = "operational.user";
 const OPERATIONAL_AGENT: &str = "operational.agent";
+const UNAVAILABLE_USER: &str = "unavailable-tool.user";
+const UNAVAILABLE_AGENT: &str = "unavailable-tool.agent";
 const MASTER_USER: &str = "master.user";
 const MASTER_AGENT: &str = "master.agent";
 
@@ -52,6 +54,19 @@ pub(crate) struct RenderedBuckets {
     pub auto_fixed: RenderedPair,
     pub manual_fixes_needed: RenderedPair,
     pub operational_error: RenderedPair,
+    pub unavailable_tool: RenderedPair,
+}
+
+impl RenderedBuckets {
+    fn pairs(&self) -> [&RenderedPair; 5] {
+        [
+            &self.clean,
+            &self.auto_fixed,
+            &self.manual_fixes_needed,
+            &self.operational_error,
+            &self.unavailable_tool,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -60,6 +75,31 @@ pub(crate) struct RenderedMessages {
     pub buckets: RenderedBuckets,
     pub user: Option<String>,
     pub agent: Option<String>,
+    /// Which audiences were rendered only from built-in text.
+    #[serde(skip)]
+    pub builtin: BuiltinAudiences,
+}
+
+/// Audiences whose text comes only from the runner's built-in templates or
+/// messages, not from configured templates.
+///
+/// Built-in text is written to be useful where a harness can deliver it; when
+/// a Stop has no channel for that audience (agent text on an allowed Stop, or
+/// any user text on Antigravity), omitting it is expected and is neither
+/// warned about nor a strict lowering failure. Configured text keeps the
+/// `loweringPolicy` contract.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct BuiltinAudiences {
+    pub user: bool,
+    pub agent: bool,
+}
+
+impl BuiltinAudiences {
+    /// Both audiences carry only runner-owned text.
+    pub(crate) const ALL: Self = Self {
+        user: true,
+        agent: true,
+    };
 }
 
 #[derive(Debug)]
@@ -73,6 +113,7 @@ pub(crate) struct DeferredReporter {
     config: pkl::DeferredReporting,
     groups: Vec<CompiledGroup>,
     templates: Environment<'static>,
+    builtin: BuiltinAudiences,
 }
 
 impl DeferredReporter {
@@ -135,6 +176,8 @@ impl DeferredReporter {
             (MANUAL_AGENT, config.manual_fixes_needed.agent.clone()),
             (OPERATIONAL_USER, config.operational_error.user.clone()),
             (OPERATIONAL_AGENT, config.operational_error.agent.clone()),
+            (UNAVAILABLE_USER, config.unavailable_tool.user.clone()),
+            (UNAVAILABLE_AGENT, config.unavailable_tool.agent.clone()),
             (MASTER_USER, config.master_user.clone()),
             (MASTER_AGENT, config.master_agent.clone()),
         ] {
@@ -149,6 +192,7 @@ impl DeferredReporter {
             config: config.clone(),
             groups,
             templates,
+            builtin: builtin_audiences(config),
         })
     }
 
@@ -208,29 +252,29 @@ impl DeferredReporter {
                 render_empty || count("operational_errors") > 0,
                 &context,
             )?,
+            unavailable_tool: self.render_pair(
+                UNAVAILABLE_USER,
+                UNAVAILABLE_AGENT,
+                render_empty || count("unavailable_tools") > 0,
+                &context,
+            )?,
         };
         let rendered_buckets = serde_json::to_value(&buckets)
             .map_err(|error| ReportingError::Context(error.to_string()))?;
-        let user_list = [
-            &buckets.clean.user,
-            &buckets.auto_fixed.user,
-            &buckets.manual_fixes_needed.user,
-            &buckets.operational_error.user,
-        ]
-        .into_iter()
-        .filter(|message| !message.trim().is_empty())
-        .cloned()
-        .collect::<Vec<_>>();
-        let agent_list = [
-            &buckets.clean.agent,
-            &buckets.auto_fixed.agent,
-            &buckets.manual_fixes_needed.agent,
-            &buckets.operational_error.agent,
-        ]
-        .into_iter()
-        .filter(|message| !message.trim().is_empty())
-        .cloned()
-        .collect::<Vec<_>>();
+        let user_list = buckets
+            .pairs()
+            .into_iter()
+            .map(|pair| &pair.user)
+            .filter(|message| !message.trim().is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        let agent_list = buckets
+            .pairs()
+            .into_iter()
+            .map(|pair| &pair.agent)
+            .filter(|message| !message.trim().is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
         let object = context
             .as_object_mut()
             .expect("reporting context is an object");
@@ -245,6 +289,7 @@ impl DeferredReporter {
             buckets,
             user,
             agent,
+            builtin: self.builtin,
         })
     }
 
@@ -344,6 +389,7 @@ impl DeferredReporter {
                 "uncovered": result.uncovered_files.len(),
                 "not_applicable": result.not_applicable_files.len(),
                 "coverage_gaps": result.coverage_gaps.len(),
+                "unavailable_tools": result.unavailable_tools.len(),
                 "groups": groups.len(),
             },
             "files": result.files.values().collect::<Vec<_>>(),
@@ -368,6 +414,7 @@ impl DeferredReporter {
             "artifact_contents": artifact_contents,
             "operational_problems": result.operational_problems,
             "coverage_gaps": result.coverage_gaps,
+            "unavailable_tools": result.unavailable_tools.values().collect::<Vec<_>>(),
         }))
         .map_err(|error| ReportingError::Context(error.to_string()))
     }
@@ -399,6 +446,28 @@ fn associated_artifact_paths(result: &DeferredRunResult, files: &[&FileResult]) 
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// Which audiences every template of `config` leaves at the built-in default.
+fn builtin_audiences(config: &pkl::DeferredReporting) -> BuiltinAudiences {
+    let defaults = pkl::DeferredReporting::default();
+    let pairs = [
+        (&config.clean, &defaults.clean),
+        (&config.auto_fixed, &defaults.auto_fixed),
+        (&config.manual_fixes_needed, &defaults.manual_fixes_needed),
+        (&config.operational_error, &defaults.operational_error),
+        (&config.unavailable_tool, &defaults.unavailable_tool),
+    ];
+    BuiltinAudiences {
+        user: config.master_user == defaults.master_user
+            && pairs
+                .iter()
+                .all(|(pair, default)| pair.user == default.user),
+        agent: config.master_agent == defaults.master_agent
+            && pairs
+                .iter()
+                .all(|(pair, default)| pair.agent == default.agent),
+    }
 }
 
 fn nonempty(message: String) -> Option<String> {
@@ -567,6 +636,58 @@ mod tests {
         let rendered = reporter.render(&result, run()).unwrap();
         assert_eq!(rendered.user.as_deref(), Some("sub=1|1|1"));
         assert_eq!(rendered.agent.as_deref(), Some("artifact bytes"));
+    }
+
+    /// A customized `masterUser` that joins the rendered bucket lists still
+    /// carries the notice for a tool that never ran.
+    #[test]
+    fn unavailable_tools_render_as_a_bucket_custom_masters_keep() {
+        let unavailable = || crate::UnavailableTool {
+            tool_id: "prettier".into(),
+            tool_name: "Prettier".into(),
+            executable: "prettier".into(),
+            install_hint: None,
+            affected_files: vec![PathBuf::from("/repo/a.ts")],
+            message: "Prettier: `prettier` is unavailable; its files were not checked".into(),
+        };
+        let mut result = DeferredRunResult::default();
+        result.record_unavailable_tool(unavailable());
+        result.record_uncovered("/repo/a.ts");
+
+        let defaults = DeferredReporter::new(&pkl::DeferredReporting::default()).unwrap();
+        let rendered = defaults.render(&result, run()).unwrap();
+        assert_eq!(
+            rendered.user.as_deref(),
+            Some("Prettier: `prettier` is unavailable; its files were not checked")
+        );
+        assert!(rendered.agent.is_none());
+        assert_eq!(rendered.builtin, BuiltinAudiences::ALL);
+
+        let config = pkl::DeferredReporting {
+            master_user: "hookkit: {{ rendered_bucket_lists.user | join(', ') }}".into(),
+            ..Default::default()
+        };
+        let custom = DeferredReporter::new(&config).unwrap();
+        let rendered = custom.render(&result, run()).unwrap();
+        assert_eq!(
+            rendered.user.as_deref(),
+            Some("hookkit: Prettier: `prettier` is unavailable; its files were not checked")
+        );
+        assert!(!rendered.builtin.user && rendered.builtin.agent);
+    }
+
+    #[test]
+    fn customizing_any_audience_template_makes_that_audience_configured() {
+        let mut config = pkl::DeferredReporting::default();
+        config.auto_fixed.agent = "re-read {{ counts.auto_fixed }}".into();
+        let reporter = DeferredReporter::new(&config).unwrap();
+        assert_eq!(
+            reporter.builtin,
+            BuiltinAudiences {
+                user: true,
+                agent: false
+            }
+        );
     }
 
     #[test]

@@ -203,6 +203,7 @@ pub enum InspectionSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 /// Literal path operand recovered from a command argv.
 pub struct PathCandidate {
     /// Exact recovered argv value.
@@ -223,43 +224,49 @@ impl PathCandidate {
 fn summarize_search(executable: &str, argv: &[String]) -> InspectionSummary {
     let mut index = 1;
     let mut query = None;
+    let mut paths = Vec::new();
+    let mut operands_only = false;
+    // rg and GNU grep accept options after positionals, so option parsing
+    // continues until `--`.
     while index < argv.len() {
-        let argument = &argv[index];
-        if argument == "--" {
-            index += 1;
-            break;
-        }
-        if matches!(argument.as_str(), "-e" | "--regexp") {
-            let Some(value) = argv.get(index + 1) else {
+        let argument = argv[index].as_str();
+        if !operands_only {
+            if argument == "--" {
+                operands_only = true;
+                index += 1;
+                continue;
+            }
+            if matches!(argument, "-e" | "--regexp") {
+                let Some(value) = argv.get(index + 1) else {
+                    return InspectionSummary::Unknown;
+                };
+                if query.is_some() {
+                    // Several patterns do not fit one summarized query.
+                    return InspectionSummary::Unknown;
+                }
+                query = Some(value.clone());
+                index += 2;
+                continue;
+            }
+            if is_search_boolean_flag(argument) {
+                index += 1;
+                continue;
+            }
+            if argument.starts_with('-') && argument != "-" {
                 return InspectionSummary::Unknown;
-            };
-            query = Some(value.clone());
-            index += 2;
-            continue;
+            }
         }
-        if is_search_boolean_flag(argument) {
-            index += 1;
-            continue;
+        if query.is_none() {
+            query = Some(argument.to_owned());
+        } else {
+            paths.push(PathCandidate::new(argument, index));
         }
-        if argument.starts_with('-') {
-            return InspectionSummary::Unknown;
-        }
-        break;
+        index += 1;
     }
 
-    if query.is_none() {
-        query = argv.get(index).cloned();
-        index += usize::from(query.is_some());
-    }
     let Some(query) = query else {
         return InspectionSummary::Unknown;
     };
-    let paths = argv
-        .iter()
-        .enumerate()
-        .skip(index)
-        .map(|(index, value)| PathCandidate::new(value, index))
-        .collect();
     InspectionSummary::Search {
         command: executable.to_owned(),
         query,
@@ -338,8 +345,10 @@ fn is_search_boolean_flag(argument: &str) -> bool {
     )
 }
 
+/// Normalizes executable names exactly as file-access inference does: a bare
+/// name, or the basename of a path in a standard system binary directory.
 fn executable_name(command: &str) -> &str {
-    command.rsplit('/').next().unwrap_or(command)
+    crate::file_access::builtin_command_name(command)
 }
 
 #[cfg(test)]
@@ -389,6 +398,38 @@ mod tests {
         );
         assert_eq!(
             summarizer.summarize(&command("rg --glob '*.rs' needle")),
+            InspectionSummary::Unknown
+        );
+    }
+
+    #[test]
+    fn search_options_after_the_query_are_not_paths() {
+        let summarizer = InspectionSummarizer;
+        assert_eq!(
+            summarizer.summarize(&command("rg needle -g '*.rs'")),
+            InspectionSummary::Unknown
+        );
+        assert!(matches!(
+            summarizer.summarize(&command("rg needle src -n")),
+            InspectionSummary::Search { ref paths, .. }
+                if paths.iter().map(|path| path.value.as_str()).collect::<Vec<_>>() == ["src"]
+        ));
+        assert!(matches!(
+            summarizer.summarize(&command("grep -- -n src")),
+            InspectionSummary::Search { ref query, ref paths, .. }
+                if query == "-n" && paths.len() == 1
+        ));
+    }
+
+    #[test]
+    fn executable_names_match_file_access_normalization() {
+        let summarizer = InspectionSummarizer;
+        assert!(matches!(
+            summarizer.summarize(&command("/bin/cat .env")),
+            InspectionSummary::Read { .. }
+        ));
+        assert_eq!(
+            summarizer.summarize(&command("./cat .env")),
             InspectionSummary::Unknown
         );
     }

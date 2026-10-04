@@ -36,11 +36,12 @@ pub use bash::{
     ArgvStatus, BashAnalysis, BashAnalysisOutcome, BashAnalyzer, BashAnalyzerLimits,
     CommandOccurrence, ConstructKind, ConstructOccurrence, DynamicReason, ExecutionContext,
     HereDocument, IncompleteReason, Redirection, RedirectionKind, RedirectionOperator, ShellWord,
-    SourcePosition, SourceSpan, UnavailableReason,
+    SourcePosition, SourceSpan, StatementKind, StatementRedirection, UnavailableReason,
 };
 pub use call::{
-    JsonRef, ShellToolCallError, ShellToolCallErrorKind, ShellToolCallExt, ShellToolCallMatch,
-    ShellToolCallRef, ShellToolProfile, ShellToolProfileError, ToolPhase,
+    JsonRef, ShellCwdOrigin, ShellDialect, ShellToolCallError, ShellToolCallErrorKind,
+    ShellToolCallExt, ShellToolCallMatch, ShellToolCallRef, ShellToolProfile,
+    ShellToolProfileError, ToolPhase,
 };
 pub use file_access::{
     BuiltinCommandFileSemantics, CommandFileContext, CommandFileSemantics, FileAccessAnalyzer,

@@ -1,11 +1,11 @@
 //! Core types and error model for hookkit.
 #![deny(missing_docs)]
+#![warn(missing_debug_implementations)]
 mod context;
 mod environment;
 mod error;
 mod event;
 mod identity;
-pub mod json_helpers;
 pub mod path;
 mod raw;
 

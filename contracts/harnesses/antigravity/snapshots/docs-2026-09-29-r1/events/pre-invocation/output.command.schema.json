@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-09-29-r1:pre-invocation:command-output",
+  "type": "object",
+  "properties": {
+    "injectSteps": {
+      "type": "array",
+      "description": "Steps to inject into the trajectory before the model is called.",
+      "items": {
+        "type": "object",
+        "oneOf": [
+          { "required": ["toolCall"] },
+          { "required": ["userMessage"] },
+          { "required": ["ephemeralMessage"] }
+        ],
+        "properties": {
+          "toolCall": { "type": "object", "description": "A tool call to execute." },
+          "userMessage": { "type": "string", "description": "A message from the user." },
+          "ephemeralMessage": { "type": "string", "description": "A transient system message." }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

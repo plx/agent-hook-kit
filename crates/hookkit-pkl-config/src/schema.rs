@@ -60,14 +60,31 @@ pub struct Settings {
     pub fail_fast: bool,
     /// Whether later tools may run after an earlier tool reports issues.
     pub continue_after_issues: bool,
-    /// Glob patterns excluded from tool file selection.
+    /// Glob patterns excluded from tool file selection, matched against
+    /// project-relative paths.
     pub exclude: Vec<String>,
     /// Handling for common output that the native harness cannot represent.
     pub lowering_policy: LoweringPolicy,
-    /// Directory used for full tool diagnostics, or `None` to disable files.
+    /// Directory for the immediate runner's full tool diagnostics, relative to
+    /// the project root. `None` (only reachable by constructing settings in
+    /// Rust) falls back to the per-user artifact directory under the system
+    /// temporary directory (`hookkit-artifacts-<uid>` on Unix, see
+    /// `hookkit_runtime::artifacts::ArtifactManager::default_temp_dir`); it
+    /// does not disable diagnostics files.
     pub diagnostics_directory: Option<String>,
     /// Behavior when a configured executable cannot be found.
     pub missing_tool_policy: MissingToolPolicy,
+    /// Deadline in seconds for one external tool command; `0` disables it.
+    /// A command that exceeds it is killed with its process group and
+    /// reported as an operational failure. The deadline applies to each
+    /// command separately; [`Self::run_timeout_seconds`] bounds their sum.
+    pub command_timeout_seconds: u64,
+    /// Budget in seconds for every external tool command of one hook
+    /// invocation together; `0` disables it. Each command's deadline is the
+    /// smaller of `command_timeout_seconds` and the budget left, and a command
+    /// that would start after the budget is spent is reported as an
+    /// operational failure instead of running.
+    pub run_timeout_seconds: u64,
     /// Optional stop-time file-activity reconciliation settings.
     pub file_activity: Option<FileActivitySettings>,
     /// Templates and file groups used to render deferred results.
@@ -80,15 +97,30 @@ impl Default for Settings {
             jobs: 0,
             fail_fast: true,
             continue_after_issues: true,
-            exclude: vec![".git/**".into(), "node_modules/**".into()],
+            exclude: vec!["**/.git/**".into(), "**/node_modules/**".into()],
             lowering_policy: LoweringPolicy::default(),
             diagnostics_directory: Some(".agent-hook-kit/post-tool-use".into()),
             missing_tool_policy: MissingToolPolicy::default(),
+            command_timeout_seconds: DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            run_timeout_seconds: DEFAULT_RUN_TIMEOUT_SECONDS,
             file_activity: None,
             deferred_reporting: DeferredReporting::default(),
         }
     }
 }
+
+/// Default deadline for one external command. It bounds a single hung tool
+/// only: phases, jobs, argument chunks, and tools run one after another, each
+/// with its own deadline, so their sum is bounded by
+/// [`DEFAULT_RUN_TIMEOUT_SECONDS`] instead.
+pub const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 300;
+
+/// Default budget for all external commands of one hook invocation: below the
+/// 600-second default command-hook timeout of Claude Code and Codex, leaving
+/// time to write artifacts and respond before the harness abandons the hook.
+/// Lower it (and `commandTimeoutSeconds`) when the configured hook timeout is
+/// shorter, for example Antigravity's 30-second default.
+pub const DEFAULT_RUN_TIMEOUT_SECONDS: u64 = 540;
 
 /// Field-preserving settings overlay for one Pkl file.
 ///
@@ -120,8 +152,12 @@ pub struct SettingsPatch {
     pub diagnostics_directory: Option<String>,
     /// Optional missing-tool-policy override.
     pub missing_tool_policy: Option<MissingToolPolicy>,
-    /// Optional file-activity settings override.
-    pub file_activity: Option<FileActivitySettings>,
+    /// Optional per-command timeout override in seconds.
+    pub command_timeout_seconds: Option<u64>,
+    /// Optional per-invocation command budget override in seconds.
+    pub run_timeout_seconds: Option<u64>,
+    /// Optional field-preserving file-activity settings overlay.
+    pub file_activity: Option<FileActivitySettingsPatch>,
     /// Optional deferred-reporting settings overlay.
     pub deferred_reporting: Option<DeferredReportingPatch>,
 }
@@ -150,8 +186,14 @@ impl SettingsPatch {
         if let Some(missing_tool_policy) = self.missing_tool_policy {
             settings.missing_tool_policy = missing_tool_policy;
         }
+        if let Some(command_timeout_seconds) = self.command_timeout_seconds {
+            settings.command_timeout_seconds = command_timeout_seconds;
+        }
+        if let Some(run_timeout_seconds) = self.run_timeout_seconds {
+            settings.run_timeout_seconds = run_timeout_seconds;
+        }
         if let Some(file_activity) = self.file_activity {
-            settings.file_activity = Some(file_activity);
+            file_activity.apply_to(settings.file_activity.get_or_insert_with(Default::default));
         }
         if let Some(deferred_reporting) = self.deferred_reporting {
             deferred_reporting.apply_to(&mut settings.deferred_reporting);
@@ -195,6 +237,9 @@ pub struct DeferredReporting {
     pub manual_fixes_needed: TemplatePair,
     /// Templates for workflow execution failures.
     pub operational_error: TemplatePair,
+    /// Templates for configured tools whose executable is missing under
+    /// `missingToolPolicy = "user-notice"`; their files were not checked.
+    pub unavailable_tool: TemplatePair,
     /// Aggregate template rendered for the user.
     pub master_user: String,
     /// Aggregate template rendered for the coding agent.
@@ -223,8 +268,12 @@ impl Default for DeferredReporting {
                 user: "{{ counts.operational_errors }} operational formatter/linter error{% if counts.operational_errors != 1 %}s{% endif %}. Details: {{ artifact_paths | join(\", \") }}".into(),
                 agent: "Operational formatter/linter failures remain. Inspect {{ artifact_paths | join(\", \") }} before retrying Stop.".into(),
             },
-            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.user | length %}\n{% endif %}File-activity coverage is incomplete for {{ counts.coverage_gaps }} retained gap{% if counts.coverage_gaps != 1 %}s{% endif %}; see {{ run.summary_path }}.{% endif %}".into(),
-            master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.agent | length %}\n{% endif %}File-activity coverage is incomplete; inspect retained gaps in {{ run.summary_path }} before treating the run as exhaustive.{% endif %}".into(),
+            unavailable_tool: TemplatePair {
+                user: "{% for tool in unavailable_tools %}{{ tool.message }}{% if not loop.last %}\n{% endif %}{% endfor %}".into(),
+                agent: String::new(),
+            },
+            master_user: "{{ rendered_bucket_lists.user | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.user | length %}\n{% endif %}File-activity coverage is incomplete for {{ counts.coverage_gaps }} reported gap{% if counts.coverage_gaps != 1 %}s{% endif %}; see {{ run.summary_path }}.{% endif %}".into(),
+            master_agent: "{{ rendered_bucket_lists.agent | join(\"\n\") }}{% if counts.coverage_gaps %}{% if rendered_bucket_lists.agent | length %}\n{% endif %}File-activity coverage is incomplete; inspect the reported gaps in {{ run.summary_path }} before treating the run as exhaustive.{% endif %}".into(),
             render_empty_buckets: false,
         }
     }
@@ -318,6 +367,8 @@ pub struct DeferredReportingPatch {
     pub manual_fixes_needed: Option<TemplatePairPatch>,
     /// Optional operational-error template patch.
     pub operational_error: Option<TemplatePairPatch>,
+    /// Optional unavailable-tool template patch.
+    pub unavailable_tool: Option<TemplatePairPatch>,
     /// Optional aggregate user-facing template replacement.
     pub master_user: Option<String>,
     /// Optional aggregate agent-facing template replacement.
@@ -343,6 +394,9 @@ impl DeferredReportingPatch {
         }
         if let Some(pair) = self.operational_error {
             pair.apply_to(&mut reporting.operational_error);
+        }
+        if let Some(pair) = self.unavailable_tool {
+            pair.apply_to(&mut reporting.unavailable_tool);
         }
         if let Some(master_user) = self.master_user {
             reporting.master_user = master_user;
@@ -382,26 +436,108 @@ impl Default for FileActivitySettings {
             timestamp_tolerance_millis: 2_000,
             max_entries: 100_000,
             coverage_gap_policy: CoverageGapPolicy::BestEffort,
-            ignored_directory_names: vec![
-                ".context".into(),
-                ".git".into(),
-                ".hg".into(),
-                ".svn".into(),
-                "node_modules".into(),
-                "target".into(),
-            ],
+            ignored_directory_names: DEFAULT_IGNORED_DIRECTORY_NAMES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+        }
+    }
+}
+
+/// Directory basenames pruned by default from reconciliation, target
+/// resolution, and snapshot walks: version-control metadata, dependency,
+/// virtual-environment, cache, and build-tool output directories that are
+/// never agent-authored source, and `.agent-hook-kit`, which holds the hook's
+/// own configuration and diagnostics artifacts.
+///
+/// This is the same list as `hookkit_file_activity::DEFAULT_IGNORED_DIRECTORY_NAMES`,
+/// so direct library callers and the bundled runners prune the same
+/// directories; the runner's tests keep the two in sync.
+pub const DEFAULT_IGNORED_DIRECTORY_NAMES: &[&str] = &[
+    ".agent-hook-kit",
+    ".context",
+    ".direnv",
+    ".git",
+    ".gradle",
+    ".hg",
+    ".mypy_cache",
+    ".next",
+    ".nox",
+    ".nuxt",
+    ".parcel-cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svelte-kit",
+    ".svn",
+    ".terraform",
+    ".tox",
+    ".turbo",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+    "venv",
+];
+
+/// Field-preserving overlay for [`FileActivitySettings`].
+///
+/// A later configuration layer that sets one `fileActivity` field leaves every
+/// other field inherited from earlier layers. `ignoredDirectoryNames` replaces
+/// the whole list when present.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FileActivitySettingsPatch {
+    /// Optional mtime-scan override.
+    pub filesystem_mtime: Option<bool>,
+    /// Optional VCS fallback override.
+    pub vcs: Option<FileActivityVcsFallback>,
+    /// Optional clock tolerance override.
+    pub timestamp_tolerance_millis: Option<u64>,
+    /// Optional traversal budget override.
+    pub max_entries: Option<usize>,
+    /// Optional coverage-gap policy override.
+    pub coverage_gap_policy: Option<CoverageGapPolicy>,
+    /// Optional replacement for the ignored directory names.
+    pub ignored_directory_names: Option<Vec<String>>,
+}
+
+impl FileActivitySettingsPatch {
+    /// Overwrites each setting represented by `Some`, leaving others unchanged.
+    pub fn apply_to(self, settings: &mut FileActivitySettings) {
+        if let Some(filesystem_mtime) = self.filesystem_mtime {
+            settings.filesystem_mtime = filesystem_mtime;
+        }
+        if let Some(vcs) = self.vcs {
+            settings.vcs = vcs;
+        }
+        if let Some(timestamp_tolerance_millis) = self.timestamp_tolerance_millis {
+            settings.timestamp_tolerance_millis = timestamp_tolerance_millis;
+        }
+        if let Some(max_entries) = self.max_entries {
+            settings.max_entries = max_entries;
+        }
+        if let Some(coverage_gap_policy) = self.coverage_gap_policy {
+            settings.coverage_gap_policy = coverage_gap_policy;
+        }
+        if let Some(ignored_directory_names) = self.ignored_directory_names {
+            settings.ignored_directory_names = ignored_directory_names;
         }
     }
 }
 
 /// Behavior when file-activity reconciliation reports incomplete coverage.
+///
+/// A gap is reported once, in the Stop that first observes it; retrying the
+/// same analysis cannot resolve it. A reconciliation gap that describes a
+/// persistent condition, observed again at every Stop, is reported once per
+/// session.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CoverageGapPolicy {
     /// Continue with the available evidence while reporting coverage gaps.
     #[default]
     BestEffort,
-    /// Prevent a clean result while any coverage gap remains.
+    /// Also block the Stop in which a coverage gap is first reported.
     Strict,
 }
 
@@ -425,6 +561,10 @@ pub enum LoweringPolicy {
     /// Drop unsupported intent without adding a warning.
     BestEffort,
     /// Drop unsupported intent and retain a lowering warning.
+    ///
+    /// Under every policy, deferred Stop text that comes only from the
+    /// built-in templates is dropped without a warning or a strict failure
+    /// where the harness has no channel for it.
     #[default]
     BestEffortWithWarnings,
 }
@@ -436,7 +576,10 @@ pub enum MissingToolPolicy {
     /// Emit a user-visible notice and continue.
     #[default]
     UserNotice,
-    /// Treat the missing executable as a runner failure.
+    /// Treat the missing executable as a runner failure: the immediate runner
+    /// stops and reports an error (on exit 0 through `systemMessage` for
+    /// Claude Code and Codex, as a hook error on Antigravity); the Stop runner
+    /// records an operational problem that blocks.
     HardFailure,
     /// Ask the harness to block through its native decision mechanism.
     HarnessBlock,
@@ -634,6 +777,11 @@ pub struct Phase {
     pub enabled: bool,
     /// Literal values expanded by [`ArgToken::ExtraArgs`].
     pub extra_args: Vec<String>,
+    /// Whether the phase runs once for the job's file batch or once per file.
+    /// [`InvocationGranularity::PerFile`] suits tools that treat several file
+    /// arguments as one input stream (for example `jq`); any other value runs
+    /// the batch.
+    pub invocation: InvocationGranularity,
 }
 
 impl Default for Phase {
@@ -646,6 +794,7 @@ impl Default for Phase {
             writes: WriteBehavior::None,
             enabled: true,
             extra_args: Vec::new(),
+            invocation: InvocationGranularity::Batch,
         }
     }
 }
@@ -750,7 +899,8 @@ pub enum WriteBehavior {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Diagnostics {
-    /// Directory override, or `None` to use the runner-wide setting.
+    /// Directory override relative to the project root, or `None` to use the
+    /// runner-wide setting.
     pub directory: Option<String>,
 }
 

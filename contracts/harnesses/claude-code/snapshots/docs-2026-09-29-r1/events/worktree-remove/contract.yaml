@@ -1,0 +1,127 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: removed
+      exit:
+        exact: 0
+      id: removed
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: fail-if-directory-remains
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: failed
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+  http:
+    kind: http
+    method: POST
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: removed
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: removed
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: fail-if-directory-remains
+      exit:
+        range:
+          max: 599
+          min: 400
+      id: failed
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: body
+      content_kind: json
+      framing: one-http-message
+    request_content_type: application/json
+    response_content_type: application/json
+event:
+  category: workspace
+  identification:
+    discriminator:
+      const: WorktreeRemove
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: worktree_remove
+  wire_name: WorktreeRemove
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- http
+- mcp_tool
+harness: claude-code
+id: claude-code/docs-2026-09-29-r1/WorktreeRemove
+schemas:
+  input:
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+  outputs: []
+snapshot: docs-2026-09-29-r1
+uncertainties:
+- 'Claude Code reads only the exit code: exit 0 counts as removed, and a nonzero exit fails the removal when worktree_path still exists afterward, leaving the worktree on disk with no git fallback.'
+- The reference says Claude Code reads nothing else from the hook and discards its JSON output fields, so stdout is modeled as ignored; the general statement that terminalSequence still fires on discarding events is not restated for WorktreeRemove.
+- A failed removal writes the hook command and stderr to the debug log; agent view quotes the start of stderr when a background-session delete is refused.
+- An HTTP hook applies the same failure contract. Without any WorktreeRemove hook, Claude Code falls back to git worktree remove --force on the WorktreeCreate path.

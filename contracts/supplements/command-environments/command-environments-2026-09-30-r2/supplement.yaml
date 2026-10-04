@@ -1,0 +1,650 @@
+format_version: 1
+id: command-environments-2026-09-30-r2
+state: frozen
+retrieved: 2026-09-30
+sources_file: sources.yaml
+manifest_file: MANIFEST.sha256
+harnesses:
+  antigravity:
+    snapshot: docs-2026-09-30-r1
+    sources:
+    - antigravity-hooks-reference
+    - antigravity-hooks-markdown
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    profiles: []
+    event_profiles:
+      PostInvocation: []
+      PostToolUse: []
+      PreInvocation: []
+      PreToolUse: []
+      Stop: []
+  claude-code:
+    snapshot: docs-2026-09-30-r1
+    sources:
+    - claude-hooks-reference
+    - claude-environment-reference
+    - claude-plugins-reference
+    - claude-plugin-components
+    - claude-cross-session-messaging
+    - claude-cloud-environments
+    - claude-self-hosted-environments
+    - claude-self-hosted-environments-configuration
+    - claude-code-changelog
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    profiles:
+    - id: baseline
+      activation:
+        kind: always
+      completeness: all-or-none
+      variables:
+      - name: CLAUDECODE
+        value:
+          kind: literal
+          literal: '1'
+      - name: CLAUDE_CODE_CHILD_SESSION
+        value:
+          kind: literal
+          literal: '1'
+      - name: CLAUDE_CODE_SESSION_ID
+        value:
+          kind: input-field
+          reference: /session_id
+      - name: CLAUDE_PROJECT_DIR
+        value:
+          kind: path
+      sources:
+      - claude-hooks-reference
+      - claude-environment-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: environment-file
+      activation:
+        kind: optional
+      completeness: all-or-none
+      variables:
+      - name: CLAUDE_ENV_FILE
+        value:
+          kind: path
+      sources:
+      - claude-hooks-reference
+      - claude-environment-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: effort
+      activation:
+        kind: optional
+      completeness: all-or-none
+      variables:
+      - name: CLAUDE_EFFORT
+        value:
+          kind: input-field
+          reference: /effort/level
+      sources:
+      - claude-environment-reference
+      - claude-code-changelog
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: trace-context
+      activation:
+        kind: optional
+      completeness: all-or-none
+      variables:
+      - name: TRACEPARENT
+        value:
+          kind: opaque
+          allow_empty: true
+      sources:
+      - claude-environment-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: claude-process
+      activation:
+        kind: optional
+      completeness: all-or-none
+      variables:
+      - name: CLAUDE_PID
+        value:
+          kind: opaque
+      sources:
+      - claude-environment-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: cloud-session
+      activation:
+        kind: conditional
+        condition: command hook runs in a Claude Code cloud session, on Anthropic-hosted infrastructure or, since Claude Code v2.1.224, in a self-hosted environment
+      completeness: all-or-none
+      variables:
+      - name: CLAUDE_CODE_REMOTE
+        value:
+          kind: literal
+          literal: 'true'
+      - name: CLAUDE_CODE_REMOTE_SESSION_ID
+        value:
+          kind: opaque
+      sources:
+      - claude-environment-reference
+      - claude-hooks-reference
+      - claude-cloud-environments
+      - claude-self-hosted-environments
+      - claude-self-hosted-environments-configuration
+      - claude-code-changelog
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: local-remote-control
+      activation:
+        kind: optional
+      completeness: all-or-none
+      variables:
+      - name: CLAUDE_CODE_BRIDGE_SESSION_ID
+        value:
+          kind: opaque
+      sources:
+      - claude-environment-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: messaging
+      activation:
+        kind: conditional
+        condition: Claude Code session binds a cross-session messaging inbox socket (Claude Code v2.1.224 or later)
+      completeness: all-or-none
+      variables:
+      - name: CLAUDE_CODE_MESSAGING_SOCKET
+        value:
+          kind: path
+      sources:
+      - claude-environment-reference
+      - claude-cross-session-messaging
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: messaging-token
+      activation:
+        kind: conditional
+        condition: the session also exports CLAUDE_CODE_MESSAGING_SOCKET (Claude Code v2.1.228 or later); a token without the socket is inherited state
+      completeness: all-or-none
+      variables:
+      - name: CLAUDE_CODE_MESSAGING_TOKEN
+        value:
+          kind: opaque
+      sources:
+      - claude-environment-reference
+      - claude-cross-session-messaging
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: plugin-paths
+      activation:
+        kind: conditional
+        condition: command hook was contributed by a Claude Code plugin
+      completeness: all-or-none
+      variables:
+      - name: CLAUDE_PLUGIN_ROOT
+        value:
+          kind: path
+      - name: CLAUDE_PLUGIN_DATA
+        value:
+          kind: path
+      sources:
+      - claude-plugins-reference
+      - claude-plugin-components
+      - claude-hooks-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: plugin-options
+      activation:
+        kind: conditional
+        condition: plugin command hook declares one or more plugin settings
+      completeness: independent
+      variables:
+      - prefix: CLAUDE_PLUGIN_OPTION_
+        value:
+          kind: opaque
+          allow_empty: true
+      sources:
+      - claude-plugins-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    event_profiles:
+      ConfigChange:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      CwdChanged:
+      - baseline
+      - environment-file
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      DirectoryAdded:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      Elicitation:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      ElicitationResult:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      FileChanged:
+      - baseline
+      - environment-file
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      InstructionsLoaded:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      MessageDisplay:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      Notification:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PermissionDenied:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PermissionRequest:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PostCompact:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PostModelSwitch:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PostToolBatch:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PostToolUse:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PostToolUseFailure:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PreCompact:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PreModelSwitch:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      PreToolUse:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      SessionEnd:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      SessionStart:
+      - baseline
+      - environment-file
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      Setup:
+      - baseline
+      - environment-file
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      Stop:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      StopFailure:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      SubagentStart:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      SubagentStop:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      TaskCompleted:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      TaskCreated:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      TeammateIdle:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      UserPromptExpansion:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      UserPromptSubmit:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      WorktreeCreate:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+      WorktreeRemove:
+      - baseline
+      - effort
+      - trace-context
+      - claude-process
+      - cloud-session
+      - local-remote-control
+      - messaging
+      - messaging-token
+      - plugin-paths
+      - plugin-options
+  codex:
+    snapshot: commit-ff6aec9-r2
+    sources:
+    - codex-hooks-source
+    - codex-protocol-source
+    - codex-config-source
+    - codex-hooks-reference
+    assurance:
+      confidence: high
+      verification: source-reviewed
+    profiles:
+    - id: plugin-paths
+      activation:
+        kind: conditional
+        condition: command hook was discovered from a Codex plugin
+      completeness: all-or-none
+      variables:
+      - name: PLUGIN_ROOT
+        value:
+          kind: path
+      - name: PLUGIN_DATA
+        value:
+          kind: path
+      - name: CLAUDE_PLUGIN_ROOT
+        value:
+          kind: environment-variable
+          reference: PLUGIN_ROOT
+      - name: CLAUDE_PLUGIN_DATA
+        value:
+          kind: environment-variable
+          reference: PLUGIN_DATA
+      sources:
+      - codex-hooks-source
+      - codex-hooks-reference
+      assurance:
+        confidence: high
+        verification: source-reviewed
+    event_profiles:
+      Interrupt:
+      - plugin-paths
+      PermissionRequest:
+      - plugin-paths
+      PostCompact:
+      - plugin-paths
+      PostToolUse:
+      - plugin-paths
+      PreCompact:
+      - plugin-paths
+      PreToolUse:
+      - plugin-paths
+      SessionEnd:
+      - plugin-paths
+      SessionStart:
+      - plugin-paths
+      Stop:
+      - plugin-paths
+      SubagentStart:
+      - plugin-paths
+      SubagentStop:
+      - plugin-paths
+      UserPromptSubmit:
+      - plugin-paths

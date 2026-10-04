@@ -1,5 +1,7 @@
+use super::reporting::BuiltinAudiences;
+use crate::util::unsupported_harness;
 use hookkit_common::TurnCompletionOutput;
-use hookkit_core::{HarnessId, HookkitError};
+use hookkit_core::{BuiltinHarness, HarnessId, HookkitError};
 use hookkit_pkl_config::schema as pkl;
 use serde::Serialize;
 
@@ -9,34 +11,36 @@ struct HarnessCapabilities {
     allowed_agent: Option<&'static str>,
     blocked_user: Option<&'static str>,
     blocked_agent: Option<&'static str>,
-    warning_fallback: Option<&'static str>,
 }
 
-/// The exact native Stop audience capability matrix. An absent
-/// channel means that using a syntactically valid native field would not
-/// faithfully deliver that audience at this completion state.
+/// The exact native Stop audience capability matrix. An absent channel means
+/// that using a syntactically valid native field would not faithfully deliver
+/// that audience at this completion state.
+///
+/// Claude's Stop `hookSpecificOutput.additionalContext` continues the
+/// conversation through the same loop protection as `decision: "block"`, so
+/// it is not an allowed-completion agent channel. Antigravity injects Stop
+/// `reason` only when `decision` is `"continue"`, so an allowed Antigravity
+/// stop has no channel at all.
 fn capabilities(harness: &HarnessId) -> Option<HarnessCapabilities> {
-    match harness.as_str() {
-        "claude-code" => Some(HarnessCapabilities {
-            allowed_user: Some("systemMessage"),
-            allowed_agent: Some("hookSpecificOutput.additionalContext"),
-            blocked_user: Some("systemMessage"),
-            blocked_agent: Some("reason+hookSpecificOutput.additionalContext"),
-            warning_fallback: None,
-        }),
-        "codex" => Some(HarnessCapabilities {
+    match BuiltinHarness::from_id(harness)? {
+        BuiltinHarness::ClaudeCode => Some(HarnessCapabilities {
             allowed_user: Some("systemMessage"),
             allowed_agent: None,
             blocked_user: Some("systemMessage"),
             blocked_agent: Some("reason"),
-            warning_fallback: None,
         }),
-        "antigravity" => Some(HarnessCapabilities {
+        BuiltinHarness::Codex => Some(HarnessCapabilities {
+            allowed_user: Some("systemMessage"),
+            allowed_agent: None,
+            blocked_user: Some("systemMessage"),
+            blocked_agent: Some("reason"),
+        }),
+        BuiltinHarness::Antigravity => Some(HarnessCapabilities {
             allowed_user: None,
             allowed_agent: None,
             blocked_user: None,
             blocked_agent: Some("reason"),
-            warning_fallback: Some("reason"),
         }),
         _ => None,
     }
@@ -57,6 +61,9 @@ pub(crate) struct StopLoweringMetadata {
     pub user: AudienceLowering,
     pub agent: AudienceLowering,
     pub warnings: Vec<String>,
+    /// Whether the omission warnings reached a native channel. Allowed
+    /// Antigravity stops have none, so their warnings live only here.
+    pub warnings_delivered: bool,
     pub strict_error: Option<String>,
 }
 
@@ -77,15 +84,54 @@ impl StopLoweringPlan {
     }
 }
 
+/// [`plan_stop_lowering_with`] for audiences that both come from configured
+/// templates.
+#[cfg(test)]
 pub(crate) fn plan_stop_lowering(
     harness: &HarnessId,
     blocked: bool,
     user: Option<&str>,
     agent: Option<&str>,
+    fallback_reason: &str,
     policy: pkl::LoweringPolicy,
 ) -> hookkit_core::Result<StopLoweringPlan> {
+    plan_stop_lowering_with(
+        harness,
+        blocked,
+        user,
+        agent,
+        fallback_reason,
+        policy,
+        BuiltinAudiences::default(),
+    )
+}
+
+/// Plan the exact native Stop response for one rendered deferred result.
+///
+/// A blocked completion always carries a non-empty agent reason: Codex treats
+/// `decision: "block"` with a blank reason as an invalid hook result (and lets
+/// the turn end), Claude documents the reason as required, and Antigravity
+/// would re-enter its loop with no explanation. When the rendered agent
+/// message is empty (for example an empty template), `fallback_reason` is
+/// used and the agent audience is recorded as `synthesized`.
+///
+/// An audience rendered only from built-in text (`builtin`) that has no
+/// channel at this Stop is omitted (`omitted-builtin`) under every policy,
+/// without a warning or a strict failure.
+pub(crate) fn plan_stop_lowering_with(
+    harness: &HarnessId,
+    blocked: bool,
+    user: Option<&str>,
+    agent: Option<&str>,
+    fallback_reason: &str,
+    policy: pkl::LoweringPolicy,
+    builtin: BuiltinAudiences,
+) -> hookkit_core::Result<StopLoweringPlan> {
     let capabilities = capabilities(harness).ok_or_else(|| {
-        invalid_data(format!("turn-completion runner does not support {harness}"))
+        unsupported_harness(
+            harness,
+            "the turn-completion runner has no Stop lowering for this harness",
+        )
     })?;
     let user_channel = if blocked {
         capabilities.blocked_user
@@ -108,21 +154,30 @@ pub(crate) fn plan_stop_lowering(
         policy,
         harness,
         blocked,
+        builtin.user,
         &mut native_user,
         &mut unsupported,
         &mut warnings,
     );
-    let agent_lowering = lower_audience(
+    let mut agent_lowering = lower_audience(
         "agent",
         agent,
         agent_channel,
         policy,
         harness,
         blocked,
+        builtin.agent,
         &mut native_agent,
         &mut unsupported,
         &mut warnings,
     );
+    if blocked && native_agent.is_none() {
+        native_agent = Some(fallback_reason.to_owned());
+        agent_lowering = AudienceLowering {
+            status: "synthesized",
+            native_channel: agent_channel,
+        };
+    }
     let strict_error = (!unsupported.is_empty()).then(|| {
         format!(
             "strict deferred Stop lowering cannot represent {} for {harness} while completion is {}",
@@ -130,15 +185,15 @@ pub(crate) fn plan_stop_lowering(
             if blocked { "blocked" } else { "allowed" }
         )
     });
-    let mut diagnostic_reason = None;
+    let mut warnings_delivered = warnings.is_empty();
     if !warnings.is_empty() {
         let warning_text = warnings.join("\n");
         if user_channel.is_some() {
             append_message(&mut native_user, warning_text);
+            warnings_delivered = true;
         } else if agent_channel.is_some() {
             append_message(&mut native_agent, warning_text);
-        } else if capabilities.warning_fallback.is_some() {
-            diagnostic_reason = Some(warning_text);
+            warnings_delivered = true;
         }
     }
 
@@ -148,6 +203,7 @@ pub(crate) fn plan_stop_lowering(
         user: user_lowering,
         agent: agent_lowering,
         warnings,
+        warnings_delivered,
         strict_error,
     };
     if metadata.strict_error.is_some() {
@@ -156,13 +212,7 @@ pub(crate) fn plan_stop_lowering(
             output: None,
         });
     }
-    let output = build_native_output(
-        harness,
-        blocked,
-        native_user,
-        native_agent,
-        diagnostic_reason,
-    )?;
+    let output = build_native_output(harness, blocked, native_user, native_agent)?;
     Ok(StopLoweringPlan {
         metadata,
         output: Some(output),
@@ -177,6 +227,7 @@ fn lower_audience(
     policy: pkl::LoweringPolicy,
     harness: &HarnessId,
     blocked: bool,
+    builtin: bool,
     native_message: &mut Option<String>,
     unsupported: &mut Vec<&'static str>,
     warnings: &mut Vec<String>,
@@ -192,6 +243,12 @@ fn lower_audience(
         return AudienceLowering {
             status: "emitted",
             native_channel,
+        };
+    }
+    if builtin {
+        return AudienceLowering {
+            status: "omitted-builtin",
+            native_channel: None,
         };
     }
     match policy {
@@ -228,32 +285,28 @@ fn build_native_output(
     blocked: bool,
     user: Option<String>,
     agent: Option<String>,
-    diagnostic_reason: Option<String>,
 ) -> hookkit_core::Result<TurnCompletionOutput> {
-    match harness.as_str() {
-        "claude-code" => {
+    let reason = || {
+        agent
+            .clone()
+            .filter(|reason| !reason.trim().is_empty())
+            .ok_or_else(|| invalid_data("a blocked deferred Stop needs a reason".to_owned()))
+    };
+    match BuiltinHarness::from_id(harness) {
+        Some(BuiltinHarness::ClaudeCode) => {
             let native = if blocked {
-                match agent {
-                    Some(agent) => hookkit_claude::catalog::StopOutput::block_with_context(
-                        agent.clone(),
-                        agent,
-                    ),
-                    None => hookkit_claude::catalog::StopOutput::block(""),
-                }
+                hookkit_claude::catalog::StopOutput::block(reason()?)
             } else {
-                match agent {
-                    Some(agent) => hookkit_claude::catalog::StopOutput::with_context(agent),
-                    None => hookkit_claude::catalog::StopOutput::no_op(),
-                }
+                hookkit_claude::catalog::StopOutput::no_op()
             };
             Ok(TurnCompletionOutput::Claude(match user {
                 Some(user) => native.with_system_message(user)?,
                 None => native,
             }))
         }
-        "codex" => {
+        Some(BuiltinHarness::Codex) => {
             let native = if blocked {
-                hookkit_codex::catalog::StopOutput::block(agent.unwrap_or_default())
+                hookkit_codex::catalog::StopOutput::block(reason()?)
             } else {
                 hookkit_codex::catalog::StopOutput::no_op()
             };
@@ -262,15 +315,15 @@ fn build_native_output(
                 None => native,
             }))
         }
-        "antigravity" => Ok(TurnCompletionOutput::Antigravity(
-            hookkit_antigravity::StopOutput {
-                decision: if blocked { "continue" } else { "stop" }.into(),
-                reason: if blocked { agent } else { diagnostic_reason },
-            },
+        Some(BuiltinHarness::Antigravity) => Ok(TurnCompletionOutput::Antigravity(if blocked {
+            hookkit_antigravity::StopOutput::continue_with(reason()?)
+        } else {
+            hookkit_antigravity::StopOutput::allow_stop()
+        })),
+        _ => Err(unsupported_harness(
+            harness,
+            "the turn-completion runner has no Stop lowering for this harness",
         )),
-        _ => Err(invalid_data(format!(
-            "turn-completion runner does not support {harness}"
-        ))),
     }
 }
 
@@ -289,20 +342,43 @@ fn invalid_data(message: String) -> HookkitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hookkit_core::EventSpec as _;
+
+    const FALLBACK: &str = "Deferred checks need attention; see /state/run/summary.json.";
+
+    fn stdout_json(output: TurnCompletionOutput) -> serde_json::Value {
+        let emission = match output {
+            TurnCompletionOutput::Claude(native) => {
+                hookkit_claude::catalog::Stop::emit(native).unwrap()
+            }
+            TurnCompletionOutput::Codex(native) => {
+                hookkit_codex::catalog::Stop::emit(native).unwrap()
+            }
+            TurnCompletionOutput::Antigravity(native) => {
+                hookkit_antigravity::Stop::emit(native).unwrap()
+            }
+            _ => panic!("unexpected harness"),
+        };
+        assert_eq!(emission.exit_code(), 0);
+        serde_json::from_slice(emission.stdout()).unwrap()
+    }
 
     #[test]
     fn capability_matrix_matches_exact_native_stop_surfaces() {
         let claude = capabilities(&HarnessId::CLAUDE_CODE).unwrap();
         assert!(claude.allowed_user.is_some());
-        assert!(claude.allowed_agent.is_some());
+        assert!(
+            claude.allowed_agent.is_none(),
+            "Claude Stop additionalContext continues the turn"
+        );
         assert!(claude.blocked_user.is_some());
-        assert!(claude.blocked_agent.is_some());
+        assert_eq!(claude.blocked_agent, Some("reason"));
 
         let codex = capabilities(&HarnessId::CODEX).unwrap();
         assert!(codex.allowed_user.is_some());
         assert!(codex.allowed_agent.is_none());
         assert!(codex.blocked_user.is_some());
-        assert!(codex.blocked_agent.is_some());
+        assert_eq!(codex.blocked_agent, Some("reason"));
 
         let antigravity = capabilities(&HarnessId::ANTIGRAVITY).unwrap();
         assert!(antigravity.allowed_user.is_none());
@@ -312,12 +388,170 @@ mod tests {
     }
 
     #[test]
+    fn allowed_claude_stop_never_emits_a_continuing_agent_channel() {
+        let plan = plan_stop_lowering(
+            &HarnessId::CLAUDE_CODE,
+            false,
+            Some("Auto-fixed 1 file: a.rs"),
+            Some("Auto-fixed 1 file; re-read changed files."),
+            FALLBACK,
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        )
+        .unwrap();
+        assert_eq!(plan.metadata.agent.status, "omitted");
+        let json = stdout_json(plan.finish().unwrap());
+        assert!(json.get("hookSpecificOutput").is_none(), "{json}");
+        assert!(json.get("decision").is_none(), "{json}");
+        let system = json["systemMessage"].as_str().unwrap();
+        assert!(system.starts_with("Auto-fixed 1 file: a.rs"));
+        assert!(system.contains("omitted agent"));
+    }
+
+    /// The built-in templates render agent text such as "re-read changed
+    /// files" and user text on every harness; where a Stop has no channel for
+    /// it, dropping built-in text is expected, so it neither warns nor fails
+    /// strict lowering.
+    #[test]
+    fn undeliverable_builtin_text_is_omitted_without_warnings_or_strict_failures() {
+        for policy in [
+            pkl::LoweringPolicy::Strict,
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        ] {
+            for harness in [HarnessId::CLAUDE_CODE, HarnessId::CODEX] {
+                let plan = plan_stop_lowering_with(
+                    &harness,
+                    false,
+                    Some("Auto-fixed 1 file: a.rs"),
+                    Some("Auto-fixed 1 file; re-read changed files."),
+                    FALLBACK,
+                    policy,
+                    BuiltinAudiences::ALL,
+                )
+                .unwrap();
+                assert_eq!(plan.metadata.agent.status, "omitted-builtin");
+                assert!(plan.metadata.warnings.is_empty());
+                let json = stdout_json(plan.finish().unwrap());
+                assert_eq!(json["systemMessage"], "Auto-fixed 1 file: a.rs", "{json}");
+            }
+
+            let plan = plan_stop_lowering_with(
+                &HarnessId::ANTIGRAVITY,
+                true,
+                Some("1 file needs manual fixes"),
+                Some("fix a.rs"),
+                FALLBACK,
+                policy,
+                BuiltinAudiences::ALL,
+            )
+            .unwrap();
+            assert_eq!(plan.metadata.user.status, "omitted-builtin");
+            let json = stdout_json(plan.finish().unwrap());
+            assert_eq!(json["reason"], "fix a.rs", "no warning reaches the agent");
+        }
+
+        // Configured text keeps the lowering-policy contract.
+        let configured = plan_stop_lowering_with(
+            &HarnessId::CLAUDE_CODE,
+            false,
+            None,
+            Some("configured agent text"),
+            FALLBACK,
+            pkl::LoweringPolicy::Strict,
+            BuiltinAudiences {
+                user: true,
+                agent: false,
+            },
+        )
+        .unwrap();
+        assert!(configured.metadata.strict_error.is_some());
+    }
+
+    #[test]
+    fn blocked_claude_stop_sends_the_agent_text_once() {
+        let plan = plan_stop_lowering(
+            &HarnessId::CLAUDE_CODE,
+            true,
+            Some("user"),
+            Some("fix a.rs"),
+            FALLBACK,
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        )
+        .unwrap();
+        let json = stdout_json(plan.finish().unwrap());
+        assert_eq!(json["decision"], "block");
+        assert_eq!(json["reason"], "fix a.rs");
+        assert!(json.get("hookSpecificOutput").is_none(), "{json}");
+    }
+
+    #[test]
+    fn blocked_stops_never_emit_a_blank_reason() {
+        for harness in [
+            HarnessId::CLAUDE_CODE,
+            HarnessId::CODEX,
+            HarnessId::ANTIGRAVITY,
+        ] {
+            for agent in [None, Some(""), Some("  \n")] {
+                let plan = plan_stop_lowering(
+                    &harness,
+                    true,
+                    None,
+                    agent,
+                    FALLBACK,
+                    pkl::LoweringPolicy::Strict,
+                )
+                .unwrap();
+                assert_eq!(plan.metadata.agent.status, "synthesized");
+                let json = stdout_json(plan.finish().unwrap());
+                assert_eq!(json["reason"], FALLBACK, "{harness}: {json}");
+            }
+        }
+    }
+
+    #[test]
+    fn allowed_antigravity_stop_carries_no_reason_and_records_undelivered_warnings() {
+        let plan = plan_stop_lowering(
+            &HarnessId::ANTIGRAVITY,
+            false,
+            Some("Checked 1 clean file"),
+            None,
+            FALLBACK,
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        )
+        .unwrap();
+        assert_eq!(plan.metadata.user.status, "omitted");
+        assert_eq!(plan.metadata.warnings.len(), 1);
+        assert!(!plan.metadata.warnings_delivered);
+        let json = stdout_json(plan.finish().unwrap());
+        assert_eq!(json, serde_json::json!({"decision": "stop"}));
+    }
+
+    #[test]
+    fn blocked_antigravity_stop_carries_warnings_in_its_continue_reason() {
+        let plan = plan_stop_lowering(
+            &HarnessId::ANTIGRAVITY,
+            true,
+            Some("user text"),
+            Some("fix a.rs"),
+            FALLBACK,
+            pkl::LoweringPolicy::BestEffortWithWarnings,
+        )
+        .unwrap();
+        assert!(plan.metadata.warnings_delivered);
+        let json = stdout_json(plan.finish().unwrap());
+        assert_eq!(json["decision"], "continue");
+        let reason = json["reason"].as_str().unwrap();
+        assert!(reason.starts_with("fix a.rs\n"));
+        assert!(reason.contains("omitted user"));
+    }
+
+    #[test]
     fn strict_rejects_an_allowed_codex_agent_message() {
         let plan = plan_stop_lowering(
             &HarnessId::CODEX,
             false,
             Some("user"),
             Some("agent"),
+            FALLBACK,
             pkl::LoweringPolicy::Strict,
         )
         .unwrap();
@@ -334,6 +568,7 @@ mod tests {
             false,
             Some("user"),
             Some("agent"),
+            FALLBACK,
             pkl::LoweringPolicy::BestEffort,
         )
         .unwrap();
@@ -346,25 +581,13 @@ mod tests {
             false,
             Some("user"),
             Some("agent"),
+            FALLBACK,
             pkl::LoweringPolicy::BestEffortWithWarnings,
         )
         .unwrap();
         assert_eq!(warned.metadata.agent.status, "omitted");
         assert_eq!(warned.metadata.warnings.len(), 1);
+        assert!(warned.metadata.warnings_delivered);
         assert!(warned.finish().is_ok());
-    }
-
-    #[test]
-    fn empty_agent_message_needs_no_capability() {
-        let plan = plan_stop_lowering(
-            &HarnessId::CODEX,
-            true,
-            Some("user"),
-            None,
-            pkl::LoweringPolicy::Strict,
-        )
-        .unwrap();
-        assert_eq!(plan.metadata.agent.status, "empty");
-        assert!(plan.finish().is_ok());
     }
 }

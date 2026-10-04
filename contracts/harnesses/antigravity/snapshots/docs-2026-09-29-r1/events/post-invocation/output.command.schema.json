@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-09-29-r1:post-invocation:command-output",
+  "type": "object",
+  "properties": {
+    "injectSteps": {
+      "type": "array",
+      "description": "Steps to inject after the invocation completes, with the PreInvocation injected-step schema.",
+      "items": {
+        "type": "object",
+        "oneOf": [
+          { "required": ["toolCall"] },
+          { "required": ["userMessage"] },
+          { "required": ["ephemeralMessage"] }
+        ],
+        "properties": {
+          "toolCall": { "type": "object", "description": "A tool call to execute." },
+          "userMessage": { "type": "string", "description": "A message from the user." },
+          "ephemeralMessage": { "type": "string", "description": "A transient system message." }
+        },
+        "additionalProperties": false
+      }
+    },
+    "terminationBehavior": {
+      "enum": ["", "force_continue", "terminate"],
+      "description": "force_continue forces the loop to continue; terminate forces it to terminate; the empty string, like omission, selects the default behavior."
+    }
+  },
+  "additionalProperties": false
+}

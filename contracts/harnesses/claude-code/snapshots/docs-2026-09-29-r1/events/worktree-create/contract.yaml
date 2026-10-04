@@ -1,0 +1,198 @@
+format_version: 1
+id: claude-code/docs-2026-09-29-r1/WorktreeCreate
+harness: claude-code
+snapshot: docs-2026-09-29-r1
+event:
+  wire_name: WorktreeCreate
+  rust_key: worktree_create
+  category: workspace
+  identification:
+    inferability: definitive
+    discriminator:
+      json_pointer: /hook_event_name
+      const: WorktreeCreate
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    assurance:
+      confidence: low
+      verification: source-reviewed
+  outputs:
+  - id: http-response
+    file: output.http.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    assurance:
+      confidence: low
+      verification: source-reviewed
+bindings:
+  command:
+    kind: process
+    request:
+      channel: stdin
+      framing: single-document-at-eof
+      content_kind: json
+    outcomes:
+    - id: created
+      effect: provide-value
+      exit:
+        exact: 0
+      stdout:
+        presence: required
+        role: protocol-value
+        content_kind: text
+        encoding: utf-8
+        semantic_format: path-on-last-nonempty-line-after-ansi-stripping
+        trailing_newline: allowed
+      stderr:
+        presence: optional
+        role: diagnostics
+        content_kind: text
+        encoding: utf-8
+      sources:
+      - claude-hooks-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: missing-path
+      effect: fail
+      exit:
+        exact: 0
+      stdout:
+        presence: optional
+        role: ignored
+        content_kind: opaque
+      stderr:
+        presence: optional
+        role: diagnostics
+        content_kind: text
+        encoding: utf-8
+      sources:
+      - claude-hooks-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: refused-path
+      effect: fail
+      exit:
+        exact: 0
+      stdout:
+        presence: required
+        role: protocol-value
+        content_kind: text
+        encoding: utf-8
+        semantic_format: path-on-last-nonempty-line-after-ansi-stripping
+        trailing_newline: allowed
+      stderr:
+        presence: optional
+        role: diagnostics
+        content_kind: text
+        encoding: utf-8
+      sources:
+      - claude-hooks-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: failed
+      effect: fail
+      exit:
+        range:
+          min: 1
+          max: 255
+      stdout:
+        presence: optional
+        role: ignored
+        content_kind: opaque
+      stderr:
+        presence: optional
+        role: user-message
+        content_kind: text
+        encoding: utf-8
+      sources:
+      - claude-hooks-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+  http:
+    kind: http
+    method: POST
+    request_content_type: application/json
+    response_content_type: application/json
+    request:
+      channel: body
+      framing: one-http-message
+      content_kind: json
+    outcomes:
+    - id: created
+      effect: provide-value
+      exit:
+        range:
+          min: 200
+          max: 299
+      stdout:
+        presence: required
+        role: http-body
+        content_kind: json
+      stderr:
+        presence: forbidden
+        role: none
+        content_kind: empty
+      output_schema: http-response
+      sources:
+      - claude-hooks-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: missing-path
+      effect: fail
+      exit:
+        range:
+          min: 200
+          max: 299
+      stdout:
+        presence: optional
+        role: ignored
+        content_kind: opaque
+      stderr:
+        presence: forbidden
+        role: none
+        content_kind: empty
+      sources:
+      - claude-hooks-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+    - id: failed
+      effect: fail
+      exit:
+        range:
+          min: 400
+          max: 599
+      stdout:
+        presence: optional
+        role: ignored
+        content_kind: opaque
+      stderr:
+        presence: forbidden
+        role: none
+        content_kind: empty
+      sources:
+      - claude-hooks-reference
+      assurance:
+        confidence: low
+        verification: source-reviewed
+handler_kinds:
+- command
+- http
+- mcp_tool
+fixtures: fixtures.yaml
+uncertainties:
+- A command hook returns the path as the last non-empty stdout line after Claude Code strips ANSI escape codes, so earlier lines such as shell banners are ignored; a command hook cannot return JSON, so terminalSequence is unavailable to it.
+- A relative path is resolved against the directory the hook ran in, collapsing . and .. segments. An absolute path that contains . or .. segments, or any path that passes through a symlink below the repository root, is refused (Claude Code v2.1.216 or later).
+- If the resolved path is not a directory Claude Code can enter, the session prints an error naming the path and exits with code 1.
+- Claude Code acts on the hook's success and returned path and discards systemMessage and continue. A failed HTTP hook, or a 2xx response without worktreePath, fails creation under the same contract as a command hook.
+- Configuring the hook replaces the default git worktree behavior, so .worktreeinclude is not processed.

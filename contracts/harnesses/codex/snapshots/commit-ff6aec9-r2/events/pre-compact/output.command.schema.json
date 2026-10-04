@@ -1,0 +1,25 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:codex:commit-ff6aec9-r2:pre-compact:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "pre-compact.command.output",
+  "type": "object"
+}

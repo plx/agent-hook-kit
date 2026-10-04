@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 /// failures deliberately live outside this relation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum FileStatus {
     /// Every applicable workflow completed without finding issues.
     Clean,
@@ -27,6 +28,7 @@ impl FileStatus {
 /// Result of one authoritative, non-mutating check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum CheckOutcome {
     /// The check found no actionable issues.
     Clean,
@@ -37,6 +39,7 @@ pub enum CheckOutcome {
 /// The command role represented by an artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum CommandPhase {
     /// First authoritative check before any remedy.
     InitialCheck,
@@ -53,6 +56,7 @@ pub enum CommandPhase {
 /// Semantic classification assigned to a durable command artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ArtifactClassification {
     /// Command completed without finding issues.
     Clean,
@@ -62,6 +66,8 @@ pub enum ArtifactClassification {
     Failure,
     /// Command could not be spawned.
     SpawnError,
+    /// Command exceeded `settings.commandTimeoutSeconds` and was killed.
+    TimedOut,
     /// Workflow configuration prevented execution.
     ConfigurationError,
     /// Result could not be classified more precisely.
@@ -259,6 +265,12 @@ impl OperationalProblem {
 }
 
 /// A known incompleteness in candidate discovery or scope materialization.
+///
+/// Gaps are reported once: a message-only gap or an unresolvable target is
+/// summarized in the run that first observes it and is then discharged with
+/// the source window, because retrying cannot resolve it. Only targets that
+/// were never attempted (skipped after the traversal budget ran out) are
+/// retained for the next Stop.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoverageGap {
@@ -270,6 +282,29 @@ pub struct CoverageGap {
     pub message: String,
     /// Whether the gap was retained for a future deferred attempt.
     pub retained: bool,
+}
+
+/// A configured executable that could not be found while
+/// `missingToolPolicy = "user-notice"`.
+///
+/// Missing tools are an environment problem the agent cannot fix, so they are
+/// reported to the user without blocking completion or re-queueing the files
+/// the tool would have checked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnavailableTool {
+    /// Tool whose command could not be spawned.
+    pub tool_id: String,
+    /// Human-readable tool name.
+    pub tool_name: String,
+    /// Executable that was not found.
+    pub executable: String,
+    /// Optional configured installation guidance.
+    pub install_hint: Option<String>,
+    /// Files the tool would have checked.
+    pub affected_files: Vec<PathBuf>,
+    /// Rendered user-facing notice.
+    pub message: String,
 }
 
 /// Complete runner-owned semantic result before rendering or native lowering.
@@ -290,6 +325,10 @@ pub struct DeferredRunResult {
     pub coverage_gaps: BTreeMap<String, CoverageGap>,
     /// Durable run artifacts keyed by artifact identifier.
     pub artifacts: BTreeMap<String, RunArtifact>,
+    /// Missing executables reported under `missingToolPolicy = "user-notice"`,
+    /// keyed by tool identifier.
+    #[serde(default)]
+    pub unavailable_tools: BTreeMap<String, UnavailableTool>,
 }
 
 impl DeferredRunResult {
@@ -388,6 +427,17 @@ impl DeferredRunResult {
     /// Records a candidate-discovery or scope-materialization gap.
     pub fn record_coverage_gap(&mut self, gap: CoverageGap) {
         self.coverage_gaps.insert(gap.id.clone(), gap);
+    }
+
+    /// Records a missing executable, merging affected files per tool.
+    pub fn record_unavailable_tool(&mut self, mut tool: UnavailableTool) {
+        if let Some(existing) = self.unavailable_tools.get_mut(&tool.tool_id) {
+            existing.affected_files.append(&mut tool.affected_files);
+            sort_paths(&mut existing.affected_files);
+            return;
+        }
+        sort_paths(&mut tool.affected_files);
+        self.unavailable_tools.insert(tool.tool_id.clone(), tool);
     }
 
     /// Records an artifact after normalizing its path collections.

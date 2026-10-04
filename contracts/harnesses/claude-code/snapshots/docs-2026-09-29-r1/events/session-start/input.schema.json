@@ -1,0 +1,102 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-29-r1:session-start:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "context_tokens": {
+      "description": "Sent only when source is resume or fork and the transcript holds a response (Claude Code v2.1.251 or later).",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "estimated_cache_write_usd": {
+      "description": "Sent only when source is resume or fork and the transcript holds a response (Claude Code v2.1.251 or later).",
+      "minimum": 0,
+      "type": "number"
+    },
+    "hook_event_name": {
+      "const": "SessionStart"
+    },
+    "model": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ]
+    },
+    "prompt_cache_likely_expired": {
+      "description": "Sent only when source is resume or fork and the transcript holds a response (Claude Code v2.1.251 or later).",
+      "type": "boolean"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "description": "Session scratchpad directory; absent when the session has none or the temp directory is unavailable (Claude Code v2.1.257 or later).",
+      "type": "string"
+    },
+    "seconds_since_last_response": {
+      "description": "Sent only when source is resume or fork and the transcript holds a response (Claude Code v2.1.251 or later).",
+      "minimum": 0,
+      "type": "number"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "session_title": {
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "startup",
+        "resume",
+        "clear",
+        "compact",
+        "fork"
+      ]
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "source"
+  ],
+  "type": "object"
+}

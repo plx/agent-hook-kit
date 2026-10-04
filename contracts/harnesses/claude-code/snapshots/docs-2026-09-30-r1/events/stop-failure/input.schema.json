@@ -1,0 +1,95 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-30-r1:stop-failure:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": true,
+      "properties": {
+        "level": {
+          "description": "Open string: the Agent SDK types it as string; the examples are the documented levels.",
+          "examples": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "error": {
+      "enum": [
+        "rate_limit",
+        "overloaded",
+        "authentication_failed",
+        "oauth_org_not_allowed",
+        "account_on_hold",
+        "billing_error",
+        "invalid_request",
+        "model_not_found",
+        "server_error",
+        "max_output_tokens",
+        "cloud_credential_error",
+        "verification_required",
+        "unknown"
+      ]
+    },
+    "error_details": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "StopFailure"
+    },
+    "last_assistant_message": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "description": "Open string: the Agent SDK types it as string; the examples are the documented modes.",
+      "examples": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "description": "Session scratchpad directory; absent when the session has none or the temp directory is unavailable (Claude Code v2.1.257 or later).",
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "error"
+  ],
+  "type": "object"
+}

@@ -1,15 +1,24 @@
-//! Message intent helpers.
+//! Message intent vocabulary.
 //!
-//! These types help hook authors answer:
-//! - Is this for the user only?
-//! - For the agent/model only?
-//! - Or for both via different channels?
+//! These value types let hook logic record who a message is for before a
+//! harness-specific adapter lowers it:
+//! - a [`UserNotice`] is for the user only;
+//! - [`AgentContext`] and [`AgentFeedback`] are for the agent only;
+//! - a [`DiagnosticReport`] carries user-visible text plus an optional
+//!   [`DiagnosticArtifact`] the agent can be pointed at.
+//!
+//! The types carry no lowering of their own. Each harness has different
+//! user and agent channels (for example Claude Code's `systemMessage` versus
+//! `additionalContext`), so the adapter that emits the native output chooses
+//! the channel.
 
 use serde::Serialize;
 use std::path::PathBuf;
 
 /// Intended audience for a message emitted by common hook logic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum MessageAudience {
     /// Deliver only through a human-facing channel.
     User,
@@ -20,7 +29,7 @@ pub enum MessageAudience {
 }
 
 /// A notice intended for the human user.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UserNotice {
     /// Human-readable notice text.
     pub text: String,
@@ -29,7 +38,11 @@ pub struct UserNotice {
 }
 
 /// Severity level for user-facing notices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+///
+/// Levels may be added in later releases, so matches outside this crate need
+/// a wildcard arm.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoticeLevel {
     /// Informational notice.
@@ -67,7 +80,7 @@ impl UserNotice {
 }
 
 /// Context injected for the agent/model to see.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct AgentContext {
     /// Ordered context lines.
     pub lines: Vec<String>,
@@ -91,14 +104,10 @@ impl AgentContext {
     }
 }
 
-impl Default for AgentContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Severity level for agent-facing feedback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum FeedbackSeverity {
     /// Informational suggestion.
     Info,
@@ -109,7 +118,7 @@ pub enum FeedbackSeverity {
 }
 
 /// Feedback for the agent: a concise corrective instruction or suggestion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AgentFeedback {
     /// Concise instruction or suggestion for the agent.
     pub text: String,
@@ -152,9 +161,12 @@ impl AgentFeedback {
 }
 
 /// A diagnostic artifact produced by a hook.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiagnosticArtifact {
-    /// Absolute filesystem location of the artifact.
+    /// Filesystem location of the artifact.
+    ///
+    /// Callers should supply an absolute path so the agent can open the
+    /// artifact from any working directory; the value is not validated.
     pub absolute_path: PathBuf,
     /// Optional path relative to the project root for portable display.
     pub project_relative_path: Option<PathBuf>,
@@ -165,7 +177,10 @@ pub struct DiagnosticArtifact {
 }
 
 impl DiagnosticArtifact {
-    /// Creates an artifact reference with an absolute path and media type.
+    /// Creates an artifact reference with a path and media type.
+    ///
+    /// Pass an absolute path: a relative one is kept verbatim and resolves
+    /// against whatever directory later reads it.
     pub fn new(absolute_path: impl Into<PathBuf>, media_type: impl Into<String>) -> Self {
         Self {
             absolute_path: absolute_path.into(),
@@ -189,7 +204,7 @@ impl DiagnosticArtifact {
 }
 
 /// User-visible diagnostic text plus an optional artifact reference.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiagnosticReport {
     /// Short report title.
     pub title: String,
@@ -217,7 +232,7 @@ impl DiagnosticReport {
 }
 
 /// Request to invoke a tool as a tail call after the current hook.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TailToolCall {
     /// Harness-native tool name.
     pub name: String,

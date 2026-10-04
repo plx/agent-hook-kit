@@ -71,6 +71,35 @@ pub enum PathBase {
     UnknownAfterDirectoryChange,
     /// The invocation omitted a working directory for a relative expression.
     MissingWorkingDirectory,
+    /// The expression was resolved against the hook payload's session or turn
+    /// working directory (or, for Antigravity structured tools, its first
+    /// workspace root) because the tool's own working directory is not
+    /// observable. The tool may run elsewhere, for example when a Codex shell
+    /// call passes a `workdir` argument that its hook payload omits.
+    SessionCwd,
+    /// The expression begins with `~`, so its meaning depends on how the tool
+    /// expands home directories; it is not lexically resolved.
+    UnexpandedHome,
+    /// The call targets another execution environment (for example a Codex
+    /// patch `*** Environment ID:` header) whose filesystem is not observable.
+    UnknownEnvironment,
+    /// A shell expression beginning with `~`, which the shell expands against
+    /// `$HOME`. It is resolved only when the analyzer was given a home
+    /// directory (see [`crate::ToolAccessAnalyzer::with_home`]); otherwise
+    /// only the raw `~/...` text is retained. Unlike [`Self::UnexpandedHome`],
+    /// the expansion rule is the shell's, not a tool's.
+    Home,
+}
+
+impl PathBase {
+    /// Returns whether a relative expression with this base names a location
+    /// the resolver may anchor to the configured workspace roots.
+    pub(crate) const fn is_observable(self) -> bool {
+        matches!(
+            self,
+            Self::Absolute | Self::InvocationCwd | Self::SessionCwd
+        )
+    }
 }
 
 /// A raw path and any justified lexical resolution.
@@ -128,6 +157,11 @@ pub enum StructuredFieldMatch {
     ExactPointer,
     /// Selected because the object's key appears in the configured key set.
     KeyHeuristic,
+    /// Selected by a documented argument of a harness built-in tool.
+    BuiltinTool,
+    /// The documented argument was omitted, so the built-in tool's default
+    /// (its working directory) applies; the pointer names the absent argument.
+    BuiltinDefault,
 }
 
 impl fmt::Display for StructuredFieldMatch {
@@ -135,6 +169,8 @@ impl fmt::Display for StructuredFieldMatch {
         match self {
             Self::ExactPointer => formatter.write_str("exact pointer"),
             Self::KeyHeuristic => formatter.write_str("configured key"),
+            Self::BuiltinTool => formatter.write_str("built-in tool argument"),
+            Self::BuiltinDefault => formatter.write_str("built-in tool default"),
         }
     }
 }
@@ -228,6 +264,25 @@ pub enum AccessProvenance {
         /// One-based line number in the patch body.
         line: usize,
     },
+    /// A path recovered from a patch passed as a shell `apply_patch`
+    /// command's argument, which the standalone `apply_patch` executable
+    /// reads instead of standard input.
+    ShellPatchArgument {
+        /// Zero-based command index in the Bash analysis.
+        command_index: usize,
+        /// Span of the containing `apply_patch` command.
+        command_span: SourceSpan,
+        /// Span of the argument word that carries the patch.
+        argument_span: SourceSpan,
+        /// Patch role assigned to the path.
+        operation: PatchOperation,
+        /// Patch header marker that introduced the path (e.g. `*** Update File`,
+        /// `*** Add File`, `---`, or `+++`); the path itself lives in the
+        /// candidate's [`AccessTarget`], not in this field.
+        header: String,
+        /// One-based line number in the patch argument.
+        line: usize,
+    },
     /// Evidence emitted by an application-defined analyzer.
     Custom {
         /// Stable analyzer identifier.
@@ -244,7 +299,7 @@ impl AccessProvenance {
             Self::StructuredField { .. } => AccessSource::Structured,
             Self::Patch { .. } => AccessSource::Patch,
             Self::Shell { .. } => AccessSource::Shell,
-            Self::ShellPatch { .. } => AccessSource::Shell,
+            Self::ShellPatch { .. } | Self::ShellPatchArgument { .. } => AccessSource::Shell,
             Self::Custom { .. } => AccessSource::Custom,
         }
     }
@@ -283,6 +338,16 @@ impl fmt::Display for AccessProvenance {
             } => write!(
                 formatter,
                 "shell patch {operation} at bytes {}..{}, patch line {line}",
+                command_span.start_byte, command_span.end_byte
+            ),
+            Self::ShellPatchArgument {
+                command_span,
+                operation,
+                line,
+                ..
+            } => write!(
+                formatter,
+                "shell patch argument {operation} at bytes {}..{}, patch line {line}",
                 command_span.start_byte, command_span.end_byte
             ),
             Self::Custom { analyzer, detail } => {
@@ -346,9 +411,10 @@ pub enum ToolAccessGapReason {
         /// Raw relative path.
         raw: String,
         /// Location of the raw path: an RFC 6901 JSON Pointer for structured
-        /// input or a patch payload field (e.g. `/patch`, `/input`), or the
+        /// input or a patch payload field (e.g. `/command`, `/patch`), or the
         /// literal sentinel `"<shell-heredoc>"` for a path recovered from a
-        /// shell `apply_patch` here-document; `None` when no location is known.
+        /// shell `apply_patch` here-document or `"<shell-argument>"` for one
+        /// recovered from its patch argument; `None` when no location is known.
         pointer: Option<String>,
     },
     /// A configured structured path value is neither a string nor string array.
@@ -399,15 +465,34 @@ pub enum ToolAccessGapReason {
         /// Constructs that make the body dynamic.
         reasons: Vec<hookkit_shell::DynamicReason>,
     },
-    /// An `apply_patch` command has no observable here-document body.
+    /// A shell `apply_patch` command's patch text is not observable: no
+    /// here-document supplies its standard input (it reads a file, a pipe, a
+    /// here-string, or nothing), or its argument is dynamic or not the only
+    /// one.
     MissingShellPatchHereDocument {
         /// Span of the containing shell command.
         command_span: SourceSpan,
     },
-    /// A directory-changing command precedes the shell patch.
+    /// A directory change may take effect before the shell patch (or a
+    /// wrapper option such as `env -C` may run it elsewhere), and the
+    /// directory it applies in cannot be determined.
     ShellPatchWorkingDirectoryMayHaveChanged {
         /// Span of the containing `apply_patch` command.
         command_span: SourceSpan,
+    },
+    /// A structured path begins with `~`; its expansion depends on the tool.
+    UnexpandedHomePath {
+        /// Raw path text.
+        raw: String,
+        /// JSON Pointer to the path.
+        pointer: String,
+    },
+    /// The call targets a named execution environment (for example a Codex
+    /// patch `*** Environment ID:` header or `view_image` `environment_id`)
+    /// whose filesystem and working directory are not observable.
+    UnknownExecutionEnvironment {
+        /// Environment identifier declared by the call.
+        environment_id: String,
     },
 }
 
@@ -499,7 +584,7 @@ impl fmt::Display for ToolAccessGap {
             ),
             ToolAccessGapReason::MissingShellPatchHereDocument { command_span } => write!(
                 formatter,
-                "shell apply_patch at bytes {}..{} has no observable here-document body",
+                "shell apply_patch at bytes {}..{} has no observable patch text",
                 command_span.start_byte, command_span.end_byte
             ),
             ToolAccessGapReason::ShellPatchWorkingDirectoryMayHaveChanged { command_span } => {
@@ -509,6 +594,14 @@ impl fmt::Display for ToolAccessGap {
                     command_span.start_byte, command_span.end_byte
                 )
             }
+            ToolAccessGapReason::UnexpandedHomePath { raw, pointer } => write!(
+                formatter,
+                "path `{raw}` at {pointer} depends on the tool's home-directory expansion"
+            ),
+            ToolAccessGapReason::UnknownExecutionEnvironment { environment_id } => write!(
+                formatter,
+                "call targets environment `{environment_id}`, whose filesystem is not observable"
+            ),
         }
     }
 }
@@ -551,7 +644,23 @@ fn write_shell_gap(
             formatter.write_str("native working directory is missing")
         }
         Reason::UnsupportedRedirection => formatter.write_str("redirection is unsupported"),
+        Reason::UnsupportedShellDialect { dialect } => write!(
+            formatter,
+            "the command runs under the {} shell, which Bash analysis cannot model",
+            dialect_name(*dialect)
+        ),
         _ => formatter.write_str("unknown shell-analysis gap"),
+    }
+}
+
+fn dialect_name(dialect: hookkit_shell::ShellDialect) -> &'static str {
+    use hookkit_shell::ShellDialect;
+
+    match dialect {
+        ShellDialect::Bash => "Bash",
+        ShellDialect::Zsh => "zsh",
+        ShellDialect::PowerShell => "PowerShell",
+        _ => "unidentified",
     }
 }
 

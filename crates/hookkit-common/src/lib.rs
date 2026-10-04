@@ -13,14 +13,14 @@ pub use aligned::{
     PostCompactCommandEnvironment, PostCompactInput, PostCompactOutput,
     PostToolUseCommandEnvironment, PostToolUseInput, PostToolUseOutput,
     PreCompactCommandEnvironment, PreCompactInput, PreCompactOutput, PreToolUseCommandEnvironment,
-    PreToolUseInput, PreToolUseOutput, SessionEndCommandEnvironment, SessionEndInput,
-    SessionEndOutput, SessionStartCommandEnvironment, SessionStartInput, SessionStartOutput,
-    SubagentStartCommandEnvironment, SubagentStartInput, SubagentStartOutput,
+    PreToolUseInput, PreToolUseOutput, RewriteApproval, SessionEndCommandEnvironment,
+    SessionEndInput, SessionEndOutput, SessionStartCommandEnvironment, SessionStartInput,
+    SessionStartOutput, SubagentStartCommandEnvironment, SubagentStartInput, SubagentStartOutput,
     SubagentStopCommandEnvironment, SubagentStopInput, SubagentStopOutput, ToolInputRef,
     TurnCompletionCommandEnvironment, TurnCompletionInput, TurnCompletionOutput,
     UserPromptSubmitCommandEnvironment, UserPromptSubmitInput, UserPromptSubmitOutput,
 };
 pub use message::{
-    AgentFeedback, DiagnosticArtifact, DiagnosticReport, FeedbackSeverity, MessageAudience,
-    NoticeLevel, UserNotice,
+    AgentContext, AgentFeedback, DiagnosticArtifact, DiagnosticReport, FeedbackSeverity,
+    MessageAudience, NoticeLevel, TailToolCall, UserNotice,
 };

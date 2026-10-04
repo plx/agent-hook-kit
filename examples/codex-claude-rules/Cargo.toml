@@ -14,7 +14,6 @@ path = "src/main.rs"
 clap = { workspace = true }
 dirs = { workspace = true }
 globset = { workspace = true }
-hookkit-common = { workspace = true }
 hookkit-codex = { workspace = true }
 hookkit-core = { workspace = true }
 hookkit-runtime = { workspace = true }

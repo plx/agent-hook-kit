@@ -16,10 +16,20 @@ Apache-2.0; see `LICENSE-MIT` and `LICENSE-APACHE`.
 | Crate | Version | Declared license (SPDX) |
 | --- | --- | --- |
 | `aho-corasick` | 1.1.4 | `Unlicense OR MIT` |
+| `anstream` | 1.0.0 | `MIT OR Apache-2.0` |
+| `anstyle` | 1.0.14 | `MIT OR Apache-2.0` |
+| `anstyle-parse` | 1.0.0 | `MIT OR Apache-2.0` |
+| `anstyle-query` | 1.1.5 | `MIT OR Apache-2.0` |
+| `anstyle-wincon` | 3.0.11 | `MIT OR Apache-2.0` |
 | `block-buffer` | 0.12.1 | `MIT OR Apache-2.0` |
 | `bstr` | 1.12.1 | `MIT OR Apache-2.0` |
 | `camino` | 1.2.2 | `MIT OR Apache-2.0` |
 | `cfg-if` | 1.0.4 | `MIT OR Apache-2.0` |
+| `clap` | 4.6.1 | `MIT OR Apache-2.0` |
+| `clap_builder` | 4.6.0 | `MIT OR Apache-2.0` |
+| `clap_derive` | 4.6.1 | `MIT OR Apache-2.0` |
+| `clap_lex` | 1.1.0 | `MIT OR Apache-2.0` |
+| `colorchoice` | 1.0.5 | `MIT OR Apache-2.0` |
 | `const-oid` | 0.10.2 | `Apache-2.0 OR MIT` |
 | `cpufeatures` | 0.3.0 | `MIT OR Apache-2.0` |
 | `crypto-common` | 0.2.2 | `MIT OR Apache-2.0` |
@@ -29,9 +39,11 @@ Apache-2.0; see `LICENSE-MIT` and `LICENSE-APACHE`.
 | `dirs-sys` | 0.5.0 | `MIT OR Apache-2.0` |
 | `fs2` | 0.4.3 | `MIT OR Apache-2.0` |
 | `globset` | 0.4.18 | `Unlicense OR MIT` |
+| `heck` | 0.5.0 | `MIT OR Apache-2.0` |
 | `hybrid-array` | 0.4.13 | `MIT OR Apache-2.0` |
 | `include_dir` | 0.7.4 | `MIT` |
 | `include_dir_macros` | 0.7.4 | `MIT` |
+| `is_terminal_polyfill` | 1.70.2 | `MIT OR Apache-2.0` |
 | `itoa` | 1.0.18 | `MIT OR Apache-2.0` |
 | `libc` | 0.2.186 | `MIT OR Apache-2.0` |
 | `log` | 0.4.29 | `MIT OR Apache-2.0` |
@@ -39,6 +51,7 @@ Apache-2.0; see `LICENSE-MIT` and `LICENSE-APACHE`.
 | `memo-map` | 0.3.3 | `Apache-2.0` |
 | `minijinja` | 2.19.0 | `Apache-2.0` |
 | `num-conv` | 0.1.0 | `MIT OR Apache-2.0` |
+| `once_cell_polyfill` | 1.70.2 | `MIT OR Apache-2.0` |
 | `option-ext` | 0.2.0 | `MPL-2.0` |
 | `powerfmt` | 0.2.0 | `MIT OR Apache-2.0` |
 | `proc-macro2` | 1.0.106 | `MIT OR Apache-2.0` |
@@ -53,6 +66,7 @@ Apache-2.0; see `LICENSE-MIT` and `LICENSE-APACHE`.
 | `serde_json` | 1.0.149 | `MIT OR Apache-2.0` |
 | `sha2` | 0.11.0 | `MIT OR Apache-2.0` |
 | `streaming-iterator` | 0.1.9 | `MIT OR Apache-2.0` |
+| `strsim` | 0.11.1 | `MIT` |
 | `syn` | 2.0.117 | `MIT OR Apache-2.0` |
 | `thiserror` | 2.0.18 | `MIT OR Apache-2.0` |
 | `thiserror-impl` | 2.0.18 | `MIT OR Apache-2.0` |
@@ -63,6 +77,7 @@ Apache-2.0; see `LICENSE-MIT` and `LICENSE-APACHE`.
 | `tree-sitter-language` | 0.1.7 | `MIT` |
 | `typenum` | 1.20.1 | `MIT OR Apache-2.0` |
 | `unicode-ident` | 1.0.24 | `(MIT OR Apache-2.0) AND Unicode-3.0` |
+| `utf8parse` | 0.2.2 | `Apache-2.0 OR MIT` |
 | `walkdir` | 2.5.0 | `Unlicense OR MIT` |
 | `winapi` | 0.3.9 | `MIT OR Apache-2.0` |
 | `winapi-util` | 0.1.11 | `Unlicense OR MIT` |
@@ -367,6 +382,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - `fs2` 0.4.3 — <https://github.com/danburkert/fs2-rs>
+- `heck` 0.5.0 — <https://github.com/withoutboats/heck>
 
 ```
 Copyright (c) 2015 The Rust Project Developers
@@ -423,6 +439,41 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+```
+
+### MIT License — text shipped by `utf8parse`
+
+Used by:
+
+- `utf8parse` 0.2.2 — <https://github.com/alacritty/vte>
+
+```
+Copyright (c) 2016 Joe Wilm
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 ```
 
@@ -851,6 +902,46 @@ SOFTWARE.
 
 ```
 
+### MIT License — text shipped by `anstream`
+
+Used by:
+
+- `anstream` 1.0.0 — <https://github.com/rust-cli/anstyle.git>
+- `anstyle-parse` 1.0.0 — <https://github.com/rust-cli/anstyle.git>
+- `anstyle-query` 1.1.5 — <https://github.com/rust-cli/anstyle.git>
+- `anstyle-wincon` 3.0.11 — <https://github.com/rust-cli/anstyle.git>
+- `anstyle` 1.0.14 — <https://github.com/rust-cli/anstyle.git>
+- `clap` 4.6.1 — <https://github.com/clap-rs/clap>
+- `clap_builder` 4.6.0 — <https://github.com/clap-rs/clap>
+- `clap_derive` 4.6.1 — <https://github.com/clap-rs/clap>
+- `clap_lex` 1.1.0 — <https://github.com/clap-rs/clap>
+- `colorchoice` 1.0.5 — <https://github.com/rust-cli/anstyle.git>
+- `is_terminal_polyfill` 1.70.2 — <https://github.com/polyfill-rs/is_terminal_polyfill>
+- `once_cell_polyfill` 1.70.2 — <https://github.com/polyfill-rs/once_cell_polyfill>
+
+```
+Copyright (c) Individual contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
 ### MIT License — text shipped by `libc`
 
 Used by:
@@ -993,6 +1084,39 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+```
+
+### MIT License — text shipped by `strsim`
+
+Used by:
+
+- `strsim` 0.11.1 — <https://github.com/rapidfuzz/strsim-rs>
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015 Danny Guo
+Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
+Copyright (c) 2018 Akash Kurdekar
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ```
 

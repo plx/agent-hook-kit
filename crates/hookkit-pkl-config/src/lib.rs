@@ -30,11 +30,13 @@ pub use catalog::{
 pub use error::PklConfigError;
 pub use eval::{
     BUILTINS_PKL, CONFIG_PKL, StagedBuiltins, evaluate_pkl_file, evaluate_pkl_file_patch,
-    evaluate_pkl_source, evaluate_pkl_source_patch, staged_builtins_dir,
+    evaluate_pkl_files_patch, evaluate_pkl_source, evaluate_pkl_source_patch, staged_builtins_dir,
 };
 pub use schema::{
-    ArgToken, ArgvElement, CheckScope, DeferredReporting, DeferredReportingPatch, Diagnostics,
-    ExitCodes, FileActivitySettings, FileActivityVcsFallback, FileGroup, FileSelection,
+    ArgToken, ArgvElement, CheckScope, CoverageGapPolicy, DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    DEFAULT_IGNORED_DIRECTORY_NAMES, DEFAULT_RUN_TIMEOUT_SECONDS, DeferredReporting,
+    DeferredReportingPatch, Diagnostics, ExitCodes, FileActivitySettings,
+    FileActivitySettingsPatch, FileActivityVcsFallback, FileGroup, FileSelection,
     InvocationGranularity, LoweringPolicy, Merge, MergeResetKey, Messages, MissingToolPolicy,
     Phase, PhaseMode, RunnerConfig, RunnerConfigPatch, Settings, SettingsPatch, TemplatePair,
     TemplatePairPatch, ToolSpec, UnexpectedExitPolicy, Workflow, WorkflowCommand, WriteBehavior,
@@ -45,18 +47,29 @@ pub use schema::{
 pub struct Loaded {
     /// The merged configuration after the discovery chain.
     pub config: RunnerConfig,
-    /// Project root inferred from the inner-most project config (or the cwd
-    /// if none was found).
+    /// Project root: the deepest directory holding a discovered project or
+    /// local config (never the home directory), or the cwd if none was found.
     pub project_root: PathBuf,
 }
 
 /// Discover and load Pkl configs around `cwd`.
 ///
 /// When `override_path` is provided, the discovery chain is bypassed and only
-/// that file is loaded.
+/// that file is loaded. Every discovered layer is evaluated by one `pkl`
+/// process over one staging directory.
 pub fn discover_and_load(
     cwd: &Path,
     override_path: Option<&Path>,
+) -> Result<Loaded, PklConfigError> {
+    discover_and_load_with_home(cwd, override_path, dirs::home_dir().as_deref())
+}
+
+/// [`discover_and_load`] with an explicit home directory (`None` disables the
+/// home layer), for embedders and tests that manage their own home.
+pub fn discover_and_load_with_home(
+    cwd: &Path,
+    override_path: Option<&Path>,
+    home: Option<&Path>,
 ) -> Result<Loaded, PklConfigError> {
     if let Some(path) = override_path {
         let config = merge::merge_patch_chain(std::iter::once(evaluate_pkl_file_patch(path)?));
@@ -69,30 +82,21 @@ pub fn discover_and_load(
         });
     }
 
-    let chain = discovery::discover(cwd);
-
-    let mut configs = Vec::with_capacity(chain.len());
-    let mut project_root = cwd.to_path_buf();
-    for discovered in &chain {
-        let config = evaluate_pkl_file_patch(&discovered.path)?;
-        if matches!(
-            discovered.kind,
-            discovery::DiscoveredKind::Project | discovery::DiscoveredKind::Local
-        ) {
-            project_root = discovery::project_root_for(discovered, cwd);
-        }
-        configs.push(config);
-    }
-
-    let config = if configs.is_empty() {
+    let chain = discovery::discover_with_home(cwd, home);
+    let paths = chain
+        .iter()
+        .map(|discovered| discovered.path.as_path())
+        .collect::<Vec<_>>();
+    let patches = evaluate_pkl_files_patch(&paths)?;
+    let config = if patches.is_empty() {
         RunnerConfig::default()
     } else {
-        merge::merge_patch_chain(configs.into_iter())
+        merge::merge_patch_chain(patches.into_iter())
     };
 
     Ok(Loaded {
         config,
-        project_root,
+        project_root: discovery::project_root(&chain, cwd, home),
     })
 }
 
@@ -105,35 +109,7 @@ pub fn load_explicit(path: &Path, cwd: &Path) -> Result<Loaded, PklConfigError> 
 /// keyed by their Pkl identifier (e.g. `"ruff"`, `"cargoFmt"`).
 pub fn builtin_specs() -> Result<BTreeMap<String, ToolSpec>, PklConfigError> {
     let staging = staged_builtins_dir()?;
-    let builtins_path = staging.builtins_path();
-
-    let output = std::process::Command::new("pkl")
-        .args(["eval", "--format", "json"])
-        .arg(&builtins_path)
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                PklConfigError::PklNotFound
-            } else {
-                PklConfigError::PklExec(e.to_string())
-            }
-        })?;
-
-    if !output.status.success() {
-        return Err(PklConfigError::PklEvalFailed {
-            path: builtins_path,
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let specs = serde_json::from_str::<BTreeMap<String, ToolSpec>>(&stdout).map_err(|e| {
-        PklConfigError::JsonDecode {
-            path: builtins_path,
-            error: e.to_string(),
-        }
-    })?;
-    validate_builtin_catalog(&specs)
-        .map_err(|error| PklConfigError::CatalogValidation(error.to_string()))?;
+    let specs = eval::run_pkl_eval::<BTreeMap<String, ToolSpec>>(&staging.builtins_path())?;
+    validate_builtin_catalog(&specs).map_err(PklConfigError::CatalogValidation)?;
     Ok(specs)
 }

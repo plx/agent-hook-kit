@@ -1,0 +1,23 @@
+format_version: 1
+id: docs-2026-09-30-r1
+harness: antigravity
+state: frozen
+retrieved: 2026-09-30
+sources_file: sources.yaml
+manifest_file: MANIFEST.sha256
+events:
+- wire_name: PreToolUse
+  rust_key: pre_tool_use
+  path: events/pre-tool-use
+- wire_name: PostToolUse
+  rust_key: post_tool_use
+  path: events/post-tool-use
+- wire_name: PreInvocation
+  rust_key: pre_invocation
+  path: events/pre-invocation
+- wire_name: PostInvocation
+  rust_key: post_invocation
+  path: events/post-invocation
+- wire_name: Stop
+  rust_key: stop
+  path: events/stop
