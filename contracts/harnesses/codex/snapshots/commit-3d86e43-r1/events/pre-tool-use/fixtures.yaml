@@ -74,7 +74,7 @@ output:
     schema: command-response
     origin: synthesized
     sources: [codex-hooks-reference, codex-core-source]
-    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: allow, updatedInput: { server: fs, path: b.md } } }
+    value: { hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: allow, updatedInput: { server: fs, uri: "file:///repo/b.md" } } }
 output_negative:
   - id: deny-without-reason
     schema: command-response

@@ -794,7 +794,10 @@ fn contract(snapshot: Snapshot, seed: &Seed, input_schema: &Value) -> Value {
     }
 
     let mut uncertainties: Vec<&str> = seed.uncertainties.clone();
-    uncertainties.push(COMPATIBILITY_FIELDS);
+    if !seed.observer {
+        // Observers parse no output, so no compatibility field can be parsed.
+        uncertainties.push(COMPATIBILITY_FIELDS);
+    }
     uncertainties.push(if seed.observer {
         OBSERVER_STDERR
     } else if v172 {
@@ -1226,12 +1229,14 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
         incomplete["status"] = json!("failed");
         incomplete["error"] = json!("Incomplete response returned, reason: max_output_tokens");
         incomplete["response_id"] = json!("resp_456");
-        let mut legacy_usage = token_usage.clone();
-        legacy_usage
+        // Codex always serializes `cache_write_input_tokens`; omitting it pins
+        // that the generated schema leaves it optional (default 0).
+        let mut usage_without_cache_writes = token_usage.clone();
+        usage_without_cache_writes
             .as_object_mut()
             .expect("token usage")
             .remove("cache_write_input_tokens");
-        incomplete["token_usage"] = legacy_usage;
+        incomplete["token_usage"] = usage_without_cache_writes;
         positive.push(positive_fixture(
             "failed-incomplete",
             json!(["codex-generated-schemas", "codex-hooks-source"]),
@@ -1662,6 +1667,33 @@ mod tests {
                 for outcome in outcomes {
                     assert_eq!(outcome["stdout"], ignored_stdout());
                     assert_eq!(outcome["stderr"], diagnostic_stderr());
+                }
+                // Observers surface exit-0 stderr and parse no output, so the
+                // texts of the output-parsing events must not appear.
+                let uncertainties = &contract["uncertainties"];
+                assert!(
+                    uncertainties
+                        .as_array()
+                        .expect("uncertainties")
+                        .iter()
+                        .any(|text| text == OBSERVER_STDERR)
+                );
+                for text in [
+                    COMPATIBILITY_FIELDS,
+                    EXIT_ZERO_STDERR,
+                    EXIT_ZERO_STDERR_SCOPED,
+                    ASYNC_HANDLERS,
+                    HANDLER_KINDS_SCOPED,
+                ] {
+                    assert!(
+                        !uncertainties
+                            .as_array()
+                            .expect("uncertainties")
+                            .iter()
+                            .any(|value| value == text),
+                        "{}: {text}",
+                        seed.wire_name
+                    );
                 }
             }
         }
