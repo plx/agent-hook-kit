@@ -13,7 +13,7 @@ schemas:
   input:
     file: input.schema.json
     origin: derived
-    sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-changelog, antigravity-cli-changelog]
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-changelog, antigravity-cli-changelog, antigravity-hooks-archive-2026-08-16, antigravity-plugins]
     assurance: { confidence: low, verification: source-reviewed }
   outputs:
     - id: command-response
@@ -58,5 +58,5 @@ uncertainties:
   - "hookEventName and cwd were added to hook input by CLI 1.5.4 according to its release notes; the reference does not document them. They are optional strings, no App, IDE, or IDE-extension note mentions them, and whether hookEventName uses the PascalCase event names is undocumented. The JSON cwd is the agent's working directory, which can differ from the hook process's working directory (the plugin root for plugin hooks)."
   - "workspacePaths may be an empty array. The reference sets no minimum, and release notes describe conversations without a workspace (CLI 1.2.2, Antigravity App v2.14.0 standalone conversations) while global hooks load from ~/.gemini/config/hooks.json. Whether such payloads send [] or omit the field is undocumented, so the field stays required."
   - "transcriptPath and artifactDirectoryPath are described as absolute paths, but every official example uses a literal ~/ prefix; the schema does not require an absolute or expanded path."
-  - "<app_data_dir> is documented only for the App (~/.gemini/antigravity), the CLI (~/.gemini/antigravity-cli), and the IDE (~/.gemini/antigravity-ide). IDE extensions have none: the ACP-based JetBrains, Zed, and Xcode extensions store conversation artifacts under <GEMINI_HOME>/antigravity-acp (v1.0.0), which may or may not be their payload <app_data_dir>, and their v1.5.0 multi-root support may send several workspacePaths. mcp.md places the IDE's data under ~/.gemini/antigravity, contradicting the hooks reference. The schemas constrain no path prefix."
+  - "<app_data_dir> is documented only for the App (~/.gemini/antigravity), the CLI (~/.gemini/antigravity-cli), and the IDE (~/.gemini/antigravity-ide). IDE extensions have none: the ACP-based JetBrains, Zed, and Xcode extensions store conversation artifacts under <GEMINI_HOME>/antigravity-acp (v1.0.0), which may or may not be their payload <app_data_dir>, and their v1.5.0 multi-root support may send several workspacePaths. mcp.md resolves the IDE's <app-data-dir> to ~/.gemini/antigravity (for its MCP schema cache), contradicting the hooks reference's ~/.gemini/antigravity-ide. The schemas constrain no path prefix."
   - "The reference supports only command handlers: type is optional, 'Currently only command is supported', and defaults to command, and build-plugins.md speaks of command hooks. plugins.md and build-plugins.md describe lifecycle hooks as 'shell commands or prompt evaluations', and release notes mention prompt hooks (CLI 1.1.23) and hooks that call a model (Antigravity App v2.6.0), but no prompt handler is documented, so none is inventoried."

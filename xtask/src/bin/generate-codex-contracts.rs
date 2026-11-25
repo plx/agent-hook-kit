@@ -2,9 +2,11 @@
 //! the vendored upstream schemas.
 //!
 //! `PreToolUse` is hand-authored in each snapshot and is intentionally not
-//! seeded here. Frozen snapshots are immutable, so regenerating must reproduce
-//! each of them byte for byte: a seed correction gets a new [`Snapshot`]
-//! revision and keeps the text of the revisions before it.
+//! seeded here, as are each snapshot's `snapshot.yaml` and `sources.yaml`.
+//! Frozen snapshots are immutable, so regenerating must reproduce each of them
+//! byte for byte: a seed correction gets a new [`Snapshot`] revision and keeps
+//! the text of the revisions before it. A draft snapshot is regenerated freely
+//! until `cargo xtask contracts freeze` freezes it.
 
 use base64::Engine as _;
 use serde_json::{Map, Value, json};
@@ -87,12 +89,12 @@ const TOOL_ENVIRONMENTS: &str = "A tool call bound to execution environments run
 // Observation-only model-request events (`commit-3d86e43-r1` and later).
 
 const OBSERVER_STDOUT: &str = "Observation-only: Codex never parses stdout, at any exit code. Plain text, invalid JSON, and JSON that looks like a control directive, such as `{\"continue\":false,\"decision\":\"block\"}`, are only debug-logged; no output can block, veto, or change the model request or its context.";
-const OBSERVER_STDERR: &str = "Unlike every other Codex event, trimmed non-blank stderr becomes an error entry at every exit code, including 0: an exit-0 run is completed but shows its stderr, so exit-0 outcomes model stderr as diagnostics. A runtime error written to stderr is therefore visible on every model request attempt.";
+const OBSERVER_STDERR: &str = "Unlike every other Codex event, trimmed non-blank stderr becomes an error entry at every exit code, including 0: an exit-0 run is completed but still carries its stderr, so exit-0 outcomes model stderr as diagnostics. A synchronous handler's entries appear in its hook-completed notification, so its stderr is shown on every model request attempt; background (`async: true`) runs never produce hook notifications, so their stderr is not shown.";
 const OBSERVER_FAILURE: &str = "Every non-zero exit, exit 2 included, and a process that dies without an exit status is a failed run with no other effect; Codex adds no `hook exited with code N` text, so a failed run with blank stderr has no output entries. A timeout, spawn error, or plugin trust error adds its own error entry.";
-const OBSERVER_DISPATCH: &str = "Codex ignores any configured `matcher` for this event, and ignores `additionalContextLimit` with a load warning. `async: true` is honored, and background runs deliver their error entries too. The timeout defaults to 600 seconds, with a minimum of 1 and no clamp.";
+const OBSERVER_DISPATCH: &str = "Codex ignores any configured `matcher` for this event, and ignores `additionalContextLimit` with a load warning. `async: true` is honored: a background run delays nothing, and Codex keeps its result out of hook notifications (it reaches only metrics and analytics). The timeout defaults to 600 seconds, with a minimum of 1 and no clamp.";
 const OBSERVER_HANDLER_KINDS: &str = "Codex also runs `mcp_tool` handlers, synchronously unless they are executor-scoped (those always run in the background), and ignores the tool result's text like command stdout; `isError: true` fails the run. Since 0.164.0 a hook call waits for its MCP server and may start a dormant one within the hook timeout; since 0.171.0 bundled App hooks must target the host Apps server, and the connector and current policy must allow automatic execution. `prompt` and `agent` handlers are parsed but skipped. Only the command binding is modeled.";
 const OBSERVER_PAIRING: &str = "Each call that opens a model response stream runs one PreModelRequest and PostModelRequest pair; transport recovery within that call does not start another pair, and no pair starts once the rollout budget is exhausted. `request_id` (a UUID) is shared by the retries and model fallbacks of one generation, and `attempt_number` counts its opens from 1, although the generated schema allows 0. The pair's lifecycle id is not serialized, so hooks can correlate the two events only by (`request_id`, `attempt_number`). PostModelRequest runs without a PreModelRequest when only post handlers are configured.";
-const OBSERVER_KIND: &str = "`kind` is `sampling` for turn requests and `foreground_compaction` for compaction requests; `background_compaction` comes only from the under-development `AsyncCompaction` feature (off by default), whose requests can run before PreCompact, possibly for a discarded compaction candidate. The value set already grew in 0.171.0, so consumers should accept unknown kinds.";
+const OBSERVER_KIND: &str = "`kind` is `sampling` for turn requests and `foreground_compaction` for compaction requests; `background_compaction` comes only from the under-development `AsyncCompaction` feature (off by default), whose requests can run before PreCompact, possibly for a discarded compaction candidate. `kind` arrived in 0.171.0 together with compaction dispatch and mirrors an internal enum, so consumers should accept unknown kinds.";
 const OBSERVER_FIELDS: &str = "The payload carries no `permission_mode`. `cwd` is the step's local-environment cwd, falling back to the turn cwd. `thread_id` names the issuing thread, and `agent_id` and `agent_type` (which falls back to the default role name) are present only for thread-spawned subagents, where `agent_id` equals `thread_id`. `kind`, `request_id`, `attempt_number`, `thread_id`, and PostModelRequest `response_id` were added in 0.171.0; the hooks reference documents only the earlier field set, and the pinned generated schema controls.";
 const OBSERVER_MEMORY: &str = "Memory-consolidation turns run only managed-source and executor-scoped model-request handlers; user, project, session-flag, plugin, and environment-scoped hooks do not run there.";
 const OBSERVER_OPEN_SCHEMA: &str = "Unlike every other Codex input schema, the generated schema declares no `additionalProperties: false`, because the input struct flattens its event enum without `deny_unknown_fields`; the serialized key set is nonetheless closed. This contract derives one event's schema from the shared file's matching `oneOf` branch and keeps the vendored openness and the `attempt_number` minimum of 0.";
@@ -488,7 +490,7 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
             shared_input: Some("model-request"),
             observer: true,
             uncertainties: model_request_uncertainties(vec![
-                "PreModelRequest (Codex >= 0.164.0) runs before each attempt to open a model response stream, for turn and compaction requests on the main thread and on subagent threads.",
+                "PreModelRequest (Codex >= 0.164.0) runs before each attempt to open a model response stream for a turn request, and since 0.171.0 also for a compaction request, on the main thread and on subagent threads.",
                 OBSERVER_STDOUT,
                 "A synchronous PreModelRequest handler delays the request until it finishes, for up to its timeout.",
             ]),
@@ -507,9 +509,9 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
             shared_input: Some("model-request"),
             observer: true,
             uncertainties: model_request_uncertainties(vec![
-                "PostModelRequest (Codex >= 0.164.0) reports the outcome of each attempt to open a model response stream as `completed`, `failed`, or `cancelled`.",
+                "PostModelRequest (Codex >= 0.164.0) reports the outcome of each attempt to open a model response stream for a turn request, and since 0.171.0 also for a compaction request, as `completed`, `failed`, or `cancelled`.",
                 OBSERVER_STDOUT,
-                "Status rules from the pinned source, which the schema does not encode: `completed` has a null `error` and the response's `response_id`, with `token_usage` the provider usage or null; `failed` carries the error's display text in `error` (for example `stream disconnected before completion: stream closed before response.completed` when the stream ends early), and only an incomplete response (`Incomplete response returned, reason: ...`) also carries `response_id` and `token_usage`, which are null for every other failure; `cancelled` (a turn abort, an interrupt, or an attempt dropped before it settled) has all three null. `token_usage` always includes `cache_write_input_tokens` although the schema marks it optional.",
+                "Status rules from the pinned source, which the schema does not encode: `completed` has a null `error` and the response's `response_id`, with `token_usage` the provider usage or null; `failed` carries the error's display text in `error` (for example `stream disconnected before completion: stream closed before response.completed` when the stream ends early), and only an incomplete response (`Incomplete response returned, reason: ...`) can also carry `response_id` and `token_usage` (each null when the provider reported none), which are null for every other failure; `cancelled` (a turn abort, an interrupt, or an attempt dropped before it settled) has all three null. `token_usage` always includes `cache_write_input_tokens` although the schema marks it optional.",
                 "A synchronous PostModelRequest handler holds back the attempt's terminal event (completed or error) and, under `response_process_mode` `AfterCompleteResponse`, its buffered items until it finishes; in the default mode streaming output and tool dispatch proceed. When the turn stops waiting, unfinished synchronous runs are marked stopped (`Hook cancelled because the turn was interrupted`). An attempt dropped before it settled schedules its `cancelled` PostModelRequest on the background executor even for synchronous handlers; that run shares the eight-hook background limit and is aborted at shutdown, so it may never happen.",
                 "A synchronous, non-executor `mcp_tool` handler whose run completes may price a billable attempt (`completed`, or `failed` with `token_usage`) by returning `structuredContent` `{\"extra_codex_rollout_budget_units\": <finite number >= 0>}` (default 0); a non-object, a wrong type, or a negative or non-finite value is an invalid price that makes usage posting fail, while sibling prices are kept. Command handlers can never price, so stdout such as `{\"extra_codex_rollout_budget_units\":3}` is ignored. The hooks reference does not document pricing.",
             ]),
@@ -1190,9 +1192,7 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
         "total_tokens":1350
     });
 
-    let positive_fixture = |id: &str, sources: Value, value: Value| {
-        json!({"id":id,"origin":"synthesized","sources":sources,"value":value})
-    };
+    let positive_fixture = |id: &str, sources: Value, value: Value| json!({"id":id,"origin":"synthesized","sources":sources,"value":value});
     let mut positive = vec![positive_fixture(
         "minimal",
         json!(["codex-generated-schemas", "codex-hooks-source"]),
@@ -1205,7 +1205,11 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
         completed["token_usage"] = token_usage.clone();
         positive.push(positive_fixture(
             "representative",
-            json!(["codex-hooks-reference", "codex-generated-schemas", "codex-hooks-source"]),
+            json!([
+                "codex-hooks-reference",
+                "codex-generated-schemas",
+                "codex-hooks-source"
+            ]),
             completed,
         ));
         let mut without_usage = minimal.clone();
@@ -1235,12 +1239,15 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
         ));
         let mut transport = minimal.clone();
         transport["status"] = json!("failed");
-        transport["error"] = json!(
-            "stream disconnected before completion: stream closed before response.completed"
-        );
+        transport["error"] =
+            json!("stream disconnected before completion: stream closed before response.completed");
         positive.push(positive_fixture(
             "failed-transport",
-            json!(["codex-generated-schemas", "codex-hooks-source", "codex-core-source"]),
+            json!([
+                "codex-generated-schemas",
+                "codex-hooks-source",
+                "codex-core-source"
+            ]),
             transport,
         ));
     } else {
@@ -1249,7 +1256,11 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
         compaction_retry["attempt_number"] = json!(2);
         positive.push(positive_fixture(
             "representative",
-            json!(["codex-hooks-reference", "codex-generated-schemas", "codex-hooks-source"]),
+            json!([
+                "codex-hooks-reference",
+                "codex-generated-schemas",
+                "codex-hooks-source"
+            ]),
             compaction_retry,
         ));
         let mut background = minimal.clone();
@@ -1278,7 +1289,10 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
     };
     let without = |member: &str| {
         let mut changed = minimal.clone();
-        changed.as_object_mut().expect("input object").remove(member);
+        changed
+            .as_object_mut()
+            .expect("input object")
+            .remove(member);
         changed
     };
     let mut negative = vec![negative_fixture(
@@ -1295,10 +1309,34 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
             .expect("token usage")
             .remove("total_tokens");
         negative.extend([
-            negative_fixture("missing-response_id", "synthesized", without("response_id"), "", "required"),
-            negative_fixture("missing-token_usage", "synthesized", without("token_usage"), "", "required"),
-            negative_fixture("unknown-status", "synthesized", with("status", json!("timeout")), "/status", "enum"),
-            negative_fixture("error-number", "synthesized", with("error", json!(5)), "/error", "type"),
+            negative_fixture(
+                "missing-response_id",
+                "synthesized",
+                without("response_id"),
+                "",
+                "required",
+            ),
+            negative_fixture(
+                "missing-token_usage",
+                "synthesized",
+                without("token_usage"),
+                "",
+                "required",
+            ),
+            negative_fixture(
+                "unknown-status",
+                "synthesized",
+                with("status", json!("timeout")),
+                "/status",
+                "enum",
+            ),
+            negative_fixture(
+                "error-number",
+                "synthesized",
+                with("error", json!(5)),
+                "/error",
+                "type",
+            ),
             negative_fixture(
                 "token_usage-missing-total",
                 "synthesized",
@@ -1309,8 +1347,20 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
         ]);
     } else {
         negative.extend([
-            negative_fixture("missing-request_id", "synthesized", without("request_id"), "", "required"),
-            negative_fixture("missing-attempt_number", "synthesized", without("attempt_number"), "", "required"),
+            negative_fixture(
+                "missing-request_id",
+                "synthesized",
+                without("request_id"),
+                "",
+                "required",
+            ),
+            negative_fixture(
+                "missing-attempt_number",
+                "synthesized",
+                without("attempt_number"),
+                "",
+                "required",
+            ),
             negative_fixture(
                 "attempt_number-string",
                 "synthesized",
@@ -1318,8 +1368,20 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
                 "/attempt_number",
                 "type",
             ),
-            negative_fixture("unknown-kind", "synthesized", with("kind", json!("warmup")), "/kind", "enum"),
-            negative_fixture("cwd-number", "synthesized", with("cwd", json!(1)), "/cwd", "type"),
+            negative_fixture(
+                "unknown-kind",
+                "synthesized",
+                with("kind", json!("warmup")),
+                "/kind",
+                "enum",
+            ),
+            negative_fixture(
+                "cwd-number",
+                "synthesized",
+                with("cwd", json!(1)),
+                "/cwd",
+                "type",
+            ),
         ]);
     }
 
@@ -1333,7 +1395,13 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
             b"",
         ),
         process_case("exit-0-invalid-json-ignored", "no-op", 0, b"{not json", b""),
-        process_case("exit-0-stderr-diagnostics", "no-op", 0, b"", b"slow log sink\n"),
+        process_case(
+            "exit-0-stderr-diagnostics",
+            "no-op",
+            0,
+            b"",
+            b"slow log sink\n",
+        ),
     ];
     if post {
         process.push(process_case(
@@ -1494,4 +1562,108 @@ fn sha256(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vendored(snapshot: Snapshot, file: &str) -> Value {
+        let generated = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask parent")
+            .join("contracts/vendor/codex")
+            .join(snapshot.revision())
+            .join("generated");
+        read_json(&generated.join(file))
+    }
+
+    fn names(values: &Value) -> BTreeSet<String> {
+        values
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|value| value.as_str().expect("string").to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn splitting_the_shared_model_request_schema_merges_one_event_branch() {
+        let shared = vendored(
+            Snapshot::Commit3d86e43R1,
+            "model-request.command.input.schema.json",
+        );
+        let shared_required = names(&shared["required"]);
+        let shared_members: BTreeSet<_> = shared["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .cloned()
+            .collect();
+        for (wire_name, own) in [
+            ("PreModelRequest", &[][..]),
+            (
+                "PostModelRequest",
+                &["error", "response_id", "status", "token_usage"][..],
+            ),
+        ] {
+            let split = split_event_branch(shared.clone(), wire_name);
+            assert!(split.get("oneOf").is_none());
+            // The vendored openness and numbering are kept, not narrowed.
+            assert!(split.get("additionalProperties").is_none());
+            assert_eq!(split["properties"]["attempt_number"]["minimum"], json!(0.0));
+            assert_eq!(
+                split["properties"]["hook_event_name"],
+                json!({"const": wire_name, "type": "string"})
+            );
+            let mut expected = shared_required.clone();
+            expected.insert("hook_event_name".to_owned());
+            expected.extend(own.iter().map(|name| (*name).to_owned()));
+            assert_eq!(names(&split["required"]), expected, "{wire_name}");
+            let members: BTreeSet<_> = split["properties"]
+                .as_object()
+                .expect("properties")
+                .keys()
+                .cloned()
+                .collect();
+            let mut expected_members = shared_members.clone();
+            expected_members.insert("hook_event_name".to_owned());
+            expected_members.extend(own.iter().map(|name| (*name).to_owned()));
+            assert_eq!(members, expected_members, "{wire_name}");
+        }
+    }
+
+    #[test]
+    fn model_request_events_exist_only_from_rust_v0_172_and_are_observation_only() {
+        for snapshot in SNAPSHOTS {
+            let observers: Vec<_> = seeds(snapshot)
+                .into_iter()
+                .filter(|seed| seed.observer)
+                .collect();
+            if snapshot < Snapshot::Commit3d86e43R1 {
+                assert!(observers.is_empty(), "{}", snapshot.id());
+                continue;
+            }
+            assert_eq!(observers.len(), 2);
+            for seed in observers {
+                assert!(seed.structured.is_none() && seed.block_effect.is_none());
+                let input = split_event_branch(
+                    vendored(snapshot, "model-request.command.input.schema.json"),
+                    seed.wire_name,
+                );
+                let contract = contract(snapshot, &seed, &input);
+                assert_eq!(contract["schemas"]["outputs"], json!([]));
+                assert_eq!(contract["handler_kinds"], json!(["command", "mcp_tool"]));
+                let outcomes = contract["bindings"]["command"]["outcomes"]
+                    .as_array()
+                    .expect("outcomes");
+                let ids: Vec<_> = outcomes.iter().map(|outcome| &outcome["id"]).collect();
+                assert_eq!(ids, [&json!("no-op"), &json!("failure")]);
+                for outcome in outcomes {
+                    assert_eq!(outcome["stdout"], ignored_stdout());
+                    assert_eq!(outcome["stderr"], diagnostic_stderr());
+                }
+            }
+        }
+    }
 }

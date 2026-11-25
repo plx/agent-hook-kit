@@ -52,6 +52,12 @@ input:
       value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0, hookEventName: 3 }
       expected_pointer: /hookEventName
       expected_keyword: type
+    - id: invalid-cwd
+      origin: synthesized
+      sources: [antigravity-cli-changelog]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, invocationNum: 0, initialNumSteps: 0, cwd: 7 }
+      expected_pointer: /cwd
+      expected_keyword: type
 output:
   - id: no-op
     schema: command-response
