@@ -124,10 +124,12 @@ The command-process environment is recorded separately in supplement
   `additionalContext`.
 - `PreToolUseOutput::allow()` auto-approves the call and skips the permission
   prompt. A hook that only adds context or has no objection should return
-  `no_op()` or `with_context(..)`. To stop a call, `deny(..)` is the only
-  decision that always holds: in auto mode `ask(..)` does not gate a
-  `SubagentHandback` call, which runs without a prompt, and `defer()` is
-  honored only in a `-p` run where Claude made a single tool call.
+  `no_op()` or `with_context(..)`. To stop a call, use `deny(..)`: in auto
+  mode `ask(..)` does not gate a `SubagentHandback` call, which runs without
+  a prompt, and `defer()` is honored only in a `-p` run where Claude made a
+  single tool call. Even a deny can be overridden by a mod's `tool.check`
+  approval in a setup with no managed settings, no `managed-mcp.json`, and no
+  Team or Enterprise `/login` as the session's credential.
 - `PermissionRequest` ignores exit 2; only `PermissionRequestOutput::deny(..)`
   denies. `with_updated_permissions` rejects an entry that does not match the
   documented permission-update shape, because Claude Code would drop the
@@ -222,9 +224,10 @@ The command-process environment is recorded separately in supplement
   that starts with `{` or `[` is sent as structured `additionalContext`.
 - A `UserPromptSubmit` block (exit 2, `decision: block`, or
   `continue: false`) drops the prompt, and its reason never reaches the
-  model: Codex shows it only as the hook run's feedback entry, which the TUI
-  displays and `codex exec` does not print. Any `additionalContext` is still
-  recorded.
+  model: Codex shows it only in the hook run's completion entries (a
+  feedback entry for an exit-2 or `decision: block` reason, a stop entry for
+  a `continue: false` `stopReason`), which the TUI displays and `codex exec`
+  does not print. Any `additionalContext` is still recorded.
 - `PermissionRequestOutput::allow()` cannot approve a `Bash` command that a
   managed `requirements.toml` `prompt-user` rule matches (Codex 0.167.0): a
   person decides, or Codex rejects the command when no capable client is

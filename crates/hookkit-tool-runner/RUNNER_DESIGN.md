@@ -100,8 +100,10 @@ not dropped; patterns match it by absolute path. When no written file lies
 under the hook's directory, and for an Antigravity conversation without a
 workspace, discovery starts from the deepest directory containing the written
 files. A relative `--config` or `--state-dir` is anchored at
-`CLAUDE_PROJECT_DIR` on Claude Code and the first workspace root elsewhere,
-and a bare file name (`--config hooks.pkl`) names a file in that directory.
+`CLAUDE_PROJECT_DIR` on Claude Code, at the first workspace root elsewhere,
+and, on a Codex tool event (which has none), at the hook's working directory,
+the step directory; a bare file name (`--config hooks.pkl`) names a file in
+that directory.
 
 Phases without `phaseOrder` run by mode (format, fix, verify, check-only) and
 then alphabetically by id; Pkl mapping order is not preserved through JSON.

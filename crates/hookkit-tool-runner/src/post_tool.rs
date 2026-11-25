@@ -213,9 +213,9 @@ pub(crate) fn run_post_tool_input(
 /// reported as `cwd` before 0.166.0, when that holds at least one modified
 /// file, so the project root found without a project configuration (or with
 /// `--config`) stays where it was even when the same command also writes a
-/// log or temporary file elsewhere. Files outside that directory are not
-/// dropped: a tool's file patterns match them by absolute path, as before
-/// 0.166.0. Otherwise, and for an Antigravity conversation without a
+/// log or temporary file elsewhere. Files outside the resulting project root
+/// are not dropped: a tool's file patterns match them by absolute path, as
+/// before 0.166.0. Otherwise, and for an Antigravity conversation without a
 /// workspace, it starts from the deepest directory containing every modified
 /// file, so discovery still finds that project's configuration.
 fn discovery_start(

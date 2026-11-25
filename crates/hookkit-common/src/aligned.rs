@@ -1139,8 +1139,17 @@ impl PermissionRequestOutput {
     /// Builds the selected harness's native approval, which answers the
     /// permission dialog on the user's behalf.
     ///
-    /// This grants the permission without showing the dialog. A hook that
-    /// only observes permission requests should return [`Self::no_op`].
+    /// On Claude Code this normally grants the permission without showing the
+    /// dialog, within the limits documented on
+    /// [`hookkit_claude::catalog::PermissionRequestOutput::allow`] (a matching
+    /// deny rule still applies). On Codex an allow from an environment-scoped
+    /// managed hook has no effect (0.165.0), and an allow cannot approve a
+    /// `Bash` command that a managed `requirements.toml` `prompt-user` rule
+    /// matches (0.167.0): a person still decides, or Codex rejects the command
+    /// when no capable client is connected; see
+    /// [`hookkit_codex::catalog::PermissionRequestOutput::allow`]. A deny
+    /// still applies on both harnesses. A hook that only observes permission
+    /// requests should return [`Self::no_op`].
     pub fn allow(harness: &HarnessId) -> hookkit_core::Result<Self> {
         match select_pair(harness, "PermissionRequest")? {
             PairHarness::Claude => Ok(Self::Claude(

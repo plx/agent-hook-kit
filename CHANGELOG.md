@@ -73,10 +73,10 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
     `http-on-failure-block` bindings on the 14 gating events and describes
     it in the other events' uncertainties (`Stop`, `SubagentStop`,
     `TaskCompleted`, and `TeammateIdle` ignore it). For an `mcp_tool` hook,
-    a plain-text answer also counts as a failure on the 11 events whose
-    block stops something, but not on `PreCompact`, where plain text is the
-    compaction instructions, or on `PostToolUse` and `PostToolUseFailure`,
-    where a block stops nothing.
+    a plain-text answer also counts as a failure on the other 11 of those 14
+    events, but not on `PreCompact`, where plain text is the compaction
+    instructions, or on `PostToolUse` and `PostToolUseFailure`, where a
+    block stops nothing.
     On Windows without Git Bash a failing shell-form `PreToolUse`,
     `PermissionRequest`, or `PreSkillShellCommand` command hook blocks with
     the field unset.
@@ -116,11 +116,14 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
     slashes fails open. A new `command-defer` process case covers `defer`.
   - Inputs: `UserPromptSubmit` `session_title` is documented (a string),
     `Notification` adds `auth_storage_failure` and `plugin_notification`,
-    and `agent_id`/`agent_type` are sent in more cases. A `Bash` matcher also
-    fires for the shell commands the `Monitor` tool starts (2.1.314), which
-    new `PreToolUse`, `PermissionRequest`, and `PostToolUse` positives
-    cover, and hooks from managed settings also run on `PostToolUse` after some failed
-    calls, with the error text as a string `tool_response`.
+    and `agent_id`/`agent_type` are sent in more cases. A `Bash` matcher on
+    `PreToolUse` or `PermissionRequest` also fires for the shell commands the
+    `Monitor` tool starts (2.1.314; a `PostToolUse` `Bash` matcher does not),
+    and a matcher that includes `Monitor` receives the Monitor call's own
+    input; new `PreToolUse` and `PermissionRequest` positives cover both
+    shapes, and a new `PostToolUse` positive covers the Monitor input. Hooks
+    from managed settings also run on `PostToolUse` after some failed calls,
+    with the error text as a string `tool_response`.
     `InstructionsLoaded` records that `globs` is sent only for
     `path_glob_match` loads, `trigger_file_path` for lazy loads, and
     `parent_file_path` for `include` loads, and its representative input is
@@ -159,9 +162,10 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
     `bypassPermissions`, and `Interrupt` `mcp_tool` handlers share the
     1-3 s timeout clamp. A `UserPromptSubmit` block (exit 2,
     `decision: block`, or `continue: false`) drops the prompt, and its
-    reason never reaches the model: Codex shows it only as the hook run's
-    feedback entry, so the exit-2 stderr role is `user-message` (it was
-    `agent-context`). `SubagentStop`'s `transcript_path` is the immediate
+    reason never reaches the model: Codex shows it only in the hook run's
+    completion entries (a feedback entry, or a stop entry for a
+    `continue: false` `stopReason`), so the exit-2 stderr role is
+    `user-message` (it was `agent-context`). `SubagentStop`'s `transcript_path` is the immediate
     parent thread's transcript (null when Codex cannot look it up), while
     every other event on a subagent thread sends the subagent's own.
 - **Antigravity `docs-2026-11-25-r1`** (Antigravity App, formerly

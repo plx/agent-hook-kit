@@ -1388,8 +1388,10 @@ The native changes follow this note, with these decisions:
   exposes it. Session state therefore no longer adds each workdir to the
   project roots. A relative `--config` or `--state-dir` on a Codex tool
   event resolves against the hook's working directory, and post-tool
-  configuration discovery starts there when it holds every written file,
-  else from their deepest common directory.
+  configuration discovery starts there when it holds at least one written
+  file (so a command that also writes a log or temporary file elsewhere
+  keeps the project's configuration), else from the deepest directory
+  containing them.
 - The conformance allowlist accepts the `PreModelRequest` `/kind` and
   `PostModelRequest` `/status` negatives as open value sets. The snapshot
   has no `PostModelRequest` `/kind` negative, although the parser also
