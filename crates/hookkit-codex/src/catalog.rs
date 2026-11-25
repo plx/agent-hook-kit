@@ -9,6 +9,11 @@
 //!   exit 2, permission decisions) from a handler configured with
 //!   `async: true`. Such handlers only deliver additional context and system
 //!   messages, and the stdin payload does not say which mode is in use.
+//!
+//! `PreModelRequest` and `PostModelRequest` (Codex >= 0.164.0) are
+//! observation-only and follow a different process contract: Codex never
+//! parses their stdout, and their outputs therefore offer no JSON, control,
+//! or exit-2 constructor. See [`PreModelRequestOutput`].
 
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSpec, HarnessId, NativeContext, ProcessEmission,
@@ -56,13 +61,78 @@ open_string_enum! {
     }
 }
 
+open_string_enum! {
+    /// What a `PreModelRequest` or `PostModelRequest` attempt generates, from
+    /// `kind` (Codex >= 0.171.0).
+    ///
+    /// The value mirrors an internal Codex enum that grew with compaction
+    /// dispatch, so a later Codex can send a value parsed into `Unknown`.
+    pub enum ModelRequestKind {
+        /// A turn's sampling request.
+        Sampling => "sampling",
+        /// A compaction request that the turn waits for.
+        ForegroundCompaction => "foreground_compaction",
+        /// A compaction request from the under-development `AsyncCompaction`
+        /// feature (off by default); it can run before `PreCompact`, possibly
+        /// for a compaction candidate that is then discarded.
+        BackgroundCompaction => "background_compaction",
+    }
+}
+
+open_string_enum! {
+    /// How a model request attempt ended, from `PostModelRequest.status`.
+    ///
+    /// The schema does not tie the other members to it, but at the pinned
+    /// source a `Completed` attempt has a null `error` and a `response_id`, a
+    /// `Failed` one carries the error text (only an incomplete response also
+    /// carries `response_id` and `token_usage`), and a `Cancelled` one has
+    /// all three null.
+    pub enum ModelRequestStatus {
+        /// The response completed.
+        Completed => "completed",
+        /// The request failed, including an incomplete response.
+        Failed => "failed",
+        /// The turn was aborted or interrupted, or the attempt was dropped
+        /// before it settled.
+        Cancelled => "cancelled",
+    }
+}
+
+/// Provider token usage from `PostModelRequest.token_usage`, as Codex
+/// reports it.
+///
+/// This typed view ignores members a later Codex adds; the complete native
+/// object stays available through [`CatalogInput::field`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TokenUsage {
+    /// Input tokens.
+    pub input_tokens: i64,
+    /// Input tokens read from the provider's prompt cache.
+    pub cached_input_tokens: i64,
+    /// Input tokens written to the provider's prompt cache.
+    ///
+    /// Codex always sends this member, but the schema leaves it optional
+    /// (with a default of 0), so an absent value reads as 0.
+    #[serde(default)]
+    pub cache_write_input_tokens: i64,
+    /// Output tokens.
+    pub output_tokens: i64,
+    /// Reasoning output tokens.
+    pub reasoning_output_tokens: i64,
+    /// Total tokens.
+    pub total_tokens: i64,
+}
+
 /// Event identity validated when a [`CatalogInput`] is created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum CatalogEvent {
     Interrupt,
     PermissionRequest,
     PostCompact,
+    PostModelRequest,
     PreCompact,
+    PreModelRequest,
     SessionEnd,
     SessionStart,
     Stop,
@@ -76,6 +146,10 @@ enum FieldKind {
     String,
     NullableString,
     Bool,
+    /// A JSON integer that fits Codex's `u32`.
+    UnsignedInteger,
+    /// A [`TokenUsage`] object or JSON `null`.
+    NullableTokenUsage,
     Any,
 }
 
@@ -121,6 +195,14 @@ const SOURCE: FieldRule = required("source", FieldKind::String);
 const AGENT_TRANSCRIPT_PATH: FieldRule =
     required("agent_transcript_path", FieldKind::NullableString);
 const PROMPT: FieldRule = required("prompt", FieldKind::String);
+const THREAD_ID: FieldRule = required("thread_id", FieldKind::String);
+const KIND: FieldRule = required("kind", FieldKind::String);
+const REQUEST_ID: FieldRule = required("request_id", FieldKind::String);
+const ATTEMPT_NUMBER: FieldRule = required("attempt_number", FieldKind::UnsignedInteger);
+const STATUS: FieldRule = required("status", FieldKind::String);
+const ERROR: FieldRule = required("error", FieldKind::NullableString);
+const RESPONSE_ID: FieldRule = required("response_id", FieldKind::NullableString);
+const TOKEN_USAGE: FieldRule = required("token_usage", FieldKind::NullableTokenUsage);
 
 impl CatalogEvent {
     fn from_name(name: &str) -> Option<Self> {
@@ -128,7 +210,9 @@ impl CatalogEvent {
             "Interrupt" => Self::Interrupt,
             "PermissionRequest" => Self::PermissionRequest,
             "PostCompact" => Self::PostCompact,
+            "PostModelRequest" => Self::PostModelRequest,
             "PreCompact" => Self::PreCompact,
+            "PreModelRequest" => Self::PreModelRequest,
             "SessionEnd" => Self::SessionEnd,
             "SessionStart" => Self::SessionStart,
             "Stop" => Self::Stop,
@@ -144,7 +228,9 @@ impl CatalogEvent {
             Self::Interrupt => "Interrupt",
             Self::PermissionRequest => "PermissionRequest",
             Self::PostCompact => "PostCompact",
+            Self::PostModelRequest => "PostModelRequest",
             Self::PreCompact => "PreCompact",
+            Self::PreModelRequest => "PreModelRequest",
             Self::SessionEnd => "SessionEnd",
             Self::SessionStart => "SessionStart",
             Self::Stop => "Stop",
@@ -163,7 +249,9 @@ impl CatalogEvent {
             Self::Interrupt => contract_id!("Interrupt"),
             Self::PermissionRequest => contract_id!("PermissionRequest"),
             Self::PostCompact => contract_id!("PostCompact"),
+            Self::PostModelRequest => contract_id!("PostModelRequest"),
             Self::PreCompact => contract_id!("PreCompact"),
+            Self::PreModelRequest => contract_id!("PreModelRequest"),
             Self::SessionEnd => contract_id!("SessionEnd"),
             Self::SessionStart => contract_id!("SessionStart"),
             Self::Stop => contract_id!("Stop"),
@@ -236,7 +324,40 @@ impl CatalogEvent {
                 OPTIONAL_AGENT_ID,
                 OPTIONAL_AGENT_TYPE,
             ],
+            // The model-request events carry no `permission_mode`.
+            Self::PreModelRequest => &[
+                TRANSCRIPT_PATH,
+                MODEL,
+                TURN_ID,
+                THREAD_ID,
+                KIND,
+                REQUEST_ID,
+                ATTEMPT_NUMBER,
+                OPTIONAL_AGENT_ID,
+                OPTIONAL_AGENT_TYPE,
+            ],
+            Self::PostModelRequest => &[
+                TRANSCRIPT_PATH,
+                MODEL,
+                TURN_ID,
+                THREAD_ID,
+                KIND,
+                REQUEST_ID,
+                ATTEMPT_NUMBER,
+                OPTIONAL_AGENT_ID,
+                OPTIONAL_AGENT_TYPE,
+                STATUS,
+                ERROR,
+                RESPONSE_ID,
+                TOKEN_USAGE,
+            ],
         }
+    }
+
+    /// Whether the event's `cwd` is a tool action's working directory rather
+    /// than a turn or step directory (see [`CatalogInput::cwd`]).
+    fn reports_command_cwd(self) -> bool {
+        self == Self::PermissionRequest
     }
 }
 
@@ -258,9 +379,19 @@ pub struct CatalogInput {
     pub session_id: String,
     /// Transcript path; required by implemented parsers but allowed to be null.
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
-    /// Working directory reported by the event: the turn directory, except
-    /// for `PermissionRequest`, which reports the step-local directory of the
-    /// tool call (see [`crate::protocol::PreToolUseInput`]).
+    /// Working directory reported by the event.
+    ///
+    /// Turn-scoped events report the turn directory. `PreModelRequest`,
+    /// `PostModelRequest`, and the tool events report the step's
+    /// local-environment directory, falling back to the turn directory,
+    /// except that since Codex 0.166.0 a `PermissionRequest` for a local Bash
+    /// command, a `write_stdin` call, or network access reports that action's
+    /// working directory (a Bash command's resolved `workdir`), so it is not
+    /// a project root and is left out of
+    /// [`NativeContext::workspace_roots`](hookkit_core::NativeContext::workspace_roots)
+    /// for `PermissionRequest`. Environment-scoped managed hooks receive the
+    /// execution environment's directory instead, in its native path form
+    /// (for example `C:\repo`).
     pub cwd: hookkit_core::Utf8PathBuf,
     /// Authoritative native event discriminator.
     pub hook_event_name: String,
@@ -398,8 +529,65 @@ impl CatalogInput {
     }
 
     /// Returns the `PermissionRequest` tool arguments in their native shape.
+    ///
+    /// For a `write_stdin` approval, `tool_input.cwd` is a `file://` URI
+    /// string, not a native path like the top-level [`Self::cwd`].
     pub fn tool_input(&self) -> Option<&serde_json::Value> {
         self.field("tool_input")
+    }
+
+    /// Returns the `PreModelRequest`/`PostModelRequest` `thread_id`: the
+    /// issuing thread, which equals `agent_id` on a thread-spawned subagent.
+    pub fn thread_id(&self) -> Option<&str> {
+        self.str_field("thread_id")
+    }
+
+    /// Returns the model-request `kind`, including undocumented values.
+    pub fn kind(&self) -> Option<ModelRequestKind> {
+        self.str_field("kind").map(ModelRequestKind::from)
+    }
+
+    /// Returns the model-request `request_id`, a UUID shared by the retries
+    /// and model fallbacks of one generation.
+    pub fn request_id(&self) -> Option<&str> {
+        self.str_field("request_id")
+    }
+
+    /// Returns the model-request `attempt_number`, which Codex counts from 1
+    /// within one `request_id`.
+    ///
+    /// The pair's own lifecycle id is not sent, so a `PreModelRequest` and
+    /// its `PostModelRequest` correlate only by ([`Self::request_id`],
+    /// `attempt_number`).
+    pub fn attempt_number(&self) -> Option<u32> {
+        self.field("attempt_number")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|number| u32::try_from(number).ok())
+    }
+
+    /// Returns `PostModelRequest.status`, including undocumented values.
+    pub fn status(&self) -> Option<ModelRequestStatus> {
+        self.str_field("status").map(ModelRequestStatus::from)
+    }
+
+    /// Returns `PostModelRequest.error`, the failure's display text; `None`
+    /// when the key is absent or JSON `null`.
+    pub fn error(&self) -> Option<&str> {
+        self.str_field("error")
+    }
+
+    /// Returns `PostModelRequest.response_id`, the provider's response
+    /// identifier; `None` when the key is absent or JSON `null`.
+    pub fn response_id(&self) -> Option<&str> {
+        self.str_field("response_id")
+    }
+
+    /// Returns `PostModelRequest.token_usage`; `None` when the key is absent
+    /// or JSON `null`. An absent `cache_write_input_tokens` reads as 0.
+    pub fn token_usage(&self) -> Option<TokenUsage> {
+        self.field("token_usage")
+            .filter(|value| !value.is_null())
+            .and_then(|value| TokenUsage::deserialize(value).ok())
     }
 
     pub(crate) fn context(&self) -> NativeContext {
@@ -418,8 +606,14 @@ impl CatalogInput {
                 })
             })
             .map(SessionBoundaryContext::observed);
+        // A tool action's working directory is not a workspace root.
+        let workspace_roots = if self.event.reports_command_cwd() {
+            Vec::new()
+        } else {
+            vec![self.cwd.clone()]
+        };
         NativeContext {
-            workspace_roots: vec![self.cwd.clone()],
+            workspace_roots,
             session_id: SessionId::new(&self.session_id).ok(),
             turn_id: self.turn_id.as_deref().and_then(|id| TurnId::new(id).ok()),
             transcript_path: self.transcript_path.clone(),
@@ -446,6 +640,16 @@ fn parse(invocation: &RawInvocation, event: CatalogEvent) -> hookkit_core::Resul
             FieldKind::String => (value.is_string(), "a string"),
             FieldKind::NullableString => (value.is_string() || value.is_null(), "a string or null"),
             FieldKind::Bool => (value.is_boolean(), "a boolean"),
+            FieldKind::UnsignedInteger => (
+                value
+                    .as_u64()
+                    .is_some_and(|number| u32::try_from(number).is_ok()),
+                "an unsigned 32-bit integer",
+            ),
+            FieldKind::NullableTokenUsage => (
+                value.is_null() || TokenUsage::deserialize(value).is_ok(),
+                "a token usage object or null",
+            ),
             FieldKind::Any => (true, "any value"),
         };
         if !matches {
@@ -468,6 +672,9 @@ enum Outcome {
     BlockingError(String),
     /// Exit 1 with stderr Codex shows as the failure message.
     Failure(String),
+    /// Exit 0 with no stdout and stderr that only the model-request events
+    /// surface.
+    Diagnostic(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -516,6 +723,13 @@ impl CatalogOutput {
         }
     }
 
+    fn diagnostic(event: CatalogEvent, message: impl Into<String>) -> Self {
+        Self {
+            event,
+            outcome: Outcome::Diagnostic(message.into()),
+        }
+    }
+
     fn with_top_level(
         mut self,
         name: &'static str,
@@ -551,6 +765,12 @@ impl CatalogOutput {
             Outcome::Text(value) => Ok(ProcessEmission::command_text(contract, value)),
             Outcome::BlockingError(message) => wire::blocking_stderr(contract, message),
             Outcome::Failure(message) => ProcessEmission::command_stderr(contract, message, 1),
+            Outcome::Diagnostic(message) => Ok(ProcessEmission::command_unchecked(
+                contract,
+                Vec::new(),
+                message.into_bytes(),
+                0,
+            )),
         }
     }
 }
@@ -751,6 +971,11 @@ impl PermissionRequestOutput {
     }
 
     /// Creates a structured permission approval.
+    ///
+    /// Since Codex 0.165.0 an `allow` from an environment-scoped managed hook
+    /// has no effect: the run completes without a decision and the request
+    /// falls through to other hooks, Guardian review, or the user. Stdin does
+    /// not say whether the hook is environment-scoped. A deny still applies.
     pub fn allow() -> Self {
         Self(CatalogOutput::json(
             CatalogEvent::PermissionRequest,
@@ -826,6 +1051,12 @@ macro_rules! context_text_event {
 
         impl $output {
             /// Creates a structured response that appends agent context.
+            ///
+            /// Context above the handler's `additionalContextLimit` (default
+            /// about 2,500 tokens; 0 disables spilling) is saved to a file
+            /// under `<temp_dir>/hook_outputs/<thread_id>/`, and the model
+            /// sees a head-and-tail preview with its path. Plain-text context
+            /// spills the same way.
             pub fn with_context(additional_context: impl Into<String>) -> Self {
                 Self(CatalogOutput::json(
                     CatalogEvent::$event,
@@ -876,6 +1107,10 @@ macro_rules! blocking_event {
             /// Creates a structured `decision: "block"` response: Codex keeps
             /// the agent working and uses the reason as its next prompt.
             ///
+            /// A long reason spills to a file at the default
+            /// `additionalContextLimit`, whatever the handler configures, and
+            /// the model sees a head-and-tail preview with its path.
+            ///
             /// The reason must be non-empty after trimming unless
             /// `continue: false` is also set; this is checked during emission.
             /// Under `continue: false` a blank block is left out of the JSON,
@@ -902,6 +1137,78 @@ macro_rules! blocking_event {
 
 blocking_event!(Stop, StopOutput, "Stop", Agent);
 blocking_event!(SubagentStop, SubagentStopOutput, "SubagentStop", Agent);
+
+macro_rules! model_request_event {
+    ($event:ident, $output:ident, $name:literal $(, $doc:literal)* $(,)?) => {
+        output_type!(
+            $output,
+            $name,
+            "The event is observation-only: Codex never parses stdout, at any \
+             exit code, so no output can block, veto, or change the model \
+             request or its context, and command stdout cannot price an \
+             attempt either. Only [`Self::no_op`], [`Self::diagnostic`], and \
+             [`Self::failure`] exist; there is no JSON, control, or exit-2 \
+             constructor, because Codex would ignore the JSON and treat exit 2 \
+             as a plain failure.",
+            "Unlike on every other Codex event, trimmed non-blank stderr \
+             becomes an error entry at every exit code, including 0. A \
+             synchronous handler's entries are shown on every model request \
+             attempt; a background (`async: true`) handler's are never shown. \
+             A synchronous handler also delays every attempt for up to its \
+             timeout, which defaults to 600 seconds with no clamp, so \
+             register telemetry hooks with `async: true`."
+            $(, $doc)*
+        );
+
+        impl $output {
+            /// Exits 0 with no stdout and no stderr: a completed run that adds
+            /// nothing to the hook output.
+            pub fn no_op() -> Self {
+                Self(CatalogOutput::empty(CatalogEvent::$event))
+            }
+
+            /// Exits 0 with `message` on stderr and no stdout.
+            ///
+            /// The run completes, and Codex still records the trimmed message
+            /// as an error entry, shown on every attempt for a synchronous
+            /// handler. A blank message emits nothing Codex records.
+            pub fn diagnostic(message: impl Into<String>) -> Self {
+                Self(CatalogOutput::diagnostic(CatalogEvent::$event, message))
+            }
+
+            /// Fails the run with exit code 1 and `message` on stderr,
+            /// verbatim.
+            ///
+            /// The failure has no effect on the request. Codex shows the
+            /// trimmed message as an error entry and adds no `hook exited with
+            /// code 1` text, so a blank message leaves no entry.
+            pub fn failure(message: impl Into<String>) -> Self {
+                Self(CatalogOutput::failure(CatalogEvent::$event, message))
+            }
+        }
+
+        event_spec!($event, $output, $name, Model);
+    };
+}
+
+model_request_event!(
+    PreModelRequest,
+    PreModelRequestOutput,
+    "PreModelRequest",
+    "Codex runs it before each attempt to open a model response stream, for \
+     turn requests and, since 0.171.0, compaction requests. A synchronous \
+     handler delays the request until it finishes."
+);
+model_request_event!(
+    PostModelRequest,
+    PostModelRequestOutput,
+    "PostModelRequest",
+    "Codex runs it after each attempt to open a model response stream, with \
+     the attempt's `status`. A synchronous handler holds back the attempt's \
+     terminal event until it finishes. Only an `mcp_tool` handler can price \
+     an attempt (through `structuredContent`); a command hook's stdout, such \
+     as `{\"extra_codex_rollout_budget_units\":3}`, is ignored."
+);
 
 context_text_event!(UserPromptSubmit, UserPromptSubmitOutput, "UserPromptSubmit");
 
@@ -998,8 +1305,20 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
             "text-context",
             "exit-2",
         ]),
+        hookkit_core::NativeEventDescriptor::command::<PreModelRequest>(MODEL_REQUEST_CASES),
+        hookkit_core::NativeEventDescriptor::command::<PostModelRequest>(MODEL_REQUEST_CASES),
     ]
 }
+
+/// Model-request process fixtures the output constructors reproduce. The
+/// fixtures whose stdout Codex ignores, and `exit-2-failure`, have no
+/// constructor by design.
+const MODEL_REQUEST_CASES: &[&str] = &[
+    "no-op",
+    "exit-0-stderr-diagnostics",
+    "exit-1-blank-stderr",
+    "failure",
+];
 
 /// Returns definitive discriminator metadata for catalog-module events.
 pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescriptor> {
@@ -1040,6 +1359,14 @@ pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescripto
         hookkit_core::IdentificationDescriptor::definitive::<UserPromptSubmit>(
             "/hook_event_name",
             "UserPromptSubmit",
+        ),
+        hookkit_core::IdentificationDescriptor::definitive::<PreModelRequest>(
+            "/hook_event_name",
+            "PreModelRequest",
+        ),
+        hookkit_core::IdentificationDescriptor::definitive::<PostModelRequest>(
+            "/hook_event_name",
+            "PostModelRequest",
         ),
     ]
 }
@@ -1246,7 +1573,7 @@ mod tests {
         );
         assert_eq!(
             emission.contract().as_str(),
-            "codex/commit-ff6aec9-r2/PermissionRequest"
+            "codex/commit-3d86e43-r1/PermissionRequest"
         );
     }
 
@@ -1289,7 +1616,7 @@ mod tests {
         );
         assert_eq!(
             emission.contract().as_str(),
-            "codex/commit-ff6aec9-r2/Interrupt"
+            "codex/commit-3d86e43-r1/Interrupt"
         );
         let built = InterruptOutput::no_op()
             .with_system_message("saved")
@@ -1421,5 +1748,288 @@ mod tests {
             "hook_event_name": "SessionEnd"
         }));
         assert!(SessionEnd::parse(&missing).is_err());
+    }
+
+    fn model_request(event: &str) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "session_id": "session-1", "thread_id": "thread-1", "turn_id": "turn-1",
+            "cwd": "/repo", "transcript_path": null, "model": "gpt-test",
+            "kind": "sampling", "request_id": "5f0c6c1e-1d1f-4c55-9a51-0d0d4f0b7a10",
+            "attempt_number": 1, "hook_event_name": event
+        });
+        if event == "PostModelRequest" {
+            value["status"] = "cancelled".into();
+            value["error"] = serde_json::Value::Null;
+            value["token_usage"] = serde_json::Value::Null;
+            value["response_id"] = serde_json::Value::Null;
+        }
+        value
+    }
+
+    fn invalid_input_message(result: hookkit_core::Result<CatalogInput>) -> String {
+        match result {
+            Err(hookkit_core::HookkitError::InvalidInputForHint { message, .. }) => message,
+            other => panic!("expected InvalidInputForHint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pre_model_request_types_its_fields_and_carries_no_permission_mode() {
+        let value = model_request("PreModelRequest");
+        let input = PreModelRequest::parse(&raw(value.clone())).unwrap();
+        assert_eq!(input.event_id(), PreModelRequest::EVENT);
+        assert_eq!(
+            PreModelRequest::EVENT,
+            EventId::builtin(HarnessId::CODEX, "PreModelRequest")
+        );
+        assert_eq!(PreModelRequest::CATEGORY, EventCategory::Model);
+        assert_eq!(input.permission_mode, None);
+        assert_eq!(input.model.as_deref(), Some("gpt-test"));
+        assert_eq!(input.thread_id(), Some("thread-1"));
+        assert_eq!(input.kind(), Some(ModelRequestKind::Sampling));
+        assert_eq!(
+            input.request_id(),
+            Some("5f0c6c1e-1d1f-4c55-9a51-0d0d4f0b7a10")
+        );
+        assert_eq!(input.attempt_number(), Some(1));
+        assert_eq!(input.agent_id(), None);
+        assert_eq!(input.status(), None);
+        assert_eq!(input.token_usage(), None);
+        // Serialization reproduces the native keys without adding nulls.
+        assert_eq!(serde_json::to_value(&input).unwrap(), value);
+
+        let context = PreModelRequest::context(&input);
+        assert_eq!(context.workspace_roots, [hookkit_core::Utf8PathBuf::from("/repo")]);
+        assert_eq!(context.session_id.unwrap().as_str(), "session-1");
+        assert_eq!(context.turn_id.unwrap().as_str(), "turn-1");
+        assert_eq!(context.transcript_path, None);
+        assert_eq!(context.tool_call_id, None);
+    }
+
+    #[test]
+    fn model_request_kinds_and_statuses_are_open_value_sets() {
+        for (wire, kind) in [
+            ("sampling", ModelRequestKind::Sampling),
+            (
+                "foreground_compaction",
+                ModelRequestKind::ForegroundCompaction,
+            ),
+            (
+                "background_compaction",
+                ModelRequestKind::BackgroundCompaction,
+            ),
+            ("warmup", ModelRequestKind::Unknown("warmup".into())),
+        ] {
+            let mut value = model_request("PreModelRequest");
+            value["kind"] = wire.into();
+            let input = PreModelRequest::parse(&raw(value.clone())).unwrap();
+            assert_eq!(input.kind().as_ref(), Some(&kind));
+            assert_eq!(kind.as_str(), wire);
+            assert_eq!(serde_json::to_value(&input).unwrap(), value);
+        }
+        for (wire, status) in [
+            ("completed", ModelRequestStatus::Completed),
+            ("failed", ModelRequestStatus::Failed),
+            ("cancelled", ModelRequestStatus::Cancelled),
+            ("timeout", ModelRequestStatus::Unknown("timeout".into())),
+        ] {
+            let mut value = model_request("PostModelRequest");
+            value["status"] = wire.into();
+            let input = PostModelRequest::parse(&raw(value.clone())).unwrap();
+            assert_eq!(input.status().as_ref(), Some(&status));
+            assert_eq!(status.is_known(), wire != "timeout");
+            assert_eq!(serde_json::to_value(&input).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn post_model_request_reads_the_attempt_outcome() {
+        let mut value = model_request("PostModelRequest");
+        value["status"] = "completed".into();
+        value["response_id"] = "resp_123".into();
+        value["agent_id"] = "thread-2".into();
+        value["agent_type"] = "reviewer".into();
+        value["thread_id"] = "thread-2".into();
+        value["token_usage"] = serde_json::json!({
+            "input_tokens": 1200, "cached_input_tokens": 800,
+            "cache_write_input_tokens": 7, "output_tokens": 150,
+            "reasoning_output_tokens": 64, "total_tokens": 1350, "future_tokens": 1
+        });
+        let input = PostModelRequest::parse(&raw(value.clone())).unwrap();
+        assert_eq!(input.status(), Some(ModelRequestStatus::Completed));
+        assert_eq!(input.response_id(), Some("resp_123"));
+        assert_eq!(input.error(), None);
+        assert_eq!(input.agent_id(), input.thread_id());
+        assert_eq!(input.agent_type(), Some("reviewer"));
+        assert_eq!(
+            input.token_usage(),
+            Some(TokenUsage {
+                input_tokens: 1200,
+                cached_input_tokens: 800,
+                cache_write_input_tokens: 7,
+                output_tokens: 150,
+                reasoning_output_tokens: 64,
+                total_tokens: 1350,
+            })
+        );
+        // The unknown usage member survives in the native field.
+        assert_eq!(serde_json::to_value(&input).unwrap(), value);
+
+        // Codex always sends cache_write_input_tokens, but the schema leaves
+        // it optional with a default of 0.
+        value["status"] = "failed".into();
+        value["error"] = "Incomplete response returned, reason: max_output_tokens".into();
+        value["token_usage"]
+            .as_object_mut()
+            .unwrap()
+            .remove("cache_write_input_tokens");
+        let input = PostModelRequest::parse(&raw(value)).unwrap();
+        assert_eq!(input.token_usage().unwrap().cache_write_input_tokens, 0);
+        assert_eq!(
+            input.error(),
+            Some("Incomplete response returned, reason: max_output_tokens")
+        );
+    }
+
+    #[test]
+    fn model_request_parsers_check_required_keys_and_member_types() {
+        for field in ["request_id", "attempt_number", "thread_id", "kind", "model"] {
+            let mut value = model_request("PreModelRequest");
+            value.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                invalid_input_message(PreModelRequest::parse(&raw(value))),
+                format!("missing required field {field}")
+            );
+        }
+        for field in ["status", "error", "response_id", "token_usage"] {
+            let mut value = model_request("PostModelRequest");
+            value.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                invalid_input_message(PostModelRequest::parse(&raw(value))),
+                format!("missing required field {field}")
+            );
+        }
+        for attempt in [
+            serde_json::json!("1"),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(u64::from(u32::MAX) + 1),
+        ] {
+            let mut value = model_request("PreModelRequest");
+            value["attempt_number"] = attempt;
+            assert_eq!(
+                invalid_input_message(PreModelRequest::parse(&raw(value))),
+                "field attempt_number must be an unsigned 32-bit integer"
+            );
+        }
+        for usage in [
+            serde_json::json!("1350"),
+            serde_json::json!({"input_tokens": 1, "cached_input_tokens": 0,
+                "output_tokens": 1, "reasoning_output_tokens": 0}),
+            serde_json::json!({"input_tokens": 1, "cached_input_tokens": 0,
+                "output_tokens": 1, "reasoning_output_tokens": 0, "total_tokens": "2"}),
+        ] {
+            let mut value = model_request("PostModelRequest");
+            value["token_usage"] = usage;
+            assert_eq!(
+                invalid_input_message(PostModelRequest::parse(&raw(value))),
+                "field token_usage must be a token usage object or null"
+            );
+        }
+        let mut value = model_request("PostModelRequest");
+        value["error"] = 5.into();
+        assert_eq!(
+            invalid_input_message(PostModelRequest::parse(&raw(value))),
+            "field error must be a string or null"
+        );
+        let mut value = model_request("PreModelRequest");
+        value["cwd"] = 1.into();
+        assert!(PreModelRequest::parse(&raw(value)).is_err());
+
+        // The generated schema is open, so a member Codex adds later is kept.
+        let mut value = model_request("PreModelRequest");
+        value["status"] = "completed".into();
+        let input = PreModelRequest::parse(&raw(value)).unwrap();
+        assert_eq!(input.field("status"), Some(&serde_json::json!("completed")));
+
+        // The discriminator still routes: a Post payload is not a Pre input.
+        assert!(matches!(
+            PreModelRequest::parse(&raw(model_request("PostModelRequest"))),
+            Err(hookkit_core::HookkitError::InvalidForHint { .. })
+        ));
+    }
+
+    #[test]
+    fn model_request_outputs_are_observation_only() {
+        for (emission, contract) in [
+            (
+                PreModelRequest::emit(PreModelRequestOutput::no_op()).unwrap(),
+                "codex/commit-3d86e43-r1/PreModelRequest",
+            ),
+            (
+                PostModelRequest::emit(PostModelRequestOutput::no_op()).unwrap(),
+                "codex/commit-3d86e43-r1/PostModelRequest",
+            ),
+        ] {
+            assert!(emission.stdout().is_empty());
+            assert!(emission.stderr().is_empty());
+            assert_eq!(emission.exit_code(), 0);
+            assert_eq!(emission.contract().as_str(), contract);
+        }
+
+        let emission = PreModelRequest::emit(PreModelRequestOutput::failure("x")).unwrap();
+        assert_eq!(
+            (emission.stdout(), emission.stderr(), emission.exit_code()),
+            (&b""[..], &b"x"[..], 1)
+        );
+        let emission =
+            PostModelRequest::emit(PostModelRequestOutput::failure("hook failed\n")).unwrap();
+        assert_eq!(emission.stderr(), b"hook failed\n");
+        assert_eq!(emission.exit_code(), 1);
+        // A blank failure is still a plain failure; Codex records no entry.
+        let emission = PostModelRequest::emit(PostModelRequestOutput::failure(" \n")).unwrap();
+        assert_eq!(emission.stderr(), b" \n");
+        assert_eq!(emission.exit_code(), 1);
+
+        let emission =
+            PreModelRequest::emit(PreModelRequestOutput::diagnostic("slow log sink\n")).unwrap();
+        assert!(emission.stdout().is_empty());
+        assert_eq!(emission.stderr(), b"slow log sink\n");
+        assert_eq!(emission.exit_code(), 0);
+
+        // No constructor can write stdout, so none can carry a decision or
+        // `continue`, and none exits 2.
+        for output in [
+            PostModelRequestOutput::no_op(),
+            PostModelRequestOutput::diagnostic("{\"continue\":false}"),
+            PostModelRequestOutput::failure("{\"decision\":\"block\"}"),
+        ] {
+            let emission = PostModelRequest::emit(output).unwrap();
+            assert!(emission.stdout().is_empty());
+            assert_ne!(emission.exit_code(), 2);
+        }
+    }
+
+    #[test]
+    fn permission_request_cwd_is_not_a_workspace_root() {
+        let input = PermissionRequest::parse(&raw(serde_json::json!({
+            "session_id": "session-1", "transcript_path": null, "cwd": "/repo/nested",
+            "hook_event_name": "PermissionRequest", "model": "gpt-test", "turn_id": "turn-1",
+            "permission_mode": "default", "tool_name": "write_stdin",
+            "tool_input": {"session_id": 7, "chars": "y\n", "cwd": "file:///repo/nested"}
+        })))
+        .unwrap();
+        assert_eq!(input.cwd, "/repo/nested");
+        let context = PermissionRequest::context(&input);
+        assert!(context.workspace_roots.is_empty());
+        assert_eq!(context.session_id.unwrap().as_str(), "session-1");
+        assert_eq!(context.turn_id.unwrap().as_str(), "turn-1");
+
+        // Turn-scoped events still report their cwd as the workspace root.
+        let input = SessionStart::parse(&raw(session_start("compact"))).unwrap();
+        assert_eq!(
+            SessionStart::context(&input).workspace_roots,
+            [hookkit_core::Utf8PathBuf::from("/repo")]
+        );
     }
 }

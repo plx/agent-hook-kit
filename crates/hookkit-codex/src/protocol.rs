@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use crate::CodexCommandEnvironment;
 use crate::wire::{self, contract_id, open_string_enum, snapshot_literal};
 
-/// Codex source snapshot implemented by this crate: openai/codex `rust-v0.159.2`
-/// (`ff6aec96948b70d94983af2641a6b67c94faeff5`).
+/// Codex source snapshot implemented by this crate: openai/codex `rust-v0.172.0`
+/// (`3d86e43b075adeba2193ec5c22ac92f55afd82e6`).
 pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin(snapshot_literal!());
 
 /// Returns every Codex event with a native command implementation.
@@ -49,6 +49,12 @@ open_string_enum! {
     /// Since Codex 0.156.0 the tool events (`PreToolUse`, `PermissionRequest`,
     /// `PostToolUse`) report the mode captured for the individual step, so it
     /// can change within one turn.
+    ///
+    /// Codex derives the value only from the approval policy and sends only
+    /// [`Self::Default`] or [`Self::BypassPermissions`] (approval policy
+    /// `never`). The other values are documented by the hooks reference and
+    /// the generated schema but never sent, so plan mode cannot be inferred
+    /// from this field.
     pub enum PermissionMode {
         /// Use the default interactive permission policy.
         Default => "default",
@@ -67,15 +73,27 @@ open_string_enum! {
 #[non_exhaustive]
 /// Native Codex input observed before a tool invocation.
 ///
-/// Since Codex 0.157.0 `cwd` (and the hook's process working directory) is the
-/// step's local-environment directory when one is selected, falling back to
-/// the turn directory, so it can differ from the `cwd` of turn-scoped events.
+/// Since Codex 0.166.0 `cwd` is the working directory of the tool's command:
+/// for a local `exec_command` (`Bash`) call its resolved `workdir`, joined
+/// onto the selected environment's directory, in native path form. Other
+/// tools and remote-environment commands report the step's local-environment
+/// directory, falling back to the turn directory. The `Bash` `tool_input`
+/// carries only `command`, so `cwd` is the only place the workdir appears.
+/// Codex always starts the hook process in the step's local-environment
+/// directory, so `cwd` and the hook's own working directory can differ, and
+/// `cwd` is not a project root: [`PreToolUse::context`] leaves
+/// [`NativeContext::workspace_roots`] empty.
+///
+/// `session_id` is the root session identity that every descendant thread
+/// shares, so on a subagent thread it names the root session; `agent_id`
+/// names the subagent.
 pub struct PreToolUseInput {
-    /// Native session identifier.
+    /// Native session identifier: the root session, also on a subagent
+    /// thread.
     pub session_id: String,
     /// Transcript path; the key is required but its value may be JSON `null`.
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
-    /// Step-local working directory of the tool call.
+    /// Working directory of the tool's command (see the type documentation).
     pub cwd: hookkit_core::Utf8PathBuf,
     /// Authoritative native event discriminator.
     pub hook_event_name: String,
@@ -157,7 +175,9 @@ impl PreToolUseOutput {
     /// Creates a legacy top-level `decision: "block"` response.
     ///
     /// The reason must be non-empty after trimming; this is checked during
-    /// emission. Prefer [`Self::deny`], the current hook-specific form.
+    /// emission. Prefer [`Self::deny`], the current hook-specific form. In
+    /// code mode a block rejects the nested tool promise before the tool
+    /// runs.
     pub fn block(reason: impl Into<String>) -> Self {
         Self::decision(PreToolUseDecision::Block(reason.into()))
     }
@@ -165,7 +185,8 @@ impl PreToolUseOutput {
     /// Creates a hook-specific `permissionDecision: "deny"` response.
     ///
     /// The reason must be non-empty after trimming; this is checked during
-    /// emission.
+    /// emission. In code mode a deny rejects the nested tool promise before
+    /// the tool runs.
     pub fn deny(reason: impl Into<String>) -> Self {
         Self::decision(PreToolUseDecision::Deny(reason.into()))
     }
@@ -175,11 +196,29 @@ impl PreToolUseOutput {
     /// For Bash and `apply_patch` the replacement must contain a string
     /// `command`; for MCP and other function tools it is the complete
     /// replacement arguments object.
+    ///
+    /// Since Codex 0.165.0 the replacement may omit or repeat, but not
+    /// change, the call's target selectors: a tool's environment argument
+    /// (such as `environment_id`), an MCP resource call's `server` and, since
+    /// 0.170.0, its `environment_id` (both compared after trimming), a
+    /// terminal session's `session_id`, and the `apply_patch` environment.
+    /// Copy them from the original `tool_input` or leave them out; Codex
+    /// restores an omitted selector. A changed selector fails the tool call
+    /// with the model-visible error `PreToolUse hook cannot change the tool
+    /// environment (<field>)`. Ordinary MCP tool calls have no selector
+    /// check. A rewritten `apply_patch` must still parse. In code mode the
+    /// rewritten call runs and resolves the nested tool promise with its
+    /// result.
     pub fn rewrite(updated_input: serde_json::Map<String, serde_json::Value>) -> Self {
         Self::decision(PreToolUseDecision::Rewrite(updated_input))
     }
 
     /// Creates a response that adds agent context without a decision.
+    ///
+    /// Context above the handler's `additionalContextLimit` (default about
+    /// 2,500 tokens; 0 disables spilling) is saved to a file under
+    /// `<temp_dir>/hook_outputs/<thread_id>/`, and the model sees a
+    /// head-and-tail preview with its path.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::Structured(StructuredPreToolUseOutput {
             additional_context: Some(context.into()),
@@ -208,7 +247,8 @@ impl PreToolUseOutput {
     /// Adds agent-facing `hookSpecificOutput.additionalContext`.
     ///
     /// Valid on [`Self::no_op`] and every structured response; stderr-only
-    /// responses are rejected because their shape is final.
+    /// responses are rejected because their shape is final. Long context
+    /// spills to a file as for [`Self::with_context`].
     pub fn with_additional_context(
         mut self,
         context: impl Into<String>,
@@ -319,9 +359,11 @@ impl EventSpec for PreToolUse {
         }
     }
 
+    /// Leaves [`NativeContext::workspace_roots`] empty: since Codex 0.166.0
+    /// the tool events' `cwd` is the command's working directory, not a
+    /// workspace root.
     fn context(input: &Self::Input) -> NativeContext {
         NativeContext {
-            workspace_roots: vec![input.cwd.clone()],
             session_id: SessionId::new(&input.session_id).ok(),
             turn_id: TurnId::new(&input.turn_id).ok(),
             transcript_path: input.transcript_path.clone(),
@@ -335,14 +377,20 @@ impl EventSpec for PreToolUse {
 #[non_exhaustive]
 /// Native Codex input observed after a tool invocation.
 ///
-/// `cwd`, `model`, and `permission_mode` describe the step that ran the tool
-/// (see [`PreToolUseInput`]).
+/// `model` and `permission_mode` describe the step that ran the tool. Since
+/// Codex 0.166.0 `cwd` for unified-exec (`Bash`) output is the original
+/// command's local working directory, even when a later `write_stdin` poll or
+/// a later turn delivers the completion; other tools and remote-environment
+/// commands report the step's local-environment directory (see
+/// [`PreToolUseInput`]). [`PostToolUse::context`] therefore leaves
+/// [`NativeContext::workspace_roots`] empty.
 pub struct PostToolUseInput {
-    /// Native session identifier.
+    /// Native session identifier: the root session, also on a subagent
+    /// thread.
     pub session_id: String,
     /// Transcript path; the key is required but its value may be JSON `null`.
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
-    /// Step-local working directory of the tool call.
+    /// Working directory of the tool's command (see the type documentation).
     pub cwd: hookkit_core::Utf8PathBuf,
     /// Authoritative native event discriminator.
     pub hook_event_name: String,
@@ -438,6 +486,11 @@ impl PostToolUseOutput {
     }
 
     /// Creates a structured response that appends agent context.
+    ///
+    /// Context above the handler's `additionalContextLimit` (default about
+    /// 2,500 tokens; 0 disables spilling) is saved to a file under
+    /// `<temp_dir>/hook_outputs/<thread_id>/`, and the model sees a
+    /// head-and-tail preview with its path.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::Structured(StructuredPostToolUseOutput {
             hook_specific_output: Some(PostToolUseSpecific {
@@ -454,7 +507,10 @@ impl PostToolUseOutput {
     /// The reason must be non-empty after trimming unless `continue: false`
     /// is also set; this is checked during emission. With `continue: false`
     /// a blank block is left out of the JSON: it would change nothing but
-    /// make Codex drop the response's additional context.
+    /// make Codex drop the response's additional context. In code mode a
+    /// block rejects the nested tool promise with the reason after the tool
+    /// ran. Feedback that replaces the tool result always spills to a file
+    /// at the default `additionalContextLimit`.
     pub fn block(reason: impl Into<String>) -> Self {
         Self::Structured(StructuredPostToolUseOutput {
             decision: Some("block"),
@@ -481,6 +537,7 @@ impl PostToolUseOutput {
     ///
     /// Codex discards the context of a response whose block reason is blank,
     /// even under `continue: false`, so emission never sends such a block.
+    /// Long context spills to a file as for [`Self::with_context`].
     pub fn with_additional_context(
         mut self,
         context: impl Into<String>,
@@ -495,7 +552,8 @@ impl PostToolUseOutput {
     /// Creates a code-2 response with required stderr text.
     ///
     /// The message must be non-empty after trimming; this is checked during
-    /// emission.
+    /// emission. In code mode it rejects the nested tool promise with the
+    /// message after the tool ran.
     pub fn blocking_error(message: impl Into<String>) -> Self {
         Self::BlockingError {
             message: message.into(),
@@ -530,7 +588,9 @@ impl PostToolUseOutput {
     /// the tool call. Codex replaces the tool result the model sees with the
     /// block `reason` when it is non-blank, else [`Self::with_stop_reason`],
     /// else `PostToolUse hook stopped execution`, and the model carries on
-    /// from there; code mode's tool promise still resolves. It takes
+    /// from there. Code mode's nested tool promise still resolves, with the
+    /// original tool result: the hook's text never reaches the script. It
+    /// takes
     /// precedence over a block decision. To halt, deny the call in
     /// `PreToolUse`, or use `continue: false` on `Stop` or
     /// `UserPromptSubmit`.
@@ -628,9 +688,11 @@ impl EventSpec for PostToolUse {
         }
     }
 
+    /// Leaves [`NativeContext::workspace_roots`] empty: since Codex 0.166.0
+    /// the tool events' `cwd` is the command's working directory, not a
+    /// workspace root.
     fn context(input: &Self::Input) -> NativeContext {
         NativeContext {
-            workspace_roots: vec![input.cwd.clone()],
             session_id: SessionId::new(&input.session_id).ok(),
             turn_id: TurnId::new(&input.turn_id).ok(),
             transcript_path: input.transcript_path.clone(),
@@ -713,8 +775,12 @@ pub enum Event {
     PermissionRequest,
     /// Selects [`crate::catalog::PostCompact`].
     PostCompact,
+    /// Selects [`crate::catalog::PostModelRequest`].
+    PostModelRequest,
     /// Selects [`crate::catalog::PreCompact`].
     PreCompact,
+    /// Selects [`crate::catalog::PreModelRequest`].
+    PreModelRequest,
     /// Selects [`crate::catalog::SessionStart`].
     SessionStart,
     /// Selects [`crate::catalog::SessionEnd`].
@@ -737,7 +803,9 @@ impl EventSelector for Event {
             Self::Interrupt => "Interrupt",
             Self::PermissionRequest => "PermissionRequest",
             Self::PostCompact => "PostCompact",
+            Self::PostModelRequest => "PostModelRequest",
             Self::PreCompact => "PreCompact",
+            Self::PreModelRequest => "PreModelRequest",
             Self::SessionStart => "SessionStart",
             Self::SessionEnd => "SessionEnd",
             Self::Stop => "Stop",
@@ -757,8 +825,45 @@ pub enum AnyInput {
     PreToolUse(PreToolUseInput),
     /// A post-tool input.
     PostToolUse(PostToolUseInput),
-    /// An input for another implemented catalog event.
+    /// An input for another implemented catalog event, including
+    /// `PreModelRequest` and `PostModelRequest`.
     Catalog(crate::catalog::CatalogInput),
+}
+
+impl AnyInput {
+    /// Returns the event's `cwd` exactly as Codex sent it.
+    ///
+    /// What it names depends on the event: see [`Self::command_cwd`].
+    pub fn cwd(&self) -> &hookkit_core::Utf8Path {
+        match self {
+            Self::PreToolUse(input) => &input.cwd,
+            Self::PostToolUse(input) => &input.cwd,
+            Self::Catalog(input) => &input.cwd,
+        }
+    }
+
+    /// Returns `cwd` when it is a tool action's working directory: on
+    /// `PreToolUse`, `PermissionRequest`, and `PostToolUse`.
+    ///
+    /// Since Codex 0.166.0 that is the resolved `workdir` of a local Bash
+    /// command (and the working directory of a `write_stdin` or
+    /// network-access approval), so it need not be a project root, and
+    /// [`Codex::context`](HarnessSpec::context) leaves it out of
+    /// [`NativeContext::workspace_roots`]. Resolve the action's relative
+    /// operands against it. Other events return `None`; their `cwd` is the
+    /// turn or step directory that `workspace_roots` reports.
+    pub fn command_cwd(&self) -> Option<&hookkit_core::Utf8Path> {
+        match self {
+            Self::PreToolUse(input) => Some(&input.cwd),
+            Self::PostToolUse(input) => Some(&input.cwd),
+            Self::Catalog(input)
+                if input.event_id() == crate::catalog::PermissionRequest::EVENT =>
+            {
+                Some(&input.cwd)
+            }
+            Self::Catalog(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -769,7 +874,8 @@ pub enum AnyCommandOutput {
     PreToolUse(PreToolUseOutput),
     /// A post-tool output.
     PostToolUse(PostToolUseOutput),
-    /// An output for another implemented catalog event.
+    /// An output for another implemented catalog event, including
+    /// `PreModelRequest` and `PostModelRequest`.
     Catalog(crate::catalog::CatalogOutput),
 }
 
@@ -869,14 +975,22 @@ mod tests {
 
     #[test]
     fn contract_ids_name_the_implemented_snapshot() {
-        assert_eq!(SNAPSHOT_ID.as_str(), "commit-ff6aec9-r2");
+        assert_eq!(SNAPSHOT_ID.as_str(), "commit-3d86e43-r1");
         assert_eq!(
             PreToolUse::CONTRACT.as_str(),
-            "codex/commit-ff6aec9-r2/PreToolUse"
+            "codex/commit-3d86e43-r1/PreToolUse"
         );
         assert_eq!(
             PostToolUse::CONTRACT.as_str(),
-            "codex/commit-ff6aec9-r2/PostToolUse"
+            "codex/commit-3d86e43-r1/PostToolUse"
+        );
+        assert_eq!(
+            <crate::catalog::PreModelRequest as EventSpec>::CONTRACT.as_str(),
+            "codex/commit-3d86e43-r1/PreModelRequest"
+        );
+        assert_eq!(
+            <crate::catalog::PostModelRequest as EventSpec>::CONTRACT.as_str(),
+            "codex/commit-3d86e43-r1/PostModelRequest"
         );
     }
 
@@ -1173,10 +1287,79 @@ mod tests {
     }
 
     #[test]
-    fn selector_covers_interrupt() {
+    fn selector_covers_interrupt_and_the_model_request_events() {
+        for (selector, name) in [
+            (Event::Interrupt, "Interrupt"),
+            (Event::PreModelRequest, "PreModelRequest"),
+            (Event::PostModelRequest, "PostModelRequest"),
+        ] {
+            assert_eq!(selector.event_id(), EventId::builtin(HarnessId::CODEX, name));
+        }
+    }
+
+    #[test]
+    fn model_request_events_decode_through_the_harness() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","thread_id":"t2","turn_id":"t","cwd":"/repo","transcript_path":null,"model":"gpt-test","kind":"sampling","request_id":"r","attempt_number":3,"hook_event_name":"PreModelRequest"}"#.to_vec(),
+        )
+        .unwrap();
+        let event = Event::PreModelRequest.event_id();
+        let input = Codex::decode(&event, &raw).unwrap();
+        assert_eq!(Codex::input_event(&input), event);
+        let AnyInput::Catalog(catalog) = &input else {
+            panic!("model-request inputs are catalog inputs")
+        };
+        assert_eq!(catalog.attempt_number(), Some(3));
+        assert_eq!(input.cwd(), "/repo");
+        assert_eq!(input.command_cwd(), None);
         assert_eq!(
-            Event::Interrupt.event_id(),
-            EventId::builtin(HarnessId::CODEX, "Interrupt")
+            Codex::context(&input).workspace_roots,
+            [hookkit_core::Utf8PathBuf::from("/repo")]
+        );
+
+        let output = AnyCommandOutput::from(crate::catalog::PreModelRequestOutput::failure("x"));
+        assert_eq!(Codex::output_event(&output), event);
+        let emission = Codex::encode_command(&event, output).unwrap();
+        assert_eq!(emission.exit_code(), 1);
+        assert!(
+            Codex::encode_command(
+                &Event::PostModelRequest.event_id(),
+                crate::catalog::PreModelRequestOutput::no_op().into()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn tool_event_cwd_is_a_command_directory_not_a_workspace_root() {
+        // Since Codex 0.166.0 a local Bash command reports its resolved
+        // workdir, which can be a scratch directory outside the project.
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s1","transcript_path":null,"cwd":"/tmp/scratch","hook_event_name":"PreToolUse","model":"gpt-test","turn_id":"t","permission_mode":"default","tool_name":"Bash","tool_use_id":"u","tool_input":{"command":"ls"},"agent_id":"th2","agent_type":"worker"}"#.to_vec(),
+        )
+        .unwrap();
+        let input = Codex::decode(&PreToolUse::EVENT, &raw).unwrap();
+        assert_eq!(input.command_cwd(), Some(hookkit_core::Utf8Path::new("/tmp/scratch")));
+        let context = Codex::context(&input);
+        assert!(context.workspace_roots.is_empty());
+        // A subagent's tool call is grouped under the root session.
+        assert_eq!(context.session_id.unwrap().as_str(), "s1");
+        assert_eq!(context.tool_call_id.unwrap().as_str(), "u");
+
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s","transcript_path":null,"cwd":"C:\\repo-B","hook_event_name":"PostToolUse","model":"gpt-test","turn_id":"t","permission_mode":"default","tool_name":"Bash","tool_use_id":"u","tool_input":{"command":"type a.txt"},"tool_response":"a"}"#.to_vec(),
+        )
+        .unwrap();
+        let input = Codex::decode(&PostToolUse::EVENT, &raw).unwrap();
+        // A Windows-form cwd is kept verbatim, also on Unix.
+        assert_eq!(input.cwd().as_str(), r"C:\repo-B");
+        assert!(Codex::context(&input).workspace_roots.is_empty());
+        let AnyInput::PostToolUse(post) = &input else {
+            panic!("decoded the wrong event")
+        };
+        assert_eq!(
+            serde_json::to_value(post).unwrap()["cwd"],
+            serde_json::json!(r"C:\repo-B")
         );
     }
 }

@@ -1,0 +1,35 @@
+format_version: 1
+sources:
+  - id: claude-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://code.claude.com/docs/en/hooks.md
+    retrieved: 2026-09-30
+    content_sha256: 5129d58370ed4d7910c6e86537e0592b2902ea5bf0a8682721c5484f5d46f566
+    reproducibility: content-hash-only
+    limitations:
+      - The mutable Markdown page has no checked-in capture; the hash covers the decoded 248570-byte body that `curl --compressed` returned, identically, on two retrievals on 2026-09-30.
+      - Compared with the docs-2026-09-29-r1 evidence (sha256 c20e140ef4c61a570800ec9a9edf23bd9aabba8303dc632851e34d80a3242c8c), this revision changes only the UserPromptSubmit block wording and adds the "What a blocked prompt leaves behind" section, which extends suppressOriginalPrompt to exit-2 blocks that print JSON.
+  - id: claude-code-changelog
+    kind: official-release-notes
+    authority: primary
+    url: https://raw.githubusercontent.com/anthropics/claude-code/2282079d6ac8824ec4b72a432a03e0c636e0512f/CHANGELOG.md
+    retrieved: 2026-09-30
+    revision: 2282079d6ac8824ec4b72a432a03e0c636e0512f
+    content_sha256: 0937ba0c7c5e7c5272c65aa0b24e0a5e6cc57e8e0e263f5a0559b5800cf2f217
+    reproducibility: pinned-revision
+    limitations:
+      - Prose release notes through Claude Code 2.1.285; cited only where the hooks reference is silent, such as the 2.1.284 Elicitation and ElicitationResult decision fix.
+      - The file was byte-identical at main commit 732e167ee9d71296b4b63d6f529ac1334513826a on 2026-09-30, so no hook change follows 2.1.285.
+  - id: claude-agent-sdk-types
+    kind: official-package-types
+    authority: secondary
+    url: https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.285.tgz
+    retrieved: 2026-09-30
+    revision: 0.3.285
+    content_sha256: 5c68fdbf22cbe796d533dfb59e939aecdee7d3ce37d4853003b9d4b33863f40f
+    reproducibility: pinned-revision
+    limitations:
+      - The hash covers the published tarball; package/sdk.d.ts inside it hashes to 3bc04bbd9858b00a2589b899317c66852ff875e841eb90c2a741ef9047e235bf. 0.3.285 was still the npm latest tag on 2026-09-30.
+      - The TypeScript hook input and output types corroborate optionality and value sets but are not the command-hook reference; they omit scratchpad_dir, still type hookSpecificOutput for Setup and Notification, and type UserPromptSubmit source and session_title inputs that the reference does not document.
+      - Historical claims about SDK 0.3.223 refer to https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.223.tgz (sha256 767b1c43b70ed4f2379eeb645e439e0d516c45be885e2e613c1590a59e5032b3).
