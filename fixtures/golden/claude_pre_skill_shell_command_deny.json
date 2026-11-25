@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"hookEventName":"PreSkillShellCommand","permissionDecision":"deny","permissionDecisionReason":"curl is not allowed in skills."}}

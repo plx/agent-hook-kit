@@ -23,15 +23,15 @@ rewriting protocol history.
 
 | Harness | Selected snapshot | Events | Audit |
 | --- | --- | --- | --- |
-| Claude Code | [`docs-2026-09-30-r1`](harnesses/claude-code/snapshots/docs-2026-09-30-r1/) (Claude Code 2.1.285) | 33, including `PreModelSwitch` and `PostModelSwitch` | [`2026-09-30-claude-code-hooks.md`](../planning/audits/2026-09-30-claude-code-hooks.md) |
-| Codex | [`commit-ff6aec9-r2`](harnesses/codex/snapshots/commit-ff6aec9-r2/) (`rust-v0.159.2`) | 12, including `Interrupt` | [`2026-09-30-codex-hooks.md`](../planning/audits/2026-09-30-codex-hooks.md) |
-| Antigravity | [`docs-2026-09-30-r1`](harnesses/antigravity/snapshots/docs-2026-09-30-r1/) | 5 | [`2026-09-30-antigravity-hooks.md`](../planning/audits/2026-09-30-antigravity-hooks.md) |
+| Claude Code | [`docs-2026-11-25-r1`](harnesses/claude-code/snapshots/docs-2026-11-25-r1/) (Claude Code 2.1.332) | 34, including `PreSkillShellCommand` | [`2026-11-25-claude-code-hooks.md`](../planning/audits/2026-11-25-claude-code-hooks.md) |
+| Codex | [`commit-3d86e43-r1`](harnesses/codex/snapshots/commit-3d86e43-r1/) (`rust-v0.172.0`) | 14, including `PreModelRequest` and `PostModelRequest` | [`2026-11-25-codex-hooks.md`](../planning/audits/2026-11-25-codex-hooks.md) |
+| Antigravity | [`docs-2026-11-25-r1`](harnesses/antigravity/snapshots/docs-2026-11-25-r1/) | 6, including `SessionStart` | [`2026-11-25-antigravity-hooks.md`](../planning/audits/2026-11-25-antigravity-hooks.md) |
 
 <!-- markdownlint-enable MD013 -->
 
 The selected command-environment supplement is
-[`command-environments-2026-09-30-r2`](supplements/command-environments/command-environments-2026-09-30-r2/),
-which maps all 50 events; [`docs/command-environments.md`](../docs/command-environments.md)
+[`command-environments-2026-11-25-r1`](supplements/command-environments/command-environments-2026-11-25-r1/),
+which maps all 54 events; [`docs/command-environments.md`](../docs/command-environments.md)
 summarizes it. [`status/support.md`](status/support.md) is the generated
 support matrix.
 
@@ -39,8 +39,12 @@ support matrix.
 
 Catalog breadth is not implementation scope. Snapshots preserve every binding
 documented by an upstream harness when the available evidence supports an exact
-contract, including Claude Code HTTP bindings. HookKit itself implements only
-the `command` binding in this iteration.
+contract, including Claude Code HTTP bindings and the
+`command-on-failure-block` and `http-on-failure-block` bindings that record a
+hook entry with `"onFailure": "block"`. HookKit itself implements only the
+`command` binding in this iteration. `command-on-failure-block` is
+`catalog-only`, and `status/implementation-gaps.yaml` lists it as a gap on
+each of its 14 events; the HTTP bindings are `unsupported`.
 
 `status/stabilization-v1.yaml` is the machine-readable boundary: command
 bindings can progress from `catalog-only` to native/runtime support, while

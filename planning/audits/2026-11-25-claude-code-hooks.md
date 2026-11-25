@@ -4,7 +4,8 @@
 - Previous selected snapshot: `docs-2026-09-30-r1` (Claude Code 2.1.285;
   selected in `620d5f1`)
 - Proposed successor: `docs-2026-11-25-r1`, **draft (not yet frozen or
-  selected)**
+  selected)** when this note was written; since frozen and selected (see
+  "Final status")
 - Proposed pin: Claude Code 2.1.332, the changelog head at
   `anthropics/claude-code@d66368052c9303ce022c017a5b59d62ebd57d1e7` and the
   npm `latest` tag on the audit date (npm `stable` is 2.1.326)
@@ -2132,7 +2133,7 @@ cite the earlier full hash in `limitations`):
 
 | Source id | New SHA-256 (bytes) | Pinned |
 | --- | --- | --- |
-| `claude-hooks-reference` | `194272edd023a34be015d351c402c3ca166d84ebfd9b50215b204f09553e3099` (293,618) | `5129d583…f566` |
+| `claude-hooks-reference` | `d16003851f60562eaa793e6270316b17550f8e24691214d7d798e5a503537c79` (301,732; the body that `docs-2026-11-25-r1` pins, see "Post-review corrections"; this note reviewed `194272ed…3099`, 293,618) | `5129d583…f566` |
 | `claude-environment-reference` | `30cd22fe95a40ced8d175d368d5e915441014255f40965e681d2a3dcbdff317e` (194,781) | `f49dad1f…7b1a` |
 | `claude-plugins-reference` | `bcd6278cef41259de55b509ae9d9f91c9d2fba1c369798ec1a6667738ae32986` (43,583) | `2ec613e8…c270` |
 | `claude-plugin-components` | `1737d81c9c68f055970b0b78cf621946644daf940bda65a8c3125d4b35ae5d1b` (38,271) | `97fa2bab…8fed` |
@@ -2521,3 +2522,54 @@ snapshot and `xtask/src/bin/generate-claude-contracts.rs` carry them.
   note); PreToolUse `command-exit-2-continue-false` maps to
   `exit-2-structured`; PermissionRequest records the 2.1.300 and 2.1.326
   rewrite rules; the MCP-skill ask is marked as CLI inspection.
+
+## Final status
+
+`docs-2026-11-25-r1` is frozen with the post-review corrections, recorded in
+`FROZEN_LEDGER`, and selected in `contracts/registry.yaml`, together with
+supplement `command-environments-2026-11-25-r1`. The supplement pins
+`hooks.md` at `d16003851f60562eaa793e6270316b17550f8e24691214d7d798e5a503537c79`,
+maps `PreSkillShellCommand` to the `PreToolUse` profiles without
+`environment-file`, and records the PowerShell `CLAUDE_ENV_FILE` exclusion.
+`hookkit-claude` implements the snapshot, and all 34 events,
+`PreSkillShellCommand` included, are `command-runtime-beta` targets for the
+`command` binding with `source-reviewed` verification.
+
+The native changes follow this note, with these decisions:
+
+- `PreCompactOutput::no_op()` prints nothing, and
+  `PreCompactOutput::compaction_instructions` writes instructions.
+- `StopOutput` and `SubagentStopOutput` `into_blocking_error` reject a
+  response that sets `continue: false`.
+- `TaskCompletedOutput` and `TeammateIdleOutput` gain `block` and
+  `with_block`.
+- `UserPromptSubmit` rejects a non-string `session_title`;
+  `PreSkillShellCommand` does not check the optional `command_source`, and
+  its context carries no tool-call id.
+- Under `FailurePolicy::FailClosed`, `PreSkillShellCommand` exits 2, and
+  `UserPromptSubmit` exits 2 with a JSON `block` decision on stdout, as the
+  aligned `UserPromptSubmitOutput::block` now does on Claude Code.
+- `hookkit-shell` matches `Monitor` calls that run a command
+  (`CLAUDE_MONITOR_PROFILE`), and `hookkit-tool-access` reports a
+  `PostToolUse` with a string `tool_response` as `Conditional` evidence.
+
+Deferred:
+
+- `command-on-failure-block` is `catalog-only`: no native descriptor
+  declares it and conformance does not execute its cases, so
+  `contracts/status/implementation-gaps.yaml` records a
+  `binding-implemented` gap on each of its 14 events. Implementing it also
+  needs a binding name in `HandlerKind` and in the conformance registry
+  writer, and xtask's report and support checks, which treat only `command`
+  as a command runtime. `http-on-failure-block` is `unsupported`, like every
+  HTTP binding.
+- `PreSkillShellCommand` is not a `hookkit-shell` shell source, there is no
+  PowerShell profile (PowerShell calls stay `NotShell`), and
+  `forbidden-file-guard` does not handle `PreSkillShellCommand`.
+- On `PreCompact`, structured JSON at exit 0 that does not block, such as
+  `no_op().with_terminal_sequence(..)`, is still appended to the compaction
+  instructions, according to inspection of the CLI; this is documented on
+  the type but not prevented.
+- The runner variables `CLAUDE_CODE_REMOTE_SESSION_UUID` and
+  `CLAUDE_CODE_REMOTE_SLACK_*` are not modeled.
+- Every question under "Open questions and uncertainties" is still open.

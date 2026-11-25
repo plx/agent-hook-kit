@@ -90,16 +90,7 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
 {%- endif %}
 {%- endfor %}
 {%- if "file_activity" in state_capabilities %}
-        Command::SessionStartState => {
-{%- if "antigravity" in harnesses %}
-            // `Cli::validate` rejects this combination first. Exit status 2
-            // can mean "block" to a harness, so fail non-blockingly.
-            if harness == hookkit_core::HarnessId::ANTIGRAVITY {
-                return std::process::ExitCode::FAILURE;
-            }
-{%- endif %}
-            crate::scaffold::runners::run_session_start(harness, state_dir)
-        }
+        Command::SessionStartState => crate::scaffold::runners::run_session_start(harness, state_dir),
 {%- endif %}
 {%- else %}
 {%- for stable_id in native_hooks %}
@@ -141,9 +132,9 @@ pub fn run(cli: Cli) -> std::process::ExitCode {
             config_path,
             state_dir,
         ),
-{%- elif "file_activity" in state_capabilities and stable_id == "session_start" and harness != "antigravity" %}
+{%- elif "file_activity" in state_capabilities and stable_id == "session_start" %}
         Command::{{ variant(stable_id) }} => hookkit_runtime::run_event::<
-            {{ "hookkit_claude::protocol::SessionStart" if harness == "claude-code" else "hookkit_codex::catalog::SessionStart" }},
+            {{ "hookkit_claude::protocol::SessionStart" if harness == "claude-code" else ("hookkit_codex::catalog::SessionStart" if harness == "codex" else "hookkit_antigravity::SessionStart") }},
             _,
         >(move |input, environment, context| {
             crate::scaffold::state::ensure_session_state(context, state_dir.as_deref())
@@ -334,10 +325,11 @@ fn run_pre_tool() -> std::process::ExitCode {
 {%- elif harness == "antigravity" %}
     hookkit_runtime::run_event::<hookkit_antigravity::PreToolUse, _>(
         |input, _environment, _context| {
-            // Antigravity requires a decision and has no pass-through, so "no
-            // objection" is `ask`: it respects "Always Allow" grants and
-            // prompts only where none covers the call. `allow` would
-            // auto-approve every call and bypass the user's Ask presets.
+            // Antigravity requires a decision. Its current reference makes
+            // `allow` a pass-through, but builds that predate that undated
+            // change auto-approve on it, so "no objection" is `ask`: it
+            // respects "Always Allow" grants and prompts only where none
+            // covers the call. `auto_approve` would approve every call.
             Ok(match crate::hooks::pre_tool::evaluate(Some(&input.tool_call.name)) {
                 Decision::Allow => hookkit_antigravity::PreToolUseOutput::ask(),
                 Decision::Deny(reason) => {

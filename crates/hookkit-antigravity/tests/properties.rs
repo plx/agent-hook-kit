@@ -50,7 +50,9 @@ proptest! {
     /// builds that predate `systemMessage`.
     #[test]
     fn injected_deprecated_ephemeral_messages_are_exact(message in any::<String>()) {
-        let output = PreInvocationOutput::inject(InjectStep::ephemeral_message(message.clone()));
+        #[allow(deprecated)]
+        let step = InjectStep::ephemeral_message(message.clone());
+        let output = PreInvocationOutput::inject(step);
         let emission = PreInvocation::emit(output).unwrap();
         let value: Value = serde_json::from_slice(emission.stdout()).unwrap();
 

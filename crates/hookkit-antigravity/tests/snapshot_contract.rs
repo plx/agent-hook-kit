@@ -264,9 +264,11 @@ fn fixture_output(event_dir: &str, id: &str) -> ProcessEmission {
                 InjectStep::system_message_with_metadata("Remember to lint", metadata("policy")),
             ))
         }
-        ("pre-invocation", "inject-deprecated-ephemeral") => PreInvocation::emit(
-            PreInvocationOutput::inject(InjectStep::ephemeral_message("Remember to lint")),
-        ),
+        ("pre-invocation", "inject-deprecated-ephemeral") => {
+            #[allow(deprecated)]
+            let step = InjectStep::ephemeral_message("Remember to lint");
+            PreInvocation::emit(PreInvocationOutput::inject(step))
+        }
         ("pre-invocation", "explicit-default") => PreInvocation::emit(
             PreInvocationOutput::no_op()
                 .with_termination_behavior(PreInvocationTermination::Default),
@@ -286,9 +288,11 @@ fn fixture_output(event_dir: &str, id: &str) -> ProcessEmission {
             PostInvocationOutput::inject(InjectStep::system_message("Summarize the changes."))
                 .with_termination_behavior(TerminationBehavior::Terminate),
         ),
-        ("post-invocation", "inject-deprecated-ephemeral") => PostInvocation::emit(
-            PostInvocationOutput::inject(InjectStep::ephemeral_message("Summarize the changes.")),
-        ),
+        ("post-invocation", "inject-deprecated-ephemeral") => {
+            #[allow(deprecated)]
+            let step = InjectStep::ephemeral_message("Summarize the changes.");
+            PostInvocation::emit(PostInvocationOutput::inject(step))
+        }
         ("post-invocation", "inject-error-message") => PostInvocation::emit(
             PostInvocationOutput::inject(InjectStep::error_message("Post-turn check failed."))
                 .with_termination_behavior(TerminationBehavior::Terminate),
@@ -426,6 +430,8 @@ fn every_process_case_matches_exact_bytes_and_is_declared() {
 
 #[test]
 fn every_typed_output_constructor_satisfies_the_output_schema() {
+    // The deprecated `ephemeralMessage` step is still a documented kind.
+    #[allow(deprecated)]
     let steps = || {
         vec![
             InjectStep::system_message("instruction"),

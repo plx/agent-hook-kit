@@ -71,9 +71,27 @@ fn input(harness: &str, cwd: &Path, path: &str) -> serde_json::Value {
     }
 }
 
+/// Builds a Claude Code `PreSkillShellCommand` payload: an injected command
+/// that a loading skill is about to run through `tool_name`.
+fn injected_command(cwd: &Path, tool_name: &str, command: &str) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": "session",
+        "transcript_path": "/tmp/transcript.jsonl",
+        "cwd": cwd.to_str().unwrap(),
+        "permission_mode": "default",
+        "hook_event_name": "PreSkillShellCommand",
+        "tool_name": tool_name,
+        "tool_input": {"command": command},
+        "tool_use_id": "skillsh_1",
+        "command_name": "release-notes",
+        "invoked_by": "user"
+    })
+}
+
 /// Runs the guard with `args`, feeding `stdin`. On Claude Code the baseline
-/// environment names `project_dir` as `CLAUDE_PROJECT_DIR`. `home` replaces
-/// `$HOME` so default discovery never reads the developer's own policy.
+/// environment names `project_dir` as `CLAUDE_PROJECT_DIR` and the payload's
+/// `session_id` (default `session`) as the session. `home` replaces `$HOME`
+/// so default discovery never reads the developer's own policy.
 fn run_with(
     args: &[String],
     harness: &str,
@@ -91,10 +109,14 @@ fn run_with(
     clear_hook_environment(&mut command);
     command.env("HOME", home);
     if harness == "claude" {
+        let session = serde_json::from_slice::<serde_json::Value>(stdin)
+            .ok()
+            .and_then(|payload| payload["session_id"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "session".to_owned());
         command
             .env("CLAUDECODE", "1")
             .env("CLAUDE_CODE_CHILD_SESSION", "1")
-            .env("CLAUDE_CODE_SESSION_ID", "session")
+            .env("CLAUDE_CODE_SESSION_ID", session)
             .env("CLAUDE_PROJECT_DIR", project_dir);
     }
     let mut child = command.spawn().unwrap();
@@ -126,6 +148,15 @@ fn run(harness: &str, config: &Path, input: &serde_json::Value) -> std::process:
         config.parent().unwrap(),
         &serde_json::to_vec(input).unwrap(),
     )
+}
+
+/// The `hookEventName` of a Claude Code structured response.
+fn hook_event_name(output: &std::process::Output) -> String {
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    value["hookSpecificOutput"]["hookEventName"]
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 fn decision(output: &std::process::Output) -> String {
@@ -162,6 +193,138 @@ fn every_aligned_harness_denies_matches_and_passes_other_calls_through() {
             "codex" => assert!(passed.stdout.is_empty(), "{harness}"),
             _ => assert_eq!(passed.stdout, br#"{"decision":"ask"}"#),
         }
+    }
+}
+
+#[test]
+fn claude_injected_commands_are_denied_on_match_and_otherwise_pass_through() {
+    // PreToolUse does not fire for a skill's injected commands, so the same
+    // registration also guards PreSkillShellCommand.
+    let temporary = TempDirectory::new("injected");
+    let config = temporary.0.join("policy.yaml");
+    std::fs::write(
+        &config,
+        "patterns: ['.env', '**/.env']\naccess_policy: inspect_known\n",
+    )
+    .unwrap();
+
+    let denied = run(
+        "claude",
+        &config,
+        &injected_command(&temporary.0, "Bash", "cat .env"),
+    );
+    assert!(denied.status.success(), "{:?}", denied.stderr);
+    assert_eq!(hook_event_name(&denied), "PreSkillShellCommand");
+    assert_eq!(decision(&denied), "deny");
+    let value: serde_json::Value = serde_json::from_slice(&denied.stdout).unwrap();
+    assert!(
+        value["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains(".env"),
+        "{value}"
+    );
+
+    // No objection is the event's no-op: an injected command cannot be
+    // approved, so it runs unless another hook blocks it.
+    for (tool, command) in [
+        ("Bash", "cat notes.txt"),
+        ("PowerShell", "Get-Content notes.txt"),
+    ] {
+        let passed = run(
+            "claude",
+            &config,
+            &injected_command(&temporary.0, tool, command),
+        );
+        assert!(passed.status.success(), "{tool}: {:?}", passed.stderr);
+        assert_eq!(passed.stdout, b"{}", "{tool}");
+    }
+
+    // Every injected command is a shell command, PowerShell included.
+    std::fs::write(&config, "access_policy: deny_all_shell\n").unwrap();
+    for tool in ["Bash", "PowerShell"] {
+        let denied = run(
+            "claude",
+            &config,
+            &injected_command(&temporary.0, tool, "echo safe"),
+        );
+        assert!(denied.status.success(), "{tool}: {:?}", denied.stderr);
+        assert_eq!(decision(&denied), "deny", "{tool}");
+    }
+}
+
+#[test]
+fn snapshot_pre_skill_shell_command_fixtures_follow_the_shell_posture() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../contracts/harnesses/claude-code/snapshots")
+        .join(hookkit_claude::SNAPSHOT.as_str())
+        .join("events/pre-skill-shell-command/fixtures.yaml");
+    let document: serde_json::Value =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let positives = document["input"]["positive"].as_array().unwrap();
+    assert!(!positives.is_empty(), "{}", path.display());
+
+    let temporary = TempDirectory::new("injected-fixtures");
+    let config = temporary.0.join("policy.yaml");
+    for (policy, expected) in [
+        (
+            "patterns: ['secrets/**']\naccess_policy: inspect_known\n",
+            None,
+        ),
+        ("access_policy: deny_all_shell\n", Some("deny")),
+    ] {
+        std::fs::write(&config, policy).unwrap();
+        for fixture in positives {
+            let id = fixture["id"].as_str().unwrap();
+            let output = run("claude", &config, &fixture["value"]);
+            assert!(output.status.success(), "{id}: {:?}", output.stderr);
+            match expected {
+                Some(expected) => {
+                    assert_eq!(hook_event_name(&output), "PreSkillShellCommand", "{id}");
+                    assert_eq!(decision(&output), expected, "{id}");
+                }
+                None => assert_eq!(output.stdout, b"{}", "{id}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn claude_injected_command_policy_applies_after_the_agent_changes_directory() {
+    let temporary = TempDirectory::new("injected-cd");
+    let project = temporary.0.join("project");
+    let home = temporary.0.join("home");
+    std::fs::create_dir_all(project.join(".agent-hook-kit")).unwrap();
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::create_dir_all(project.join("secrets")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        project.join(".agent-hook-kit/forbidden-files.yaml"),
+        "patterns: ['secrets/**']\n",
+    )
+    .unwrap();
+    let token = project.join("secrets/token.txt");
+    std::fs::write(&token, "token").unwrap();
+
+    // The injected command runs in the session shell's current directory,
+    // which the hook `cwd` reports; CLAUDE_PROJECT_DIR still names the
+    // project root.
+    let elsewhere = temporary.0.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    for (cwd, command) in [
+        (project.join("src"), "cat ../secrets/token.txt".to_owned()),
+        (elsewhere, format!("cat {}", token.display())),
+    ] {
+        let payload = injected_command(&cwd, "Bash", &command);
+        let output = run_with(
+            &["--harness=claude".to_owned()],
+            "claude",
+            &project,
+            &home,
+            &serde_json::to_vec(&payload).unwrap(),
+        );
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(decision(&output), "deny", "cwd {}", cwd.display());
     }
 }
 
@@ -349,12 +512,52 @@ fn unreadable_invocations_fail_closed_with_each_native_block() {
             // Exit 2 with a reason blocks the call on Claude Code and Codex.
             assert_eq!(output.status.code(), Some(2), "{harness}");
             assert!(output.stdout.is_empty(), "{harness}");
+            // On Claude Code the guard serves PreToolUse and
+            // PreSkillShellCommand, and an unreadable payload names neither.
+            let hook = match harness {
+                "claude" => "claude-code failed",
+                _ => "PreToolUse failed",
+            };
             assert!(
-                String::from_utf8_lossy(&output.stderr).contains("PreToolUse failed"),
-                "{harness}"
+                String::from_utf8_lossy(&output.stderr).contains(hook),
+                "{harness}: {:?}",
+                output.stderr
             );
         }
     }
+
+    // An injected command the exact parser rejects still blocks.
+    let mut malformed = injected_command(&temporary.0, "Bash", "cat .env");
+    malformed["tool_input"] = serde_json::json!({});
+    let output = run("claude", &config, &malformed);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("claude-code/PreSkillShellCommand failed"),
+        "{:?}",
+        output.stderr
+    );
+}
+
+#[test]
+fn claude_events_the_guard_does_not_guard_are_not_blocked() {
+    // A registration under an event that gates nothing reports a
+    // non-blocking error instead of guessing a response.
+    let temporary = TempDirectory::new("other-event");
+    let config = temporary.0.join("policy.yaml");
+    std::fs::write(&config, "patterns: ['.env']\n").unwrap();
+    let mut payload = input("claude", &temporary.0, ".env");
+    payload["hook_event_name"] = serde_json::json!("PostToolUseFailure");
+    payload["error"] = serde_json::json!("failed");
+    let output = run("claude", &config, &payload);
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.stderr);
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("guards Claude Code PreToolUse and PreSkillShellCommand"),
+        "{:?}",
+        output.stderr
+    );
 }
 
 #[test]
@@ -387,6 +590,24 @@ fn checked_in_antigravity_fixture_is_denied() {
 
     let output = run("antigravity", &config, &input);
     assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(decision(&output), "deny");
+}
+
+#[test]
+fn checked_in_claude_pre_skill_shell_command_fixture_is_denied() {
+    let temporary = TempDirectory::new("claude-fixture");
+    let config = temporary.0.join("policy.yaml");
+    std::fs::write(&config, "patterns: ['**/.env']\n").unwrap();
+    let fixture = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/claude_pre_skill_shell_command.json"),
+    )
+    .unwrap();
+    let input: serde_json::Value = serde_json::from_slice(&fixture).unwrap();
+    assert_eq!(input["hook_event_name"], "PreSkillShellCommand");
+
+    let output = run("claude", &config, &input);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(hook_event_name(&output), "PreSkillShellCommand");
     assert_eq!(decision(&output), "deny");
 }
 

@@ -36,7 +36,16 @@ Typed single-harness hooks can analyze their native input in place with
 `ToolAccessAnalyzer::analyze_native`, which accepts any `ObservableToolCall`
 (aligned inputs, Codex and Antigravity pre/post inputs, and Claude catalog
 inputs for `PreToolUse`, `PermissionRequest`, `PostToolUse`, and
-`PostToolUseFailure`) without cloning it into an aligned wrapper.
+`PostToolUseFailure`) without cloning it into an aligned wrapper. Other Claude
+events, including `PreSkillShellCommand`, whose injected command is not a tool
+call, report a `MissingToolCall` gap.
+
+A Claude Code `PostToolUse` does not prove that the call succeeded: hooks from
+managed settings also run after some failed calls and then receive the error
+text as a string `tool_response`. For such a payload the analyzer reports
+`Conditional` instead of `Direct` candidates. A Bash-matched `PreToolUse` can
+also have no matching post-tool event, because Claude Code (v2.1.314 or later)
+runs it for the shell commands the `Monitor` tool starts.
 
 ## Built-in tool contracts
 

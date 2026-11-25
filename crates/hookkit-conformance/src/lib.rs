@@ -120,6 +120,7 @@ pub fn verify_all_inputs() -> Result<BTreeSet<&'static str>, String> {
             PostToolUseFailure,
             PreCompact,
             PreModelSwitch,
+            PreSkillShellCommand,
             PreToolUse,
             SessionEnd,
             SessionStart,
@@ -144,8 +145,10 @@ pub fn verify_all_inputs() -> Result<BTreeSet<&'static str>, String> {
             Interrupt,
             PermissionRequest,
             PostCompact,
+            PostModelRequest,
             PostToolUse,
             PreCompact,
+            PreModelRequest,
             PreToolUse,
             SessionEnd,
             SessionStart,
@@ -157,7 +160,14 @@ pub fn verify_all_inputs() -> Result<BTreeSet<&'static str>, String> {
     }
     {
         use hookkit_antigravity::*;
-        verify!(PreInvocation, PostInvocation, PreToolUse, PostToolUse, Stop);
+        verify!(
+            SessionStart,
+            PreInvocation,
+            PostInvocation,
+            PreToolUse,
+            PostToolUse,
+            Stop
+        );
     }
     if let Some((contract, pointer)) = OPEN_VALUE_SET_NEGATIVES
         .iter()
@@ -181,9 +191,13 @@ pub fn verify_all_inputs() -> Result<BTreeSet<&'static str>, String> {
 /// contracts name their snapshot, so each snapshot update reviews the list.
 pub const OPEN_VALUE_SET_NEGATIVES: &[(&str, &str)] = &[
     // `SessionEnd.reason` reads into `SessionEndReason::Unknown`.
-    ("codex/commit-ff6aec9-r2/SessionEnd", "/reason"),
+    ("codex/commit-3d86e43-r1/SessionEnd", "/reason"),
     // `SessionStart.source` reads into `SessionStartSource::Unknown`.
-    ("codex/commit-ff6aec9-r2/SessionStart", "/source"),
+    ("codex/commit-3d86e43-r1/SessionStart", "/source"),
+    // `PreModelRequest.kind` reads into `ModelRequestKind::Unknown`.
+    ("codex/commit-3d86e43-r1/PreModelRequest", "/kind"),
+    // `PostModelRequest.status` reads into `ModelRequestStatus::Unknown`.
+    ("codex/commit-3d86e43-r1/PostModelRequest", "/status"),
 ];
 
 /// Executes every declared process conformance case and returns their
@@ -218,6 +232,10 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
     const BLOCKED: &str = "blocked by hook";
     const FAILED: &str = "hook failed";
     const OPEN_BRACE: &str = "{ context without a closing brace";
+    // Stderr that says a file is missing. Claude Code reads exit 2 with such
+    // stderr and empty stdout from a Stop, SubagentStop, or TaskCompleted hook
+    // as a non-blocking error, so those blocking cases keep JSON on stdout.
+    const MISSING_FILE: &str = "/bin/sh: /repo/.claude/hooks/check.sh: No such file or directory\n";
 
     case!(
         ConfigChange,
@@ -351,13 +369,24 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         PermissionRequestOutput::nonblocking_error(FAILED)
     );
     case!(
+        PermissionRequest,
+        "command-set-mode-manual",
+        built(
+            PermissionRequestOutput::allow().with_updated_permissions(vec![serde_json::json!({
+                "type": "setMode",
+                "mode": "manual",
+                "destination": "session"
+            })])
+        )?
+    );
+    case!(
         PostCompact,
         "command-structured",
         PostCompactOutput::no_op()
     );
     case!(
         PostCompact,
-        "command-nonzero",
+        "command-nonzero-unstructured",
         PostCompactOutput::nonblocking_error(FAILED)
     );
     case!(
@@ -374,6 +403,16 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         PostModelSwitch,
         "command-text-open-brace",
         PostModelSwitchOutput::text_context(OPEN_BRACE)
+    );
+    case!(
+        PostModelSwitch,
+        "command-text-json-array",
+        PostModelSwitchOutput::text_context(r#"["a","b"]"#)
+    );
+    case!(
+        PostModelSwitch,
+        "command-text-json-string",
+        PostModelSwitchOutput::text_context(r#""quoted""#)
     );
     case!(
         PostModelSwitch,
@@ -465,6 +504,19 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         "command-structured",
         PreCompactOutput::block("Save state first.")
     );
+    case!(PreCompact, "command-no-op", PreCompactOutput::no_op());
+    case!(
+        PreCompact,
+        "command-compaction-instructions",
+        built(PreCompactOutput::compaction_instructions(
+            "Preserve the failing test names.\n"
+        ))?
+    );
+    case!(
+        PreCompact,
+        "command-text-json-array",
+        built(PreCompactOutput::compaction_instructions(r#"["a","b"]"#))?
+    );
     case!(
         PreCompact,
         "command-exit-2",
@@ -479,6 +531,13 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         PreCompact,
         "command-nonzero-unstructured",
         PreCompactOutput::nonblocking_error(FAILED)
+    );
+    case!(
+        PreCompact,
+        "command-text-over-cap",
+        built(PreCompactOutput::compaction_instructions(
+            "a".repeat(10_001)
+        ))?
     );
     case!(
         PreModelSwitch,
@@ -508,6 +567,45 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         PreModelSwitchOutput::nonblocking_error(FAILED)
     );
     case!(
+        PreSkillShellCommand,
+        "command-structured",
+        PreSkillShellCommandOutput::deny("curl is not allowed in skills.")
+    );
+    case!(
+        PreSkillShellCommand,
+        "command-ask-refuses",
+        PreSkillShellCommandOutput::ask("Confirm network access.")
+    );
+    case!(
+        PreSkillShellCommand,
+        "command-decision-block",
+        PreSkillShellCommandOutput::block("Destructive command blocked by hook")
+    );
+    case!(
+        PreSkillShellCommand,
+        "command-continue-false",
+        built(
+            PreSkillShellCommandOutput::no_op()
+                .with_continue(false)
+                .and_then(|output| output.with_stop_reason("Skill disabled by policy."))
+        )?
+    );
+    case!(
+        PreSkillShellCommand,
+        "command-exit-2",
+        PreSkillShellCommandOutput::blocking_error(BLOCKED)
+    );
+    case!(
+        PreSkillShellCommand,
+        "command-exit-2-skill-policy",
+        PreSkillShellCommandOutput::blocking_error("curl is not allowed in skills")
+    );
+    case!(
+        PreSkillShellCommand,
+        "command-nonzero-unstructured",
+        PreSkillShellCommandOutput::nonblocking_error(FAILED)
+    );
+    case!(
         PreToolUse,
         "command-structured",
         built(
@@ -517,6 +615,25 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
                     serde_json::Value::String("cargo test".into()),
                 )]))
                 .and_then(|output| output.with_additional_context("Production environment."))
+        )?
+    );
+    case!(
+        PreToolUse,
+        "command-updated-input-without-decision",
+        built(
+            PreToolUseOutput::no_op().with_updated_input(serde_json::Map::from_iter([(
+                "command".into(),
+                serde_json::Value::String("cargo test --offline".into()),
+            )]))
+        )?
+    );
+    case!(
+        PreToolUse,
+        "command-continue-false-without-deny",
+        built(
+            PreToolUseOutput::no_op()
+                .with_continue(false)
+                .and_then(|output| output.with_stop_reason("Stop after this call."))
         )?
     );
     case!(
@@ -531,13 +648,27 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
     );
     case!(
         PreToolUse,
+        "command-exit-2-missing-file",
+        PreToolUseOutput::blocking_error(MISSING_FILE)
+    );
+    case!(
+        PreToolUse,
+        "command-exit-2-continue-false",
+        built(
+            PreToolUseOutput::no_op()
+                .with_continue(false)
+                .and_then(|output| output.into_blocking_error(BLOCKED))
+        )?
+    );
+    case!(
+        PreToolUse,
         "command-nonzero-unstructured",
         PreToolUseOutput::nonblocking_error(FAILED)
     );
     case!(SessionEnd, "command-structured", SessionEndOutput::no_op());
     case!(
         SessionEnd,
-        "command-nonzero",
+        "command-nonzero-unstructured",
         SessionEndOutput::nonblocking_error(FAILED)
     );
     case!(
@@ -562,6 +693,16 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
     );
     case!(
         SessionStart,
+        "command-text-json-array",
+        SessionStartOutput::text_context(r#"["a","b"]"#)
+    );
+    case!(
+        SessionStart,
+        "command-text-json-string",
+        SessionStartOutput::text_context(r#""quoted""#)
+    );
+    case!(
+        SessionStart,
         "command-nonzero-unstructured",
         SessionStartOutput::nonblocking_error(FAILED)
     );
@@ -576,6 +717,16 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         Stop,
         "command-exit-2-structured",
         built(StopOutput::block("Run tests again.").into_blocking_error(BLOCKED))?
+    );
+    case!(
+        Stop,
+        "command-exit-2-other-stderr",
+        StopOutput::blocking_error("tests failed")
+    );
+    case!(
+        Stop,
+        "command-exit-2-missing-file-with-stdout",
+        built(StopOutput::block("Run tests again.").into_blocking_error(MISSING_FILE))?
     );
     case!(
         Stop,
@@ -621,6 +772,16 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
     );
     case!(
         SubagentStop,
+        "command-exit-2-other-stderr",
+        SubagentStopOutput::blocking_error("tests failed")
+    );
+    case!(
+        SubagentStop,
+        "command-exit-2-missing-file-with-stdout",
+        built(SubagentStopOutput::block("Run another pass.").into_blocking_error(MISSING_FILE))?
+    );
+    case!(
+        SubagentStop,
         "command-nonzero-unstructured",
         SubagentStopOutput::nonblocking_error(FAILED)
     );
@@ -635,6 +796,11 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
     );
     case!(
         TaskCompleted,
+        "command-block",
+        TaskCompletedOutput::block("Tests not passing.")
+    );
+    case!(
+        TaskCompleted,
         "command-exit-2",
         TaskCompletedOutput::blocking_error(BLOCKED)
     );
@@ -645,6 +811,25 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
             TaskCompletedOutput::no_op()
                 .with_system_message("Tests are still failing.")
                 .and_then(|output| output.into_blocking_error(BLOCKED))
+        )?
+    );
+    case!(
+        TaskCompleted,
+        "command-exit-2-other-stderr",
+        TaskCompletedOutput::blocking_error("tests failed")
+    );
+    case!(
+        TaskCompleted,
+        "command-exit-2-block",
+        built(TaskCompletedOutput::block("Tests not passing.").into_blocking_error(BLOCKED))?
+    );
+    case!(
+        TaskCompleted,
+        "command-exit-2-missing-file-with-stdout",
+        built(
+            TaskCompletedOutput::no_op()
+                .with_system_message("Tests are still failing.")
+                .and_then(|output| output.into_blocking_error(MISSING_FILE))
         )?
     );
     case!(
@@ -684,6 +869,11 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
     );
     case!(
         TeammateIdle,
+        "command-block",
+        TeammateIdleOutput::block("Review the remaining files first.")
+    );
+    case!(
+        TeammateIdle,
         "command-exit-2",
         TeammateIdleOutput::blocking_error(BLOCKED)
     );
@@ -694,6 +884,14 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
             TeammateIdleOutput::no_op()
                 .with_system_message("Teammate kept working.")
                 .and_then(|output| output.into_blocking_error(BLOCKED))
+        )?
+    );
+    case!(
+        TeammateIdle,
+        "command-exit-2-block",
+        built(
+            TeammateIdleOutput::block("Review the remaining files first.")
+                .into_blocking_error(BLOCKED)
         )?
     );
     case!(
@@ -715,6 +913,16 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         UserPromptExpansion,
         "command-text-open-brace",
         UserPromptExpansionOutput::text_context(OPEN_BRACE)
+    );
+    case!(
+        UserPromptExpansion,
+        "command-text-json-array",
+        UserPromptExpansionOutput::text_context(r#"["a","b"]"#)
+    );
+    case!(
+        UserPromptExpansion,
+        "command-text-json-string",
+        UserPromptExpansionOutput::text_context(r#""quoted""#)
     );
     case!(
         UserPromptExpansion,
@@ -753,6 +961,16 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         UserPromptSubmit,
         "command-text-open-brace",
         UserPromptSubmitOutput::text_context(OPEN_BRACE)
+    );
+    case!(
+        UserPromptSubmit,
+        "command-text-json-array",
+        UserPromptSubmitOutput::text_context(r#"["a","b"]"#)
+    );
+    case!(
+        UserPromptSubmit,
+        "command-text-json-string",
+        UserPromptSubmitOutput::text_context(r#""quoted""#)
     );
     case!(
         UserPromptSubmit,
@@ -824,7 +1042,9 @@ fn execute_codex_cases() -> Result<Vec<ExecutedCase>, String> {
     }
     const BLOCKED: &str = "blocked by hook";
     // Codex shows failure stderr only for PreCompact, PostCompact, and
-    // SessionEnd, and prints it verbatim.
+    // SessionEnd, and prints it verbatim. The exception is a synchronous
+    // PreModelRequest or PostModelRequest hook, whose trimmed stderr Codex
+    // shows at every exit code, including 0.
     const FAILED: &str = "hook failed\n";
     const DEVELOPER_CONTEXT: &str = "Hook-provided developer context.";
 
@@ -879,6 +1099,24 @@ fn execute_codex_cases() -> Result<Vec<ExecutedCase>, String> {
     );
     case!(PostCompact, "no-op", PostCompactOutput::no_op());
     case!(PostCompact, "failure", PostCompactOutput::failure(FAILED));
+    // The model-request fixtures whose stdout Codex ignores, and
+    // `exit-2-failure`, have no constructor by design.
+    case!(PostModelRequest, "no-op", PostModelRequestOutput::no_op());
+    case!(
+        PostModelRequest,
+        "exit-0-stderr-diagnostics",
+        PostModelRequestOutput::diagnostic("slow log sink\n")
+    );
+    case!(
+        PostModelRequest,
+        "exit-1-blank-stderr",
+        PostModelRequestOutput::failure(" \n")
+    );
+    case!(
+        PostModelRequest,
+        "failure",
+        PostModelRequestOutput::failure(FAILED)
+    );
     case!(
         PreCompact,
         "structured",
@@ -886,6 +1124,22 @@ fn execute_codex_cases() -> Result<Vec<ExecutedCase>, String> {
     );
     case!(PreCompact, "no-op", PreCompactOutput::no_op());
     case!(PreCompact, "failure", PreCompactOutput::failure(FAILED));
+    case!(PreModelRequest, "no-op", PreModelRequestOutput::no_op());
+    case!(
+        PreModelRequest,
+        "exit-0-stderr-diagnostics",
+        PreModelRequestOutput::diagnostic("slow log sink\n")
+    );
+    case!(
+        PreModelRequest,
+        "exit-1-blank-stderr",
+        PreModelRequestOutput::failure(" \n")
+    );
+    case!(
+        PreModelRequest,
+        "failure",
+        PreModelRequestOutput::failure(FAILED)
+    );
     case!(SessionEnd, "no-op", SessionEndOutput::no_op());
     case!(SessionEnd, "failure", SessionEndOutput::failure(FAILED));
     case!(
@@ -971,9 +1225,21 @@ fn execute_antigravity_cases() -> Result<Vec<ExecutedCase>, String> {
         };
     }
     case!(
+        SessionStart,
+        "inject-system-message",
+        SessionStartOutput::inject(InjectStep::system_message(
+            "Environment initialized for workspace /workspace/project"
+        ))
+    );
+    case!(
         PreInvocation,
         "inject-reminder",
-        PreInvocationOutput::inject(InjectStep::ephemeral_message("Remember to lint"))
+        PreInvocationOutput::inject(InjectStep::system_message("Remember to lint"))
+    );
+    case!(
+        PreInvocation,
+        "block-prompt",
+        PreInvocationOutput::block("Prompt blocked by policy.")
     );
     case!(
         PostInvocation,
@@ -991,6 +1257,11 @@ fn execute_antigravity_cases() -> Result<Vec<ExecutedCase>, String> {
         PreToolUseOutput::ask()
             .with_reason("Requires confirmation for test execution.")
             .with_permission_override("command(npm test)")
+    );
+    case!(
+        PreToolUse,
+        "auto-approve",
+        PreToolUseOutput::auto_approve().with_reason("Lint-only command.")
     );
     case!(PostToolUse, "no-op", PostToolUseOutput::no_op());
     case!(Stop, "continue", StopOutput::continue_with("Not done yet"));

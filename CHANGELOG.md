@@ -3,8 +3,8 @@
 ## Unreleased — contract-first reboot
 
 - Added a frozen, source-provenance-aware contract catalog for Claude Code,
-  Codex, and Antigravity events (46 at introduction; 50 since the 2026-09-29
-  harness refresh below).
+  Codex, and Antigravity events (46 at introduction, 50 after the 2026-09-29
+  harness refresh, and 54 since the 2026-11-25 harness refresh below).
 - Added event-associated typed command APIs and exact byte/process emission.
 - Added harness-native command-environment types for every catalog event,
   deterministic map-based parsing, selective process capture, redundant input
@@ -43,11 +43,246 @@
   sentence promises that it is set and its own examples guard it with
   `[ -n "$CLAUDE_ENV_FILE" ]`, so it is optional.)
 
+### 2026-11-25 harness refresh
+
+All three harnesses moved to new frozen contract snapshots, selected together
+with command-environment supplement `command-environments-2026-11-25-r1`. The
+selection now covers 54 events: 34 Claude Code, 14 Codex, and 6 Antigravity.
+Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
+`planning/audits/2026-11-25-codex-hooks.md`, and
+`planning/audits/2026-11-25-antigravity-hooks.md`.
+
+- **Claude Code `docs-2026-11-25-r1`** (Claude Code 2.1.332; hooks reference
+  `d1600385…`, CHANGELOG at `d6636805`, Agent SDK 0.3.332):
+  - New `PreSkillShellCommand` event (2.1.332). It runs before an injected
+    command, a shell command that runs while a skill or a command such as
+    `/security-review` loads, which `PreToolUse` hooks do not see. It can
+    only refuse the command (`deny`, `ask`, `defer`, a top-level block,
+    exit 2, or `continue: false`, which aborts the skill), never approve or
+    rewrite it. Its input carries `tool_name` (`Bash` or `PowerShell`),
+    `tool_input.command`, `tool_use_id`, `command_name`, `invoked_by`, and an
+    optional `command_source`.
+  - `onFailure` (`continue` or `block`, 2.1.295): with `block`, a hook that
+    cannot start, times out, exits with a code other than 0 or 2, or prints
+    invalid JSON takes the event's exit-2 effect, and on `PermissionRequest`
+    it denies. The catalog records it as the `command-on-failure-block` and
+    `http-on-failure-block` bindings on the 14 gating events and describes
+    it in the other events' uncertainties (`Stop`, `SubagentStop`,
+    `TaskCompleted`, and `TeammateIdle` ignore it).
+    On Windows without Git Bash a failing shell-form `PreToolUse`,
+    `PermissionRequest`, or `PreSkillShellCommand` command hook blocks with
+    the field unset.
+  - Exit-2 exceptions: exit 2 with blank stdout and a stderr that says a file
+    is missing or cannot be opened is a non-blocking error on `Stop`,
+    `SubagentStop`, `TaskCompleted`, and a plugin's `UserPromptSubmit`;
+    `continue: false` takes precedence over exit 2 on `Stop` and
+    `SubagentStop`; `Elicitation` and `ElicitationResult` ignore
+    `hookSpecificOutput` on every non-zero exit, while a top-level
+    `decision: "block"` at exit 1 or 3-255 declines.
+  - Corrections: `PreCompact` plain-text stdout is the compaction
+    instructions (cut at 10,000 characters since 2.1.314); `TaskCompleted`
+    and `TeammateIdle` honor a top-level `decision: "block"`; JSON lines that
+    set no field are plain text on the 27 events without text context; the
+    output-discarding events gain an `invalid-json` outcome, and `PostCompact`
+    and `SessionEnd` split their non-zero outcome by whether stdout is
+    structured.
+  - Inputs: `UserPromptSubmit` `session_title` is documented (a string),
+    `Notification` adds `auth_storage_failure` and `plugin_notification`,
+    and `agent_id`/`agent_type` are sent in more cases. A `Bash` matcher also
+    fires for the shell commands the `Monitor` tool starts (2.1.314), and
+    hooks from managed settings also run on `PostToolUse` after some failed
+    calls, with the error text as a string `tool_response`.
+- **Codex `commit-3d86e43-r1`** (openai/codex `rust-v0.172.0`; schemas vendored
+  under `contracts/vendor/codex/3d86e43…/generated`, where the only change
+  from `ff6aec9` is the new model-request input schema):
+  - New `PreModelRequest` and `PostModelRequest` events (0.164.0; `kind`,
+    `request_id`, `attempt_number`, `thread_id`, and `response_id` since
+    0.171.0) run around each attempt to open a model response stream. They
+    only observe: Codex never parses their stdout, every non-zero exit,
+    2 included, is a plain failure, and non-blank stderr becomes an error
+    entry at every exit code, including 0. `PostModelRequest` also reports
+    `status`, `error`, and `token_usage`.
+  - The tool events' `cwd` is the tool command's working directory, a local
+    Bash command's resolved `workdir` (0.166.0); the hook process still
+    starts in the step's environment directory.
+  - Environment-scoped managed hooks (0.165.0) run on the environment's
+    executor with rewritten stdin and no plugin variables, and their
+    `PermissionRequest` `allow` is ignored. A `PreToolUse` `updatedInput`
+    may not change the tool's target selector (0.165.0, MCP `environment_id`
+    0.170.0), and direct Guardian review dispatches `PreToolUse` alone for
+    calls that never run (0.167.0, 0.168.0).
+  - A plugin hook's approval is bound to the plugin bundle's contents
+    (0.164.0): a changed, symlinked, or unreadable bundle fails every run
+    before launch.
+  - Corrections: `permission_mode` is only ever `default` or
+    `bypassPermissions`, and `Interrupt` `mcp_tool` handlers share the
+    1-3 s timeout clamp.
+- **Antigravity `docs-2026-11-25-r1`** (Antigravity App, formerly
+  Antigravity 2.0, through v2.35.1; CLI through 1.5.16):
+  - New `SessionStart` event: it fires once when a new conversation session
+    starts, receives the common fields only, and may return `injectSteps`.
+  - `PreToolUse` `allow` is now a pass-through to the next hook or the
+    default policy (the redefinition is undated); the new `auto_approve`
+    decision approves, and the new `overwrite` output shallow-merges keys
+    into `toolCall.args`. The recorded `permissionOverrides` action
+    vocabulary now lists all eight permission actions, adding
+    `download_url` and the deprecated `unsandboxed`.
+  - Inject steps gain `systemMessage` and `errorMessage`; `ephemeralMessage`
+    is deprecated and the `toolCall` step is no longer documented.
+    `PreInvocation` gains `terminationBehavior` (`terminate` or `""`), which
+    with an `errorMessage` step blocks the prompt (CLI 1.4.11).
+  - Every input gains the optional `lastUserInput`. The release notes alone
+    add `hookEventName`, `cwd`, and `toolCall.id` (CLI 1.5.4) and the `Stop`
+    field `continuation_active` (CLI 1.5.6).
+  - The plugin authoring guide documents fail-open (a non-zero exit is
+    logged and ignored), so every event gains a `failure` outcome.
+
+#### Command environments in the 2026-11-25 refresh
+
+- Selected supplement `command-environments-2026-11-25-r1` maps all 54
+  events, succeeds `-2026-09-30-r2`, and re-pins every documentation source.
+- Antigravity: new `plugin-paths` profile on all six events. Plugin hooks
+  receive `PLUGIN_ROOT` and `PLUGIN_DATA` (CLI 1.5.3), modeled as
+  `AntigravityCommandEnvironment::plugin`; a partial, empty, or non-UTF-8
+  pair yields no plugin, and an inherited pair cannot be told apart.
+- Claude Code: `PreSkillShellCommand` gets the `PreToolUse` profiles without
+  `environment-file`; `CLAUDE_ENV_FILE` never reaches a hook that runs in
+  PowerShell; the self-hosted runner's `CLAUDE_CODE_REMOTE_SESSION_UUID` and
+  `CLAUDE_CODE_REMOTE_SLACK_*` variables are recorded but not modeled.
+- Codex: the model-request events receive the plugin variables like every
+  other event; the credential scrub list grew from five to nine names
+  (`SPIFFE_ENDPOINT_SOCKET` is not scrubbed); `CODEX_TOOL_CALL_ID` labels a
+  shell tool's process and is not hook identity; environment-scoped hooks
+  get no environment replay and no plugin variables.
+
+#### New public APIs in the 2026-11-25 refresh
+
+- **hookkit-claude:** `catalog::PreSkillShellCommand` and
+  `PreSkillShellCommandOutput` (also in `events`; `no_op`, `deny`, `ask`,
+  `defer`, `with_decision_reason`, `block`, `blocking_error`, and no
+  `allow`), `protocol::Event::PreSkillShellCommand`, `SkillInvoker`,
+  `CatalogInput::{injected_command, command_name, command_source,
+  invoked_by, session_title, message_delta, message_index, message_final}`,
+  `PreCompactOutput::compaction_instructions`,
+  `TaskCompletedOutput::{block, with_block}` and the same on
+  `TeammateIdleOutput`, and `NotificationType::{AuthStorageFailure,
+  PluginNotification}`.
+- **hookkit-codex:** `catalog::{PreModelRequest, PostModelRequest}` with
+  `PreModelRequestOutput` and `PostModelRequestOutput` (only `no_op`,
+  `diagnostic`, and `failure`), `ModelRequestKind`, `ModelRequestStatus`,
+  `TokenUsage`, `protocol::Event::{PreModelRequest, PostModelRequest}`,
+  `CatalogInput::{thread_id, kind, request_id, attempt_number, status,
+  error, response_id, token_usage, workspace_roots}`, and
+  `protocol::AnyInput::{cwd, command_cwd}`.
+- **hookkit-antigravity:** `SessionStart`, `SessionStartInput`, and
+  `SessionStartOutput` (with `Event`, `AnyInput`, and `AnyCommandOutput`
+  arms); `last_user_input`, `hook_event_name`, `cwd`, and
+  `known_model_name()` on every input; `ToolCall::id` and `id_str()`;
+  `StopInput::continuation_active` and `continuation_active_flag()`;
+  `ToolDecision::AutoApprove`, `PreToolUseOutput::{auto_approve,
+  with_overwrite}`; `InjectStep::{system_message,
+  system_message_with_metadata, error_message}` with `SystemMessageStep` and
+  `ErrorMessageStep`; `PreInvocationTermination` and
+  `PreInvocationOutput::{block, with_termination_behavior}`; and
+  `AntigravityPluginEnvironment`.
+- **hookkit-shell:** `CLAUDE_MONITOR_PROFILE`.
+- **hookkit-tool-runner:** `session-start-state-agent-hook` accepts
+  `--antigravity` and `--harness=antigravity`.
+
+#### Behavior changes in the 2026-11-25 refresh
+
+- **hookkit-antigravity / hookkit-common:** `SessionStart` reports a
+  `Startup` session boundary keyed by the conversation. Antigravity
+  `NativeContext.tool_call_id` and the aligned `tool_call_id()` carry a
+  non-blank string `toolCall.id`, and the aligned `cwd()` and
+  `stop_hook_active()` return `cwd` and `continuation_active` when sent; all
+  were always `None`.
+- **hookkit-runtime:** hint-less Antigravity resolution also considers
+  `SessionStart`, whose common-fields shape every payload fits: a payload
+  with only the common fields is now `AmbiguousEvent` instead of
+  `UnrecognizedEvent`, the invocation and tool-use pairs list it among their
+  candidates, and `Stop` still resolves by shape.
+- **hookkit-session-state:** an invocation-zero `InvocationStart` boundary
+  is recorded only while no other epoch exists for the session, so it no
+  longer replaces an Antigravity `SessionStart` epoch as the current
+  session. Codex tool events no longer add their command directory to the
+  session's workspace roots.
+- **hookkit-shell / hookkit-tool-access / hookkit-file-activity:** the
+  Claude Code adapters match `Monitor` calls that run a command (a `ws`
+  watch is still `NotShell`). A Claude Code `PostToolUse` whose
+  `tool_response` is a string reports `Conditional` instead of `Direct`
+  candidates, so its file activity is no longer direct evidence.
+  `PreSkillShellCommand` is not a tool call and records a `MissingToolCall`
+  gap.
+- **hookkit-tool-runner:** on a Codex tool event, which has no workspace
+  root, a relative `--config` or `--state-dir` resolves against the hook's
+  working directory, and post-tool configuration discovery starts there
+  when it holds every written file, else from their deepest common
+  directory. The Stop runner treats Antigravity `continuation_active` as its
+  continuation signal when it is present.
+- **Examples:** `antigravity-pre-invocation` injects a `systemMessage` step.
+  Without `--project-root`, `codex-claude-rules` uses the nearest directory
+  with `.claude/rules` up to the enclosing checkout, else that checkout.
+  `forbidden-file-guard` also treats the checkout enclosing a Codex `cwd`
+  as a policy root, and analyzes `Monitor` commands through `hookkit-shell`.
+- **Contracts and conformance:** `FROZEN_LEDGER` records the three snapshots
+  and the supplement. Every existing support target moved to the new
+  snapshots at the same level, and `SessionStart` (Antigravity),
+  `PreSkillShellCommand`, `PreModelRequest`, and `PostModelRequest` are new
+  `command-runtime-beta` targets. `command-on-failure-block` defaults to
+  `catalog-only`, with a `binding-implemented` gap on each of its 14 events,
+  and `http-on-failure-block` to `unsupported`. The implementation registry
+  now covers 54 events and 193 process cases, and the conformance allowlist
+  accepts the open `PreModelRequest` `kind` and `PostModelRequest` `status`
+  negatives.
+
+#### BREAKING changes in the 2026-11-25 refresh
+
+- **Protocol crates:** `SNAPSHOT`/`SNAPSHOT_ID` and every `ContractId` name
+  the new snapshots.
+- **hookkit-claude:**
+  - `PreCompactOutput::no_op()` prints nothing; it printed `{}`, which
+    Claude Code adds to the compaction instructions. A structured builder
+    still turns it into a JSON object.
+  - `StopOutput::into_blocking_error` and
+    `SubagentStopOutput::into_blocking_error` return an error for a response
+    that sets `continue: false`, which would end the turn instead of
+    continuing it.
+  - `UserPromptSubmit` input with a non-string `session_title` is rejected.
+- **hookkit-codex:** `NativeContext.workspace_roots`, and so
+  `RuntimeContext::workspace_roots`, is empty for `PreToolUse`,
+  `PermissionRequest`, and `PostToolUse` (it was `[cwd]`); use
+  `AnyInput::command_cwd()` or the inputs' `cwd`.
+- **hookkit-antigravity:**
+  - `PreToolUseOutput` and `PreInvocationOutput` are `#[non_exhaustive]` and
+    gain `overwrite` and `termination_behavior`, so build them with their
+    constructors.
+  - `AntigravityCommandEnvironment` is no longer a `Copy` unit struct: it is
+    `#[non_exhaustive]`, has a `plugin` field, and is built with `from_map`
+    or `Default`.
+  - `PreToolUseOutput::allow()` still emits `{"decision":"allow"}`, which
+    the current reference defines as a pass-through; use `auto_approve()`
+    to approve.
+  - `#[deprecated]`: `InjectStep::ephemeral_message`, `InjectStep::tool_call`,
+    and their `EphemeralMessage` and `ToolCall` variants.
+- **hookkit-common:** the aligned `PreToolUseOutput::allow` emits
+  `{"decision":"auto_approve"}` on Antigravity (it emitted `allow`); the
+  Codex tool-event arms' `workspace_roots()` is empty; the aligned
+  `UserPromptSubmitOutput::block` on Claude Code exits 2 with the reason on
+  stderr and `{"decision":"block","reason":…}` on stdout (stdout was
+  empty); and the aligned `PreCompact` no-op prints nothing on Claude Code.
+- **hookkit-runtime:** fail-closed lowering changed. Under
+  `FailurePolicy::FailClosed`, Claude Code `PreSkillShellCommand` exits 2,
+  Claude Code `UserPromptSubmit` also prints `{"decision":"block",…}` on
+  stdout, and Antigravity `PreInvocation` answers at exit 0 with an
+  `errorMessage` step and `"terminationBehavior":"terminate"` instead of
+  exiting 1. The Codex model-request events stay non-blocking.
+
 ### 2026-09-29 harness refresh
 
 All three harnesses moved to new frozen contract snapshots, selected together
 with command-environment supplement `command-environments-2026-09-30-r1`. The
-selection now covers 50 events: 33 Claude Code, 12 Codex, and 5 Antigravity.
+selection then covered 50 events: 33 Claude Code, 12 Codex, and 5 Antigravity.
 The [second review pass](#second-review-pass) below replaced these snapshots
 and the supplement with corrected 2026-09-30 successors.
 Audits: `planning/audits/2026-09-29-claude-code-hooks.md`,
@@ -467,7 +702,7 @@ Audits: `planning/audits/2026-09-29-claude-code-hooks.md`,
 ### Second review pass
 
 A second review of the refresh above fixed the findings below and replaced
-the three snapshots with frozen successors. The registry now selects
+the three snapshots with frozen successors. The registry then selected
 `claude-code/docs-2026-09-30-r1`, `codex/commit-ff6aec9-r2`, and
 `antigravity/docs-2026-09-30-r1`, with supplement
 `command-environments-2026-09-30-r2` (same 33/12/5 events and profiles).

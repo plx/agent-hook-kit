@@ -29,7 +29,7 @@ from copier.errors import InteractiveSessionError
 
 
 SUPPORTED_HARNESSES = ("claude-code", "codex", "antigravity")
-EXPECTED_EVENT_COUNTS = {"claude-code": 33, "codex": 12, "antigravity": 5}
+EXPECTED_EVENT_COUNTS = {"claude-code": 34, "codex": 14, "antigravity": 6}
 EXPECTED_UNIVERSAL_FAMILIES = 3
 EXPECTED_CLAUDE_CODEX_ONLY_FAMILIES = 8
 ALL_STATE_CAPABILITIES = (
@@ -795,9 +795,10 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
         and data["harness"] == "antigravity"
         and "pre_tool_use" in data["native_hooks"]
     ):
-        # Antigravity requires a decision and documents no pass-through;
-        # "allow" auto-approves and bypasses Ask presets, so the no-objection
-        # path must answer the least-privilege "ask".
+        # Antigravity requires a decision. "auto_approve" approves the call,
+        # and "allow", now a pass-through, still auto-approves on builds
+        # that predate that undated change, so the no-objection path must
+        # answer the least-privilege "ask".
         if data["starter"] == "custom":
             starter_path = crate / "src" / "hooks" / "native" / "antigravity_pre_tool_use.rs"
         else:
@@ -805,7 +806,12 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
         starter_source = starter_path.read_text(encoding="utf-8")
         if "hookkit_antigravity::PreToolUseOutput::ask()" not in starter_source or any(
             allow in starter_source
-            for allow in ("ToolDecision::Allow", "PreToolUseOutput::allow()")
+            for allow in (
+                "ToolDecision::Allow",
+                "ToolDecision::AutoApprove",
+                "PreToolUseOutput::allow()",
+                "PreToolUseOutput::auto_approve()",
+            )
         ):
             raise AcceptanceFailure(
                 f"{case.name}: Antigravity PreToolUse starter auto-approves tool calls "

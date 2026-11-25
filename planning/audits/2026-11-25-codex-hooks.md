@@ -5,7 +5,8 @@
   `ff6aec96948b70d94983af2641a6b67c94faeff5`, tag `rust-v0.159.2`;
   selected in `620d5f1`)
 - Proposed successor: `commit-3d86e43-r1`, **draft (not yet frozen or
-  selected)**
+  selected)** when this note was written; since frozen and selected (see
+  "Final status")
 - Proposed pinned upstream revision:
   `3d86e43b075adeba2193ec5c22ac92f55afd82e6` (tag `rust-v0.172.0`, the
   latest stable release on the audit date)
@@ -1363,3 +1364,48 @@ No finding was refuted outright. These claims did not survive as stated:
   `catalog.rs:754`, not `:643`; there is no "classic shell" handler at
   `3d86e43` (CX-SRC-8); the plugin-manifest packaging work in CX-DOC-7
   has no target in this repository.
+
+## Final status
+
+`commit-3d86e43-r1` is frozen, recorded in `FROZEN_LEDGER`, and selected in
+`contracts/registry.yaml`, together with supplement
+`command-environments-2026-11-25-r1`. The supplement maps `PreModelRequest`
+and `PostModelRequest` to `plugin-paths`, like every other Codex event, and
+records the nine scrubbed names, `CODEX_TOOL_CALL_ID`, the local-only
+replay and scrub, and the plugin-trust rule that mutable state belongs in
+`PLUGIN_DATA`. `hookkit-codex` implements the snapshot, and all 14 events,
+both model-request events included, are `command-runtime-beta` targets with
+`source-reviewed` verification.
+
+The native changes follow this note, with these decisions:
+
+- The model-request outputs have only `no_op`, `diagnostic`, and `failure`
+  (exit 1, message verbatim); there is no JSON, control, or exit-2
+  constructor. Under `FailurePolicy::FailClosed` both events stay
+  non-blocking (exit 1).
+- `PreToolUse`, `PermissionRequest`, and `PostToolUse` no longer put their
+  `cwd` into `NativeContext.workspace_roots`; `AnyInput::command_cwd()`
+  exposes it. Session state therefore no longer adds each workdir to the
+  project roots. A relative `--config` or `--state-dir` on a Codex tool
+  event resolves against the hook's working directory, and post-tool
+  configuration discovery starts there when it holds every written file,
+  else from their deepest common directory.
+- The conformance allowlist accepts the `PreModelRequest` `/kind` and
+  `PostModelRequest` `/status` negatives as open value sets. The snapshot
+  has no `PostModelRequest` `/kind` negative, although the parser also
+  accepts an unknown kind there.
+- The repository README carries the plugin packaging guidance (no
+  symlinks, nothing written under `PLUGIN_ROOT`) and says not to set
+  `onFailure` on Codex hooks.
+
+Deferred or left unchanged:
+
+- `hookkit-tool-access` still sets `ToolCallRef.workspace_roots` to `[cwd]`
+  for Codex, so workspace-wide targets follow the workdir.
+- The aligned `project_roots()` still returns `cwd` on Codex tool events,
+  which is the command directory; its documentation says so.
+- `hookkit-shell` keeps `ShellCwdOrigin::UnverifiedFallback`, because a
+  remote-environment command still reports the host's step directory.
+- The main-only and pre-release changes listed above are not encoded;
+  re-check them, `onFailure` first, at the next stable tag.
+- Every question under "Open questions and uncertainties" is still open.

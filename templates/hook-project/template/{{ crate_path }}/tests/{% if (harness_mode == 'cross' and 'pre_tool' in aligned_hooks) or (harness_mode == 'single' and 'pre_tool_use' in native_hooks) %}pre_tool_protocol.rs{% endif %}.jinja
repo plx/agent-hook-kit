@@ -1,11 +1,17 @@
 use hookkit_core::EnvironmentVariables;
 
 {% if harness_mode == "cross" or starter != "custom" -%}
-/// An explicit allow skips Claude Code's permission prompt and bypasses
-/// Antigravity's Ask presets, so the scaffold must never emit one.
+/// An explicit approval skips the user's permission prompt: Claude Code's
+/// `allow`, Antigravity's `auto_approve`, and Antigravity's `allow` on builds
+/// that predate its redefinition as a pass-through. The scaffold must never
+/// emit one.
 fn assert_never_auto_approves(stdout: &[u8]) {
     let stdout = String::from_utf8_lossy(stdout);
-    for approval in [r#""permissionDecision":"allow""#, r#""decision":"allow""#] {
+    for approval in [
+        r#""permissionDecision":"allow""#,
+        r#""decision":"allow""#,
+        r#""decision":"auto_approve""#,
+    ] {
         assert!(!stdout.contains(approval), "{stdout}");
     }
 }

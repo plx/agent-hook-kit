@@ -1,3 +1,120 @@
 format_version: 1
-gaps: []
-
+# Claude Code docs-2026-11-25-r1 catalogs `"onFailure": "block"` as the
+# command-on-failure-block binding on these events. hookkit-claude tests its
+# typed outputs against that binding's cases, but no native descriptor
+# declares the binding and hookkit-conformance does not execute its cases.
+# The binding's stabilization default is catalog-only. The HTTP bindings are
+# unsupported by scope, so they are not gaps.
+gaps:
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: ConfigChange
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The ConfigChange descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: Elicitation
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The Elicitation descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: ElicitationResult
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The ElicitationResult descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: PermissionRequest
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The PermissionRequest descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: PostToolBatch
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The PostToolBatch descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: PostToolUse
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The PostToolUse descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: PostToolUseFailure
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The PostToolUseFailure descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: PreCompact
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The PreCompact descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: PreModelSwitch
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The PreModelSwitch descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: PreSkillShellCommand
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The PreSkillShellCommand descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: PreToolUse
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The PreToolUse descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: TaskCreated
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The TaskCreated descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: UserPromptExpansion
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The UserPromptExpansion descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6
+  - harness: claude-code
+    snapshot: docs-2026-11-25-r1
+    event: UserPromptSubmit
+    binding: command-on-failure-block
+    assertion: binding-implemented
+    rationale: The UserPromptSubmit descriptor declares only the command binding, so the command-on-failure-block process cases are not executed.
+    owner: hookkit-claude
+    removal_phase: 6

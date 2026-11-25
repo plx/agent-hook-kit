@@ -1088,7 +1088,7 @@ fn unsupported_shell_dialect_gaps_name_the_dialect() {
 #[test]
 fn antigravity_post_tool_use_without_a_tool_call_is_a_gap() {
     let value = contract_fixture(
-        "antigravity/snapshots/docs-2026-09-30-r1/events/post-tool-use",
+        "antigravity/snapshots/docs-2026-11-25-r1/events/post-tool-use",
         "ide-reference-example",
     );
     assert!(value.get("toolCall").is_none());

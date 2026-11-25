@@ -673,6 +673,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "tree-sitter",
  "tree-sitter-bash",
 ]

@@ -7,8 +7,9 @@ import "Builtins.pkl"
 
 settings {
   loweringPolicy = {{ lowering_policy | tojson }}
-{% if starter == "deferred_quality" or "file_activity" in state_capabilities %}  // Timestamp reconciliation supplies a best-effort lower bound when the
-  // harness has no exact SessionStart event (currently Antigravity).
+{% if starter == "deferred_quality" or "file_activity" in state_capabilities %}  // Timestamp reconciliation supplies a best-effort lower bound when no
+  // exact SessionStart was observed, for example on Antigravity builds that
+  // predate that event.
   fileActivity {
     filesystemMtime = true
     vcs = "disabled"

@@ -1,0 +1,15 @@
+{
+  "session_id": "claude-guard-example",
+  "transcript_path": "/tmp/claude-transcript.jsonl",
+  "cwd": "/repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreSkillShellCommand",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cat .env"
+  },
+  "tool_use_id": "skillsh_1",
+  "command_name": "release-notes",
+  "command_source": "projectSettings",
+  "invoked_by": "user"
+}

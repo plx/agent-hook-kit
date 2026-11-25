@@ -70,24 +70,63 @@ fn every_input_fixture_decodes_as_the_event_its_file_names() {
     let claude = decode_inputs::<hookkit_claude::protocol::ClaudeCode>("claude");
     assert!(claude.iter().any(|event| event == "PreModelSwitch"));
     assert!(claude.iter().any(|event| event == "PostModelSwitch"));
+    assert!(claude.iter().any(|event| event == "PreSkillShellCommand"));
     let codex = decode_inputs::<hookkit_codex::protocol::Codex>("codex");
     assert!(codex.iter().any(|event| event == "Interrupt"));
+    assert!(codex.iter().any(|event| event == "PreModelRequest"));
+    assert!(codex.iter().any(|event| event == "PostModelRequest"));
+    // Every Antigravity event has an input fixture.
     let antigravity = decode_inputs::<hookkit_antigravity::Antigravity>("antigravity");
-    assert!(!antigravity.is_empty());
+    let mut implemented: Vec<_> = hookkit_antigravity::events()
+        .iter()
+        .map(|descriptor| descriptor.event().name().to_owned())
+        .collect();
+    implemented.sort();
+    assert_eq!(antigravity, implemented);
 }
 
-fn stdout(emission: hookkit_core::Result<ProcessEmission>) -> serde_json::Value {
+/// Returns the bytes a golden file must hold: the emitted JSON stdout, byte
+/// for byte, ending in one newline.
+fn stdout(emission: hookkit_core::Result<ProcessEmission>) -> Vec<u8> {
     let emission = emission.expect("golden constructor emits");
     assert_eq!(emission.exit_code(), 0);
     assert!(emission.stderr().is_empty());
-    serde_json::from_slice(emission.stdout()).expect("golden output is JSON")
+    serde_json::from_slice::<serde_json::Value>(emission.stdout()).expect("golden output is JSON");
+    let mut bytes = emission.stdout().to_vec();
+    if !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+    }
+    bytes
 }
 
 #[test]
 fn every_golden_output_is_what_a_typed_constructor_emits() {
     use hookkit_core::EventSpec;
 
-    let expected: BTreeMap<&str, serde_json::Value> = BTreeMap::from([
+    let expected: BTreeMap<&str, Vec<u8>> = BTreeMap::from([
+        (
+            "antigravity_pre_invocation_block.json",
+            stdout(hookkit_antigravity::PreInvocation::emit(
+                hookkit_antigravity::PreInvocationOutput::block("Prompt blocked by policy."),
+            )),
+        ),
+        (
+            "antigravity_pre_tool_auto_approve.json",
+            stdout(hookkit_antigravity::PreToolUse::emit(
+                hookkit_antigravity::PreToolUseOutput::auto_approve()
+                    .with_reason("Lint-only command."),
+            )),
+        ),
+        (
+            "antigravity_session_start_system_message.json",
+            stdout(hookkit_antigravity::SessionStart::emit(
+                hookkit_antigravity::SessionStartOutput::inject(
+                    hookkit_antigravity::InjectStep::system_message(
+                        "Environment initialized for workspace /workspace/project",
+                    ),
+                ),
+            )),
+        ),
         (
             "claude_post_model_switch_context.json",
             stdout(hookkit_claude::events::PostModelSwitch::emit(
@@ -109,6 +148,14 @@ fn every_golden_output_is_what_a_typed_constructor_emits() {
             stdout(hookkit_claude::events::PreModelSwitch::emit(
                 hookkit_claude::events::PreModelSwitchOutput::block(
                     "Opus 4.6 is retired for this project.",
+                ),
+            )),
+        ),
+        (
+            "claude_pre_skill_shell_command_deny.json",
+            stdout(hookkit_claude::events::PreSkillShellCommand::emit(
+                hookkit_claude::events::PreSkillShellCommandOutput::deny(
+                    "curl is not allowed in skills.",
                 ),
             )),
         ),
@@ -159,9 +206,12 @@ fn every_golden_output_is_what_a_typed_constructor_emits() {
         "every golden file needs a typed constructor here"
     );
     for path in &files {
-        let actual: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let actual = std::fs::read(path).unwrap();
         let name = path.file_name().unwrap().to_str().unwrap();
-        assert_eq!(actual, expected[name], "{name}");
+        assert_eq!(
+            String::from_utf8_lossy(&actual),
+            String::from_utf8_lossy(&expected[name]),
+            "{name}"
+        );
     }
 }

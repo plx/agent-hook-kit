@@ -1,0 +1,15 @@
+{
+  "session_id": "abc-123-def",
+  "transcript_path": "/tmp/claude/transcript-abc.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "PreSkillShellCommand",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git log -5 --oneline"
+  },
+  "tool_use_id": "skillsh_1",
+  "command_name": "release-notes",
+  "command_source": "projectSettings",
+  "invoked_by": "user"
+}

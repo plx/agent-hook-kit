@@ -1,1 +1,1 @@
-{"hookSpecificOutput":{"hookEventName":"PostModelSwitch","additionalContext":"On Opus, delegate implementation work to subagents."}}
+{"hookSpecificOutput":{"additionalContext":"On Opus, delegate implementation work to subagents.","hookEventName":"PostModelSwitch"}}

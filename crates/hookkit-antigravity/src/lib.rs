@@ -381,6 +381,9 @@ pub enum InjectStep {
     /// The reference deprecates `ephemeralMessage` in favor of
     /// [`InjectStep::SystemMessage`]. Builds that predate `systemMessage`
     /// may accept only this kind.
+    #[deprecated(
+        note = "Antigravity deprecates the `ephemeralMessage` inject step in favor of `systemMessage`; use `InjectStep::system_message` unless the target build predates it"
+    )]
     EphemeralMessage {
         /// Message serialized under the native `ephemeralMessage` key.
         #[serde(rename = "ephemeralMessage")]
@@ -429,7 +432,11 @@ impl InjectStep {
     /// The reference deprecates `ephemeralMessage`: prefer
     /// [`InjectStep::system_message`] unless the target build predates
     /// `systemMessage`.
+    #[deprecated(
+        note = "Antigravity deprecates the `ephemeralMessage` inject step in favor of `systemMessage`; use `InjectStep::system_message` unless the target build predates it"
+    )]
     pub fn ephemeral_message(message: impl Into<String>) -> Self {
+        #[allow(deprecated)]
         Self::EphemeralMessage {
             ephemeral_message: message.into(),
         }
@@ -2614,6 +2621,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn inject_step_constructors_emit_the_documented_shapes() {
         let mut metadata = serde_json::Map::new();
         metadata.insert("source".into(), "policy".into());

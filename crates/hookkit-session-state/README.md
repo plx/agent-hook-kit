@@ -121,7 +121,9 @@ compact, invocation start, or first-observed fallback. A fork receives a new
 native session identity, so a `fork` epoch, like `startup`, starts the
 conversation stored under that identity. The metadata also includes the
 harness, hashed identity, accumulated workspace roots, and latest typed
-transcript and artifact paths.
+transcript and artifact paths. Codex tool events contribute no workspace root:
+since Codex 0.166.0 their `cwd` is the tool command's working directory, so
+only Codex's turn-scoped events name roots there.
 
 Every HookKit build that opens a session reads the same metadata files, so the
 persisted enums tolerate values written by newer builds: an unrecognized epoch

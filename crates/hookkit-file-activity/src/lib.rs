@@ -2151,7 +2151,7 @@ mod tests {
 
     #[test]
     fn antigravity_post_tool_use_without_a_tool_call_records_a_gap() {
-        // The `ide-reference-example` fixture of antigravity/docs-2026-09-30-r1:
+        // The `ide-reference-example` fixture of antigravity/docs-2026-11-25-r1:
         // the documented IDE payload omits `toolCall`, so which files the tool
         // wrote is unknown and must not be reported as "nothing written".
         let input = PostToolUseInput::Antigravity(

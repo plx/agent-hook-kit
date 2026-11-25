@@ -70,10 +70,11 @@ fn prepared_state_dir(state_dir: Option<PathBuf>) -> Result<PathBuf, ExitCode> {
     })
 }
 
-/// Record precise session metadata at Claude/Codex SessionStart.
+/// Record precise session metadata at a native SessionStart.
 ///
-/// Antigravity intentionally does not call this entrypoint: its lower bound is
-/// established best-effort by the first PostToolUse observation instead.
+/// Antigravity builds that predate its `SessionStart` event never call this
+/// entrypoint; there the first PostToolUse observation establishes the lower
+/// bound best-effort instead.
 pub fn run_session_start(harness: HarnessId, state_dir: Option<PathBuf>) -> ExitCode {
     let state_dir = match prepared_state_dir(state_dir) {
         Ok(state_dir) => state_dir,

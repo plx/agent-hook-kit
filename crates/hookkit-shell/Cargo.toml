@@ -31,3 +31,4 @@ tree-sitter-bash = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }

@@ -3,7 +3,8 @@
 - Audit date: 2026-11-25
 - Previous selected snapshot: `docs-2026-09-30-r1` (selected in `620d5f1`)
 - Proposed successor: `docs-2026-11-25-r1`, **draft (not yet frozen or
-  selected)**
+  selected)** when this note was written; since frozen and selected (see
+  "Final status")
 - Selected supplement: `command-environments-2026-09-30-r2`; it needs a
   successor that targets `docs-2026-11-25-r1`
 - Native crate: `crates/hookkit-antigravity` (implements
@@ -715,8 +716,11 @@ and `Stop::emit` rejects an empty one.
 ### Process outcomes (all events)
 
 - The hooks reference still defines no exit codes and no handling of
-  stderr or invalid stdout (`ag-hooks.md:223`); it adds a default timeout
-  of 30 seconds (`:219`).
+  stderr or invalid stdout (`ag-hooks.md:223`). Its handler-configuration
+  table documents an optional `timeout` field in seconds that defaults to
+  `30` (`:219`). That is a configuration default, not a process outcome,
+  and `docs-2026-09-30-r1` recorded no hook configuration details, so
+  whether the default is new since then is unknown.
 - `build-plugins.md:461`: "Command hooks run with their working directory
   (`cwd`) set to `<plugin-root>`, receive event context as JSON on
   `stdin`, and must exit with code **`0`** and write a JSON response
@@ -1119,3 +1123,43 @@ No finding was refuted outright. These claims did not survive as stated:
   `pre-invocation/fixtures.yaml:8-11`, `:37-41`, `:56-63`,
   `post-invocation/fixtures.yaml:42-46`, and
   `post-tool-use/fixtures.yaml:16-19`; `resolution.rs:831` is test code.
+
+## Final status
+
+`docs-2026-11-25-r1` is frozen, recorded in `FROZEN_LEDGER`, and selected
+in `contracts/registry.yaml`, together with supplement
+`command-environments-2026-11-25-r1`. The supplement adds the
+`plugin-paths` profile (`PLUGIN_ROOT` and `PLUGIN_DATA`) and maps it to all
+six events. `hookkit-antigravity` implements the snapshot, and all six
+events, `SessionStart` included, are `command-runtime-beta` targets with
+`source-reviewed` verification.
+
+The native changes follow this note, with these decisions:
+
+- The aligned `PreToolUseOutput::allow` emits `auto_approve`; the aligned
+  `pass_through` keeps emitting `ask`, which never approves on any build.
+- Under `FailurePolicy::FailClosed` a failing `PreInvocation` hook blocks
+  the prompt at exit 0 (an `errorMessage` step plus `"terminate"`).
+- The invocation-zero `InvocationStart` boundary is recorded only while no
+  other epoch exists for the session, so it never replaces a `SessionStart`
+  epoch.
+- `NativeContext.tool_call_id` carries `toolCall.id` when it is a non-blank
+  string.
+- `InjectStep::ephemeral_message` and `InjectStep::tool_call`, with their
+  variants, are `#[deprecated]`.
+- `session-start-state-agent-hook` accepts `--antigravity`, and the Stop
+  runner uses `continuation_active` as its loop signal when it is present.
+
+Deferred:
+
+- An aligned rewrite for `overwrite` (`rewrite_for`): what `overwrite` does
+  with `ask` and `force_ask` is undocumented, so the aligned `rewrite`
+  still fails for Antigravity.
+- Antigravity is not part of the aligned `SessionStart` family, which stays
+  Claude Code and Codex only.
+- Nothing pairs a `PreToolUse` with its `PostToolUse` by `toolCall.id`.
+- The hint-less fail-closed `{"decision":"deny"}` is still invalid output
+  for `SessionStart` and the invocation events; `failure_response`
+  documents this.
+- Every question under "Open questions for live observation" is still
+  open.

@@ -59,5 +59,5 @@ templates/hook-project/tests/run.sh --case pinned --pinned-revision <sha>
 ```
 
 The matrix derives native events and aligned-family intersections from the
-canonical catalogs while asserting the design's current 33/12/5 event counts
+canonical catalogs while asserting the design's current 34/14/6 event counts
 and universal-three plus Claude/Codex-eight family split.

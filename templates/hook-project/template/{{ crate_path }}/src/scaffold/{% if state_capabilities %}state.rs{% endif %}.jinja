@@ -68,8 +68,13 @@ pub fn default_state_root() -> Result<StateRoot> {
 /// `cd` in its Bash tool, so a relative state directory would otherwise
 /// split one session's state across directories. Like HookKit's runners,
 /// this resolves a relative path against `CLAUDE_PROJECT_DIR` on Claude Code
-/// and against the event's first working directory elsewhere. Absolute
-/// paths, and relative paths without an absolute anchor, are unchanged.
+/// and against the event's first workspace root elsewhere: the input `cwd`
+/// on Codex and the first `workspacePaths` entry on Antigravity. Codex tool
+/// events (`PreToolUse`, `PermissionRequest`, and `PostToolUse`) carry no
+/// workspace root, because their `cwd` is the tool command's working
+/// directory, so there a relative path resolves against the hook process's
+/// working directory, where Codex starts every tool hook. Absolute paths,
+/// and relative paths without an absolute anchor, are unchanged.
 pub fn anchor_state_dir(context: &RuntimeContext<'_>, path: &Path) -> PathBuf {
     let project_root = if *context.harness() == HarnessId::CLAUDE_CODE {
         std::env::var_os("CLAUDE_PROJECT_DIR").map(PathBuf::from)
