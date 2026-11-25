@@ -429,7 +429,7 @@ where
             diagnostics,
             resolved,
             |input, environment, context| {
-                let environment = BuiltinCommandEnvironment::Antigravity(*environment);
+                let environment = BuiltinCommandEnvironment::Antigravity(environment.clone());
                 match handler(BuiltinInput::Antigravity(input), &environment, context)? {
                     BuiltinOutput::Antigravity(output) => Ok(output),
                     output => Err(builtin_harness_mismatch(context, &output)),

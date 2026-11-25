@@ -2,7 +2,7 @@
 
 use hookkit_antigravity::{
     InjectStep, PostToolUse, PostToolUseOutput, PreInvocation, PreInvocationOutput, PreToolUse,
-    PreToolUseOutput, Stop, StopDecision, StopOutput, ToolDecision,
+    PreToolUseOutput, SessionStart, SessionStartOutput, Stop, StopDecision, StopOutput,
 };
 use hookkit_core::EventSpec;
 use proptest::prelude::*;
@@ -13,13 +13,51 @@ proptest! {
     /// Property: message injection is a one-element ordered operation and
     /// arbitrary message text is serialized without semantic normalization.
     #[test]
-    fn injected_ephemeral_messages_are_exact(message in any::<String>()) {
-        let output = PreInvocationOutput::inject(InjectStep::ephemeral_message(message.clone()));
+    fn injected_system_messages_are_exact(message in any::<String>()) {
+        let output = PreInvocationOutput::inject(InjectStep::system_message(message.clone()));
         let emission = PreInvocation::emit(output).unwrap();
         let value: Value = serde_json::from_slice(emission.stdout()).unwrap();
 
         prop_assert_eq!(value["injectSteps"].as_array().unwrap().len(), 1);
+        prop_assert_eq!(
+            value["injectSteps"][0]["systemMessage"]["systemMessage"].as_str(),
+            Some(message.as_str())
+        );
+        prop_assert!(value["injectSteps"][0]["systemMessage"].get("metadata").is_none());
+        prop_assert!(value.get("terminationBehavior").is_none());
+
+        let start = SessionStart::emit(SessionStartOutput::inject(
+            InjectStep::system_message(message.clone()),
+        )).unwrap();
+        prop_assert_eq!(start.stdout(), emission.stdout());
+    }
+
+    /// Property: the deprecated `ephemeralMessage` step stays exact for
+    /// builds that predate `systemMessage`.
+    #[test]
+    fn injected_deprecated_ephemeral_messages_are_exact(message in any::<String>()) {
+        let output = PreInvocationOutput::inject(InjectStep::ephemeral_message(message.clone()));
+        let emission = PreInvocation::emit(output).unwrap();
+        let value: Value = serde_json::from_slice(emission.stdout()).unwrap();
+
         prop_assert_eq!(value["injectSteps"][0]["ephemeralMessage"].as_str(), Some(message.as_str()));
+    }
+
+    /// Property: a prompt block always pairs exactly one error step with
+    /// `terminate`, and the message is shown verbatim.
+    #[test]
+    fn prompt_blocks_are_exact(message in any::<String>()) {
+        let emission = PreInvocation::emit(PreInvocationOutput::block(message.clone())).unwrap();
+        let value: Value = serde_json::from_slice(emission.stdout()).unwrap();
+
+        prop_assert_eq!(
+            value,
+            serde_json::json!({
+                "injectSteps": [{"errorMessage": {"userMessage": message}}],
+                "terminationBehavior": "terminate",
+            })
+        );
+        prop_assert_eq!(emission.exit_code(), 0);
     }
 
     /// Property: permission overrides form a set on the native wire contract.
@@ -29,11 +67,8 @@ proptest! {
     fn permission_overrides_are_deduplicated_in_first_occurrence_order(
         overrides in prop::collection::vec("[a-c]{0,2}", 0..30),
     ) {
-        let output = PreToolUseOutput {
-            decision: ToolDecision::Deny,
-            reason: None,
-            permission_overrides: overrides.clone(),
-        };
+        let mut output = PreToolUseOutput::deny();
+        output.permission_overrides = overrides.clone();
         let emission = PreToolUse::emit(output).unwrap();
         let value: Value = serde_json::from_slice(emission.stdout()).unwrap();
 

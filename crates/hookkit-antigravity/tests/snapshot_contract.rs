@@ -1,5 +1,5 @@
 //! Checks the native crate against every fixture and output schema of the
-//! frozen snapshot it implements.
+//! snapshot it implements.
 //!
 //! The conformance crate exercises only the registry-selected snapshot and
 //! only the `representative` input. This suite follows [`SNAPSHOT`] instead
@@ -9,8 +9,9 @@
 use base64::Engine as _;
 use hookkit_antigravity::{
     InjectStep, PostInvocation, PostInvocationOutput, PostToolUse, PostToolUseOutput,
-    PreInvocation, PreInvocationOutput, PreToolUse, PreToolUseOutput, SNAPSHOT, Stop, StopDecision,
-    StopOutput, TerminationBehavior, ToolDecision,
+    PreInvocation, PreInvocationOutput, PreInvocationTermination, PreToolUse, PreToolUseOutput,
+    SNAPSHOT, SessionStart, SessionStartOutput, Stop, StopDecision, StopOutput,
+    TerminationBehavior, ToolDecision,
 };
 use hookkit_core::{EventSpec, ProcessEmission, RawInvocation};
 use serde::Serialize;
@@ -18,7 +19,8 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const EVENT_DIRS: [&str; 5] = [
+const EVENT_DIRS: [&str; 6] = [
+    "session-start",
     "pre-invocation",
     "post-invocation",
     "pre-tool-use",
@@ -115,6 +117,7 @@ where
 
 #[test]
 fn every_positive_input_fixture_parses_and_every_negative_is_rejected() {
+    check_inputs::<SessionStart>("session-start");
     check_inputs::<PreInvocation>("pre-invocation");
     check_inputs::<PostInvocation>("post-invocation");
     check_inputs::<PreToolUse>("pre-tool-use");
@@ -171,6 +174,28 @@ fn snapshot_fixtures_exercise_the_relaxed_input_constraints() {
                 .any(|fixture| fixture["value"].get("modelName").is_some()),
             "{event_dir}: expected a modelName positive"
         );
+        // The common fields documented or announced after
+        // docs-2026-09-30-r1 must be exercised by every event.
+        for field in ["lastUserInput", "hookEventName", "cwd"] {
+            assert!(
+                positives
+                    .iter()
+                    .any(|fixture| fixture["value"].get(field).is_some()),
+                "{event_dir}: expected a {field} positive"
+            );
+        }
+    }
+    // CLI 1.5.4 tool-call identifiers may be strings or numbers.
+    for event_dir in ["pre-tool-use", "post-tool-use"] {
+        let fixtures = read_yaml(event_dir);
+        let ids: Vec<&Value> = fixture_list(&fixtures, "/input/positive")
+            .iter()
+            .filter_map(|fixture| fixture["value"].pointer("/toolCall/id"))
+            .collect();
+        assert!(
+            ids.iter().any(|id| id.is_number()),
+            "{event_dir}: expected a numeric toolCall.id positive"
+        );
     }
 }
 
@@ -189,18 +214,67 @@ fn emitted_json(event_dir: &str, emission: &ProcessEmission) -> Value {
     value
 }
 
+fn metadata(source: &str) -> serde_json::Map<String, Value> {
+    serde_json::json!({ "source": source })
+        .as_object()
+        .unwrap()
+        .clone()
+}
+
+fn args(value: Value) -> serde_json::Map<String, Value> {
+    value.as_object().unwrap().clone()
+}
+
 /// Typed outputs reproducing each documented output fixture, by fixture id.
 fn fixture_output(event_dir: &str, id: &str) -> ProcessEmission {
     let emission = match (event_dir, id) {
+        ("session-start", "no-op") => SessionStart::emit(SessionStartOutput::no_op()),
+        ("session-start", "inject-system-message") => {
+            SessionStart::emit(SessionStartOutput::inject(InjectStep::system_message(
+                "Environment initialized for workspace /workspace/project",
+            )))
+        }
+        ("session-start", "inject-user-message") => SessionStart::emit(SessionStartOutput::inject(
+            InjectStep::user_message("Startup context."),
+        )),
+        ("session-start", "inject-system-message-with-metadata") => {
+            SessionStart::emit(SessionStartOutput::inject(
+                InjectStep::system_message_with_metadata("Remember to lint", metadata("policy")),
+            ))
+        }
+        ("session-start", "inject-error-message") => {
+            SessionStart::emit(SessionStartOutput::inject(InjectStep::error_message(
+                "Workspace policy could not be loaded.",
+            )))
+        }
         ("pre-invocation", "no-op") => PreInvocation::emit(PreInvocationOutput::no_op()),
         ("pre-invocation", "inject-reminder") => PreInvocation::emit(PreInvocationOutput::inject(
-            InjectStep::ephemeral_message("Remember to lint"),
+            InjectStep::system_message("Remember to lint"),
         )),
+        ("pre-invocation", "block-prompt") => {
+            PreInvocation::emit(PreInvocationOutput::block("Prompt blocked by policy."))
+        }
         ("pre-invocation", "inject-user-message") => {
             PreInvocation::emit(PreInvocationOutput::inject(InjectStep::user_message(
                 "Run the linter before continuing.",
             )))
         }
+        ("pre-invocation", "inject-system-message-with-metadata") => {
+            PreInvocation::emit(PreInvocationOutput::inject(
+                InjectStep::system_message_with_metadata("Remember to lint", metadata("policy")),
+            ))
+        }
+        ("pre-invocation", "inject-deprecated-ephemeral") => PreInvocation::emit(
+            PreInvocationOutput::inject(InjectStep::ephemeral_message("Remember to lint")),
+        ),
+        ("pre-invocation", "explicit-default") => PreInvocation::emit(
+            PreInvocationOutput::no_op()
+                .with_termination_behavior(PreInvocationTermination::Default),
+        ),
+        ("pre-invocation", "terminate-without-message") => PreInvocation::emit(
+            PreInvocationOutput::no_op()
+                .with_termination_behavior(PreInvocationTermination::Terminate),
+        ),
         ("post-invocation", "default") => PostInvocation::emit(
             PostInvocationOutput::no_op().with_termination_behavior(TerminationBehavior::Default),
         ),
@@ -209,22 +283,54 @@ fn fixture_output(event_dir: &str, id: &str) -> ProcessEmission {
                 .with_termination_behavior(TerminationBehavior::ForceContinue),
         ),
         ("post-invocation", "terminate-after-reminder") => PostInvocation::emit(
-            PostInvocationOutput::inject(InjectStep::ephemeral_message("Summarize the changes."))
+            PostInvocationOutput::inject(InjectStep::system_message("Summarize the changes."))
                 .with_termination_behavior(TerminationBehavior::Terminate),
         ),
-        ("pre-tool-use", "allow") => PreToolUse::emit(PreToolUseOutput::allow()),
+        ("post-invocation", "inject-deprecated-ephemeral") => PostInvocation::emit(
+            PostInvocationOutput::inject(InjectStep::ephemeral_message("Summarize the changes.")),
+        ),
+        ("post-invocation", "inject-error-message") => PostInvocation::emit(
+            PostInvocationOutput::inject(InjectStep::error_message("Post-turn check failed."))
+                .with_termination_behavior(TerminationBehavior::Terminate),
+        ),
+        ("pre-tool-use", "allow-pass-through") => PreToolUse::emit(PreToolUseOutput::allow()),
+        ("pre-tool-use", "auto-approve") => {
+            PreToolUse::emit(PreToolUseOutput::auto_approve().with_reason("Lint-only command."))
+        }
+        ("pre-tool-use", "deny") => PreToolUse::emit(
+            PreToolUseOutput::deny().with_reason("Destructive command blocked by policy."),
+        ),
         ("pre-tool-use", "ask") => PreToolUse::emit(
             PreToolUseOutput::ask()
                 .with_reason("Requires confirmation for test execution.")
                 .with_permission_override("command(npm test)"),
         ),
+        ("pre-tool-use", "force-ask") => PreToolUse::emit(
+            PreToolUseOutput::force_ask().with_reason("Always confirm deployments."),
+        ),
         ("pre-tool-use", "deny-unless-prior-grant") => PreToolUse::emit(
             PreToolUseOutput::deny_unless_prior_grant()
                 .with_permission_override("read_file(/workspace/project/.env)"),
         ),
+        ("pre-tool-use", "overwrite-cwd") => PreToolUse::emit(
+            PreToolUseOutput::allow()
+                .with_overwrite(args(serde_json::json!({"Cwd": "/workspace/project/sub"}))),
+        ),
+        ("pre-tool-use", "auto-approve-with-overwrite") => PreToolUse::emit(
+            PreToolUseOutput::auto_approve()
+                .with_overwrite(args(serde_json::json!({"CommandLine": "npm test -- --ci"}))),
+        ),
+        ("pre-tool-use", "ask-with-extended-overrides") => {
+            PreToolUse::emit(PreToolUseOutput::ask().with_permission_overrides([
+                "download_url(example.com)",
+                "unsandboxed(git push)",
+                "mcp(linter/*)",
+            ]))
+        }
         ("post-tool-use", "no-op") => PostToolUse::emit(PostToolUseOutput::no_op()),
         ("stop", "continue") => Stop::emit(StopOutput::continue_with("Not done yet")),
         ("stop", "stop") => Stop::emit(StopOutput::allow_stop()),
+        ("stop", "continue-without-reason") => Stop::emit(StopOutput::new(StopDecision::Continue)),
         _ => panic!("{event_dir}/{id}: add a typed constructor for this output fixture"),
     };
     emission.unwrap_or_else(|error| panic!("{event_dir}/{id}: {error}"))
@@ -257,6 +363,7 @@ fn every_process_case_matches_exact_bytes_and_is_declared() {
         let cases = fixture_list(&fixtures, "/process");
         assert!(!cases.is_empty(), "{event_dir}: expected process cases");
         let wire_name = match event_dir {
+            "session-start" => "SessionStart",
             "pre-invocation" => "PreInvocation",
             "post-invocation" => "PostInvocation",
             "pre-tool-use" => "PreToolUse",
@@ -272,11 +379,27 @@ fn every_process_case_matches_exact_bytes_and_is_declared() {
             descriptor.contract().as_str(),
             format!("antigravity/{}/{wire_name}", SNAPSHOT.as_str())
         );
+        // Typed outputs always exit 0. A non-zero `failure` case is what a
+        // failing process produces (Antigravity logs and ignores it), so it
+        // is checked for shape here but not declared or reproduced.
+        let (exit_zero, failures): (Vec<&Value>, Vec<&Value>) = cases
+            .iter()
+            .partition(|case| case["exit_code"].as_u64() == Some(0));
         let declared: BTreeSet<&str> = descriptor.conformance_cases().iter().copied().collect();
-        let documented: BTreeSet<&str> = cases.iter().map(fixture_id).collect();
+        let documented: BTreeSet<&str> = exit_zero.iter().copied().map(fixture_id).collect();
         assert_eq!(declared, documented, "{event_dir}: declared process cases");
+        assert_eq!(
+            failures.iter().copied().map(fixture_id).collect::<Vec<_>>(),
+            ["failure"],
+            "{event_dir}: expected exactly one failure process case"
+        );
+        for failure in failures {
+            assert_eq!(failure["outcome"], "failure", "{event_dir}");
+            assert_eq!(failure["stdout_base64"], "", "{event_dir}");
+            assert_ne!(failure["exit_code"].as_u64(), Some(0), "{event_dir}");
+        }
 
-        for case in cases {
+        for case in exit_zero {
             let id = fixture_id(case);
             let emission = fixture_output(event_dir, id);
             let stdout = engine
@@ -305,30 +428,47 @@ fn every_process_case_matches_exact_bytes_and_is_declared() {
 fn every_typed_output_constructor_satisfies_the_output_schema() {
     let steps = || {
         vec![
-            InjectStep::ephemeral_message("transient"),
+            InjectStep::system_message("instruction"),
+            InjectStep::system_message_with_metadata("instruction", metadata("policy")),
             InjectStep::user_message("persistent"),
-            InjectStep::tool_call(
-                serde_json::json!({"name": "run_command", "args": {"CommandLine": "ls"}})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-            ),
+            InjectStep::ephemeral_message("deprecated transient"),
+            InjectStep::error_message("shown to the user"),
         ]
     };
 
-    let pre_invocation = [
+    let session_start = [
+        SessionStartOutput::no_op(),
+        SessionStartOutput::inject(InjectStep::system_message("one")),
+        SessionStartOutput::inject_all(steps()),
+        SessionStartOutput::no_op().with_step(InjectStep::user_message("appended")),
+    ];
+    for output in session_start {
+        emitted_json("session-start", &SessionStart::emit(output).unwrap());
+    }
+
+    let mut pre_invocation = vec![
         PreInvocationOutput::no_op(),
         PreInvocationOutput::inject(InjectStep::user_message("one")),
         PreInvocationOutput::inject_all(steps()),
-        PreInvocationOutput::no_op().with_step(InjectStep::ephemeral_message("appended")),
+        PreInvocationOutput::no_op().with_step(InjectStep::system_message("appended")),
+        PreInvocationOutput::block("blocked"),
+        PreInvocationOutput::block("blocked").with_step(InjectStep::system_message("why")),
     ];
+    for behavior in [
+        PreInvocationTermination::Default,
+        PreInvocationTermination::Terminate,
+    ] {
+        pre_invocation.push(PreInvocationOutput::no_op().with_termination_behavior(behavior));
+        pre_invocation
+            .push(PreInvocationOutput::inject_all(steps()).with_termination_behavior(behavior));
+    }
     for output in pre_invocation {
         emitted_json("pre-invocation", &PreInvocation::emit(output).unwrap());
     }
 
     let mut post_invocation = vec![
         PostInvocationOutput::no_op(),
-        PostInvocationOutput::inject(InjectStep::ephemeral_message("one")),
+        PostInvocationOutput::inject(InjectStep::system_message("one")),
         PostInvocationOutput::inject_all(steps()),
         PostInvocationOutput::no_op().with_step(InjectStep::user_message("appended")),
     ];
@@ -347,6 +487,7 @@ fn every_typed_output_constructor_satisfies_the_output_schema() {
 
     let decisions = [
         PreToolUseOutput::allow(),
+        PreToolUseOutput::auto_approve(),
         PreToolUseOutput::deny(),
         PreToolUseOutput::ask(),
         PreToolUseOutput::force_ask(),
@@ -363,12 +504,22 @@ fn every_typed_output_constructor_satisfies_the_output_schema() {
             "pre-tool-use",
             &PreToolUse::emit(
                 output
+                    .clone()
                     .with_reason("because")
                     .with_permission_overrides(["command(npm test)", "read_file(/a)"]),
             )
             .unwrap(),
         );
         assert_eq!(value["permissionOverrides"].as_array().unwrap().len(), 2);
+        for overwrite in [
+            serde_json::json!({}),
+            serde_json::json!({"Cwd": "/w", "Nested": {"a": [1, null]}, "Null": null}),
+        ] {
+            emitted_json(
+                "pre-tool-use",
+                &PreToolUse::emit(output.clone().with_overwrite(args(overwrite))).unwrap(),
+            );
+        }
     }
 
     emitted_json(
@@ -410,23 +561,60 @@ fn documented_output_negatives_are_unrepresentable_or_repaired() {
             );
             match (event_dir, id) {
                 // `InjectStep` is a one-of enum and cannot carry two kinds.
-                ("pre-invocation" | "post-invocation", "inject-step-mutually-exclusive") => {}
-                // `TerminationBehavior` is closed to the documented values.
-                ("post-invocation", "unknown-termination-behavior") => {}
-                // `ToolDecision` has no empty value.
-                ("pre-tool-use", "empty-decision") => {}
+                (
+                    "pre-invocation" | "post-invocation",
+                    "inject-step-mutually-exclusive" | "two-step-kinds",
+                ) => {}
+                // Only the deprecated `InjectStep::tool_call` emits the
+                // withdrawn step, and the schemas reject what it emits.
+                (
+                    "session-start" | "pre-invocation" | "post-invocation",
+                    "inject-tool-call-undocumented",
+                ) => {
+                    #[allow(deprecated)]
+                    let step =
+                        InjectStep::tool_call(args(serde_json::json!({"name": "run_command"})));
+                    let value = serde_json::json!({ "injectSteps": [step] });
+                    assert_eq!(value, fixture["value"], "{event_dir}/{id}");
+                    assert!(!validator.is_valid(&value));
+                }
+                // `SystemMessageStep` and `ErrorMessageStep` are objects with
+                // a required text member.
+                (
+                    "session-start" | "pre-invocation" | "post-invocation",
+                    "system-message-not-object",
+                )
+                | (
+                    "pre-invocation",
+                    "system-message-missing-text" | "error-message-missing-user-message",
+                ) => {}
+                // `SessionStartOutput` has no `terminationBehavior`.
+                ("session-start", "termination-behavior-undocumented") => {}
+                // `PreInvocationTermination` has no `force_continue`, and both
+                // termination enums are closed to the documented values.
+                ("pre-invocation", "force-continue-undocumented" | "unknown-termination")
+                | ("post-invocation", "unknown-termination-behavior") => {}
+                // `ToolDecision` is closed and has no empty value, and
+                // `decision` is a required member.
+                (
+                    "pre-tool-use",
+                    "empty-decision"
+                    | "unknown-decision"
+                    | "auto-approve-wrong-case"
+                    | "overwrite-without-decision",
+                ) => {}
+                // `overwrite` is typed as a JSON object.
+                ("pre-tool-use", "overwrite-not-object" | "overwrite-array") => {}
                 // `PostToolUseOutput` always emits exactly `{}`.
                 ("post-tool-use", "non-empty-response") => {}
                 ("pre-tool-use", "duplicate-permission-override") => {
-                    let output = PreToolUseOutput {
-                        decision: ToolDecision::Ask,
-                        reason: None,
-                        permission_overrides: vec![
-                            "command(npm test)".into(),
-                            "command(npm test)".into(),
-                        ],
-                    };
-                    let value = emitted_json(event_dir, &PreToolUse::emit(output).unwrap());
+                    let output =
+                        PreToolUseOutput::ask().with_permission_override("command(npm test)");
+                    let mut duplicated = output.clone();
+                    duplicated
+                        .permission_overrides
+                        .push("command(npm test)".into());
+                    let value = emitted_json(event_dir, &PreToolUse::emit(duplicated).unwrap());
                     assert_eq!(
                         value,
                         serde_json::json!({
@@ -438,6 +626,8 @@ fn documented_output_negatives_are_unrepresentable_or_repaired() {
                 ("stop", "empty-decision") => {
                     assert!(Stop::emit(StopOutput::new("")).is_err());
                 }
+                // `StopOutput` always serializes a decision.
+                ("stop", "empty-object") => {}
                 _ => panic!("{event_dir}/{id}: classify this output negative"),
             }
         }
