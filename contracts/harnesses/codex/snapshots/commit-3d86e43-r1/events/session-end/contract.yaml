@@ -1,0 +1,86 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: none
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: failure
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: session
+  identification:
+    discriminator:
+      const: SessionEnd
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: session_end
+  wire_name: SessionEnd
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+harness: codex
+id: codex/commit-3d86e43-r1/SessionEnd
+schemas:
+  input:
+    assurance:
+      confidence: high
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+  outputs: []
+snapshot: commit-3d86e43-r1
+uncertainties:
+- 'SessionEnd is advisory: Codex ignores stdout at exit 0, never runs it for subagents, and `reason` is always `other`.'
+- SessionEnd handlers always run synchronously even when `async` is true, default to a one-second timeout clamped to one through three seconds, and reject `mcp_tool` handlers; `prompt` and `agent` handlers are parsed but skipped.
+- SessionEnd runs for the main thread when an open conversation is archived or deleted, when Codex shuts down normally, and when the thread is unloaded after no client has been subscribed to it for `thread_unload_delay_secs` (60 seconds by default in the pinned core source, configurable per configuration or thread; the hooks reference says 30 minutes). Unsubscribing or switching clients does not run it immediately, and it never runs when the process is killed, so cleanup keyed on SessionEnd must tolerate late or missing delivery.
+- The official generated schemas include parsed compatibility fields; runtime support restrictions from the hooks reference and pinned source remain controlling.
+- Codex never reads stderr from a command that exits 0 for this event (only PreModelRequest and PostModelRequest surface exit-0 stderr), so exit-0 outcomes model stderr as ignored rather than as diagnostics.
+- For non-zero exits Codex marks the run failed and reports the trimmed stderr (or `hook exited with code N` when stderr is blank) as the failure message; exit 2 has no special meaning and the operation continues.
+- Since Codex 0.149.0 locally executed command hooks receive a replay of the environment Codex captured when the session hook registry was created, not the live environment; since 0.155.0 they start in a new session without a controlling terminal and their timeout also covers stdin delivery. On timeout, I/O failure, or turn abort Codex SIGKILLs the hook's whole process group.
+- Codex does not dispatch command hooks for Work threads that use cloud orchestration, even when tools execute locally; only admin-managed Global `mcp_tool` hooks run there, never environment-scoped hooks or SessionEnd MCP hooks.
+- 'Since Codex 0.165.0 managed hooks declared by an execution environment''s requirements (environment-scoped hooks) also run for this event. Codex rewrites their stdin without marking the scope: `cwd` becomes the environment''s cwd in its native form, and `transcript_path` (and `agent_transcript_path`, where present) becomes null even when the session has a transcript. They run on the environment''s executor through the exec server, in the environment''s shell (on Windows only PowerShell, which pipes the stdin line to the command, with its trailing newline and encoding unverified; cmd is rejected), under its `shell_environment_policy` without an environment replay, with the exec server''s credential scrub and no plugin variables; stdout and stderr are each silently capped at 1 MiB, and one deadline covers launch, stdin, and output.'
+- Since Codex 0.164.0 a non-builtin plugin hook with a saved approval re-hashes its whole plugin bundle before every run (synchronous, background, or `mcp_tool`) unless `--dangerously-bypass-hook-trust` is set, and the scan counts against the hook timeout. A changed declaration or bundle content, a symlink or special entry (including a symlinked plugin root), a file that changes during the scan, or a scan timeout records a failed run with an error entry and no exit code, without launching the hook, and the operation continues (fail-open). The hooks reference says changed hooks are skipped until trusted, but at runtime they fail on every match.
+- A `matcher` that is omitted, `""`, or `"*"` matches every occurrence; one made only of ASCII letters, digits, `_`, and `|` matches exactly one of its `|`-separated alternatives (`Bash` does not match `BashOutput`); anything else is an unanchored regular expression. An invalid regular expression skips its matcher group, which is a load failure for required managed hooks.

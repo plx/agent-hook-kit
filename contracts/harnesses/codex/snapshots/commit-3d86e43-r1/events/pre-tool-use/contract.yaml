@@ -1,0 +1,83 @@
+format_version: 1
+id: codex/commit-3d86e43-r1/PreToolUse
+harness: codex
+snapshot: commit-3d86e43-r1
+event:
+  wire_name: PreToolUse
+  rust_key: pre_tool_use
+  category: tool
+  identification:
+    inferability: definitive
+    discriminator: { json_pointer: /hook_event_name, const: PreToolUse }
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources: [codex-hooks-reference, codex-generated-schemas, codex-core-source]
+    assurance: { confidence: high, verification: source-reviewed }
+  outputs:
+    - id: command-response
+      file: output.command.schema.json
+      origin: derived
+      sources: [codex-hooks-reference, codex-generated-schemas, codex-hooks-source]
+      assurance: { confidence: high, verification: source-reviewed }
+bindings:
+  command:
+    kind: process
+    request: { channel: stdin, framing: single-document-at-eof, content_kind: json }
+    outcomes:
+      - id: no-op
+        effect: none
+        exit: { exact: 0 }
+        stdout: { presence: optional, role: none, content_kind: empty }
+        stderr: { presence: optional, role: ignored, content_kind: opaque }
+        sources: [codex-hooks-reference, codex-hooks-source]
+        assurance: { confidence: high, verification: source-reviewed }
+      - id: control
+        effect: control
+        exit: { exact: 0 }
+        stdout: { presence: required, role: protocol-value, content_kind: json }
+        stderr: { presence: optional, role: ignored, content_kind: opaque }
+        output_schema: command-response
+        sources: [codex-hooks-reference, codex-generated-schemas, codex-hooks-source]
+        assurance: { confidence: high, verification: source-reviewed }
+      - id: block-stderr
+        effect: deny
+        exit: { exact: 2 }
+        stdout: { presence: optional, role: ignored, content_kind: opaque }
+        stderr: { presence: required, role: agent-context, content_kind: text, encoding: utf-8 }
+        sources: [codex-hooks-reference, codex-hooks-source]
+        assurance: { confidence: high, verification: source-reviewed }
+      - id: failure
+        effect: nonblocking-error
+        exit: { range: { min: 1, max: 255 } }
+        stdout: { presence: optional, role: ignored, content_kind: opaque }
+        stderr: { presence: optional, role: ignored, content_kind: opaque }
+        sources: [codex-hooks-reference, codex-hooks-source]
+        assurance: { confidence: high, verification: source-reviewed }
+handler_kinds: [command, mcp_tool]
+fixtures: fixtures.yaml
+uncertainties:
+  - 'Since Codex 0.166.0 stdin `cwd` for a local `exec_command` (Bash) call is its resolved `workdir` (joined onto the selected environment''s cwd; an empty or absent `workdir` means that cwd), in native path form; other tools and remote-environment commands report the step''s local-environment cwd (falling back to the turn cwd). `exec_command` `tool_input` carries only `command`, so `cwd` is the only place the workdir appears. The hook process always starts in that step-local cwd, so stdin `cwd` and the process working directory can differ. A `workdir` or environment that does not resolve fails the call before PreToolUse runs. The hooks reference still says the session cwd. Since 0.156.0 `model` and `permission_mode` come from the step''s captured settings and can change within a turn.'
+  - 'Exit 2 selects the block-stderr outcome only when stderr is non-empty after trimming; exit 2 with empty or whitespace-only stderr is a failed run (failure outcome) and does not block the tool call.'
+  - '`permissionDecision: deny` needs a `permissionDecisionReason`, and legacy `decision: block` (honored only when hookSpecificOutput carries no permissionDecision, permissionDecisionReason, or updatedInput) needs a `reason`, each non-empty after trimming; otherwise Codex fails the synchronous run without blocking. The output schema adds both runtime rules.'
+  - 'The Draft 2020-12 root otherwise preserves the complete vendored output surface; contextual restrictions described by hook documentation are enforced by typed output constructors rather than by narrowing the catalog schema. `permissionDecision: ask`, legacy `decision: approve`, `allow` without `updatedInput`, `updatedInput` without `allow`, `permissionDecisionReason` without `permissionDecision`, a legacy `reason` without `decision`, and `continue: false`, `stopReason`, or `suppressOutput` (the ask, approve, and common-controls output examples) are parsed but fail the run; Codex reports the error and continues the tool call.'
+  - 'For Bash and apply_patch, `updatedInput` must include a string `command` field; for MCP and other local function tools it is the replacement arguments object (hooks reference).'
+  - 'Plain text on stdout is ignored at exit 0. A synchronous handler''s additionalContext is dropped when the rest of its output is invalid.'
+  - 'Since Codex 0.165.0 `updatedInput` may omit or repeat, but not change, the call''s target selectors: the tool-declared environment argument fields (such as `environment_id`), an MCP resource call''s `server` (trimmed, with a blank value treated as null), a terminal session''s `session_id`, and the `apply_patch` environment, plus since 0.170.0 an MCP call''s `environment_id` under environment-qualified exposure. A changed selector fails the tool call with the model-visible error `PreToolUse hook cannot change the tool environment (<field>)` (without the field for `apply_patch`) instead of failing the hook run, an omitted non-null selector is restored, and for such tools a non-object `updatedInput` fails with `expected an object for rewritten tool arguments`. A rewritten `apply_patch` must parse (`apply_patch verification failed: ...`). The schema cannot relate `updatedInput` to the input.'
+  - 'Since Codex 0.167.0 (`exec_command`; since 0.168.0 also `apply_patch`, `request_permissions`, and MCP calls) a direct Guardian review of a recorded tool call runs PreToolUse alone, inside a speculative turn with a fresh UUIDv7 `turn_id`. The call never executes, so no PermissionRequest or PostToolUse follows, and a block reaches the API caller instead of the model; aggregation keyed on `turn_id` must tolerate such an orphan PreToolUse.'
+  - 'In code mode, a block or deny (including exit 2 with non-blank stderr) rejects the nested tool promise before the tool runs, and `updatedInput` runs the rewritten call and resolves the promise with its result.'
+  - 'Canonical `tool_name` values: shell commands and unified exec (`exec_command`) report `Bash`; `apply_patch` also matches the `Edit` and `Write` matcher aliases and `spawn_agent` the `Agent` alias, but stdin keeps the canonical name. `write_stdin` never runs PreToolUse, and hosted tools such as WebSearch never run tool hooks.'
+  - 'A tool call bound to execution environments runs only those environments'' environment-scoped hooks, while an environment-agnostic call (one that may use every environment, or an MCP call without an owning environment) runs the tool hooks of every attached environment.'
+  - 'Model-visible `additionalContext` above the handler''s `additionalContextLimit` (default about 2,500 tokens; 0 disables spilling) is saved to `<temp_dir>/hook_outputs/<thread_id>/<uuid>.txt` and replaced by a head-and-tail preview with that path, or by a plain truncation when the file cannot be written. The directory is keyed by the hook registry''s thread id, not the `<session_id>` the hooks reference names, so subagent output spills separately.'
+  - 'Codex never reads stderr from a command that exits 0 for this event (only PreModelRequest and PostModelRequest surface exit-0 stderr), so exit-0 outcomes model stderr as ignored rather than as diagnostics.'
+  - 'For non-zero exits that do not select a blocking outcome Codex records only `hook exited with code N`, discards stderr, and continues (fail-open); a process that dies without an exit status is also a failed run.'
+  - 'Command handlers with `async: true` (Codex >= 0.148.0) run in the background: Codex ignores every control effect (decision, permissionDecision, updatedInput, PermissionRequest decisions, continue:false, stopReason, and exit 2), treats exit 2 as a plain failure, and delivers only additionalContext and systemMessage at the next safe point. The stdin payload carries no execution-mode marker, so these outcomes describe synchronous handlers.'
+  - 'Codex >= 0.148.0 also runs `mcp_tool` handlers, synchronously unless they are executor-scoped (those always run in the background and cannot apply control effects): Codex joins the tool result''s text content blocks with newlines and parses them like exit-0 stdout, `isError: true` fails the run, and `structuredContent` is ignored. Since 0.164.0 a hook call waits for its MCP server and may start a dormant one within the hook timeout; since 0.171.0 bundled App hooks must target the host Apps server, and the connector and current policy must allow automatic execution. `prompt` and `agent` handlers are parsed but skipped. Only the command binding is modeled.'
+  - 'Since Codex 0.149.0 locally executed command hooks receive a replay of the environment Codex captured when the session hook registry was created, not the live environment; since 0.155.0 they start in a new session without a controlling terminal and their timeout also covers stdin delivery. On timeout, I/O failure, or turn abort Codex SIGKILLs the hook''s whole process group.'
+  - 'Codex does not dispatch command hooks for Work threads that use cloud orchestration, even when tools execute locally; only admin-managed Global `mcp_tool` hooks run there, never environment-scoped hooks or SessionEnd MCP hooks. There a PreToolUse error, timeout, or malformed response can let the tool run.'
+  - 'Since Codex 0.165.0 managed hooks declared by an execution environment''s requirements (environment-scoped hooks) also run for this event. Codex rewrites their stdin without marking the scope: `cwd` becomes the environment''s cwd in its native form, and `transcript_path` (and `agent_transcript_path`, where present) becomes null even when the session has a transcript. They run on the environment''s executor through the exec server, in the environment''s shell (on Windows only PowerShell, which pipes the stdin line to the command, with its trailing newline and encoding unverified; cmd is rejected), under its `shell_environment_policy` without an environment replay, with the exec server''s credential scrub and no plugin variables; stdout and stderr are each silently capped at 1 MiB, and one deadline covers launch, stdin, and output.'
+  - 'Since Codex 0.164.0 a non-builtin plugin hook with a saved approval re-hashes its whole plugin bundle before every run (synchronous, background, or `mcp_tool`) unless `--dangerously-bypass-hook-trust` is set, and the scan counts against the hook timeout. A changed declaration or bundle content, a symlink or special entry (including a symlinked plugin root), a file that changes during the scan, or a scan timeout records a failed run with an error entry and no exit code, without launching the hook, and the operation continues (fail-open). The hooks reference says changed hooks are skipped until trusted, but at runtime they fail on every match.'
+  - 'A `matcher` that is omitted, `""`, or `"*"` matches every occurrence; one made only of ASCII letters, digits, `_`, and `|` matches exactly one of its `|`-separated alternatives (`Bash` does not match `BashOutput`); anything else is an unanchored regular expression. An invalid regular expression skips its matcher group, which is a load failure for required managed hooks.'
+  - 'The pinned source derives `permission_mode` only from the approval policy and sends only `default` or `bypassPermissions` (approval policy `never`); `acceptEdits`, `plan`, and `dontAsk` never occur, although the hooks reference and the generated schema list them, so the schema keeps the five-value superset and the value cannot reveal plan mode.'
+  - '`session_id` is the root session identity that every descendant thread shares (the hooks reference says the parent session id), so on a subagent thread it names the root session, not the subagent; `agent_id` identifies a thread-spawned subagent.'

@@ -1,0 +1,117 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - codex-hooks-reference
+      - codex-generated-schemas
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: none
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: empty
+        presence: optional
+        role: none
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: failure
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: compaction
+  identification:
+    discriminator:
+      const: PostCompact
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: post_compact
+  wire_name: PostCompact
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- mcp_tool
+harness: codex
+id: codex/commit-3d86e43-r1/PostCompact
+schemas:
+  input:
+    assurance:
+      confidence: high
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+  outputs:
+  - assurance:
+      confidence: high
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+snapshot: commit-3d86e43-r1
+uncertainties:
+- 'Plain text on stdout is ignored at exit 0. A synchronous `continue: false` takes effect after compaction has completed, so the compacted history is kept, and aborts the active turn, whether the compaction is manual or automatic; Codex reports the turn as interrupted, which on the main thread also dispatches Interrupt.'
+- The official generated schemas include parsed compatibility fields; runtime support restrictions from the hooks reference and pinned source remain controlling.
+- Codex never reads stderr from a command that exits 0 for this event (only PreModelRequest and PostModelRequest surface exit-0 stderr), so exit-0 outcomes model stderr as ignored rather than as diagnostics.
+- For non-zero exits Codex marks the run failed and reports the trimmed stderr (or `hook exited with code N` when stderr is blank) as the failure message; exit 2 has no special meaning and the operation continues.
+- 'Command handlers with `async: true` (Codex >= 0.148.0) run in the background: Codex ignores every control effect (decision, permissionDecision, updatedInput, PermissionRequest decisions, continue:false, stopReason, and exit 2), treats exit 2 as a plain failure, and delivers only additionalContext and systemMessage at the next safe point. The stdin payload carries no execution-mode marker, so these outcomes describe synchronous handlers.'
+- 'Codex >= 0.148.0 also runs `mcp_tool` handlers, synchronously unless they are executor-scoped (those always run in the background and cannot apply control effects): Codex joins the tool result''s text content blocks with newlines and parses them like exit-0 stdout, `isError: true` fails the run, and `structuredContent` is ignored. Since 0.164.0 a hook call waits for its MCP server and may start a dormant one within the hook timeout; since 0.171.0 bundled App hooks must target the host Apps server, and the connector and current policy must allow automatic execution. `prompt` and `agent` handlers are parsed but skipped. Only the command binding is modeled.'
+- Since Codex 0.149.0 locally executed command hooks receive a replay of the environment Codex captured when the session hook registry was created, not the live environment; since 0.155.0 they start in a new session without a controlling terminal and their timeout also covers stdin delivery. On timeout, I/O failure, or turn abort Codex SIGKILLs the hook's whole process group.
+- Codex does not dispatch command hooks for Work threads that use cloud orchestration, even when tools execute locally; only admin-managed Global `mcp_tool` hooks run there, never environment-scoped hooks or SessionEnd MCP hooks.
+- 'Since Codex 0.165.0 managed hooks declared by an execution environment''s requirements (environment-scoped hooks) also run for this event. Codex rewrites their stdin without marking the scope: `cwd` becomes the environment''s cwd in its native form, and `transcript_path` (and `agent_transcript_path`, where present) becomes null even when the session has a transcript. They run on the environment''s executor through the exec server, in the environment''s shell (on Windows only PowerShell, which pipes the stdin line to the command, with its trailing newline and encoding unverified; cmd is rejected), under its `shell_environment_policy` without an environment replay, with the exec server''s credential scrub and no plugin variables; stdout and stderr are each silently capped at 1 MiB, and one deadline covers launch, stdin, and output.'
+- Since Codex 0.164.0 a non-builtin plugin hook with a saved approval re-hashes its whole plugin bundle before every run (synchronous, background, or `mcp_tool`) unless `--dangerously-bypass-hook-trust` is set, and the scan counts against the hook timeout. A changed declaration or bundle content, a symlink or special entry (including a symlinked plugin root), a file that changes during the scan, or a scan timeout records a failed run with an error entry and no exit code, without launching the hook, and the operation continues (fail-open). The hooks reference says changed hooks are skipped until trusted, but at runtime they fail on every match.
+- A `matcher` that is omitted, `""`, or `"*"` matches every occurrence; one made only of ASCII letters, digits, `_`, and `|` matches exactly one of its `|`-separated alternatives (`Bash` does not match `BashOutput`); anything else is an unanchored regular expression. An invalid regular expression skips its matcher group, which is a load failure for required managed hooks.
+- '`session_id` is the root session identity that every descendant thread shares (the hooks reference says the parent session id), so on a subagent thread it names the root session, not the subagent; `agent_id` identifies a thread-spawned subagent.'

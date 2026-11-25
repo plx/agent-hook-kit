@@ -1,0 +1,116 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: WrongEvent
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: null
+      turn_id: turn-1
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-agent_id
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: SubagentStart
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: null
+      turn_id: turn-1
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: SubagentStart
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: null
+      turn_id: turn-1
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      agent_id: agent-1
+      agent_type: reviewer
+      cwd: /repo
+      hook_event_name: SubagentStart
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: /tmp/transcript.jsonl
+      turn_id: turn-1
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - codex-hooks-reference
+  - codex-generated-schemas
+  value:
+    hookSpecificOutput:
+      additionalContext: Review test conventions.
+      hookEventName: SubagentStart
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJSZXZpZXcgdGVzdCBjb252ZW50aW9ucy4iLCJob29rRXZlbnROYW1lIjoiU3ViYWdlbnRTdGFydCJ9fQ==
+  stdout_sha256: 89f7e34f3b0661c8ade55efaf7d8783e2ab14cfbabc15522f5581eff67320bb9
+- binding: command
+  exit_code: 0
+  id: no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: text-context
+  outcome: text-context
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vay1wcm92aWRlZCBkZXZlbG9wZXIgY29udGV4dC4=
+  stdout_sha256: 257968890493fe977d24259bbcfbaa99ba8f0dbd137766751454b0ec557e07fc
+- binding: command
+  exit_code: 2
+  id: exit-2-failure
+  outcome: failure
+  stderr_base64: aG9vayBmYWlsZWQK
+  stderr_sha256: 339e9a9a2a85233d852616e657d6b262da208ce3ef1e7c8c5fa32659916f0257
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 1
+  id: failure
+  outcome: failure
+  stderr_base64: aG9vayBmYWlsZWQK
+  stderr_sha256: 339e9a9a2a85233d852616e657d6b262da208ce3ef1e7c8c5fa32659916f0257
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

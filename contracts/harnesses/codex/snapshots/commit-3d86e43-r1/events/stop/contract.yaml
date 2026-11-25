@@ -1,0 +1,142 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - codex-hooks-reference
+      - codex-generated-schemas
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: none
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: empty
+        presence: optional
+        role: none
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: continue
+      exit:
+        exact: 2
+      id: exit-2
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: agent-context
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: high
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: failure
+      sources:
+      - codex-hooks-reference
+      - codex-hooks-source
+      stderr:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: turn
+  identification:
+    discriminator:
+      const: Stop
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: stop
+  wire_name: Stop
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- mcp_tool
+harness: codex
+id: codex/commit-3d86e43-r1/Stop
+schemas:
+  input:
+    assurance:
+      confidence: high
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    - codex-core-source
+  outputs:
+  - assurance:
+      confidence: high
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    - codex-hooks-source
+snapshot: commit-3d86e43-r1
+uncertainties:
+- Synchronous handlers must write JSON or nothing at exit 0; plain text fails the run.
+- Exit 2 selects the exit-2 outcome only when stderr is non-empty after trimming; exit 2 with empty or whitespace-only stderr is a failed run (failure outcome) and has no blocking effect.
+- '`decision: block` requires a `reason` that is non-empty after trimming unless `continue: false` takes precedence; otherwise Codex fails the synchronous run without blocking. The output schema adds this runtime rule, which the generated schema does not express.'
+- Since Codex 0.150.0 managed-source Stop hooks (system, MDM, cloud, and legacy managed configuration, and since 0.165.0 environment-scoped managed hooks) also fire for internal memory-consolidation turns with an ordinary Stop payload; user, project, session-flag, and plugin Stop hooks do not, and a block there ends the memory worker with an error instead of continuing.
+- The pinned core source dispatches Interrupt, not Stop, from the path that aborts an interrupted turn; this has not been live-observed.
+- Codex ignores any configured `matcher` for this event.
+- A block reason that becomes a continuation prompt spills like `additionalContext` (saved to `<temp_dir>/hook_outputs/<thread_id>/<uuid>.txt` behind a head-and-tail preview) above the default limit of about 2,500 tokens; `additionalContextLimit` does not apply to this event, and Codex warns and ignores it.
+- The official generated schemas include parsed compatibility fields; runtime support restrictions from the hooks reference and pinned source remain controlling.
+- Codex never reads stderr from a command that exits 0 for this event (only PreModelRequest and PostModelRequest surface exit-0 stderr), so exit-0 outcomes model stderr as ignored rather than as diagnostics.
+- For non-zero exits that do not select a blocking outcome Codex records only `hook exited with code N`, discards stderr, and continues (fail-open); a process that dies without an exit status is also a failed run.
+- 'Command handlers with `async: true` (Codex >= 0.148.0) run in the background: Codex ignores every control effect (decision, permissionDecision, updatedInput, PermissionRequest decisions, continue:false, stopReason, and exit 2), treats exit 2 as a plain failure, and delivers only additionalContext and systemMessage at the next safe point. The stdin payload carries no execution-mode marker, so these outcomes describe synchronous handlers.'
+- 'Codex >= 0.148.0 also runs `mcp_tool` handlers, synchronously unless they are executor-scoped (those always run in the background and cannot apply control effects): Codex joins the tool result''s text content blocks with newlines and parses them like exit-0 stdout, `isError: true` fails the run, and `structuredContent` is ignored. Since 0.164.0 a hook call waits for its MCP server and may start a dormant one within the hook timeout; since 0.171.0 bundled App hooks must target the host Apps server, and the connector and current policy must allow automatic execution. `prompt` and `agent` handlers are parsed but skipped. Only the command binding is modeled.'
+- Since Codex 0.149.0 locally executed command hooks receive a replay of the environment Codex captured when the session hook registry was created, not the live environment; since 0.155.0 they start in a new session without a controlling terminal and their timeout also covers stdin delivery. On timeout, I/O failure, or turn abort Codex SIGKILLs the hook's whole process group.
+- Codex does not dispatch command hooks for Work threads that use cloud orchestration, even when tools execute locally; only admin-managed Global `mcp_tool` hooks run there, never environment-scoped hooks or SessionEnd MCP hooks.
+- 'Since Codex 0.165.0 managed hooks declared by an execution environment''s requirements (environment-scoped hooks) also run for this event. Codex rewrites their stdin without marking the scope: `cwd` becomes the environment''s cwd in its native form, and `transcript_path` (and `agent_transcript_path`, where present) becomes null even when the session has a transcript. They run on the environment''s executor through the exec server, in the environment''s shell (on Windows only PowerShell, which pipes the stdin line to the command, with its trailing newline and encoding unverified; cmd is rejected), under its `shell_environment_policy` without an environment replay, with the exec server''s credential scrub and no plugin variables; stdout and stderr are each silently capped at 1 MiB, and one deadline covers launch, stdin, and output.'
+- Since Codex 0.164.0 a non-builtin plugin hook with a saved approval re-hashes its whole plugin bundle before every run (synchronous, background, or `mcp_tool`) unless `--dangerously-bypass-hook-trust` is set, and the scan counts against the hook timeout. A changed declaration or bundle content, a symlink or special entry (including a symlinked plugin root), a file that changes during the scan, or a scan timeout records a failed run with an error entry and no exit code, without launching the hook, and the operation continues (fail-open). The hooks reference says changed hooks are skipped until trusted, but at runtime they fail on every match.
+- The pinned source derives `permission_mode` only from the approval policy and sends only `default` or `bypassPermissions` (approval policy `never`); `acceptEdits`, `plan`, and `dontAsk` never occur, although the hooks reference and the generated schema list them, so the schema keeps the five-value superset and the value cannot reveal plan mode.

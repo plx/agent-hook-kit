@@ -1,0 +1,119 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: null
+      turn_id: turn-1
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-turn_id
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: Interrupt
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: null
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: Interrupt
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: null
+      turn_id: turn-1
+  - id: representative
+    origin: synthesized
+    sources:
+    - codex-hooks-reference
+    - codex-generated-schemas
+    value:
+      cwd: /repo
+      hook_event_name: Interrupt
+      model: gpt-test
+      permission_mode: default
+      session_id: session-1
+      transcript_path: /tmp/transcript.jsonl
+      turn_id: turn-1
+output:
+- id: structured
+  origin: official
+  schema: command-response
+  sources:
+  - codex-hooks-reference
+  value:
+    systemMessage: Saved the interrupted turn to the local audit log.
+output_negative:
+- expected_keyword: additionalProperties
+  expected_pointer: ''
+  id: universal-continue
+  origin: regression
+  schema: command-response
+  sources:
+  - codex-generated-schemas
+  - codex-hooks-source
+  value:
+    continue: true
+- expected_keyword: additionalProperties
+  expected_pointer: ''
+  id: decision-block
+  origin: regression
+  schema: command-response
+  sources:
+  - codex-generated-schemas
+  - codex-hooks-source
+  value:
+    decision: block
+    reason: Keep going.
+process:
+- binding: command
+  exit_code: 0
+  id: structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiU2F2ZWQgdGhlIGludGVycnVwdGVkIHR1cm4gdG8gdGhlIGxvY2FsIGF1ZGl0IGxvZy4ifQ==
+  stdout_sha256: 7de8938e586ca3b2bcfca651cb3b85e44a1c472dbd76358de0820d82d08e2e25
+- binding: command
+  exit_code: 0
+  id: no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: exit-2-failure
+  outcome: failure
+  stderr_base64: aG9vayBmYWlsZWQK
+  stderr_sha256: 339e9a9a2a85233d852616e657d6b262da208ce3ef1e7c8c5fa32659916f0257
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 1
+  id: failure
+  outcome: failure
+  stderr_base64: aG9vayBmYWlsZWQK
+  stderr_sha256: 339e9a9a2a85233d852616e657d6b262da208ce3ef1e7c8c5fa32659916f0257
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
