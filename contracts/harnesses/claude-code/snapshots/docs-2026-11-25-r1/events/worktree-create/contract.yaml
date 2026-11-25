@@ -170,7 +170,7 @@ bindings:
       effect: fail
       exit:
         range:
-          min: 400
+          min: 300
           max: 599
       stdout:
         presence: optional
@@ -198,7 +198,7 @@ uncertainties:
 - Configuring the hook replaces the default git worktree behavior, so .worktreeinclude is not processed.
 - WorktreeCreate runs when a session starts with claude --worktree, when Claude creates and enters a worktree with EnterWorktree, for a subagent with isolation worktree, and, newly listed by the reference with no version, when a workflow runs an agent in its own worktree, when Claude Code isolates a background session in its own worktree, and when claude remote-control in worktree mode starts a session. A hook-created worktree for a subagent or workflow agent is kept when the agent finishes, with no WorktreeRemove.
 - A plugin's WorktreeCreate hook runs with --worktree only since Claude Code v2.1.300 and still does not run when Claude Code is launched with --worktree and --tmux, because the worktree is created before plugins load; a plugin hook's seed-directory case was fixed in 2.1.325 (changelog only). A WorktreeCreate hook never runs for git worktree add through Bash.
-- The HTTP outcomes cover a non-2xx status and a 2xx response that yields no worktreePath (missing-path); the reference does not say whether a 2xx JSON object that carries worktreePath but otherwise fails the output schema also fails creation, so no schema-invalid-body outcome is cataloged. An HTTP connection failure has no status and a timeout cancels the hook; both are failures here, and how Claude Code handles a 3xx status is undocumented.
+- The HTTP outcomes cover a non-2xx status and a 2xx response that yields no worktreePath (missing-path); the reference does not say whether a 2xx JSON object that carries worktreePath but otherwise fails the output schema also fails creation, so no schema-invalid-body outcome is cataloged. An HTTP connection failure has no status and a timeout cancels the hook; both are failures here. Any non-2xx status is a failure, so failed covers 300-599; whether Claude Code follows a redirect before it judges the status is undocumented.
 - 'The outcomes describe onFailure unset or continue. onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later) makes a failure do what exit code 2 does on this event, and any nonzero exit or other failure already fails worktree creation, so no modeled outcome changes and no on-failure-block binding is cataloged.'
 - These bindings model synchronous command hooks; a command hook that sets async or asyncRewake cannot return the worktree path, and onFailure and terminalSequence do not apply to it.
 - A hook that isn't async and leaves a background process holding its stdout or stderr takes up to 10 seconds to finish after its own process exits, and output printed after Claude Code stops reading is discarded; whether the PreToolUse suspect-capture block applies on this event is unknown.

@@ -322,6 +322,14 @@ process:
   stdout_base64: ''
   stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 - binding: command-on-failure-block
+  exit_code: 2
+  id: command-on-failure-block-exit-2-structured
+  outcome: exit-2-structured
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJHZW5lcmF0ZWQgZmlsZXMgY2hhbmdlZC4iLCJob29rRXZlbnROYW1lIjoiUG9zdFRvb2xVc2UifX0=
+  stdout_sha256: 647a207f66e143daaea2c4ae25f8c5756e8ecc5aca082d5363ae83db7bde4ab8
+- binding: command-on-failure-block
   exit_code: 1
   id: command-on-failure-block-nonzero-structured
   outcome: failure-blocked

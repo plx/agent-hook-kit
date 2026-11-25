@@ -663,11 +663,32 @@ fn claude_permission_request_fails_closed_with_a_json_deny() {
     // Claude's gating events deny with exit 2.
     let gate = spawn(
         "dispatch-claude-fail-closed",
-        br#"{"hook_event_name":"UserPromptSubmit"}"#,
+        br#"{"hook_event_name":"PreSkillShellCommand"}"#,
         &[],
     );
     assert_eq!(gate.code, Some(2), "{:?}", gate.stderr);
     assert_eq!(gate.stdout, "");
+    assert!(
+        gate.stderr
+            .contains("claude-code/PreSkillShellCommand failed")
+    );
+
+    // UserPromptSubmit also prints a JSON block, so a plugin hook's exit 2 is
+    // not downgraded when the diagnostic says a file is missing.
+    let gate = spawn(
+        "dispatch-claude-fail-closed",
+        br#"{"hook_event_name":"UserPromptSubmit"}"#,
+        &[],
+    );
+    assert_eq!(gate.code, Some(2), "{:?}", gate.stderr);
+    let output = json(&gate.stdout);
+    assert_eq!(output["decision"], "block");
+    assert!(
+        output["reason"]
+            .as_str()
+            .unwrap()
+            .contains("claude-code/UserPromptSubmit failed")
+    );
     assert!(gate.stderr.contains("claude-code/UserPromptSubmit failed"));
 
     // Blocking a Claude Stop would keep the agent working, so it stays

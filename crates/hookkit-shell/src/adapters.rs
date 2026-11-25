@@ -13,8 +13,28 @@ use crate::call::{ShellToolCallExt, ShellToolCallMatch, ShellToolProfile, ToolPh
 /// The hook event `cwd` is the command's working directory. The dialect is
 /// [`ShellDialect::Unknown`](crate::ShellDialect::Unknown) because the Bash
 /// tool runs the user's shell (zsh by default on macOS).
+///
+/// In a Code Mode session (Claude Code 2.1.323 or later) a shell command that
+/// Claude's code runs can arrive prefixed with `cd '<dir>' && `. The analyzer
+/// does not resolve relative operands after such a `cd` against the hook
+/// `cwd`; it reports them as unresolved
+/// ([`UnresolvedFileAccessReason::WorkingDirectoryMayHaveChanged`](crate::UnresolvedFileAccessReason::WorkingDirectoryMayHaveChanged)). A Bash matcher also fires for shell commands Claude
+/// starts with the Monitor tool (Claude Code v2.1.314 or later), delivered as
+/// a Bash-shaped call with no matching `PostToolUse`; see
+/// [`CLAUDE_MONITOR_PROFILE`] for the Monitor tool's own calls.
 pub const CLAUDE_BASH_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("Bash", "/command", None, true);
+#[cfg(feature = "claude")]
+/// Exact Claude Code `Monitor` tool profile (Claude Code v2.1.314 or later).
+///
+/// A Monitor call watches the output of a shell command it starts
+/// (`tool_input.command`, run in the user's shell like `Bash`) or a
+/// WebSocket (`tool_input.ws`). Only the command form is a shell call; a
+/// WebSocket watch reports [`ShellToolCallMatch::NotShell`]. A hook that
+/// rewrites a Monitor call must keep its `description` and `timeout_ms`,
+/// because `updatedInput` replaces the whole input.
+pub const CLAUDE_MONITOR_PROFILE: ShellToolProfile =
+    ShellToolProfile::builtin("Monitor", "/command", None, true);
 #[cfg(feature = "codex")]
 /// Exact Codex `Bash` tool profile.
 ///
@@ -36,6 +56,25 @@ pub const CODEX_BASH_PROFILE: ShellToolProfile =
 pub const ANTIGRAVITY_RUN_COMMAND_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("run_command", "/CommandLine", Some("/Cwd"), true);
 
+/// The Claude Code profile for `tool_name`: `Bash`, or `Monitor` when it runs
+/// a command. A Monitor WebSocket watch (`ws`, no `command`) runs no shell
+/// command.
+#[cfg(feature = "claude")]
+fn claude_shell_profile(
+    tool_name: &str,
+    tool_input: Option<&serde_json::Value>,
+) -> Option<ShellToolProfile> {
+    if tool_name == CLAUDE_BASH_PROFILE.tool_name() {
+        Some(CLAUDE_BASH_PROFILE)
+    } else if tool_name == CLAUDE_MONITOR_PROFILE.tool_name()
+        && tool_input.is_some_and(|input| input.get("command").is_some())
+    {
+        Some(CLAUDE_MONITOR_PROFILE)
+    } else {
+        None
+    }
+}
+
 /// Claude Code tool events whose input carries `tool_name` and `tool_input`.
 #[cfg(feature = "claude")]
 fn claude_tool_event(name: &str) -> Option<(&'static str, ToolPhase, Option<&'static str>)> {
@@ -53,9 +92,10 @@ fn claude_tool_event(name: &str) -> Option<(&'static str, ToolPhase, Option<&'st
 
 #[cfg(feature = "claude")]
 impl ShellToolCallExt for hookkit_claude::catalog::CatalogInput {
-    /// Matches the `Bash` tool on `PreToolUse`, `PermissionRequest`,
-    /// `PermissionDenied`, `PostToolUse`, and `PostToolUseFailure`; other
-    /// events return [`ShellToolCallMatch::UnsupportedEvent`].
+    /// Matches the `Bash` tool, and the `Monitor` tool when it runs a
+    /// command, on `PreToolUse`, `PermissionRequest`, `PermissionDenied`,
+    /// `PostToolUse`, and `PostToolUseFailure`; other events return
+    /// [`ShellToolCallMatch::UnsupportedEvent`].
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
         let Some((event_name, phase, response_field)) = claude_tool_event(&self.hook_event_name)
         else {
@@ -64,18 +104,18 @@ impl ShellToolCallExt for hookkit_claude::catalog::CatalogInput {
         let Some(tool_name) = self.field("tool_name").and_then(serde_json::Value::as_str) else {
             return ShellToolCallMatch::NotShell;
         };
-        if tool_name != CLAUDE_BASH_PROFILE.tool_name() {
+        let Some(profile) = claude_shell_profile(tool_name, self.field("tool_input")) else {
             return ShellToolCallMatch::NotShell;
-        }
+        };
         let event = EventId::builtin(HarnessId::CLAUDE_CODE, event_name);
         let Some(tool_input) = self.field("tool_input") else {
             return ShellToolCallMatch::Malformed(ShellToolCallError::missing_command(
                 event,
                 tool_name,
-                CLAUDE_BASH_PROFILE.command_pointer(),
+                profile.command_pointer(),
             ));
         };
-        CLAUDE_BASH_PROFILE.extract_from_value(
+        profile.extract_from_value(
             event,
             phase,
             tool_name,
@@ -88,8 +128,13 @@ impl ShellToolCallExt for hookkit_claude::catalog::CatalogInput {
 
 #[cfg(feature = "claude")]
 impl ShellToolCallExt for hookkit_claude::protocol::PostToolUseInput {
+    /// Matches the `Bash` tool, and the `Monitor` tool when it runs a
+    /// command.
     fn shell_tool_call(&self) -> ShellToolCallMatch<'_> {
-        CLAUDE_BASH_PROFILE.extract_from_value(
+        let Some(profile) = claude_shell_profile(&self.tool_name, Some(&self.tool_input)) else {
+            return ShellToolCallMatch::NotShell;
+        };
+        profile.extract_from_value(
             EventId::builtin(HarnessId::CLAUDE_CODE, "PostToolUse"),
             ToolPhase::Post,
             &self.tool_name,
@@ -218,6 +263,109 @@ mod tests {
             claude_catalog("Stop").shell_tool_call(),
             ShellToolCallMatch::UnsupportedEvent
         ));
+    }
+
+    #[cfg(feature = "claude")]
+    fn claude_tool_call(
+        tool_name: &str,
+        tool_input: serde_json::Value,
+    ) -> hookkit_claude::catalog::CatalogInput {
+        serde_json::from_value(serde_json::json!({
+            "session_id": "session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/repo",
+            "hook_event_name": "PreToolUse",
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "tool_use_id": "toolu_1"
+        }))
+        .unwrap()
+    }
+
+    #[cfg(feature = "claude")]
+    #[test]
+    fn claude_monitor_commands_are_shell_calls_and_websocket_watches_are_not() {
+        let command = claude_tool_call(
+            "Monitor",
+            serde_json::json!({
+                "description": "watch app log",
+                "timeout_ms": 300000,
+                "command": "tail -f app.log"
+            }),
+        );
+        let ShellToolCallMatch::Matched(call) = command.shell_tool_call() else {
+            panic!("expected a shell call");
+        };
+        assert_eq!(call.tool_name, "Monitor");
+        assert_eq!(call.command, "tail -f app.log");
+        assert_eq!(call.cwd, Some(hookkit_core::Utf8Path::new("/repo")));
+
+        let websocket = claude_tool_call(
+            "Monitor",
+            serde_json::json!({
+                "description": "ws",
+                "timeout_ms": 60000,
+                "ws": {"url": "wss://example.test/feed"}
+            }),
+        );
+        assert!(matches!(
+            websocket.shell_tool_call(),
+            ShellToolCallMatch::NotShell
+        ));
+
+        let malformed = claude_tool_call(
+            "Monitor",
+            serde_json::json!({"description": "x", "timeout_ms": 1, "command": 7}),
+        );
+        assert!(matches!(
+            malformed.shell_tool_call(),
+            ShellToolCallMatch::Malformed(_)
+        ));
+    }
+
+    #[cfg(feature = "claude")]
+    #[test]
+    fn claude_powershell_calls_do_not_match_the_bash_profile() {
+        let input = claude_tool_call(
+            "PowerShell",
+            serde_json::json!({"command": "Get-ChildItem -Recurse"}),
+        );
+        assert!(matches!(
+            input.shell_tool_call(),
+            ShellToolCallMatch::NotShell
+        ));
+    }
+
+    #[cfg(feature = "claude")]
+    #[test]
+    fn claude_code_mode_cd_prefix_leaves_relative_operands_unresolved() {
+        // Code Mode prefixes a shell command from Claude's code with
+        // `cd '<dir>' && `, so a relative operand is not under the hook cwd.
+        let input = claude_tool_call(
+            "Bash",
+            serde_json::json!({"command": "cd 'app' && rm -f out.txt"}),
+        );
+        let ShellToolCallMatch::Matched(call) = input.shell_tool_call() else {
+            panic!("expected a shell call");
+        };
+        let report = crate::FileAccessAnalyzer::default().infer(
+            &crate::BashAnalyzer::default().analyze(call.command),
+            crate::FileInferenceContext::for_call(&call),
+        );
+        assert!(
+            report.candidates.iter().all(|candidate| !matches!(
+                &candidate.target,
+                crate::FileTarget::Path { expression, .. }
+                    if expression.resolved.as_deref()
+                        == Some(hookkit_core::Utf8Path::new("/repo/out.txt"))
+            )),
+            "{report:?}"
+        );
+        assert!(
+            report.unresolved.iter().any(|gap| gap.reason
+                == crate::UnresolvedFileAccessReason::WorkingDirectoryMayHaveChanged),
+            "{report:?}"
+        );
     }
 
     #[cfg(feature = "codex")]

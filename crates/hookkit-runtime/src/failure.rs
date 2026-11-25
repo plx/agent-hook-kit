@@ -14,11 +14,36 @@
 //!   most events the pending action proceeds: a policy hook fails open. Claude
 //!   Code `WorktreeCreate` and `WorktreeRemove` are the exception: any
 //!   non-zero exit fails worktree creation, or removal while the directory
-//!   remains.
+//!   remains. This describes a Claude Code hook whose `onFailure` setting is
+//!   unset or `continue`; see below.
 //! - [`FailurePolicy::FailClosed`] emits the harness's native blocking
 //!   response for events that gate a pending action, so a policy hook that
 //!   cannot decide denies instead. See [`failure_response`] for the exact
 //!   per-harness lowering.
+//!
+//! # Claude Code `onFailure`
+//!
+//! Claude Code (v2.1.295 or later) lets each hook entry set `"onFailure":
+//! "block"`. A failure of such a hook, including the exit 1 above, does what
+//! exit 2 does on the event, and on `PermissionRequest` it denies; `Stop`,
+//! `SubagentStop`, `TaskCompleted`, and `TeammateIdle` ignore the setting.
+//! On Windows without Git Bash a shell-form `PreToolUse`, `PermissionRequest`,
+//! or `PreSkillShellCommand` command hook's failure blocks even with the
+//! setting unset. [`FailureResponse::fails_closed`] cannot see the setting,
+//! so it is a lower bound. Only the harness can fail closed when the hook
+//! binary is missing, times out, or aborts (for example with
+//! `panic = "abort"`), so register a policy hook in exec form (`"args": []`)
+//! with `"onFailure": "block"` as well as running it under
+//! [`FailurePolicy::FailClosed`].
+//!
+//! # Child processes
+//!
+//! A handler that spawns a child process must not let it inherit the hook's
+//! stdout or stderr. Claude Code waits up to 10 seconds for a hook's stdio to
+//! close after the hook exits, discards what is printed after it stops
+//! reading, and blocks a `PreToolUse` call when an allow was followed by a
+//! background process that kept the pipes open. Redirect or null the child's
+//! stdio, as the bundled tool runners do.
 //!
 //! The runners lower a failure for the event the harness actually sent: the
 //! event the runner resolved, else the one the payload's discriminator
@@ -78,7 +103,8 @@ pub enum FailurePolicy {
     /// most events the pending action proceeds and the user sees a hook-error
     /// notice. Use it for observers, telemetry, and feedback hooks, where
     /// blocking the agent because the hook itself broke would do more harm
-    /// than good.
+    /// than good. A Claude Code hook registered with `"onFailure": "block"`
+    /// still blocks on this exit (see the [module documentation](self)).
     ///
     /// Claude Code `WorktreeCreate` and `WorktreeRemove` have no non-blocking
     /// failure: any non-zero exit aborts worktree creation, and fails worktree
@@ -91,7 +117,9 @@ pub enum FailurePolicy {
     ///
     /// Claude Code and Codex exit 2 with the diagnostic on stderr, except
     /// that Claude Code `PermissionRequest`, which ignores exit 2, receives a
-    /// JSON `deny` decision. Antigravity logs and ignores a non-zero exit
+    /// JSON `deny` decision, and Claude Code `UserPromptSubmit` also prints a
+    /// JSON `block` decision so a plugin hook's missing-file diagnostic is
+    /// not downgraded to a non-blocking error. Antigravity logs and ignores a non-zero exit
     /// (fail-open), so a `PreToolUse` receives a JSON `deny` decision and a
     /// `PreInvocation` a JSON prompt block on stdout at exit 0. Events that
     /// gate nothing (observers, and turn-completion events where blocking
@@ -202,6 +230,11 @@ impl FailureResponse {
     /// This is true for every [`FailurePolicy::FailClosed`] lowering that
     /// blocks, and also for the [`FailurePolicy::NonBlocking`] exit 1 on the
     /// Claude Code worktree events, which any non-zero exit fails.
+    ///
+    /// It is a lower bound for Claude Code: a hook registered with
+    /// `"onFailure": "block"`, or a shell-form `PreToolUse`,
+    /// `PermissionRequest`, or `PreSkillShellCommand` hook on Windows without
+    /// Git Bash, also blocks on the non-blocking exit 1.
     pub fn fails_closed(&self) -> bool {
         self.fails_closed
     }
@@ -233,6 +266,11 @@ enum FailClosedLowering {
     ExitTwo,
     /// Claude Code `PermissionRequest` JSON `deny` decision at exit 0.
     ClaudePermissionDeny,
+    /// Claude Code `UserPromptSubmit`: exit 2 with the diagnostic on stderr
+    /// and a JSON `block` decision on stdout. Non-empty stdout keeps Claude
+    /// Code from downgrading a plugin hook's exit 2 to a non-blocking error
+    /// when the diagnostic says a file is missing.
+    ClaudePromptBlock,
     /// Antigravity JSON `{"decision":"deny"}` at exit 0.
     AntigravityDeny,
     /// Antigravity `PreInvocation` JSON prompt block at exit 0: an
@@ -252,6 +290,7 @@ enum FailClosedLowering {
 /// they gate nothing.
 const CLAUDE_EXIT_TWO_GATES: &[&str] = &[
     "PreToolUse",
+    "PreSkillShellCommand",
     "UserPromptSubmit",
     "UserPromptExpansion",
     "PostToolBatch",
@@ -300,6 +339,7 @@ fn fail_closed_lowering(harness: &HarnessId, event: Option<&EventId>) -> FailClo
         BuiltinHarness::ClaudeCode => match event {
             None => FailClosedLowering::ExitTwo,
             Some("PermissionRequest") => FailClosedLowering::ClaudePermissionDeny,
+            Some("UserPromptSubmit") => FailClosedLowering::ClaudePromptBlock,
             Some(name) if CLAUDE_EXIT_TWO_GATES.contains(&name) => FailClosedLowering::ExitTwo,
             Some(_) => FailClosedLowering::NotGating,
         },
@@ -337,12 +377,14 @@ fn nonzero_exit_blocks(harness: &HarnessId, event: Option<&EventId>) -> bool {
 /// stdout for every harness. Claude Code and Codex proceed with the pending
 /// action, except that Claude Code fails `WorktreeCreate`, and
 /// `WorktreeRemove` while the directory remains, on any non-zero exit
-/// ([`FailureResponse::fails_closed`] is then true). Under
-/// [`FailurePolicy::FailClosed`]:
+/// ([`FailureResponse::fails_closed`] is then true), and blocks on a hook
+/// registered with `"onFailure": "block"` (see the
+/// [module documentation](self)). Under [`FailurePolicy::FailClosed`]:
 ///
 /// | Harness | Event | Response |
 /// | :- | :- | :- |
-/// | Claude Code | `PreToolUse`, `UserPromptSubmit`, `UserPromptExpansion`, `PostToolBatch`, `PreCompact`, `PreModelSwitch`, `ConfigChange`, `Elicitation`, `ElicitationResult`, `TaskCreated`, `WorktreeCreate`, `WorktreeRemove` | exit 2, diagnostic on stderr |
+/// | Claude Code | `PreToolUse`, `PreSkillShellCommand`, `UserPromptExpansion`, `PostToolBatch`, `PreCompact`, `PreModelSwitch`, `ConfigChange`, `Elicitation`, `ElicitationResult`, `TaskCreated`, `WorktreeCreate`, `WorktreeRemove` | exit 2, diagnostic on stderr |
+/// | Claude Code | `UserPromptSubmit` | exit 2, diagnostic on stderr, `{"decision":"block","reason":…}` on stdout |
 /// | Claude Code | `PermissionRequest` (ignores exit 2) | exit 0, `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":…}}}` |
 /// | Codex | `PreToolUse`, `PermissionRequest`, `UserPromptSubmit` | exit 2, diagnostic on stderr |
 /// | Antigravity | `PreToolUse` | exit 0, `{"decision":"deny","reason":…}` |
@@ -377,6 +419,17 @@ fn nonzero_exit_blocks(harness: &HarnessId, event: Option<&EventId>) -> bool {
 /// note mentions it, so a build that does not honor it lets the prompt reach
 /// the model.
 ///
+/// Claude Code treats exit 2 with empty stdout and a stderr that says a file
+/// is missing (such as a Rust `NotFound` error's `No such file or directory`)
+/// as a non-blocking error on `Stop`, `SubagentStop`, `TaskCompleted`, and a
+/// plugin's `UserPromptSubmit`. The first three gate nothing here, and the
+/// `UserPromptSubmit` lowering prints its JSON block so the rule never
+/// applies to it.
+///
+/// Claude Code `PreSkillShellCommand` (v2.1.332 or later) gates an injected
+/// command that runs while a skill loads; exit 2 keeps that one command from
+/// running while the skill still loads.
+///
 /// Claude Code `PreCompact` is a gate: blocking an automatic compaction that
 /// Claude Code triggered to recover from a context-limit error makes that
 /// error surface and fails the current request, so fail closed on it only
@@ -408,6 +461,14 @@ pub fn failure_response(
         FailClosedLowering::NotGating => non_blocking(stderr),
         FailClosedLowering::ExitTwo => FailureResponse {
             stdout: Vec::new(),
+            stderr: format!("{reason}\n").into_bytes(),
+            exit_code: 2,
+            fails_closed: true,
+        },
+        FailClosedLowering::ClaudePromptBlock => FailureResponse {
+            stdout: serde_json::json!({"decision": "block", "reason": reason})
+                .to_string()
+                .into_bytes(),
             stderr: format!("{reason}\n").into_bytes(),
             exit_code: 2,
             fails_closed: true,
@@ -605,10 +666,94 @@ mod tests {
             let response =
                 failure_response(FailurePolicy::FailClosed, &harness, Some(&gate), "boom");
             assert_eq!(response.exit_code(), 2, "{gate}");
-            assert!(response.stdout().is_empty(), "{gate}");
+            if harness == HarnessId::CLAUDE_CODE && name == "UserPromptSubmit" {
+                // Covered by `claude_prompt_gate_prints_a_block_decision`.
+                assert!(!response.stdout().is_empty(), "{gate}");
+            } else {
+                assert!(response.stdout().is_empty(), "{gate}");
+            }
             assert_eq!(response.stderr(), b"boom\n", "{gate}");
             assert!(response.fails_closed(), "{gate}");
         }
+    }
+
+    #[test]
+    fn claude_prompt_gate_prints_a_block_decision() {
+        // Claude Code downgrades a plugin UserPromptSubmit hook's exit 2 with
+        // empty stdout and a missing-file stderr to a non-blocking error; a
+        // failed open on Unix displays exactly such text.
+        let not_found = if cfg!(unix) {
+            std::io::Error::from_raw_os_error(2).to_string()
+        } else {
+            "No such file or directory (os error 2)".to_owned()
+        };
+        assert_eq!(
+            std::io::Error::from_raw_os_error(2).kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(
+            not_found.to_lowercase().contains("no such file"),
+            "{not_found}"
+        );
+        let diagnostic = format!("hookkit: guard UserPromptSubmit failed: {not_found}");
+        let gate = event(HarnessId::CLAUDE_CODE, "UserPromptSubmit");
+        let response = failure_response(
+            FailurePolicy::FailClosed,
+            &HarnessId::CLAUDE_CODE,
+            Some(&gate),
+            &diagnostic,
+        );
+        assert_eq!(response.exit_code(), 2);
+        assert!(response.fails_closed());
+        assert_eq!(response.stderr(), format!("{diagnostic}\n").as_bytes());
+        let json: serde_json::Value = serde_json::from_slice(response.stdout()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"decision": "block", "reason": diagnostic})
+        );
+        // It is exactly what the native block constructor emits, so it
+        // satisfies the event's output schema.
+        assert_eq!(
+            response.stdout(),
+            <hookkit_claude::events::UserPromptSubmit as hookkit_core::EventSpec>::emit(
+                hookkit_claude::events::UserPromptSubmitOutput::block(diagnostic.clone())
+            )
+            .unwrap()
+            .stdout()
+        );
+        // The non-blocking policy is unchanged.
+        let response = failure_response(
+            FailurePolicy::NonBlocking,
+            &HarnessId::CLAUDE_CODE,
+            Some(&gate),
+            &diagnostic,
+        );
+        assert_eq!(response.exit_code(), 1);
+        assert!(response.stdout().is_empty());
+    }
+
+    #[test]
+    fn claude_skill_shell_command_gate_fails_closed() {
+        // Before PreSkillShellCommand was a gate, a fail-closed guard on it
+        // exited 1 and the injected command ran.
+        let gate = event(HarnessId::CLAUDE_CODE, "PreSkillShellCommand");
+        let response = failure_response(
+            FailurePolicy::FailClosed,
+            &HarnessId::CLAUDE_CODE,
+            Some(&gate),
+            "boom",
+        );
+        assert_eq!(response.exit_code(), 2);
+        assert!(response.stdout().is_empty());
+        assert!(response.fails_closed());
+        let response = failure_response(
+            FailurePolicy::NonBlocking,
+            &HarnessId::CLAUDE_CODE,
+            Some(&gate),
+            "boom",
+        );
+        assert_eq!(response.exit_code(), 1);
+        assert!(!response.fails_closed());
     }
 
     #[test]
@@ -898,15 +1043,30 @@ mod tests {
         }
     }
 
-    /// Derives, from `harness`'s registry-selected snapshot, the events whose
-    /// unstructured response at `code` (empty stdout, the diagnostic on
-    /// stderr) refuses the pending action.
+    /// The snapshot whose events the runtime lowers for `harness`.
+    ///
+    /// For Claude Code that is the snapshot `hookkit-claude` decodes, which
+    /// can be a draft ahead of the registry (the conformance suite requires
+    /// the registry to select it); for the other harnesses it is the
+    /// registry-selected snapshot.
+    fn lowered_snapshot(harness: &str) -> String {
+        if harness == "claude-code" {
+            return hookkit_claude::SNAPSHOT.as_str().to_owned();
+        }
+        let registry = read_yaml(&contracts_dir().join("registry.yaml"));
+        registry["harnesses"][harness]["current"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no selected {harness} snapshot"))
+            .to_owned()
+    }
+
+    /// Derives, from the snapshot `lowered_snapshot` names for `harness`, the
+    /// events whose unstructured response at `code` (empty stdout, the
+    /// diagnostic on stderr) refuses the pending action.
     fn ledger_gates(harness: &str, code: u64) -> BTreeSet<String> {
         let contracts = contracts_dir();
-        let registry = read_yaml(&contracts.join("registry.yaml"));
-        let snapshot = registry["harnesses"][harness]["current"]
-            .as_str()
-            .unwrap_or_else(|| panic!("no selected {harness} snapshot"));
+        let snapshot = lowered_snapshot(harness);
+        let snapshot = snapshot.as_str();
         let root = contracts
             .join("harnesses")
             .join(harness)

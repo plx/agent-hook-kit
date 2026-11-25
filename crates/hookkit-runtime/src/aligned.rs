@@ -13,7 +13,10 @@
 //! be emitted) as one stderr line and exits 1. Claude Code and Codex treat
 //! exit 1 as a non-blocking hook error, so the pending action proceeds: a
 //! policy hook built on a gating family (`PreToolUse`, `PermissionRequest`,
-//! `UserPromptSubmit`) *fails open* by default.
+//! `UserPromptSubmit`) *fails open* by default. That holds for a Claude Code
+//! hook whose `onFailure` setting is unset or `continue`; with
+//! `"onFailure": "block"` Claude Code blocks on the exit 1 too (see
+//! [`crate::failure`]).
 //!
 //! A guard that must deny when it cannot decide should run through
 //! [`run_aligned_event_with_options`] with
@@ -26,7 +29,7 @@
 //! | :- | :- | :- | :- |
 //! | [`PreToolUse`] | exit 2, reason on stderr | exit 2, reason on stderr | `{"decision":"deny"}` at exit 0 |
 //! | [`PermissionRequest`] | JSON `behavior: "deny"` at exit 0 | exit 2 | not aligned |
-//! | [`UserPromptSubmit`] | exit 2 | exit 2 | not aligned |
+//! | [`UserPromptSubmit`] | exit 2 with a JSON `block` decision | exit 2 | not aligned |
 //! | [`PreCompact`] | exit 2: blocks the compaction (see below) | exit 1 (Codex's stop is broader than a compaction block) | not aligned |
 //! | every other family | exit 1 | exit 1 | exit 1 |
 //!

@@ -37,7 +37,7 @@
     },
     "mcp_server": {
       "additionalProperties": true,
-      "description": "Present for MCP tools (Claude Code v2.1.274 or later) and, since Claude Code 2.1.332, for the ask raised before a skill that an MCP server provides loads, where it names that server. The source vocabulary is open.",
+      "description": "Present for MCP tools (Claude Code v2.1.274 or later). Inspection of the Claude Code 2.1.332 CLI during the audit, not cited as a source, suggests it is also sent for the ask raised before a skill that an MCP server provides loads, where it names that server. The source vocabulary is open.",
       "properties": {
         "name": {
           "type": "string"

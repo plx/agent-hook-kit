@@ -337,6 +337,25 @@ fn user_prompt_context_uses_the_structured_channel_on_both_harnesses() {
 }
 
 #[test]
+fn claude_prompt_block_keeps_stdout_non_empty_for_a_missing_file_reason() {
+    // Claude Code downgrades a plugin UserPromptSubmit hook's exit 2 with
+    // empty stdout to a non-blocking error when stderr says a file is missing.
+    let reason = "policy.yaml: No such file or directory";
+    let emission = match UserPromptSubmitOutput::block(&HarnessId::CLAUDE_CODE, reason).unwrap() {
+        UserPromptSubmitOutput::Claude(output) => {
+            hookkit_claude::catalog::UserPromptSubmit::emit(output).unwrap()
+        }
+        other => panic!("unexpected arm {other:?}"),
+    };
+    assert_eq!(emission.exit_code(), 2);
+    assert_eq!(emission.stderr(), reason.as_bytes());
+    assert_eq!(
+        stdout_json(&emission),
+        json!({"decision": "block", "reason": reason})
+    );
+}
+
+#[test]
 fn post_compact_notice_is_not_claimed_where_claude_discards_it() {
     let claude =
         match PostCompactOutput::with_system_notice(&HarnessId::CLAUDE_CODE, "done").unwrap() {

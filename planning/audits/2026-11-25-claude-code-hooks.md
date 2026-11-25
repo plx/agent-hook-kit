@@ -2480,3 +2480,44 @@ stderr to its debug log").
   at `:373-378` and `:390-395` on `HEAD`; the hookkit-shell and
   tool-access Codex impls were cited for Claude in CC-CL-14 (the Claude
   ones are `adapters.rs:86-98` and `call.rs:229-245`).
+
+## Post-review corrections
+
+Two reviews of the draft (2026-11-25) changed the following; the draft
+snapshot and `xtask/src/bin/generate-claude-contracts.rs` carry them.
+
+- The hooks reference changed upstream after it was staged. From about
+  06:16 UTC, `curl --compressed` returns 301,732 bytes (SHA-256
+  `d16003851f60562eaa793e6270316b17550f8e24691214d7d798e5a503537c79`),
+  which `sources.yaml` now pins; it cites the staged `194272ed…3099` body
+  as reviewed. The new text documents `PreSkillShellCommand` (its own
+  section plus rows in the event, matcher, `if`, Windows-without-Git-Bash,
+  exit-2, decision-control, and handler-kind lists) and adds a PreToolUse
+  note that injected commands don't fire it. The "0 matches" claim above
+  and the CLI-only status of the matcher, `if`, prompt/agent blocking,
+  PreToolUse-format answers, top-level `decision: "block"`, and the
+  `continue: false` message are superseded. A successor command-environment
+  supplement that cites `hooks.md` must use the new hash.
+- `PreSkillShellCommand` now cites the reference for input, output, and
+  outcomes; accepts `hookSpecificOutput` named `PreToolUse` (the reference
+  prescribes that format); uses the documented `command_source` values;
+  records exit-2 stderr as `user-message-and-agent-context`; and adds the
+  documented frontmatter, permission-check, auto-mode, Code Mode timeout,
+  Remote Control, and Windows rules as uncertainties.
+- `onFailure: "block"` on the 15 generated notice events: `nonzero-structured`
+  does change (schema-valid JSON with exit 1 or 3-255 counts as a failure,
+  `cc-hooks.md:813`, `:982`), so the "no modeled outcome changes" text in
+  the `onFailure` section above is narrowed to events without that outcome
+  (Setup, WorktreeRemove), and WorktreeRemove gets its own text.
+- Elicitation and ElicitationResult: a top-level `decision: "block"` with
+  exit 1 or 3-255 declines (`nonzero-decision-block`), because the
+  exit-code exception covers only `hookSpecificOutput` and the generic
+  other-exit-code rule lets the fields decide. The Elicitation effect id
+  stays `deny`, as in `docs-2026-09-30-r1`, with an uncertainty.
+- HTTP `non-success` covers 300-599 ("Non-2xx status" is a failure); the
+  output-discarding events gain `invalid-json` and the JSON-lines plain-text
+  rule; the on-failure-block bindings gain an `exit-2-structured` case; the
+  mcp_tool non-empty-answer rule under block is recorded (with a PreCompact
+  note); PreToolUse `command-exit-2-continue-false` maps to
+  `exit-2-structured`; PermissionRequest records the 2.1.300 and 2.1.326
+  rewrite rules; the MCP-skill ask is marked as CLI inspection.

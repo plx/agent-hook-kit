@@ -6,8 +6,7 @@ input:
     id: wrong-discriminator
     origin: regression
     sources:
-    - claude-agent-sdk-types
-    - claude-code-changelog
+    - claude-hooks-reference
     value:
       command_name: release-notes
       cwd: /repo
@@ -24,8 +23,7 @@ input:
     id: missing-tool_name
     origin: synthesized
     sources:
-    - claude-agent-sdk-types
-    - claude-code-changelog
+    - claude-hooks-reference
     value:
       command_name: release-notes
       cwd: /repo
@@ -41,6 +39,7 @@ input:
     id: missing-command
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
     value:
@@ -58,6 +57,7 @@ input:
     id: tool-input-string
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
     value:
@@ -75,6 +75,7 @@ input:
     id: missing-command-name
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
     value:
@@ -92,6 +93,7 @@ input:
     id: missing-invoked-by
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
     value:
@@ -109,6 +111,7 @@ input:
     id: invoked-by-number
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
     value:
@@ -126,8 +129,7 @@ input:
   - id: minimal
     origin: synthesized
     sources:
-    - claude-agent-sdk-types
-    - claude-code-changelog
+    - claude-hooks-reference
     value:
       command_name: release-notes
       cwd: /repo
@@ -142,6 +144,7 @@ input:
   - id: representative
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
     value:
@@ -162,6 +165,7 @@ input:
   - id: subagent-preload
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
     value:
@@ -180,6 +184,7 @@ input:
   - id: unrecognized-invoked-by
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
     value:
@@ -193,13 +198,28 @@ input:
       tool_name: Bash
       tool_use_id: skillsh_1
       transcript_path: /tmp/t.jsonl
+  - id: plugin-skill
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      command_name: my-plugin:deploy
+      command_source: plugin
+      cwd: /repo
+      hook_event_name: PreSkillShellCommand
+      invoked_by: user
+      session_id: s1
+      tool_input:
+        command: git log -1 --format=%H
+      tool_name: Bash
+      tool_use_id: skillsh_1
+      transcript_path: /tmp/t.jsonl
 output:
 - id: structured
   origin: synthesized
   schema: command-response
   sources:
-  - claude-agent-sdk-types
-  - claude-code-changelog
+  - claude-hooks-reference
   value:
     hookSpecificOutput:
       hookEventName: PreSkillShellCommand
@@ -209,8 +229,7 @@ output:
   origin: synthesized
   schema: command-response
   sources:
-  - claude-agent-sdk-types
-  - claude-code-changelog
+  - claude-hooks-reference
   value:
     hookSpecificOutput:
       hookEventName: PreSkillShellCommand
@@ -219,6 +238,7 @@ output:
   origin: synthesized
   schema: command-response
   sources:
+  - claude-hooks-reference
   - claude-agent-sdk-types
   value:
     hookSpecificOutput:
@@ -229,6 +249,7 @@ output:
   origin: synthesized
   schema: command-response
   sources:
+  - claude-hooks-reference
   - claude-agent-sdk-types
   value:
     hookSpecificOutput:
@@ -238,12 +259,39 @@ output:
   origin: synthesized
   schema: command-response
   sources:
+  - claude-hooks-reference
   - claude-agent-sdk-types
   value:
     hookSpecificOutput:
       hookEventName: PreSkillShellCommand
       updatedInput:
         command: 'true'
+- id: pretooluse-format-deny
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      hookEventName: PreToolUse
+      permissionDecision: deny
+      permissionDecisionReason: Destructive command blocked by hook
+- id: decision-block
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    reason: Destructive command blocked by hook
+- id: continue-false
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    continue: false
+    stopReason: Skill disabled by policy.
 output_negative:
 - expected_keyword: additionalProperties
   expected_pointer: /hookSpecificOutput
@@ -251,8 +299,7 @@ output_negative:
   origin: regression
   schema: command-response
   sources:
-  - claude-agent-sdk-types
-  - claude-code-changelog
+  - claude-hooks-reference
   value:
     hookSpecificOutput:
       additionalContext: Not accepted.
@@ -263,11 +310,21 @@ output_negative:
   origin: regression
   schema: command-response
   sources:
-  - claude-agent-sdk-types
-  - claude-code-changelog
+  - claude-hooks-reference
   value:
     hookSpecificOutput:
       hookEventName: PreSkillShellCommand
+      permissionDecision: approve
+- expected_keyword: enum
+  expected_pointer: /hookSpecificOutput/permissionDecision
+  id: pretooluse-format-approve-rejected
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      hookEventName: PreToolUse
       permissionDecision: approve
 process:
 - binding: command
@@ -431,6 +488,14 @@ process:
   stdout_base64: ''
   stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 - binding: command-on-failure-block
+  exit_code: 2
+  id: command-on-failure-block-exit-2-structured
+  outcome: exit-2-structured
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVNraWxsU2hlbGxDb21tYW5kIiwicGVybWlzc2lvbkRlY2lzaW9uIjoiYWxsb3cifX0=
+  stdout_sha256: 340dc48a6d3d638ab92923cd850e046e93f856f581b3c89a511e30dcd25edd67
+- binding: command-on-failure-block
   exit_code: 1
   id: command-on-failure-block-nonzero-structured
   outcome: failure-blocked
@@ -470,6 +535,30 @@ process:
   stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVNraWxsU2hlbGxDb21tYW5kIiwidXBkYXRlZElucHV0Ijp7ImNvbW1hbmQiOiJ0cnVlIn19fQ==
   stdout_sha256: c9421b773d4c9957aaf6e49a1363ac962af808c5b659b853bad2071b081790da
+- binding: command
+  exit_code: 0
+  id: command-pretooluse-format-deny
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVRvb2xVc2UiLCJwZXJtaXNzaW9uRGVjaXNpb24iOiJkZW55IiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiRGVzdHJ1Y3RpdmUgY29tbWFuZCBibG9ja2VkIGJ5IGhvb2sifX0=
+  stdout_sha256: 04a79a6397e3f6430718bc6e7fe2b4dda6d9dd012809c3a3c537dec734fc3c0d
+- binding: command
+  exit_code: 0
+  id: command-decision-block
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiRGVzdHJ1Y3RpdmUgY29tbWFuZCBibG9ja2VkIGJ5IGhvb2sifQ==
+  stdout_sha256: f18f4b5fb3ea3625912c505d5106111da7e355de1465cbe8986335efccb63f64
+- binding: command
+  exit_code: 0
+  id: command-continue-false
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6ZmFsc2UsInN0b3BSZWFzb24iOiJTa2lsbCBkaXNhYmxlZCBieSBwb2xpY3kuIn0=
+  stdout_sha256: a43e2666ecfbd8c2b8694e3f8bfa50ced96852e073b95334cef6708e05745861
 - binding: command
   exit_code: 2
   id: command-exit-2-skill-policy

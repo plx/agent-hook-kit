@@ -180,7 +180,13 @@ impl ObservableToolCall for PostToolUseInput {
 /// `PreToolUse` and `PermissionRequest` are observed before execution;
 /// `PostToolUse` and `PostToolUseFailure` after it. Claude reports failed
 /// calls, such as a Bash command that exits non-zero after writing files,
-/// only through `PostToolUseFailure`. Other events yield
+/// through `PostToolUseFailure`, but hooks from managed settings also see
+/// some failed calls on `PostToolUse`, with the error text as a string
+/// `tool_response`; [`crate::ToolAccessAnalyzer::analyze_call`] then reports
+/// no `Direct` evidence. A Bash-matched `PreToolUse` can also have no
+/// matching post-tool event: Claude Code runs it for shell commands the
+/// Monitor tool starts, whose results no Bash post-tool hook sees. Other
+/// events, including `PreSkillShellCommand`, yield
 /// [`ToolAccessGapReason::MissingToolCall`].
 impl ObservableToolCall for hookkit_claude::catalog::CatalogInput {
     fn observe_tool_call(&self) -> ToolCallObservation<'_> {

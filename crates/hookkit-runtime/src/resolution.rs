@@ -660,15 +660,15 @@ mod tests {
 
     #[test]
     fn builtin_detector_covers_every_selected_event_with_a_native_parser() {
-        // 33 Claude Code, 14 Codex, and 6 Antigravity events.
+        // 34 Claude Code, 14 Codex, and 6 Antigravity events.
         let descriptors = builtin_descriptors();
-        assert_eq!(descriptors.len(), 53);
+        assert_eq!(descriptors.len(), 54);
         assert_eq!(
             descriptors
                 .iter()
                 .filter(|descriptor| descriptor.has_native_parser())
                 .count(),
-            53
+            54
         );
 
         let raw = RawInvocation::parse(
@@ -693,6 +693,20 @@ mod tests {
                 .validation_failures
                 .iter()
                 .any(|(event, _)| event == &EventId::builtin(HarnessId::CODEX, "SessionStart"))
+        );
+    }
+
+    #[test]
+    fn claude_pre_skill_shell_command_resolves_without_a_hint() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s1","transcript_path":"/t.jsonl","cwd":"/repo","hook_event_name":"PreSkillShellCommand","tool_name":"Bash","tool_input":{"command":"git status"},"tool_use_id":"skillsh_1","command_name":"release-notes","invoked_by":"user"}"#
+                .to_vec(),
+        )
+        .unwrap();
+        let resolved = resolve_builtin_event(HarnessId::CLAUDE_CODE, &raw, None).unwrap();
+        assert_eq!(
+            resolved.event,
+            EventId::builtin(HarnessId::CLAUDE_CODE, "PreSkillShellCommand")
         );
     }
 

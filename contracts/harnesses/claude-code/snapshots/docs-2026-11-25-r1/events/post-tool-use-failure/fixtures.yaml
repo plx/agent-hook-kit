@@ -93,6 +93,20 @@ input:
       tool_name: mcp__github__create_issue
       tool_use_id: toolu_2
       transcript_path: /tmp/t.jsonl
+  - id: shell-not-started
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      error: Shell process could not be started
+      hook_event_name: PostToolUseFailure
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
 output:
 - id: structured
   origin: synthesized
@@ -273,6 +287,14 @@ process:
   stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
   stdout_base64: ''
   stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command-on-failure-block
+  exit_code: 2
+  id: command-on-failure-block-exit-2-structured
+  outcome: exit-2-structured
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJSZXRyeSB3aXRoIC0tb2ZmbGluZS4iLCJob29rRXZlbnROYW1lIjoiUG9zdFRvb2xVc2VGYWlsdXJlIn19
+  stdout_sha256: ccdd57b1b5a631b8fd8adf15aedda3d892997c7e2d01d23d6a1a080ab8931ba0
 - binding: command-on-failure-block
   exit_code: 1
   id: command-on-failure-block-nonzero-structured

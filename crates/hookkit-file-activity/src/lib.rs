@@ -740,6 +740,11 @@ impl FileActivityStore {
 }
 
 /// Observe one native post-tool event without claiming complete coverage.
+///
+/// A Claude Code `PostToolUse` does not prove the call succeeded: hooks from
+/// managed settings also run after some failed calls, with the error text as
+/// a string `tool_response`, and such an observation yields no `Direct`
+/// evidence.
 pub fn observe_post_tool(input: &PostToolUseInput, context: &RuntimeContext<'_>) -> ActivityReport {
     observe_tool_call(input, context)
 }
@@ -2281,6 +2286,46 @@ mod tests {
             item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/x.py"))
                 && item.effect == FileActivityEffect::CreateOrModify
         }));
+    }
+
+    #[test]
+    fn claude_post_tool_use_with_an_error_string_is_not_a_completed_write() {
+        // Managed-settings PostToolUse hooks also run after failed calls and
+        // receive the error text as a string tool_response.
+        let observe = |tool_response: serde_json::Value| {
+            let input: hookkit_claude::protocol::PostToolUseInput =
+                serde_json::from_value(serde_json::json!({
+                    "session_id": "session",
+                    "transcript_path": "/tmp/transcript.jsonl",
+                    "cwd": "/repo",
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": "/repo/out.txt", "content": "x"},
+                    "tool_use_id": "toolu_1",
+                    "tool_response": tool_response
+                }))
+                .unwrap();
+            activity_report(
+                ToolAccessAnalyzer::default().analyze_native(&input),
+                &observation_metadata(),
+            )
+        };
+        let failed = observe(serde_json::json!("Error: EACCES: permission denied"));
+        let evidence: Vec<_> = failed.evidence().collect();
+        assert!(!evidence.is_empty(), "{failed:?}");
+        assert!(
+            evidence
+                .iter()
+                .all(|item| item.certainty != ActivityCertainty::Direct),
+            "{failed:?}"
+        );
+        let succeeded = observe(serde_json::json!({"type": "create", "filePath": "/repo/out.txt"}));
+        assert!(
+            succeeded
+                .evidence()
+                .any(|item| item.certainty == ActivityCertainty::Direct),
+            "{succeeded:?}"
+        );
     }
 
     #[test]

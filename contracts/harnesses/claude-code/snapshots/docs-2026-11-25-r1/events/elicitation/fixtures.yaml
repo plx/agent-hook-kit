@@ -268,7 +268,7 @@ process:
 - binding: command
   exit_code: 1
   id: command-nonzero-decision-block
-  outcome: nonzero-json-ignored
+  outcome: nonzero-decision-block
   stderr_base64: ''
   stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiciJ9

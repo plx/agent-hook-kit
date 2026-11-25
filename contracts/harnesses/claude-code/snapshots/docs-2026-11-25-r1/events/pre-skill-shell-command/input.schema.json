@@ -10,15 +10,17 @@
       "type": "string"
     },
     "command_name": {
-      "description": "The skill or command whose text holds the shell command.",
+      "description": "Name of the skill or command that is loading, such as pr-summary, or my-plugin:deploy for a plugin's skill.",
       "type": "string"
     },
     "command_source": {
-      "description": "Where the skill or command came from; omitted when unknown. The vocabulary is undocumented.",
+      "description": "Where the skill or command comes from. Open string: the examples are the documented values, and the Agent SDK types the field optional.",
       "examples": [
-        "skills",
-        "syncedSkills",
-        "plugin"
+        "userSettings",
+        "projectSettings",
+        "policySettings",
+        "plugin",
+        "builtin"
       ],
       "type": "string"
     },
@@ -49,7 +51,7 @@
       "const": "PreSkillShellCommand"
     },
     "invoked_by": {
-      "description": "Who started the load. user: typed, or sent by an SDK host. claude: the Skill tool, or a turn that Claude scheduled. other: anything else, such as a subagent's preload or a channel message, or not known. Open string: an unrecognized value must be treated as other.",
+      "description": "user when the user typed the skill's name or an Agent SDK app sent it; claude when Claude or a session-scoped scheduled task invoked the skill; other for anything else, such as a subagent that preloads the skill. Open string: an unrecognized value must be treated as other.",
       "examples": [
         "user",
         "claude",
@@ -83,7 +85,7 @@
       "additionalProperties": true,
       "properties": {
         "command": {
-          "description": "The command as it would run, with arguments filled in.",
+          "description": "The shell command as it would run, with arguments filled in.",
           "type": "string"
         }
       },
@@ -93,7 +95,7 @@
       "type": "object"
     },
     "tool_name": {
-      "description": "The shell tool that runs the command.",
+      "description": "The tool that runs the command, Bash or PowerShell.",
       "examples": [
         "Bash",
         "PowerShell"
@@ -101,7 +103,7 @@
       "type": "string"
     },
     "tool_use_id": {
-      "description": "Identifies this command; it names no tool call in the transcript.",
+      "description": "ID of this command; it names no tool call in the transcript.",
       "type": "string"
     },
     "transcript_path": {

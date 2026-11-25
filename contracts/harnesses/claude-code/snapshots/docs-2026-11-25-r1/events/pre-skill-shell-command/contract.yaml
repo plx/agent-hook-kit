@@ -11,8 +11,6 @@ bindings:
       id: structured
       output_schema: command-response
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
@@ -31,8 +29,6 @@ bindings:
         exact: 0
       id: no-op
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
@@ -51,8 +47,6 @@ bindings:
         exact: 0
       id: plain-text
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
@@ -74,9 +68,8 @@ bindings:
         exact: 0
       id: invalid-json
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
+      - claude-code-changelog
       stderr:
         content_kind: text
         encoding: utf-8
@@ -95,14 +88,12 @@ bindings:
         exact: 2
       id: exit-2
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
         encoding: utf-8
         presence: required
-        role: agent-context
+        role: user-message-and-agent-context
       stdout:
         content_kind: opaque
         presence: optional
@@ -116,14 +107,12 @@ bindings:
       id: exit-2-structured
       output_schema: command-response
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
         encoding: utf-8
         presence: optional
-        role: agent-context
+        role: user-message-and-agent-context
       stdout:
         content_kind: json
         presence: required
@@ -139,8 +128,6 @@ bindings:
       id: nonzero-structured
       output_schema: command-response
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
@@ -161,8 +148,6 @@ bindings:
           min: 1
       id: nonzero-unstructured
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
@@ -189,8 +174,6 @@ bindings:
       id: structured
       output_schema: command-response
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
@@ -209,8 +192,6 @@ bindings:
         exact: 0
       id: no-op
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
@@ -229,8 +210,6 @@ bindings:
         exact: 0
       id: plain-text
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
@@ -252,14 +231,13 @@ bindings:
         exact: 0
       id: invalid-json
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
+      - claude-code-changelog
       stderr:
         content_kind: text
         encoding: utf-8
         presence: optional
-        role: agent-context
+        role: user-message-and-agent-context
       stdout:
         content_kind: opaque
         presence: required
@@ -273,14 +251,12 @@ bindings:
         exact: 2
       id: exit-2
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
         encoding: utf-8
         presence: required
-        role: agent-context
+        role: user-message-and-agent-context
       stdout:
         content_kind: opaque
         presence: optional
@@ -294,14 +270,12 @@ bindings:
       id: exit-2-structured
       output_schema: command-response
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: text
         encoding: utf-8
         presence: optional
-        role: agent-context
+        role: user-message-and-agent-context
       stdout:
         content_kind: json
         presence: required
@@ -316,14 +290,13 @@ bindings:
           min: 1
       id: failure-blocked
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
+      - claude-code-changelog
       stderr:
         content_kind: text
         encoding: utf-8
         presence: optional
-        role: agent-context
+        role: user-message-and-agent-context
       stdout:
         content_kind: opaque
         presence: optional
@@ -347,8 +320,6 @@ bindings:
       id: structured
       output_schema: command-response
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: empty
@@ -368,8 +339,6 @@ bindings:
           min: 200
       id: empty-body
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: empty
@@ -389,8 +358,6 @@ bindings:
           min: 200
       id: non-json-body
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: empty
@@ -411,8 +378,6 @@ bindings:
           min: 200
       id: schema-invalid-body
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: empty
@@ -430,11 +395,9 @@ bindings:
       exit:
         range:
           max: 599
-          min: 400
+          min: 300
       id: non-success
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: empty
@@ -465,8 +428,6 @@ bindings:
       id: structured
       output_schema: command-response
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: empty
@@ -486,8 +447,6 @@ bindings:
           min: 200
       id: empty-body
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
       stderr:
         content_kind: empty
@@ -507,9 +466,8 @@ bindings:
           min: 200
       id: non-json-body
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
+      - claude-code-changelog
       stderr:
         content_kind: empty
         presence: forbidden
@@ -529,9 +487,8 @@ bindings:
           min: 200
       id: schema-invalid-body
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
+      - claude-code-changelog
       stderr:
         content_kind: empty
         presence: forbidden
@@ -548,12 +505,11 @@ bindings:
       exit:
         range:
           max: 599
-          min: 400
+          min: 300
       id: non-success
       sources:
-      - claude-code-changelog
-      - claude-agent-sdk-types
       - claude-hooks-reference
+      - claude-code-changelog
       stderr:
         content_kind: empty
         presence: forbidden
@@ -593,6 +549,7 @@ schemas:
     file: input.schema.json
     origin: derived
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
   outputs:
@@ -603,25 +560,32 @@ schemas:
     id: command-response
     origin: derived
     sources:
+    - claude-hooks-reference
     - claude-agent-sdk-types
     - claude-code-changelog
 snapshot: docs-2026-11-25-r1
 uncertainties:
-- PreSkillShellCommand (Claude Code 2.1.332 or later) can refuse a skill's or custom command's inline shell commands as the skill loads. The hooks reference does not document it; the contract rests on the 2.1.332 changelog and the Agent SDK 0.3.332 types, applies the reference's generic exit-code, brace, HTTP, and onFailure rules, and every claim is low confidence. On Claude Code 2.1.331 and older, a settings file naming the event opens a dialog at start.
-- 'A hook allows a command only by giving no refusal: allow adds nothing, while deny, ask, and defer all keep the command from running, and updatedInput is never applied, so any value also refuses it. The Agent SDK types no additionalContext for this event.'
-- invoked_by is modeled as an open string although the Agent SDK closes it to user, claude, and other, so a future value does not reject the payload; command_source is omitted when unknown and its vocabulary is undocumented (the examples come from inspection of the 2.1.332 CLI); tool_use_id names no tool call in the transcript and its format is undocumented.
-- 'Behavior observed only by inspecting the minified Claude Code 2.1.332 CLI during the audit, not cited as a source: matchers filter tool_name (Bash or PowerShell) and the if field applies as on PreToolUse; the default timeout is 600 seconds; prompt and agent hooks are not skipped but refuse every matching command; hookSpecificOutput named PreToolUse, which this output schema rejects, and PermissionRequest-shaped answers are also accepted; and top-level decision block refuses while approve has no effect.'
-- 'A refused command is replaced in the loaded skill text by [not run: blocked by hook: <reason>], so exit-2 stderr or the reason reaches Claude inside the skill text, and the user sees a Not run in /<skill> notice with the reason cut to 500 characters and the command to 80. The agent-context stderr role of exit-2 is therefore an inference, and whether systemMessage reaches the user is undocumented.'
-- 'A non-blocking failure (exit code other than 0 or 2, invalid JSON, or a timeout) lets the command run with a Ran anyway notice, unless the hook sets onFailure: block, which this event honors. continue false aborts the whole skill load (Operation stopped by hook) rather than refusing one command.'
+- 'PreSkillShellCommand (Claude Code v2.1.332 or later, including the desktop app and VS Code extension) runs before an injected command: a shell command, written as !`<command>` or in a ```! block, that runs while a skill or a command such as /security-review loads. PreToolUse hooks don''t fire for injected commands. Earlier releases run injected commands without calling it, and in v2.1.331 or earlier a settings file naming the event opens each interactive terminal session with an Unknown hook event warning dialog. The event is new at this pin, so every claim stays low confidence.'
+- 'A hook can only block. Exit 2, permissionDecision deny, or a top-level decision block keeps the command from running, and ask, defer, and any updatedInput block it the same way; exit 0 with no decision, or allow, lets it run unless another hook blocks it. The skill still loads, and Claude reads [not run: blocked by hook: <reason>] in place of the command''s output, where the reason is exit-2 stderr, permissionDecisionReason, or reason beside a top-level decision.'
+- 'For a JSON answer the reference prescribes the PreToolUse format: hookSpecificOutput named PreToolUse is accepted so one script can serve both events, and the output schema accepts either name. Whether additionalContext in a PreToolUse-format answer has any effect is undocumented; with the PreSkillShellCommand name the Agent SDK types no additionalContext, so the schema rejects it there.'
+- Matchers filter tool_name (Bash|PowerShell covers both tools that run injected commands), and the if field is evaluated as on PreToolUse. A prompt or agent hook on this event cannot run and blocks every command it matches, and an async hook cannot block.
+- A skill's injected commands run without the hooks in its own frontmatter on its first load in a session and on loads inside a subagent, and a forked skill's run without the hooks in its frontmatter or in its subagent's definition; the reference recommends defining the hook in a settings file or a plugin.
+- The hook runs after the permission check on injected commands, so it receives only commands that passed, and it also runs in bypassPermissions mode. In auto mode a command that would otherwise need approval doesn't run while the skill loads; Claude can run it afterward as a tool call, which fires PreToolUse and not this event.
+- 'A failure (a hook that cannot start, an exit code other than 0 or 2 without schema-valid JSON, invalid JSON, or a timeout) lets the command run, and a user who typed the skill''s name sees a Ran anyway in /<name> line, unless the hook sets onFailure: block. In a Code Mode session where Claude has already run code, a timeout blocks the command by default; whether onFailure: continue overrides that is undocumented.'
+- 'On Windows without Git Bash, a shell-form PreSkillShellCommand command hook that fails with onFailure unset blocks the command, so it takes the command-on-failure-block outcomes, as on PreToolUse; exec form without onFailure: block, or an explicit onFailure: continue, restores the command outcomes.'
+- 'continue false makes invoking the skill fail with Operation stopped by hook: <stopReason>, and none of its injected commands runs, because Claude Code collects the hooks'' answers before it runs the first one; structured models it as event-specific control.'
+- When the user typed the skill's name in a terminal, a Not run in /<name> line shows the blocked command and the reason, so exit-2 stderr is modeled as reaching both the user and Claude. While Remote Control is connected the hook still blocks, but neither the user nor Claude sees the reason, which goes only to the debug log. Where the user sees the reason when Claude or another caller invoked the skill, and whether systemMessage reaches the user, are undocumented.
+- invoked_by is modeled as an open string although the Agent SDK closes it to user, claude, and other, so a future value does not reject the payload. command_source is typed optional by the Agent SDK while the reference lists it without saying when it is absent, and its documented values are kept as examples of an open vocabulary. tool_use_id names no tool call in the transcript and its format is undocumented.
+- Inspection of the minified Claude Code 2.1.332 CLI during the audit, not cited as a source, suggests a 600-second default timeout, that PermissionRequest-shaped answers are also accepted (the output schema rejects them), that top-level decision approve has no effect, and that the Not run line cuts the reason to 500 characters and the command to 80.
 - The ordering against UserPromptSubmit and UserPromptExpansion is undocumented; that a UserPromptSubmit block keeps this event from firing for that command is inferred from the UserPromptSubmit reference text.
 - Exit status 2 is described only by the exact exit-2 outcomes; the 1-255 nonzero outcomes model the reference's other exit codes and apply to status 2 only where no exit-2 outcome exists.
 - 'A hook that runs in PowerShell (shell: powershell, or a shell-form hook on Windows without Git Bash) did not take the exit-2 outcomes before Claude Code v2.1.309, nor before v2.1.316 when its command begins with a type cast, param, using, or an attribute.'
-- An HTTP connection failure has no status and is a non-blocking error, and a timeout cancels the hook, so neither is an outcome here; how Claude Code handles a 3xx status is undocumented, so non-success covers only 400-599.
-- 'The command and http outcomes describe onFailure unset or continue. With onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later; ignored for command hooks that set async or asyncRewake), a hook that cannot start, times out, exits with a code other than 0 or 2 even after printing schema-valid JSON that allows the action, or prints unparseable or schema-invalid JSON does what exit code 2 does on this event (on PermissionRequest it denies the request); the command-on-failure-block and http-on-failure-block bindings model that configuration.'
-- In the command-on-failure-block and http-on-failure-block bindings, a start failure, a connection failure, and a timeout, which no exit or status selector expresses, also take the exit-2 effect. The message reads failed; blocking because onFailure is "block" (timed out after a timeout) followed by the program's output, and its stderr role follows this event's exit-2 row. Whether a schema-valid JSON object printed with an exit code other than 0 or 2 still applies its fields alongside the blocking failure is undocumented, so failure-blocked treats stdout as ignored.
+- An HTTP connection failure has no status and takes this event's failure effect (a non-blocking error on most events), and a timeout cancels the hook, so neither is an outcome here. Any non-2xx status is a failure, so non-success covers 300-599; whether Claude Code follows a redirect before it judges the status is undocumented.
+- 'The command and http outcomes describe onFailure unset or continue. With onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later; ignored for command hooks that set async or asyncRewake), a hook that cannot start, times out, exits with a code other than 0 or 2 even after printing schema-valid JSON that allows the action, or prints unparseable or schema-invalid JSON does what exit code 2 does on this event (on PermissionRequest it denies the request); the command-on-failure-block and http-on-failure-block bindings model that configuration. For an mcp_tool hook (not a modeled binding) with onFailure: block, a non-empty answer also counts as a failure unless it is {} or JSON that sets a hook output field other than reason, so a plain-text answer blocks; the reference names PreToolUse and UserPromptSubmit as examples of such events.'
+- 'In the command-on-failure-block and http-on-failure-block bindings, a start failure, a connection failure, and a timeout, which no exit or status selector expresses, also take the failure-blocked effect: this event''s exit-2 effect, except on PermissionRequest, where a failure denies the request. The message reads failed; blocking because onFailure is "block" (timed out after a timeout) followed by the program''s output, and its stderr role is failure-blocked''s. Whether a schema-valid JSON object printed with an exit code other than 0 or 2 still applies its fields alongside the blocking failure is undocumented, so failure-blocked treats stdout as ignored.'
 - For a hook that isn't async, stdout counts as JSON output only when it is one JSON object with nothing around it but whitespace. Anything that does not start with { and end with } is plain text, including a JSON array or a quoted JSON string. Two or more lines that each parse as JSON, the first starting with { and the last ending with }, are plain text when no line is a JSON output object that sets a field, and a parse failure (invalid-json) when one is; the stdout semantic formats of the exit-0 plain-text outcome and of invalid-json name those two cases.
 - 'Each additionalContext, systemMessage, and initialUserMessage string, and plain stdout measured whole, is capped at 10,000 characters per hook (since Claude Code v2.1.89): longer output is saved to a file in the session directory and replaced by the file path and a preview of up to 2,000 characters, Claude is not asked to read the file, and the cap has no setting. The schemas set no maxLength because longer text is accepted and spilled.'
 - Since Claude Code v2.1.292, a <system-reminder> or </system-reminder> tag in a hook string reaches Claude with that tag's < replaced by &lt;.
-- Claude Code 2.1.332 shortens text over about 50,000 characters when a hook blocks or fails during a turn with a very large log (changelog only); which text it cuts, and where, is not documented.
+- Claude Code 2.1.332 shortens text over about 50,000 characters when a hook blocks or fails during a turn, or after /compact, with a very large log (changelog only); which text it cuts, and where, is not documented.
 - 'These bindings model synchronous command hooks. A command hook that sets async or asyncRewake is not modeled: decision fields such as decision, permissionDecision, and continue have no effect; after it exits, additionalContext and systemMessage reach Claude on the next turn and are not shown to the user; its JSON must be alone on stdout or on a line of its own (spanning several lines requires v2.1.295 or later), and a field with the wrong type is dropped on its own; Claude Code does not enforce timeout on async hooks but does on asyncRewake hooks; an asyncRewake exit 2 wakes Claude at once with stderr, or stdout when stderr is empty; and onFailure and terminalSequence do not apply.'
 - A hook that isn't async and leaves a background process holding its stdout or stderr takes up to 10 seconds to finish after its own process exits, and output printed after Claude Code stops reading is discarded. The reference states the resulting block (stdio went quiet; refusing to honor the suspect capture) only for a PreToolUse allow; whether it applies on this event is unknown.

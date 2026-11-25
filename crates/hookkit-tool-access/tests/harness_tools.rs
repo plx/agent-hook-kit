@@ -806,7 +806,7 @@ fn structured_home_relative_paths_stay_unresolved() {
 #[test]
 fn claude_post_tool_use_failure_is_observable_from_the_contract_fixture() {
     let mut value = contract_fixture(
-        "claude-code/snapshots/docs-2026-09-30-r1/events/post-tool-use-failure",
+        "claude-code/snapshots/docs-2026-11-25-r1/events/post-tool-use-failure",
         "representative",
     );
     value["tool_input"]["command"] = serde_json::json!("sed -i 's/a/b/' src/x.py && pytest");
@@ -826,6 +826,73 @@ fn claude_post_tool_use_failure_is_observable_from_the_contract_fixture() {
             .may_modify()
             .any(|candidate| { path_of(candidate).1 == Some(Utf8Path::new("/repo/src/x.py")) })
     );
+}
+
+#[test]
+fn claude_managed_post_tool_use_string_responses_are_not_proof_of_a_write() {
+    // Managed-settings PostToolUse hooks also run after failed calls and then
+    // receive the error text as a string tool_response.
+    let mut value = contract_fixture(
+        "claude-code/snapshots/docs-2026-11-25-r1/events/post-tool-use",
+        "managed-failed-call",
+    );
+    assert!(value["tool_response"].is_string());
+    value["tool_input"]["command"] = serde_json::json!("echo x > out.txt");
+    let failed: hookkit_claude::protocol::PostToolUseInput =
+        serde_json::from_value(value.clone()).unwrap();
+    let report = ToolAccessAnalyzer::default().analyze_native(&failed);
+    let out = report
+        .may_modify()
+        .find(|candidate| path_of(candidate).1 == Some(Utf8Path::new("/repo/out.txt")))
+        .expect("the write is still a candidate");
+    assert_eq!(out.certainty, AccessCertainty::Conditional);
+
+    // An object response keeps direct evidence.
+    value["tool_response"] = serde_json::json!({"stdout": "", "stderr": ""});
+    let succeeded: hookkit_claude::protocol::PostToolUseInput =
+        serde_json::from_value(value).unwrap();
+    let report = ToolAccessAnalyzer::default().analyze_native(&succeeded);
+    let out = report
+        .may_modify()
+        .find(|candidate| path_of(candidate).1 == Some(Utf8Path::new("/repo/out.txt")))
+        .unwrap();
+    assert_eq!(out.certainty, AccessCertainty::Direct);
+}
+
+#[test]
+fn claude_monitor_commands_are_analyzed_as_shell_and_websocket_watches_are_not() {
+    use hookkit_shell::{ShellToolCallExt, ShellToolCallMatch};
+    let fixture = |id: &str| -> hookkit_claude::catalog::CatalogInput {
+        let value = contract_fixture(
+            "claude-code/snapshots/docs-2026-11-25-r1/events/pre-tool-use",
+            id,
+        );
+        serde_json::from_value(value).unwrap()
+    };
+    assert!(matches!(
+        fixture("monitor-call").shell_tool_call(),
+        ShellToolCallMatch::Matched(call) if call.command == "tail -f app.log"
+    ));
+    assert!(matches!(
+        fixture("monitor-ws").shell_tool_call(),
+        ShellToolCallMatch::NotShell
+    ));
+
+    let report = analyze(&claude_pre(
+        "Monitor",
+        serde_json::json!({
+            "description": "watch",
+            "timeout_ms": 1000,
+            "command": "tail -f app.log > copy.log"
+        }),
+    ));
+    assert!(
+        report
+            .may_modify()
+            .any(|candidate| path_of(candidate).1 == Some(Utf8Path::new("/repo/copy.log")))
+    );
+    let websocket = PreToolUseInput::Claude(fixture("monitor-ws"));
+    assert!(analyze(&websocket).may_modify().next().is_none());
 }
 
 #[test]

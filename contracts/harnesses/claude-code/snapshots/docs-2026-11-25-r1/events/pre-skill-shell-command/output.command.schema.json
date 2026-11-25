@@ -7,42 +7,91 @@
       "type": "boolean"
     },
     "decision": {
-      "description": "Typed by the Agent SDK only as the generic approve or block and not documented for this event: block keeps the command from running and approve has no effect.",
+      "description": "The reference documents a top-level decision block, which keeps the command from running like permissionDecision deny. approve is typed only by the Agent SDK's generic output; inspection of the Claude Code 2.1.332 CLI during the audit, not cited as a source, suggests it has no effect.",
       "enum": [
         "approve",
         "block"
       ]
     },
     "hookSpecificOutput": {
-      "additionalProperties": false,
+      "else": {
+        "additionalProperties": false,
+        "properties": {
+          "hookEventName": {
+            "const": "PreSkillShellCommand"
+          },
+          "permissionDecision": {
+            "description": "allow adds nothing: the command runs unless a hook refuses it. deny, ask, and defer all keep it from running.",
+            "enum": [
+              "allow",
+              "deny",
+              "ask",
+              "defer"
+            ]
+          },
+          "permissionDecisionReason": {
+            "type": "string"
+          },
+          "updatedInput": {
+            "description": "Never applied. Any value keeps the command from running.",
+            "type": "object"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "hookEventName": {
+            "const": "PreToolUse"
+          }
+        },
+        "required": [
+          "hookEventName"
+        ]
+      },
       "properties": {
         "hookEventName": {
-          "const": "PreSkillShellCommand"
-        },
-        "permissionDecision": {
-          "description": "allow adds nothing: the command runs unless a hook refuses it. deny, ask, and defer all keep it from running.",
+          "description": "PreToolUse selects the PreToolUse output format, which this event also accepts so one script can serve both events.",
           "enum": [
-            "allow",
-            "deny",
-            "ask",
-            "defer"
+            "PreSkillShellCommand",
+            "PreToolUse"
           ]
-        },
-        "permissionDecisionReason": {
-          "type": "string"
-        },
-        "updatedInput": {
-          "description": "Never applied. Any value keeps the command from running.",
-          "type": "object"
         }
       },
       "required": [
         "hookEventName"
       ],
+      "then": {
+        "additionalProperties": false,
+        "properties": {
+          "additionalContext": {
+            "description": "Accepted in a PreToolUse-format answer; whether it has any effect on this event is undocumented.",
+            "type": "string"
+          },
+          "hookEventName": {
+            "const": "PreToolUse"
+          },
+          "permissionDecision": {
+            "description": "allow adds nothing: the command runs unless a hook refuses it. deny, ask, and defer all keep it from running.",
+            "enum": [
+              "allow",
+              "deny",
+              "ask",
+              "defer"
+            ]
+          },
+          "permissionDecisionReason": {
+            "type": "string"
+          },
+          "updatedInput": {
+            "description": "Never applied. Any value keeps the command from running.",
+            "type": "object"
+          }
+        }
+      },
       "type": "object"
     },
     "reason": {
-      "description": "Deprecated together with decision.",
+      "description": "The reason for a top-level decision block; Claude reads it in place of the command's output.",
       "type": "string"
     },
     "stopReason": {

@@ -101,6 +101,29 @@ bindings:
     - assurance:
         confidence: low
         verification: source-reviewed
+      effect: decline
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-decision-block
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+        semantic_format: decision-block
+    - assurance:
+        confidence: low
+        verification: source-reviewed
       effect: no-op
       exit:
         range:
@@ -119,6 +142,7 @@ bindings:
         content_kind: json
         presence: required
         role: protocol-value
+        semantic_format: no-decision-block
     - assurance:
         confidence: low
         verification: source-reviewed
@@ -357,7 +381,7 @@ bindings:
       exit:
         range:
           max: 599
-          min: 400
+          min: 300
       id: non-success
       sources:
       - claude-hooks-reference
@@ -467,7 +491,7 @@ bindings:
       exit:
         range:
           max: 599
-          min: 400
+          min: 300
       id: non-success
       sources:
       - claude-hooks-reference
@@ -526,7 +550,7 @@ snapshot: docs-2026-11-25-r1
 uncertainties:
 - 'Top-level decision block also declines, overriding an action in the same output, and a decline from one hook overrides another hook''s accept or cancel. Neither the user nor the server sees why: Claude Code shows neither stderr nor reason. Claude Code ignored decision on this event from v2.1.105 until v2.1.284.'
 - Exit status 2 changes the effective action to decline; stderr is shown nowhere and an exit-2 hookSpecificOutput is ignored.
-- Claude Code applies hookSpecificOutput only when the hook exits 0 and ignores it on any other exit code, so schema-valid JSON printed with a nonzero exit is nonzero-json-ignored and the dialog proceeds. Whether a hook error notice is shown then, and whether a top-level decision block still declines on exit 1 or 3-255, are undocumented; inspection of the Claude Code 2.1.285 and 2.1.332 CLI builds during the audit, not cited as a source, suggests that decision block declines on any exit code, so command-nonzero-decision-block may decline rather than proceed.
+- Claude Code applies hookSpecificOutput only when the hook exits 0 and ignores it on any other exit code, so schema-valid JSON without a top-level decision block printed with an exit code other than 0 or 2 is nonzero-json-ignored and the user's response is sent unchanged. A top-level decision block is not hookSpecificOutput, so the generic rule for schema-valid JSON on those exit codes (the fields alone decide) applies and it declines (nonzero-decision-block); inspection of the Claude Code 2.1.285 and 2.1.332 CLI builds during the audit, not cited as a source, agrees. Whether a hook error notice is shown in either case is undocumented.
 - When an Elicitation hook answers a request, Claude Code sends that answer to the server without running ElicitationResult hooks.
 - ElicitationResult hooks also run when the user declines or cancels, and the hook's action replaces the user's, so a hook that returns accept without checking that the input action is accept turns a declined request into an accepted one.
 - content in an accept replaces the user's whole content object, so a hook that changes one value must return the others too. Claude Code ignores a hookSpecificOutput that has no action, so content-without-action is schema-valid but changes nothing.
@@ -534,12 +558,12 @@ uncertainties:
 - systemMessage and continue are discarded.
 - Exit status 2 is described only by the exact exit-2 outcomes; the 1-255 nonzero outcomes model the reference's other exit codes and apply to status 2 only where no exit-2 outcome exists.
 - 'A hook that runs in PowerShell (shell: powershell, or a shell-form hook on Windows without Git Bash) did not take the exit-2 outcomes before Claude Code v2.1.309, nor before v2.1.316 when its command begins with a type cast, param, using, or an attribute.'
-- An HTTP connection failure has no status and is a non-blocking error, and a timeout cancels the hook, so neither is an outcome here; how Claude Code handles a 3xx status is undocumented, so non-success covers only 400-599.
-- 'The command and http outcomes describe onFailure unset or continue. With onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later; ignored for command hooks that set async or asyncRewake), a hook that cannot start, times out, exits with a code other than 0 or 2 even after printing schema-valid JSON that allows the action, or prints unparseable or schema-invalid JSON does what exit code 2 does on this event (on PermissionRequest it denies the request); the command-on-failure-block and http-on-failure-block bindings model that configuration.'
-- In the command-on-failure-block and http-on-failure-block bindings, a start failure, a connection failure, and a timeout, which no exit or status selector expresses, also take the exit-2 effect. The message reads failed; blocking because onFailure is "block" (timed out after a timeout) followed by the program's output, and its stderr role follows this event's exit-2 row. Whether a schema-valid JSON object printed with an exit code other than 0 or 2 still applies its fields alongside the blocking failure is undocumented, so failure-blocked treats stdout as ignored.
+- An HTTP connection failure has no status and takes this event's failure effect (a non-blocking error on most events), and a timeout cancels the hook, so neither is an outcome here. Any non-2xx status is a failure, so non-success covers 300-599; whether Claude Code follows a redirect before it judges the status is undocumented.
+- 'The command and http outcomes describe onFailure unset or continue. With onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later; ignored for command hooks that set async or asyncRewake), a hook that cannot start, times out, exits with a code other than 0 or 2 even after printing schema-valid JSON that allows the action, or prints unparseable or schema-invalid JSON does what exit code 2 does on this event (on PermissionRequest it denies the request); the command-on-failure-block and http-on-failure-block bindings model that configuration. For an mcp_tool hook (not a modeled binding) with onFailure: block, a non-empty answer also counts as a failure unless it is {} or JSON that sets a hook output field other than reason, so a plain-text answer blocks; the reference names PreToolUse and UserPromptSubmit as examples of such events.'
+- 'In the command-on-failure-block and http-on-failure-block bindings, a start failure, a connection failure, and a timeout, which no exit or status selector expresses, also take the failure-blocked effect: this event''s exit-2 effect, except on PermissionRequest, where a failure denies the request. The message reads failed; blocking because onFailure is "block" (timed out after a timeout) followed by the program''s output, and its stderr role is failure-blocked''s. Whether a schema-valid JSON object printed with an exit code other than 0 or 2 still applies its fields alongside the blocking failure is undocumented, so failure-blocked treats stdout as ignored.'
 - For a hook that isn't async, stdout counts as JSON output only when it is one JSON object with nothing around it but whitespace. Anything that does not start with { and end with } is plain text, including a JSON array or a quoted JSON string. Two or more lines that each parse as JSON, the first starting with { and the last ending with }, are plain text when no line is a JSON output object that sets a field, and a parse failure (invalid-json) when one is; the stdout semantic formats of the exit-0 plain-text outcome and of invalid-json name those two cases.
 - 'Each additionalContext, systemMessage, and initialUserMessage string, and plain stdout measured whole, is capped at 10,000 characters per hook (since Claude Code v2.1.89): longer output is saved to a file in the session directory and replaced by the file path and a preview of up to 2,000 characters, Claude is not asked to read the file, and the cap has no setting. The schemas set no maxLength because longer text is accepted and spilled.'
 - Since Claude Code v2.1.292, a <system-reminder> or </system-reminder> tag in a hook string reaches Claude with that tag's < replaced by &lt;.
-- Claude Code 2.1.332 shortens text over about 50,000 characters when a hook blocks or fails during a turn with a very large log (changelog only); which text it cuts, and where, is not documented.
+- Claude Code 2.1.332 shortens text over about 50,000 characters when a hook blocks or fails during a turn, or after /compact, with a very large log (changelog only); which text it cuts, and where, is not documented.
 - 'These bindings model synchronous command hooks. A command hook that sets async or asyncRewake is not modeled: decision fields such as decision, permissionDecision, and continue have no effect; after it exits, additionalContext and systemMessage reach Claude on the next turn and are not shown to the user; its JSON must be alone on stdout or on a line of its own (spanning several lines requires v2.1.295 or later), and a field with the wrong type is dropped on its own; Claude Code does not enforce timeout on async hooks but does on asyncRewake hooks; an asyncRewake exit 2 wakes Claude at once with stderr, or stdout when stderr is empty; and onFailure and terminalSequence do not apply.'
 - A hook that isn't async and leaves a background process holding its stdout or stderr takes up to 10 seconds to finish after its own process exits, and output printed after Claude Code stops reading is discarded. The reference states the resulting block (stdio went quiet; refusing to honor the suspect capture) only for a PreToolUse allow; whether it applies on this event is unknown.

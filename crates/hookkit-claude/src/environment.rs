@@ -50,12 +50,21 @@ use std::fmt;
 /// it is always set, and the reference examples guard it with
 /// `[ -n "$CLAUDE_ENV_FILE" ]`, so it is parsed as optional: an absent or
 /// empty value yields `None` rather than failing the hook. It is ignored on
-/// every other event, including `PreModelSwitch` and `PostModelSwitch`.
+/// every other event, including `PreModelSwitch`, `PostModelSwitch`, and
+/// `PreSkillShellCommand`.
+///
+/// A hook that runs in PowerShell (`"shell": "powershell"`, or by default on
+/// Windows without Git Bash) never receives the variable, even on these
+/// events, so its absence there is expected.
 ///
 /// Variables a `CwdChanged` or `FileChanged` hook writes to the file persist
 /// into later Bash commands only until the next `CwdChanged` event, when
 /// Claude Code clears them; `SessionStart` and `Setup` exports persist for
-/// the session.
+/// the session. Since Claude Code v2.1.296 PowerShell tool commands receive
+/// them too, but PowerShell never runs the file: Claude Code copies the
+/// assignments into the command's environment only when every line the
+/// session's hooks wrote is a plain assignment, so write plain
+/// `export NAME=value` lines when PowerShell commands need the values.
 pub const ENVIRONMENT_FILE_EVENTS: &[&str] =
     &["SessionStart", "Setup", "CwdChanged", "FileChanged"];
 
@@ -513,6 +522,7 @@ mod tests {
         "SessionEnd",
         "Elicitation",
         "ElicitationResult",
+        "PreSkillShellCommand",
     ];
 
     fn event(name: &'static str) -> EventId {
@@ -827,5 +837,57 @@ mod tests {
         both_present_but_empty.insert("CLAUDE_PLUGIN_ROOT", "");
         both_present_but_empty.insert("CLAUDE_PLUGIN_DATA", "/data/demo");
         assert!(parse("Stop", &both_present_but_empty).is_err());
+    }
+
+    #[test]
+    fn effort_is_optional_and_open() {
+        let environment = parse("SessionStart", &baseline()).unwrap();
+        assert_eq!(environment.effort, None);
+        environment
+            .validate_input(&event("SessionStart"), "session-1", Some("high"))
+            .unwrap();
+
+        let mut variables = baseline();
+        variables.insert("CLAUDE_EFFORT", "ultra");
+        let environment = parse("SessionStart", &variables).unwrap();
+        assert_eq!(
+            environment.effort,
+            Some(ClaudeEffort::Unknown("ultra".into()))
+        );
+        environment
+            .validate_input(&event("SessionStart"), "session-1", Some("ultra"))
+            .unwrap();
+    }
+
+    #[test]
+    fn runner_variables_do_not_change_a_cloud_session() {
+        // Claude Code 2.1.328 runners export these; they are not modeled
+        // hook state and must not affect parsing.
+        let mut cloud = baseline();
+        cloud.insert("CLAUDE_CODE_REMOTE", "true");
+        cloud.insert("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_x");
+        cloud.insert("CLAUDE_CODE_REMOTE_SESSION_UUID", "8f0c2d1e");
+        cloud.insert("CLAUDE_CODE_REMOTE_SLACK_THREAD_TS", "1700000000.000200");
+        assert_eq!(
+            parse("PreSkillShellCommand", &cloud)
+                .unwrap()
+                .execution_location,
+            ClaudeExecutionLocation::Cloud {
+                remote_session_id: "cse_x".into()
+            }
+        );
+    }
+
+    #[test]
+    fn pre_skill_shell_command_never_exposes_the_environment_file() {
+        let mut variables = baseline();
+        variables.insert("CLAUDE_ENV_FILE", "/tmp/inherited");
+        assert!(!ENVIRONMENT_FILE_EVENTS.contains(&"PreSkillShellCommand"));
+        assert_eq!(
+            parse("PreSkillShellCommand", &variables)
+                .unwrap()
+                .environment_file,
+            None
+        );
     }
 }

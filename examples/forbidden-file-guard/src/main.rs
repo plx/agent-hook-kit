@@ -23,10 +23,12 @@ use std::path::PathBuf;
 const PROJECT_CONFIG: &str = ".agent-hook-kit/forbidden-files.yaml";
 const TARGET_RESOLUTION_BUDGET: usize = 100_000;
 
-/// Claude Code tools that run shell commands the analyzer cannot parse:
-/// `PowerShell`, the primary shell on Windows wherever it is enabled, and
+/// Claude Code shell tools besides `Bash`: `PowerShell`, the primary shell
+/// on Windows wherever it is enabled, which the analyzer cannot parse, and
 /// `Monitor`, whose watch commands Claude Code reviews the same way as `Bash`
-/// commands.
+/// commands. `hookkit-shell` parses a Monitor command as a shell call (Claude
+/// Code v2.1.314 or later); a Monitor WebSocket watch runs no command but is
+/// still blocked under `deny_shell`, which keys on the tool name.
 const CLAUDE_UNPARSED_SHELL_TOOLS: &[&str] = &["PowerShell", "Monitor"];
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -546,9 +548,8 @@ fn forbidden_path_reason(path: &Utf8Path) -> String {
 }
 
 /// Whether the call runs a shell command: an exact native shell profile
-/// (Claude Code `Bash`, Codex `Bash`, Antigravity `run_command`) or a Claude
-/// Code shell tool the analyzer cannot parse (see
-/// [`CLAUDE_UNPARSED_SHELL_TOOLS`]).
+/// (Claude Code `Bash`, Codex `Bash`, Antigravity `run_command`) or another
+/// Claude Code shell tool (see [`CLAUDE_UNPARSED_SHELL_TOOLS`]).
 fn is_native_shell(input: &PreToolUseInput) -> bool {
     let ToolCallObservation::Call(call) = observe_pre_tool(input) else {
         return false;
@@ -1131,7 +1132,8 @@ mod tests {
             let reason = evaluate_codex(&deny_all, &input).unwrap();
             assert!(reason.contains(&format!("shell tool `{tool}`")), "{reason}");
         }
-        // The analyzer parses neither, so deny_unresolved also denies them.
+        // The analyzer does not parse PowerShell, and in the Monitor command
+        // `Get-Content` is an unknown command, so deny_unresolved denies both.
         let strict = policy(&["**/.env"], AccessPolicy::DenyUnresolved);
         for tool in ["PowerShell", "Monitor"] {
             let input = claude_input_at_cwd(
@@ -1139,7 +1141,11 @@ mod tests {
                 tool,
                 serde_json::json!({"command": "Get-Content notes.txt"}),
             );
-            assert!(evaluate_codex(&strict, &input).is_some(), "{tool}");
+            let reason = evaluate_codex(&strict, &input).unwrap();
+            assert!(
+                reason.contains("unresolved access analysis"),
+                "{tool}: {reason}"
+            );
         }
     }
 
