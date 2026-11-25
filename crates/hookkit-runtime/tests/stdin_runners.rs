@@ -157,6 +157,12 @@ fn stdin_runner_helper() {
             fail_closed(),
             |_, _, _| unreachable!("the payload is invalid"),
         ),
+        "dispatch-antigravity-pre-invocation-fail-closed" => dispatch_builtin_harness_with_options(
+            BuiltinHarness::Antigravity,
+            Some(EventId::builtin(HarnessId::ANTIGRAVITY, "PreInvocation")),
+            fail_closed(),
+            |_, _, _| Err(HookkitError::handler("prompt policy is missing")),
+        ),
         "dispatch-claude-fail-closed" => dispatch_builtin_harness_with_options(
             BuiltinHarness::ClaudeCode,
             None,
@@ -601,6 +607,42 @@ fn antigravity_fails_closed_with_a_json_deny_at_exit_zero() {
         "{reason:?}"
     );
     assert!(outcome.stderr.contains("antigravity/PreToolUse failed"));
+}
+
+#[test]
+fn antigravity_pre_invocation_fails_closed_with_a_prompt_block_at_exit_zero() {
+    let invocation = serde_json::json!({
+        "conversationId": "stdin-conversation",
+        "workspacePaths": ["/tmp"],
+        "transcriptPath": "/tmp/stdin-transcript.jsonl",
+        "artifactDirectoryPath": "/tmp/stdin-artifacts",
+        "invocationNum": 0,
+        "initialNumSteps": 1,
+        "lastUserInput": "Fix the failing unit test"
+    });
+    let outcome = spawn(
+        "dispatch-antigravity-pre-invocation-fail-closed",
+        &serde_json::to_vec(&invocation).unwrap(),
+        &[],
+    );
+    assert_eq!(outcome.code, Some(0), "{:?}", outcome.stderr);
+    let output = json(&outcome.stdout);
+    assert_eq!(output["terminationBehavior"], "terminate");
+    let steps = output["injectSteps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1);
+    let message = steps[0]["errorMessage"]["userMessage"].as_str().unwrap();
+    assert!(
+        message.starts_with("hookkit: ")
+            && message.contains("antigravity/PreInvocation failed")
+            && message.contains("prompt policy is missing"),
+        "{message:?}"
+    );
+    assert_eq!(output.as_object().unwrap().len(), 2, "{output}");
+    assert!(
+        outcome.stderr.contains("antigravity/PreInvocation failed"),
+        "{:?}",
+        outcome.stderr
+    );
 }
 
 #[test]

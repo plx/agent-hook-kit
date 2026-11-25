@@ -458,7 +458,15 @@ fn ensure_metadata_locked(
                             .first_observed_at
                             .close_to(observed_at, BOUNDARY_COALESCE_WINDOW)
                 }));
-            if !duplicate {
+            // An invocation-zero boundary only stands in for a missing start
+            // event (Antigravity builds that predate `SessionStart`). Once a
+            // native lifecycle epoch exists, it would only replace that more
+            // precise epoch as the current session.
+            let superseded = kind == SessionEpochKind::InvocationStart
+                && existing
+                    .iter()
+                    .any(|observation| observation.epoch.kind != SessionEpochKind::InvocationStart);
+            if !duplicate && !superseded {
                 let native_timestamp = boundary
                     .native_timestamp
                     .as_deref()

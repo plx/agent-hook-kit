@@ -34,14 +34,18 @@
 //! # Forward compatibility
 //!
 //! Inputs are read tolerantly. Unknown top-level and `toolCall` fields are
-//! kept in `extra` maps. Open vocabularies such as [`TerminationReason`] keep
-//! values this snapshot does not list in an `Unknown` arm, verbatim, and a
-//! missing or `null` `toolCall.args` reads as an empty object. Input structs
-//! and the [`Event`], [`AnyInput`], and [`AnyCommandOutput`] enums are
-//! `#[non_exhaustive]`, so they can gain documented fields and events without
-//! a breaking change. Strict validation of documented values belongs to the
-//! contract schemas used by conformance, not to runtime parsing. A payload
-//! that does not fit the selected event is reported as
+//! kept in `extra` maps, `toolCall.id` is kept as raw JSON of any type, and
+//! `hookEventName` is kept verbatim and never checked against the selected
+//! event. Open vocabularies such as [`TerminationReason`] keep values this
+//! snapshot does not list in an `Unknown` arm, verbatim, and a missing or
+//! `null` `toolCall.args` reads as an empty object. Input structs, the
+//! [`SessionStartOutput`], [`PreInvocationOutput`], and [`PreToolUseOutput`]
+//! responses, and the [`Event`], [`AnyInput`], and [`AnyCommandOutput`] enums
+//! are `#[non_exhaustive]`, so they can gain documented fields and events
+//! without a breaking change. Strict validation of documented value sets
+//! belongs to the contract schemas used by conformance, not to runtime
+//! parsing, but a field of the wrong JSON type is rejected. A payload that
+//! does not fit the selected event is reported as
 //! `HookkitError::InvalidInputForHint`.
 #![deny(missing_docs)]
 
@@ -312,8 +316,10 @@ pub struct PreInvocationInput {
     pub hook_event_name: Option<String>,
     /// The agent's working directory, as sent by CLI 1.5.4 and later.
     ///
-    /// Only the release notes mention it. It is not the hook process's
-    /// working directory, which for a plugin hook is the plugin root.
+    /// Only the release notes mention it. It can differ from the hook
+    /// process's working directory, which for a plugin hook is the plugin
+    /// root; the working directory of workspace and global hooks is
+    /// undocumented.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<Utf8PathBuf>,
     /// Zero-based sequence number of the current model invocation. The first
@@ -356,6 +362,9 @@ pub enum InjectStep {
     /// The reference no longer documents a `toolCall` step, and the
     /// `docs-2026-11-25-r1` output schemas reject one. Whether the runtime
     /// still accepts it is unknown.
+    #[deprecated(
+        note = "Antigravity no longer documents the `toolCall` inject step (antigravity/docs-2026-11-25-r1), and the output schemas reject it"
+    )]
     ToolCall {
         /// Tool call serialized under the native `toolCall` key.
         #[serde(rename = "toolCall")]
@@ -404,6 +413,7 @@ impl InjectStep {
         note = "Antigravity no longer documents the `toolCall` inject step (antigravity/docs-2026-11-25-r1), and the output schemas reject it"
     )]
     pub fn tool_call(tool_call: serde_json::Map<String, serde_json::Value>) -> Self {
+        #[allow(deprecated)]
         Self::ToolCall { tool_call }
     }
 
@@ -458,7 +468,7 @@ impl InjectStep {
 }
 
 /// Body of an [`InjectStep::SystemMessage`] step.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct SystemMessageStep {
@@ -766,12 +776,13 @@ pub struct ToolCall {
     /// re-serializes exactly as it was sent: without the key, as `null`, or
     /// as `{}`.
     pub args: serde_json::Map<String, serde_json::Value>,
-    /// Tool-call identifier exactly as sent, which CLI 1.5.4 and later share
-    /// between a `PreToolUse` call and its `PostToolUse` call.
+    /// Tool-call identifier exactly as sent. CLI 1.5.4 and later send it so
+    /// that a `PostToolUse` call can be matched to its `PreToolUse` call.
     ///
-    /// Only the release notes mention it, and they do not say whether it is
-    /// a string or a number, so it is kept as raw JSON: `None` when the key
-    /// is absent and `Some(Value::Null)` for an explicit `null`. Use
+    /// Only the release notes mention it. They do not say whether it is a
+    /// string or a number, and that it is equal across the pair is
+    /// unobserved, so it is kept as raw JSON: `None` when the key is absent
+    /// and `Some(Value::Null)` for an explicit `null`. Use
     /// [`ToolCall::id_str`] for a string identifier.
     pub id: Option<serde_json::Value>,
     /// Unknown tool-call fields retained for forward compatibility.
@@ -951,10 +962,11 @@ pub enum ToolDecision {
     /// otherwise prompt, while honoring explicit user-configured rules.
     ///
     /// Its introduction is undated (CLI 1.5.7 already fixes it), and a build
-    /// that predates it may treat it as an unknown decision, which earlier
-    /// CLI builds reported as a hook error. Before CLI 1.5.7 and Antigravity
-    /// App v2.33.0 it could also bypass an organization's admin-enforced
-    /// review.
+    /// that predates it may treat it as an unknown decision: CLI builds
+    /// before 1.0.16 failed even an empty decision with an "unknown pre-tool
+    /// hook decision" error. Before CLI 1.5.7 it could also bypass an
+    /// organization's admin-enforced review; Antigravity App v2.33.0 fixes
+    /// hooks bypassing enforced review without naming the value.
     AutoApprove,
     /// `deny`: hard-block the tool call immediately.
     Deny,
@@ -1159,12 +1171,17 @@ impl EventSpec for PreToolUse {
             .retain(|resource| seen.insert(resource.clone()));
         ProcessEmission::command_json(Self::CONTRACT, &output)
     }
+    /// Reports the common fields and, when the payload carries a string
+    /// `toolCall.id` (CLI 1.5.4 and later), that tool-call identifier.
     fn context(input: &Self::Input) -> NativeContext {
-        common_context(
-            &input.conversation_id,
-            &input.workspace_paths,
-            &input.transcript_path,
-            &input.artifact_directory_path,
+        tool_context(
+            common_context(
+                &input.conversation_id,
+                &input.workspace_paths,
+                &input.transcript_path,
+                &input.artifact_directory_path,
+            ),
+            Some(&input.tool_call),
         )
     }
 }
@@ -1305,12 +1322,17 @@ impl EventSpec for PostToolUse {
             0,
         ))
     }
+    /// Reports the common fields and, when the payload carries a string
+    /// `toolCall.id` (CLI 1.5.4 and later), that tool-call identifier.
     fn context(input: &Self::Input) -> NativeContext {
-        common_context(
-            &input.conversation_id,
-            &input.workspace_paths,
-            &input.transcript_path,
-            &input.artifact_directory_path,
+        tool_context(
+            common_context(
+                &input.conversation_id,
+                &input.workspace_paths,
+                &input.transcript_path,
+                &input.artifact_directory_path,
+            ),
+            input.tool_call.as_ref(),
         )
     }
 }
@@ -1641,9 +1663,10 @@ impl EventSpec for Stop {
 ///
 /// Antigravity payloads carry no documented discriminator (CLI 1.5.4 and
 /// later may send `hookEventName`, which is not relied on), so a payload
-/// that does not fit the selected event's shape (a missing or mistyped field) is reported
-/// as [`hookkit_core::HookkitError::InvalidInputForHint`], as the Claude Code
-/// and Codex parsers report a schema violation of a known event.
+/// that does not fit the selected event's shape (a missing or mistyped
+/// field) is reported as [`hookkit_core::HookkitError::InvalidInputForHint`],
+/// as the Claude Code and Codex parsers report a schema violation of a known
+/// event.
 fn deserialize_input<T: serde::de::DeserializeOwned>(
     invocation: &RawInvocation,
     event: EventId,
@@ -1675,9 +1698,25 @@ fn common_context(
     }
 }
 
+/// Adds the tool call's string identifier to a tool event's context.
+///
+/// The identifier is the same value [`ToolCall::id_str`] returns, so the
+/// runtime context and the aligned accessors agree. A numeric, blank, or
+/// missing `id` leaves the context without one.
+fn tool_context(context: NativeContext, tool_call: Option<&ToolCall>) -> NativeContext {
+    NativeContext {
+        tool_call_id: tool_call
+            .and_then(ToolCall::id_str)
+            .and_then(|id| hookkit_core::ToolCallId::new(id).ok()),
+        ..context
+    }
+}
+
 /// Context for both invocation events. Invocation 0 still reports an
-/// `InvocationStart` boundary: builds that predate `SessionStart` send no
-/// other start signal, and session-state keeps the earliest boundary.
+/// `InvocationStart` boundary, because builds that predate `SessionStart`
+/// send no other start signal. Session state treats it only as a fallback:
+/// once a `SessionStart` epoch is recorded for the conversation, the
+/// invocation-zero boundary adds no epoch.
 fn invocation_context(input: &PreInvocationInput) -> NativeContext {
     let session_boundary = (input.invocation_num == 0).then(|| {
         hookkit_core::SessionBoundaryContext::observed(
@@ -2497,18 +2536,43 @@ mod tests {
             assert_eq!(pre.tool_call.id_str(), expected_str, "{id}");
             assert!(pre.tool_call.extra.is_empty(), "{id}");
             assert_eq!(serde_json::to_value(&pre).unwrap(), *raw.json(), "{id}");
+            // The runtime context carries exactly the string identifier.
+            assert_eq!(
+                PreToolUse::context(&pre)
+                    .tool_call_id
+                    .as_ref()
+                    .map(hookkit_core::ToolCallId::as_str),
+                expected_str,
+                "{id}"
+            );
             let post = PostToolUse::parse(&raw).unwrap();
             assert_eq!(post.tool_call.as_ref().unwrap().id_str(), expected_str);
             assert_eq!(serde_json::to_value(&post).unwrap(), *raw.json(), "{id}");
+            assert_eq!(
+                PostToolUse::context(&post)
+                    .tool_call_id
+                    .as_ref()
+                    .map(hookkit_core::ToolCallId::as_str),
+                expected_str,
+                "{id}"
+            );
         }
+        // A whitespace-only identifier is blank, not an identifier.
+        let blank = PreToolUse::parse(&invocation(&base.replace("ID", r#""  ""#))).unwrap();
+        assert_eq!(blank.tool_call.id_str(), None);
+        assert!(PreToolUse::context(&blank).tool_call_id.is_none());
 
         let absent = invocation(&base.replace(r#","id":ID"#, ""));
         let pre = PreToolUse::parse(&absent).unwrap();
         assert_eq!(pre.tool_call.id, None);
         assert_eq!(serde_json::to_value(&pre).unwrap(), *absent.json());
-        // The tool-call identifier is not exposed as NativeContext's, whose
-        // consumers correlate calls; the pairing is undocumented.
         assert!(PreToolUse::context(&pre).tool_call_id.is_none());
+        // A PostToolUse payload without `toolCall` has no identifier either.
+        let without_call = invocation(
+            r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","stepIdx":20}"#,
+        );
+        let post = PostToolUse::parse(&without_call).unwrap();
+        assert!(PostToolUse::context(&post).tool_call_id.is_none());
     }
 
     #[test]

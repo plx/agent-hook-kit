@@ -1814,9 +1814,11 @@ fn antigravity_session_start_observer_records_a_startup_epoch() {
         TimestampProvenance::LifecycleHookObservation
     );
     let conversation_start = metadata.conversation.started_at.clone();
+    let startup_epoch = metadata.current_session.clone();
 
     // The first PreInvocation still reports its fallback boundary, but the
-    // SessionStart epoch remains the conversation's start.
+    // SessionStart epoch remains both the conversation's start and the
+    // current session epoch.
     let mut invocation = start.clone();
     invocation["invocationNum"] = 0.into();
     invocation["initialNumSteps"] = 1.into();
@@ -1838,6 +1840,7 @@ fn antigravity_session_start_observer_records_a_startup_epoch() {
         .metadata()
         .unwrap();
     assert_eq!(metadata.conversation.started_at, conversation_start);
+    assert_eq!(metadata.current_session, startup_epoch);
 }
 
 // --- turn-completion-agent-hook consuming session state ---

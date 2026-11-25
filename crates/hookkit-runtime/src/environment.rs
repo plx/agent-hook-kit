@@ -294,4 +294,63 @@ mod tests {
                 .unwrap();
         assert!(environment.plugin.is_none());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn stray_non_utf8_antigravity_plugin_variable_leaves_an_ordinary_hook() {
+        use hookkit_antigravity::AntigravityCommandEnvironment as Antigravity;
+
+        // Antigravity writes both plugin paths as UTF-8, so a non-UTF-8 value
+        // is inherited state: it is skipped, and the incomplete pair that
+        // remains is not a plugin.
+        let sink = Recording::default();
+        let captured = capture_from(
+            Declared {
+                names: Antigravity::VARIABLE_NAMES,
+                lenient: Antigravity::LENIENT_VARIABLE_NAMES,
+                prefixes: Antigravity::VARIABLE_PREFIXES,
+            },
+            |name| match name {
+                "PLUGIN_ROOT" => Some(non_utf8()),
+                "PLUGIN_DATA" => Some(OsString::from("/data/plugin")),
+                _ => None,
+            },
+            [],
+            &sink,
+        )
+        .unwrap();
+        assert!(!captured.contains_key("PLUGIN_ROOT"));
+        assert_eq!(captured.get("PLUGIN_DATA"), Some("/data/plugin"));
+        assert_eq!(sink.0.lock().unwrap().len(), 1);
+        let event = EventId::builtin(HarnessId::ANTIGRAVITY, "PreToolUse");
+        assert!(
+            Antigravity::from_variables(&event, &captured)
+                .unwrap()
+                .plugin
+                .is_none()
+        );
+
+        // A complete UTF-8 pair is the plugin's paths.
+        let captured = capture_from(
+            Declared {
+                names: Antigravity::VARIABLE_NAMES,
+                lenient: Antigravity::LENIENT_VARIABLE_NAMES,
+                prefixes: Antigravity::VARIABLE_PREFIXES,
+            },
+            |name| match name {
+                "PLUGIN_ROOT" => Some(OsString::from("/plugins/demo")),
+                "PLUGIN_DATA" => Some(OsString::from("/data/plugin")),
+                _ => None,
+            },
+            [],
+            &sink,
+        )
+        .unwrap();
+        let plugin = Antigravity::from_variables(&event, &captured)
+            .unwrap()
+            .plugin
+            .unwrap();
+        assert_eq!(plugin.root, "/plugins/demo");
+        assert_eq!(plugin.data, "/data/plugin");
+    }
 }

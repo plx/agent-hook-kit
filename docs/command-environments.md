@@ -46,10 +46,10 @@ in the typed contract. In particular:
   per-harness rules below.
 - A declared exact name with a non-Unicode value is rejected instead of being
   silently changed. A variable matched only through a declared prefix, or named
-  in the spec's `LENIENT_VARIABLE_NAMES` (Codex's plugin variables, which Codex
-  always writes as UTF-8, and Claude Code's `CLAUDE_PID`), is skipped with a
-  diagnostics warning instead, so stray inherited state cannot disable every
-  hook.
+  in the spec's `LENIENT_VARIABLE_NAMES` (Codex's and Antigravity's plugin
+  variables, which both harnesses write as UTF-8, and Claude Code's
+  `CLAUDE_PID`), is skipped with a diagnostics warning instead, so stray
+  inherited state cannot disable every hook.
 - `Debug` for `EnvironmentVariables`, Claude plugin options, and the Claude
   messaging token prints names but redacts values, because they can contain
   secrets.
@@ -163,11 +163,12 @@ are present and non-empty. This is low-confidence: the plugin authoring guide
 documents the two variables only for plugin MCP servers and steers hooks to
 relative paths (plugin hooks run with the plugin root as their working
 directory), App and IDE behavior is undocumented, and Antigravity sets no
-`CLAUDE_*` aliases, so a pair inherited from an outer Codex or Claude Code
-plugin hook is indistinguishable. Ordinary workspace and global hooks receive
-neither variable. Variables named in the Antigravity CLI changelog, such as
-`GEMINI_API_KEY` or `AGY_CLI_HIDE_LOGO`, configure the CLI itself and are not
-hook state.
+`CLAUDE_*` aliases, so a pair inherited from an outer process, such as a Codex
+plugin hook (Codex sets the same two names), is indistinguishable. A partial
+or empty pair, or a non-UTF-8 value, yields no plugin instead of failing the
+hook. Ordinary workspace and global hooks receive neither variable. Variables
+named in the Antigravity CLI changelog, such as `GEMINI_API_KEY` or
+`AGY_CLI_HIDE_LOGO`, configure the CLI itself and are not hook state.
 
 ### Deliberate exclusions
 

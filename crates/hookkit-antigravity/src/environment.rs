@@ -13,9 +13,9 @@
 //!
 //! Unlike Codex, Antigravity sets no `CLAUDE_*` aliases next to the two
 //! variables, so a `PLUGIN_ROOT`/`PLUGIN_DATA` pair inherited from an outer
-//! process, such as a Codex or Claude Code plugin hook that launched
-//! Antigravity, cannot be told apart from one Antigravity set. Treat
-//! [`AntigravityCommandEnvironment::plugin`] as a low-confidence hint.
+//! process, such as a Codex plugin hook (Codex sets the same two names) that
+//! launched Antigravity, cannot be told apart from one Antigravity set.
+//! Treat [`AntigravityCommandEnvironment::plugin`] as a low-confidence hint.
 
 use hookkit_core::{
     CommandEnvironmentSpec, EnvironmentVariables, EventId, HarnessId, HookkitError, Utf8PathBuf,

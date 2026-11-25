@@ -110,7 +110,8 @@ milliseconds. Every `CapturedTimestamp` carries a `TimestampProvenance`:
   the start hook ran;
 - `inferred_invocation_boundary`: Antigravity builds that predate
   `SessionStart` send no start event; invocation zero is then the best typed
-  boundary available;
+  boundary available. It is recorded only while no other epoch exists for the
+  session, so it never replaces a `SessionStart` epoch;
 - `first_hook_observation`: no start event was seen, so this is a truthful lower
   precision fallback.
 
@@ -140,9 +141,8 @@ hook. Earlier builds wrote one timestamped file per invocation; the next
 Repeated lifecycle hooks with a native occurrence key deduplicate exactly
 (Antigravity `SessionStart` is keyed by its conversation, and invocation zero
 by conversation and invocation number). Claude and Codex do not expose such a
-key, so observations of the same cause
-within a 30-second window are coalesced to accommodate multiple independently
-installed start hooks.
+key, so observations of the same cause within a 30-second window are coalesced
+to accommodate multiple independently installed start hooks.
 
 For the most precise start time, install the shipped no-op observer on the
 native `SessionStart` event:
