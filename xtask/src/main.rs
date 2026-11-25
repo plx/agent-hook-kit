@@ -2118,6 +2118,10 @@ const FROZEN_LEDGER: &[(&str, &str)] = &[
         "eae132375311f705ab6a8b6c8dcbc947797f47cbc837767ec873859c797891c9",
     ),
     (
+        "harnesses/antigravity/snapshots/docs-2026-11-25-r1/snapshot.yaml",
+        "f845e2aef88ee62c381119e4d9fb4662d4057e21a88fe574f5cddbdbb218adba",
+    ),
+    (
         "harnesses/claude-code/snapshots/docs-2026-07-12-r1/snapshot.yaml",
         "91fcb7739acb1500afaeabded55591f4353beb5c21017b5f719a19ba2c2cc4d9",
     ),
@@ -2138,6 +2142,10 @@ const FROZEN_LEDGER: &[(&str, &str)] = &[
         "0ee2aa35b2710bee24309e9c618e4931858daa91a236c99ea96808a296197e82",
     ),
     (
+        "harnesses/claude-code/snapshots/docs-2026-11-25-r1/snapshot.yaml",
+        "ad761c087142e34d701ed04a84042eb7f995ee55ecf9ca2a3ff20bc3f8791795",
+    ),
+    (
         "harnesses/codex/snapshots/commit-1e59dc5-r1/snapshot.yaml",
         "9d0a961c29057e9e3c4777a4b262503665ff9f29c304fbb409ec05ab5b39c6f4",
     ),
@@ -2156,6 +2164,10 @@ const FROZEN_LEDGER: &[(&str, &str)] = &[
     (
         "harnesses/codex/snapshots/commit-ff6aec9-r2/snapshot.yaml",
         "521b9cd86ff64171cd74f602053c6145f3ab2a6ebac93c4bf331f45d3306d701",
+    ),
+    (
+        "harnesses/codex/snapshots/commit-3d86e43-r1/snapshot.yaml",
+        "85cc1e0ae676866d69a4b43d56d84cc3b911e0fd97397554548d8f6c72dfbe7a",
     ),
     (
         "supplements/command-environments/command-environments-2026-08-05-r2/supplement.yaml",

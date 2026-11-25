@@ -1,9 +1,10 @@
 format_version: 1
 id: commit-3d86e43-r1
 harness: codex
-state: draft
+state: frozen
 retrieved: 2026-11-25
 sources_file: sources.yaml
+manifest_file: MANIFEST.sha256
 events:
 - wire_name: SessionStart
   rust_key: session_start
