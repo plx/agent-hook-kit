@@ -1,0 +1,64 @@
+format_version: 1
+id: antigravity/docs-2026-11-25-r1/PostToolUse
+harness: antigravity
+snapshot: docs-2026-11-25-r1
+event:
+  wire_name: PostToolUse
+  rust_key: post_tool_use
+  category: tool
+  identification:
+    inferability: ambiguous
+    overlaps: [PreToolUse, SessionStart]
+schemas:
+  input:
+    file: input.schema.json
+    origin: derived
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-ide-hooks-redirect, antigravity-ide-hooks-archive-2026-09-16, antigravity-hooks-archive-2026-07-21, antigravity-hooks-archive-2026-08-16, antigravity-changelog, antigravity-cli-changelog, antigravity-build-plugins, antigravity-mcp]
+    assurance: { confidence: low, verification: source-reviewed }
+  outputs:
+    - id: command-response
+      file: output.command.schema.json
+      origin: derived
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-build-plugins]
+      assurance: { confidence: low, verification: source-reviewed }
+bindings:
+  command:
+    kind: process
+    request: { channel: stdin, framing: single-document-at-eof, content_kind: json }
+    outcomes:
+      - id: no-op
+        effect: continue
+        exit: { exact: 0 }
+        stdout: { presence: required, role: protocol-value, content_kind: json }
+        stderr: { presence: optional, role: diagnostics, content_kind: text, encoding: utf-8 }
+        output_schema: command-response
+        sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-build-plugins]
+        assurance: { confidence: low, verification: source-reviewed }
+      - id: failure
+        effect: nonblocking-error
+        exit: { range: { min: 1, max: 255 } }
+        stdout: { presence: optional, role: ignored, content_kind: opaque }
+        stderr: { presence: optional, role: ignored, content_kind: opaque }
+        sources: [antigravity-build-plugins, antigravity-cli-changelog, antigravity-changelog]
+        assurance: { confidence: low, verification: source-reviewed }
+handler_kinds: [command]
+fixtures: fixtures.yaml
+uncertainties:
+  - "The failure outcome rests on build-plugins.md, which says a plugin command hook must exit 0 with a JSON response and that any non-zero exit is logged as a hook execution error and ignored (failing open). Fail-open is inferred, not documented, for workspace and global hooks and for the App and IDE; the hooks reference itself defines no exit codes, and exit 2 has no special meaning. Antigravity App v2.12.0 reports a failing custom hook as an error and continues the conversation, where earlier builds ended the session."
+  - "From CLI 1.4.3 a PostToolUse hook that fails to run - its command is missing, it exits with an error, it times out, or it prints invalid JSON - is logged and the tool keeps its result; earlier CLI builds marked the tool call failed. This is the only event for which invalid stdout at exit 0 is documented as ignored. The default handler timeout is 30 seconds (60 seconds for hooks converted by agy plugin import, CLI 1.5.5), and from CLI 1.5.14 a timed-out or canceled hook's whole process group is terminated on Linux and macOS."
+  - "Surfaces disagree on toolCall. The unified reference documents toolCall for the App, CLI, and IDE alike, and /docs/ide/hooks now redirects to it. The IDE-specific reference, however, documented PostToolUse input and its example without toolCall in every archived copy through 2026-09-16; it describes IDE v2.5.5 and earlier, which the ide-reference-example fixture keeps as a regression. IDE v2.6.0 (2026-10-26), v2.7.0, and v2.8.0 rebuilt the IDE agent on the built-in Antigravity extension with 'seamless feature parity', but no IDE note mentions hooks, so current IDE payloads are inferred. The generic reference also omitted toolCall on 2026-07-21, and CLI builds before 1.1.9 fired PostToolUse on non-tool steps, so toolCall stays optional; current App and CLI payloads are expected to carry it."
+  - "modelName is listed among the common input fields and appears in every official example, but it was first documented between the 2026-07-21 and 2026-08-16 archive captures, was absent from docs-2026-08-04-r1 and from every IDE-specific copy, and no release note dates it. It stays optional so that payloads from earlier builds and from IDE v2.5.5 and earlier still validate. Before CLI 1.5.3 a session using a custom model sent a placeholder or empty modelName, so a blank value means unknown rather than a model id."
+  - "lastUserInput is a documented common field (the most recent user prompt), added to hook stdin by CLI 1.4.7; Antigravity App v2.28.0 says hooks now receive the current user message without naming the key. It is optional because earlier builds, and the IDE and IDE extensions for which no note mentions it, may omit it, and the official PostToolUse example omits it."
+  - "hookEventName, cwd, and toolCall.id were added to hook input by CLI 1.5.4 according to its release notes, so that one command can serve several events and a PostToolUse call can be matched to its PreToolUse call; the reference does not document them. hookEventName and cwd are optional strings, and toolCall.id carries no type constraint because the evidence does not rule out a number. No App, IDE, or IDE-extension note mentions them, whether hookEventName uses the PascalCase event names is undocumented, and whether toolCall.id is stable across the pair is unobserved. The JSON cwd is the agent's working directory, which can differ from the hook process's working directory (the plugin root for plugin hooks)."
+  - "PostToolUse is identified by payload shape only and overlaps PreToolUse and the common-fields-only SessionStart. hookEventName (CLI 1.5.4 and later) may name the event, but the reference does not document it and earlier builds do not send it, so it cannot be a catalog discriminator."
+  - "workspacePaths may be an empty array. The reference sets no minimum, and release notes describe conversations without a workspace (CLI 1.2.2, Antigravity App v2.14.0 standalone conversations) while global hooks load from ~/.gemini/config/hooks.json. Whether such payloads send [] or omit the field is undocumented, so the field stays required."
+  - "transcriptPath and artifactDirectoryPath are described as absolute paths, but every official example uses a literal ~/ prefix; the schema does not require an absolute or expanded path."
+  - "<app_data_dir> is documented only for the App (~/.gemini/antigravity), the CLI (~/.gemini/antigravity-cli), and the IDE (~/.gemini/antigravity-ide). IDE extensions have none: the ACP-based JetBrains, Zed, and Xcode extensions store conversation artifacts under <GEMINI_HOME>/antigravity-acp (v1.0.0), which may or may not be their payload <app_data_dir>, and their v1.5.0 multi-root support may send several workspacePaths. mcp.md places the IDE's data under ~/.gemini/antigravity, contradicting the hooks reference. The schemas constrain no path prefix."
+  - "stepIdx is the 0-based index of the completed step in the whole conversation trajectory, not an index within the current model invocation."
+  - "error is optional, and the reference says it is empty if the tool call succeeded, so an empty string and absence both mean success. CLI 1.2.5 records signal-killed commands as canceled rather than as successful exit-0 runs, which can change the reported error. CLI 1.4.8 returns failed calls, including calls to a tool that does not exist and canceled or interrupted calls, to the agent as errors rather than ordinary results; that note concerns what the model sees, so whether PostToolUse fires for such calls, and what error then contains, is undocumented."
+  - "build-plugins.md says PostToolUse receives the tool call and any error, not the tool output; no input field carries the result."
+  - "toolCall.args is typed as an object, but the reference also documents a tool without arguments (list_permissions, Arguments: None) and never shows how such a call encodes them. Whether Antigravity then sends {}, null, or no args member is undocumented, so args is optional and nullable; a hook should treat a missing or null args as an empty object. Whether args echoes arguments a PreToolUse overwrite merged is undocumented."
+  - "toolCall.name and toolCall.args stay open. The reference lists 20 built-in tools with mixed argument casing (search_web, define_subagent, and ask_question use lower-case names), still lists find_by_name, grep_search, and list_dir although CLI 1.2.7 retired them from the default toolset, and lists view_file IsSkillFile but not the StartPage, EndPage, and MediaResolution arguments Antigravity App v2.11.0 added. Release notes name other tools (manage_inbox, read_resource, browser_* tools, run_workflow from CLI 1.5.9, update_steps from CLI 1.5.16). Lazy-loaded MCP tools, the default, arrive as call_mcp_tool with ServerName, ToolName, and Arguments; only eager MCP tools arrive as mcp_<serverName>_<toolName>."
+  - "The matcher is a regular expression over the tool name; an empty matcher or * matches all tools. An anchored full match and a special case for * are inferred, not stated. CLI 1.4.3 warns about a matcher that is not a valid regular expression and so never matches, while Antigravity App v2.6.0 rejects never-runnable configurations at load time."
+  - "The response is exactly {}, which build-plugins.md repeats. The reference defines no feedback channel, so exit-zero stderr is treated only as diagnostics and has no documented effect."
+  - "The reference supports only command handlers: type is optional, 'Currently only command is supported', and defaults to command, and build-plugins.md speaks of command hooks. plugins.md and build-plugins.md describe lifecycle hooks as 'shell commands or prompt evaluations', and release notes mention prompt hooks (CLI 1.1.23) and hooks that call a model (Antigravity App v2.6.0), but no prompt handler is documented, so none is inventoried."

@@ -1,0 +1,129 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, stepIdx: 0 }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 } }, stepIdx: 5, error: exit status 1, conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, modelName: gemini-3.6-flash-medium }
+    - id: successful-call
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: view_file, args: { AbsolutePath: /workspace/project/README.md } }, stepIdx: 6, error: "", conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: ide-reference-example
+      origin: official
+      sources: [antigravity-ide-hooks-archive-2026-09-16]
+      value: { stepIdx: 5, error: exit status 1, conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity-ide/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity-ide/brain/ec33ebf9-0cba-4100-8142-c61503f6c587 }
+    - id: list-permissions-null-args
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: list_permissions, args: null }, stepIdx: 8, error: "", conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: list-permissions-without-args
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: list_permissions }, stepIdx: 8, error: "", conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: paired-tool-call-id
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-cli-changelog]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 }, id: call_01 }, stepIdx: 20, error: "", conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity-cli/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity-cli/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, modelName: gemini-3.6-flash-medium, hookEventName: PostToolUse, cwd: /workspace/project }
+    - id: numeric-tool-call-id
+      origin: synthesized
+      sources: [antigravity-cli-changelog]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 }, id: 7 }, stepIdx: 20, error: "", conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, hookEventName: PostToolUse }
+    - id: unknown-tool-error
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-cli-changelog]
+      value: { toolCall: { name: nonexistent_tool, args: {} }, stepIdx: 11, error: tool not found, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: canceled-run-command
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-cli-changelog]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm run watch, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 } }, stepIdx: 13, error: canceled, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: call-mcp-tool
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-mcp]
+      value: { toolCall: { name: call_mcp_tool, args: { ServerName: github, ToolName: create_issue, Arguments: { title: x } } }, stepIdx: 10, error: "", conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: with-last-user-input
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-cli-changelog]
+      value: { toolCall: { name: view_file, args: { AbsolutePath: /workspace/project/README.md } }, stepIdx: 6, error: "", conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium, lastUserInput: Fix the failing unit test }
+    - id: multi-root-acp-extension
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-changelog]
+      value: { toolCall: { name: view_file, args: { AbsolutePath: /workspace/lib/README.md } }, stepIdx: 2, error: "", conversationId: c1, workspacePaths: [/workspace/app, /workspace/lib], transcriptPath: /home/u/.gemini/antigravity-acp/brain/c1/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: /home/u/.gemini/antigravity-acp/brain/c1 }
+  negative:
+    - id: invalid-tool-call
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { args: { CommandLine: npm test } }, stepIdx: 0 }
+      expected_pointer: /toolCall
+      expected_keyword: required
+    - id: missing-step-index
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} } }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-step-index
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: first }
+      expected_pointer: /stepIdx
+      expected_keyword: type
+    - id: invalid-model-name
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, modelName: 36 }
+      expected_pointer: /modelName
+      expected_keyword: type
+    - id: invalid-last-user-input
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, lastUserInput: 42 }
+      expected_pointer: /lastUserInput
+      expected_keyword: type
+    - id: invalid-hook-event-name
+      origin: synthesized
+      sources: [antigravity-cli-changelog]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, hookEventName: 3 }
+      expected_pointer: /hookEventName
+      expected_keyword: type
+    - id: invalid-error
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, error: 1 }
+      expected_pointer: /error
+      expected_keyword: type
+output:
+  - id: no-op
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: {}
+output_negative:
+  - id: non-empty-response
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference]
+    value: { decision: block }
+    expected_pointer: ""
+    expected_keyword: maxProperties
+process:
+  - id: no-op
+    binding: command
+    outcome: no-op
+    exit_code: 0
+    stdout_base64: e30=
+    stdout_sha256: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: failure
+    binding: command
+    outcome: failure
+    exit_code: 1
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: aG9vayBmYWlsZWQK
+    stderr_sha256: 339e9a9a2a85233d852616e657d6b262da208ce3ef1e7c8c5fa32659916f0257

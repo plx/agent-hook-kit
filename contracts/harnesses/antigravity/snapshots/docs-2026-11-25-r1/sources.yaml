@@ -1,0 +1,145 @@
+format_version: 1
+sources:
+  - id: antigravity-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/hooks
+    retrieved: 2026-11-25
+    revision: 'site deploy Last-Modified Wed, 25 Nov 2026 00:55:17 GMT'
+    content_sha256: 95015b077211200defd915604f75a6cb7dc1cbadda482c6cd6a5c37569ec8680
+    reproducibility: content-hash-only
+    limitations:
+      - The unified hook reference for the Antigravity App, Antigravity CLI, IDE extensions (VS Code, Visual Studio, Eclipse, JetBrains, Android Studio, Zed, Xcode), and Antigravity IDE is a mutable rendered page with site chrome and no checked-in capture; the hash covers the decoded 244063-byte HTML body returned by `curl --fail --silent --show-error --location --compressed` on 2026-11-25.
+      - docs-2026-09-30-r1 recorded 051967919edfb9904511c9a47e65115cb3def61c34f6f7e14924710df215f180 (141741 bytes) for this URL. Neither body was captured and the Internet Archive is unreachable from the retrieval environment, so the difference was reviewed through the Markdown source and against what docs-2026-09-30-r1 encodes, not byte by byte.
+      - The page carries the same hook content as hooks.md. The `?tab=ide` variant returns identical bytes; the App, CLI, and IDE tabs differ only in hook configuration locations and the `<app_data_dir>` value, not in the input/output contract.
+      - '"Antigravity 2.0" is now named "Antigravity App" with unchanged version numbering; these contracts cite its releases as Antigravity App vX.Y.Z.'
+      - IDE extensions are listed as a surface but have no configuration-location section and no documented `<app_data_dir>`. The response carries no ETag, and Last-Modified changes with every site deploy, so neither identifies a page revision.
+  - id: antigravity-hooks-markdown
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/hooks.md
+    retrieved: 2026-11-25
+    revision: 'weak ETag W/"6b0631f2-5337", Last-Modified Wed, 25 Nov 2026 00:55:14 GMT'
+    content_sha256: c500f806f5ccb285b0866d3fbbbfb4e5aa5c50b45f788446ac6ca76bd5b44f7a
+    reproducibility: content-hash-only
+    limitations:
+      - Official Markdown source of the unified hook reference, with no checked-in capture; the hash covers the decoded 21303-byte identity body that `curl --compressed` returns. The weak ETag encodes the deployed file's modification time and size, not a content revision.
+      - docs-2026-09-30-r1 recorded c1ce644786c46a666379af40e3983081887fa29245ead461be4235a92ffc80c3 (16795 bytes) for this URL. The earlier body was not captured, so the difference was reviewed against what docs-2026-09-30-r1 encodes. Changes documented only here (SessionStart, lastUserInput, auto_approve and the pass-through allow, PreToolUse overwrite, the systemMessage and errorMessage inject steps and the withdrawn toolCall step, PreInvocation terminationBehavior, and the hook enabled flag) can be dated only as after 2026-09-30 unless a release note dates them.
+      - 'It types `toolCall.args` as an object but documents `list_permissions` with "Arguments: None" and shows no payload for an argument-less call, which the PreToolUse and PostToolUse contracts record.'
+      - It still defines no exit codes and no stderr or invalid-stdout handling. It adds a default handler timeout of 30 seconds and says only the `command` handler type is supported (and is the default when `type` is omitted).
+      - It omits input fields that the CLI changelog adds and that these contracts therefore source to release notes only - hookEventName, cwd, and toolCall.id (CLI 1.5.4) and the Stop field continuation_active (CLI 1.5.6) - although it says field names use camelCase.
+      - 'Matcher semantics: a regular expression over the tool name, where "" or "*" match all tools, alternation matches either tool, and "browser_.*" matches a prefix. An anchored full match and a special case for "*" are inferred, not stated. CLI 1.4.3 warns about matchers that are not valid regular expressions and so never match, while Antigravity App v2.6.0 rejects never-runnable hook configurations at load time.'
+      - Configuration, which HookKit does not generate and which does not change stdin or stdout - hooks.json maps hook names to event definitions with an optional enabled flag; CLI hooks in ~/.gemini/antigravity-cli/settings.json are not loaded, superseding the location list in the 2026-09-29 audit; plugin-level hooks are listed for the App and CLI but not for the standalone IDE, although plugins.md documents IDE plugin loading; and `agy plugin import` gives converted hooks a 60-second default timeout (CLI 1.5.5) against 30 seconds in hooks.json.
+  - id: antigravity-ide-hooks-redirect
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/ide/hooks
+    retrieved: 2026-11-25
+    revision: 'site deploy Last-Modified Wed, 25 Nov 2026 00:55:21 GMT'
+    content_sha256: 9f497b7bebc851f1e93c3f4aebfe312e7a8b19d6f2ca5f30ffe52b9c7ef05c39
+    reproducibility: content-hash-only
+    limitations:
+      - The former IDE-specific hook reference is a 3956-byte page that redirects to /docs/hooks?tab=ide with a meta refresh and `location.replace`; the hash covers the decoded body. docs-2026-09-30-r1 recorded the 371-byte meta-refresh-only redirect 9570816c39c7cef1314bcbac2beca0e9c604634bc3dffafb6cc953f3ea714288 for this URL; the target is unchanged.
+  - id: antigravity-changelog
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/changelog.md
+    retrieved: 2026-11-25
+    revision: 'weak ETag W/"6b0631f1-a3af9", Last-Modified Wed, 25 Nov 2026 00:55:13 GMT'
+    content_sha256: f0bfcac6085100aebee39c3a1dbb8dca0bdb2f5d1642dfbd5b6db662f81ec99a
+    reproducibility: content-hash-only
+    limitations:
+      - Combined release notes for the Antigravity App (formerly Antigravity 2.0) through v2.35.1, CLI through v1.5.16, IDE Extensions (entries from 2026-08-18; VS Code extension through v1.13.0), SDK through v0.1.24, and IDE through v2.8.0, with no checked-in capture; the hash covers the decoded 670457-byte body returned by `curl --compressed`.
+      - docs-2026-09-30-r1 recorded 404ef735cb652cefd51649855e83809b0f17d50d91926d5b0bf3d27acb681b8a (268410 bytes) for this URL. Every entry after App v2.18.1, CLI 1.2.14, SDK v0.1.18, and IDE v2.5.5 was reviewed, together with the IDE Extensions section, whose presence in the earlier body is unknown.
+      - Release notes describe runtime behavior in prose only and give no types, but they now name hook input fields (lastUserInput, hookEventName, cwd, toolCall.id, continuation_active), plugin-hook environment variables, and failure handling, some of them ahead of the reference.
+      - IDE v2.6.0 (2026-10-26), v2.7.0, and v2.8.0 rebuilt the IDE agent on the built-in Antigravity extension with "seamless feature parity", but no IDE or IDE Extensions note mentions a hook payload or response, so current IDE payloads are inferred rather than documented.
+      - Hook behavior the reference does not carry is recorded only as limitations or uncertainties - Antigravity App v2.17.0 custom-agent `hooks:` front matter, CLI 1.5.14 handling of plugins whose plugin.json declares an Agent Plugins `$schema`, and per-surface timeout defaults. SDK hook items (OnSessionStartHook in SDK v0.1.5, argument rewriting in SDK v0.1.13) concern in-process SDK hooks, not hooks.json command hooks.
+      - Hook-loading fixes that change neither stdin nor stdout were reviewed and are not encoded - ADC hook loading (CLI 1.4.7), hooks.json files with a UTF-8 byte order mark (CLI 1.5.8, CLI 1.5.9, Antigravity App v2.33.0), pluginControls (CLI 1.5.9, CLI 1.5.16), Auto mode still asking before editing hooks.json (CLI 1.5.16), custom-agent relative hook paths (Antigravity App v2.23.0, CLI 1.3.1), and Remote Control honoring a hook that requires confirmation each time (CLI 1.5.10). A plugin's hooks/hooks.json is not read, and a Claude Code-style top-level hooks key loads as a single hook named hooks (CLI 1.4.3); CLI 1.5.14 fixed plugin listings that reported the hooks.json of a plugin whose plugin.json declares an Agent Plugins $schema as hooks named $schema and hooks.
+  - id: antigravity-cli-changelog
+    kind: official-documentation
+    authority: primary
+    url: https://raw.githubusercontent.com/google-antigravity/antigravity-cli/bb5c8da497ef2eb2e2b98e6a092baed90c567938/CHANGELOG.md
+    retrieved: 2026-11-25
+    revision: bb5c8da497ef2eb2e2b98e6a092baed90c567938
+    content_sha256: cbbe47863d9e029d0ba8d4314c772be4fc5581a3214191a18e79d427a9725815
+    reproducibility: pinned-revision
+    limitations:
+      - CLI release notes through 1.5.16, not vendored. The URL names the raw file at the pinned commit, so `curl --compressed <url>` reproduces the recorded hash.
+      - The pinned commit was the head of main on 2026-11-25. Its diff from eaf9e06660d2ca8f20f1474ed03f10e3dbfd35e5, the commit docs-2026-09-30-r1 pinned with content hash 09edf2e8af87f1788348e4ec62e9d2ab26f9f90cfc48fca54dc0e14fe9c31d2b, is the single insertion hunk 6a7,651 (1.2.15 through 1.5.16), so no earlier release note was edited.
+  - id: antigravity-permissions-reference
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/permissions.md
+    retrieved: 2026-11-25
+    revision: 'weak ETag W/"6b0631f3-8b72", Last-Modified Wed, 25 Nov 2026 00:55:15 GMT'
+    content_sha256: ca9048c14ca975a7ab19133d267bdd0999e11e30b213d0ba4f07dbcd98997742
+    reproducibility: content-hash-only
+    limitations:
+      - Defines the `action(target)` permission-resource vocabulary used by PreToolUse `permissionOverrides`; no checked-in capture. The hash covers the decoded 35698-byte body returned by `curl --compressed`. docs-2026-09-30-r1 recorded f2dc8d81a16b037fb1493eb8976fa0b55fa9453cb156bbb872f7850ce9aad4bd (26356 bytes) for this URL.
+      - The App's updated permission settings list read_file, write_file, read_url, execute_url, download_url (configurable from App v2.30.0), command, and mcp; its previous permission settings add unsandboxed; the CLI lists read_file, write_file, read_url, execute_url, command, unsandboxed (business and enterprise accounts only; other accounts ignore it with a warning), and mcp. No section says which actions a hook's permissionOverrides honors, on which surfaces, or how overrides combine with the decision.
+  - id: antigravity-build-plugins
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/build-plugins.md
+    retrieved: 2026-11-25
+    revision: 'weak ETag W/"6b0631f1-8c95", Last-Modified Wed, 25 Nov 2026 00:55:13 GMT'
+    content_sha256: 587b736b48409a193d27ccb8b2ef177f56c36e5dd62c6bbede0dc86b976d32cb
+    reproducibility: content-hash-only
+    limitations:
+      - Official plugin-authoring page, first cited by this snapshot, with no checked-in capture; the hash covers the decoded 35989-byte body returned by `curl --compressed`.
+      - It documents plugin command hooks only (lines 455-497) - they run with their working directory set to the plugin root, must exit 0 and write a JSON response to stdout, and any non-zero exit is logged as a hook execution error and ignored (failing open). Fail-open for workspace and global hooks is inferred from it, not stated.
+      - It documents PLUGIN_ROOT and PLUGIN_DATA only for plugin MCP server processes (lines 248-249, 257) and tells hook authors to use relative paths instead (line 255); the CLI changelog adds both variables to plugin hook commands from CLI 1.5.3.
+      - 'Its per-event summary table (lines 491-497) paraphrases the reference: it shows a SessionStart userMessage inject step and a PreToolUse overwrite, describes PreInvocation and PostInvocation per user turn, and says a Stop hook may return {} to allow the stop although the reference marks decision Required. Its "mcp_.*" matcher example matches only eager MCP tools, and its edit_file matcher example names no reference tool.'
+      - It and plugins.md describe lifecycle hooks as "Synchronous shell commands or prompt evaluations" (line 240), although the reference supports only the command handler type.
+  - id: antigravity-plugins
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/plugins.md
+    retrieved: 2026-11-25
+    revision: 'weak ETag W/"6b0631f3-3a43", Last-Modified Wed, 25 Nov 2026 00:55:15 GMT'
+    content_sha256: a6ce5caa3bdaae7627b10221f7b464a0f81f3e1cdd0ecc283878afe715298d96
+    reproducibility: content-hash-only
+    limitations:
+      - Official plugin overview, first cited by this snapshot, with no checked-in capture; the hash covers the decoded 14915-byte body returned by `curl --compressed`.
+      - It lists bundled PreToolUse, PostToolUse, SessionStart, and Stop plugin hooks (line 66), describes lifecycle hooks as shell commands or prompt evaluations (line 23), and documents plugin loading in the standalone IDE (lines 246-254), while the hooks reference lists plugin-level hooks only for the App and CLI.
+  - id: antigravity-mcp
+    kind: official-documentation
+    authority: primary
+    url: https://antigravity.google/docs/mcp.md
+    retrieved: 2026-11-25
+    revision: 'weak ETag W/"6b0631f2-5b70", Last-Modified Wed, 25 Nov 2026 00:55:14 GMT'
+    content_sha256: 78027dc5fe70bb42a2ecd698ff8003703ad842f31ef81d1b70238e384f3da168
+    reproducibility: content-hash-only
+    limitations:
+      - Official MCP page, first cited by this snapshot, with no checked-in capture; the hash covers the decoded 23408-byte body returned by `curl --compressed`.
+      - Lazy-loaded MCP tools, the default, are invoked through the built-in call_mcp_tool tool with ServerName, ToolName, and Arguments (line 199); only tools configured with "eager" true are called directly as mcp_<serverName>_<toolName> (lines 203-205). That is what toolCall.name carries and what a PreToolUse or PostToolUse matcher sees.
+      - It places the MCP schema cache under ~/.gemini/antigravity/mcp/ for both the App and the IDE (line 197), while the hooks reference gives ~/.gemini/antigravity-ide as the IDE's `<app_data_dir>`.
+  - id: antigravity-hooks-archive-2026-07-21
+    kind: archived-official-documentation
+    authority: secondary
+    url: https://web.archive.org/web/20260721131156id_/https://antigravity.google/docs/hooks
+    retrieved: 2026-09-30
+    content_sha256: f80ee1810455129ddb7033e8efe8799b9a5cd2a758b22daab02109339c18f0d4
+    reproducibility: content-hash-only
+    limitations:
+      - Internet Archive capture (original bytes, 140496) of the generic reference as last archived before docs-2026-08-04-r1. It documents no modelName, no PostToolUse toolCall, and no deny_unless_prior_grant, and says PostInvocation fires after tool calls finish.
+      - Retained unchanged from docs-2026-09-30-r1 as historical evidence; the Internet Archive was unreachable from the 2026-11-25 retrieval environment.
+  - id: antigravity-hooks-archive-2026-08-16
+    kind: archived-official-documentation
+    authority: secondary
+    url: https://web.archive.org/web/20260816124320id_/https://antigravity.google/docs/hooks/
+    retrieved: 2026-09-30
+    content_sha256: b66c78e47c9378716f0b220de2996af380c6c2fd008ab4e10646d623859f8c62
+    reproducibility: content-hash-only
+    limitations:
+      - Internet Archive capture (original bytes, 126873) and the first archived generic reference that lists modelName; no capture exists between 2026-07-21 and this one, so the day modelName was documented is unknown.
+      - Retained unchanged from docs-2026-09-30-r1 as historical evidence; the Internet Archive was unreachable from the 2026-11-25 retrieval environment.
+  - id: antigravity-ide-hooks-archive-2026-09-16
+    kind: archived-official-documentation
+    authority: secondary
+    url: https://web.archive.org/web/20260916032838id_/https://antigravity.google/docs/ide/hooks
+    retrieved: 2026-09-30
+    content_sha256: 52752e77383aa12d06bd70e875deff15e2c562833cf31322946677d3be709dce
+    reproducibility: content-hash-only
+    limitations:
+      - Internet Archive capture (original bytes, 128311) and the last archived IDE-specific reference before it became a redirect. Like every IDE copy archived from 2026-07-21 onward, it documents PostToolUse input without toolCall, PreToolUse decisions without deny_unless_prior_grant, and no modelName. It describes IDE v2.5.5 (2026-08-13) and earlier; IDE v2.6.0 to v2.8.0 have since shipped without any hook-specific release note.
