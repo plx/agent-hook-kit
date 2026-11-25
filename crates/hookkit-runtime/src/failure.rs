@@ -371,7 +371,11 @@ fn nonzero_exit_blocks(harness: &HarnessId, event: Option<&EventId>) -> bool {
 /// Antigravity logs and ignores a non-zero exit (fail-open, documented for
 /// plugin command hooks), so on `NonBlocking` the diagnostic never reaches
 /// the agent; CLI 1.4.3 and later also keep the tool's result when a
-/// `PostToolUse` hook fails.
+/// `PostToolUse` hook fails. The `PreInvocation` prompt block shows the
+/// diagnostic to the user without sending it to the model. Its
+/// `terminationBehavior` is documented from CLI 1.4.11, and no App or IDE
+/// note mentions it, so a build that does not honor it lets the prompt reach
+/// the model.
 ///
 /// Claude Code `PreCompact` is a gate: blocking an automatic compaction that
 /// Claude Code triggered to recover from a context-limit error makes that

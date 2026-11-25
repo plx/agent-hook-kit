@@ -35,7 +35,9 @@
 //!   `CLAUDE_PROJECT_DIR` in the command environment.
 //! - Codex's input `cwd` is the turn's configured working directory.
 //! - Antigravity sends `workspacePaths`, the mounted workspace roots (possibly
-//!   none), and no working directory.
+//!   none). Its reference documents no working directory; CLI 1.5.4 and
+//!   later also send the agent's working directory as `cwd`, according to
+//!   their release notes, and `cwd()` returns it only when it is present.
 //!
 //! `workspace_roots()` reports what the native input carries: `[cwd]` for
 //! Claude Code and Codex, and `workspacePaths` for Antigravity. It matches
@@ -359,12 +361,16 @@ impl PreToolUseOutput {
     ///   every response. The current reference documents `allow` as the
     ///   pass-through to the next hook or default policy, but it does not
     ///   date that redefinition, and builds that still have the earlier
-    ///   meaning auto-approve every call answered `allow`. `ask` is the
-    ///   neutral answer on every build: it respects "Always Allow" settings
-    ///   and cached grants, and prompts only where none covers the call. It
-    ///   can still prompt for a call that Antigravity's default policy would
-    ///   have run without asking. That is the deliberate least-privilege
-    ///   trade-off, to revisit once the change to `allow` is dated.
+    ///   meaning auto-approve every call answered `allow`. `ask` approves
+    ///   nothing on any build: it respects "Always Allow" settings and cached
+    ///   grants, and prompts only where none covers the call. It can
+    ///   therefore prompt for a call that Antigravity's default policy would
+    ///   have run without asking, such as a terminal command the Default
+    ///   permission preset runs in the sandbox. That is the deliberate
+    ///   least-privilege trade-off: an extra prompt costs an interruption,
+    ///   while `allow` on an earlier build would silently approve every call
+    ///   the guard lets through. Revisit it once the change to `allow` is
+    ///   dated.
     ///
     /// Use this, not [`Self::allow`], for every call a guard does not object
     /// to.
@@ -392,12 +398,14 @@ impl PreToolUseOutput {
     ///   auto-approves, are still enforced.
     /// - Antigravity: `{"decision":"auto_approve"}` approves the call where
     ///   the default policy would prompt, while honoring explicit
-    ///   user-configured rules (and, from CLI 1.5.7 and App v2.33.0, an
-    ///   organization's admin-enforced review). `allow` is no longer used:
-    ///   the current reference makes it a pass-through. A build that predates
-    ///   `auto_approve` may treat it as an unknown decision; Antigravity fails
-    ///   open on a hook error, so the call then proceeds under the default
-    ///   policy, which may prompt, rather than being approved.
+    ///   user-configured rules (and, from CLI 1.5.7, an organization's
+    ///   admin-enforced review). `allow` is not used: the current reference
+    ///   makes it a pass-through, and builds that predate that redefinition
+    ///   auto-approve on it. A build that predates `auto_approve` may treat it
+    ///   as an unknown decision. What it then does with the call is
+    ///   undocumented; if it reports a hook error, which Antigravity fails
+    ///   open on, the call proceeds under the default policy, which may
+    ///   prompt, so the approval degrades rather than escalates.
     /// - Codex: cannot express an explicit approval. It rejects
     ///   `permissionDecision: "allow"` without `updatedInput`, so this helper
     ///   lowers to empty stdout and Codex's normal approval flow still runs.
