@@ -44,10 +44,19 @@ findings. Each was adversarially verified. None was refuted outright, but
 many were narrowed or corrected, and the slices overlapped heavily. This
 note uses the verified wording, merges duplicates, re-checks the verifiers'
 "missed" items against the evidence, and records the narrowed claims at the
-end. A fifth slice on the remaining 22 events (`CC-B`) is represented here
-only by its unchanged-areas list and open questions; its two substantive
-items (`StopFailure` `overloaded` and the `ElicitationResult` `cancel` row)
-were re-derived from the reference for this note.
+end. A fifth slice on the 22 events `PermissionDenied` through
+`ElicitationResult` (`CC-B`, 17 findings: 10 confirmed, 7 modified, none
+refuted, plus 8 items its verifier found missing) was verified separately
+and merged after the main synthesis. Nine of its findings duplicate items
+the other slices had already carried (Notification values, `overloaded`,
+`continue: false` over exit 2, PreCompact instructions, the PostCompact and
+SessionEnd split, `onFailure`, `agent_id`, `background_tasks`, the
+PermissionDenied wording). Its new or corrected items are marked `CC-B-n`
+or "CC-B missed" in the sections below: the `TaskCompleted` and
+`TeammateIdle` top-level block, corrections to the missing-file rule, idle
+compaction, Elicitation remainders, subagent matchers, worktree firing
+rules, and firing-scope notes for six events. Those changes are applied in
+the draft and planned in `plan-claude-code-b.json`.
 
 ## Pin selection
 
@@ -121,16 +130,21 @@ renamed, and SDK 0.3.285 → 0.3.332 changes no existing event's input or
   shell-form `PreToolUse` or `PermissionRequest` command hook fails closed
   (2.1.299, 2.1.309, 2.1.310); in Code Mode a `PreToolUse` timeout refuses
   the call (2.1.329).
-- **New exit-2 exceptions** in the shared exit-code section: a missing-file
-  exit 2 on `Stop`, `SubagentStop`, `TaskCompleted`, and a plugin's
-  `UserPromptSubmit` is a non-blocking error; `continue: false` beats exit 2
-  on `Stop` and `SubagentStop`; `Elicitation` and `ElicitationResult`
-  ignore `hookSpecificOutput` on every nonzero exit.
-- **Corrections of the selected snapshot.** `PreCompact` plain-text stdout
-  becomes compaction instructions (true at 2.1.285 too); JSON-lines output
-  with no field set is plain text on the 27 non-text-context events, not
-  invalid JSON; `PreToolUse` deprecated top-level `decision` is still
-  mapped but the schema rejects it.
+- **Exit-2 exceptions newly documented** in the shared exit-code section: a
+  missing-file exit 2 on `Stop`, `SubagentStop`, `TaskCompleted`, and a
+  plugin's `UserPromptSubmit` is a non-blocking error; `continue: false`
+  beats exit 2 on `Stop` and `SubagentStop`; `Elicitation` and
+  `ElicitationResult` ignore `hookSpecificOutput` on every nonzero exit. The
+  CLI builds show all three already applied at 2.1.285.
+- **Corrections of the selected snapshot.**
+  - `PreCompact` plain-text stdout becomes compaction instructions (true at
+    2.1.285 too).
+  - JSON-lines output with no field set is plain text on the 27
+    non-text-context events, not invalid JSON.
+  - `PreToolUse` deprecated top-level `decision` is still mapped, but the
+    schema rejects it.
+  - `TaskCompleted` and `TeammateIdle` honor a documented top-level
+    `decision: "block"`, which their output schemas rejected.
 - **Per-event semantics** that the reference now spells out or that
   changed: `updatedInput` without a decision, `allow` exceptions and
   multi-hook precedence, Bash matchers covering Monitor commands (2.1.314),
@@ -152,16 +166,19 @@ renamed, and SDK 0.3.285 → 0.3.332 changes no existing event's input or
 | `PostToolUse` | managed hooks on failed calls (string `tool_response`); interrupt budget (2.1.319); Cowork exclusions | uncertainties; string-response positive | behavioral |
 | `PostToolBatch` | refused calls appear unmarked (stated in 2.1.328) | uncertainty; synthetic positive | documentation |
 | `PreCompact` | plain-text stdout is compaction instructions, cut at 10,000 chars (2.1.314) | `compaction-instructions` outcome replaces `plain-text` | correction |
-| `Stop`, `SubagentStop` | missing-file exit 2; `continue: false` over exit 2; Monitor tasks typed `monitor` (2.1.329) | `exit-2-missing-file`, `exit-2-continue-false` outcomes; `background_tasks` examples | behavioral |
-| `TaskCompleted` | missing-file exit 2; `agent_id` (2.1.290) | `exit-2-missing-file`; positive | behavioral |
-| `Elicitation`, `ElicitationResult` | `hookSpecificOutput` ignored on any nonzero exit; `decision` now documented | `nonzero-json-ignored` replaces `nonzero-structured`; uncertainties rewritten | correction |
-| `PostCompact`, `SessionEnd` | `terminalSequence` fires on any exit | nonzero split | documentation (resolves uncertainty) |
-| `Notification` | `auth_storage_failure` (2.1.288), `plugin_notification` | examples | additive |
+| `Stop`, `SubagentStop` | missing-file exit 2 and `continue: false` over exit 2 (both at 2.1.285 already); Monitor tasks typed `monitor` (2.1.329); SubagentStop plugin-scoped `agent_type`, web-fetch managed-only, repeated firing fixed (2.1.311) | `exit-2-missing-file`, `exit-2-continue-false` outcomes; `background_tasks` examples; matcher and firing uncertainties; `plugin-agent` positive | correction, documentation |
+| `TaskCompleted`, `TeammateIdle` | top-level `decision: "block"` documented (honored at 2.1.285); missing-file exit 2 (TaskCompleted documented, TeammateIdle CLI only); `agent_id` (2.1.290) | top-level `decision`/`reason` accepted; `block` examples and process cases; TaskCompleted `exit-2-missing-file`; positives | correction |
+| `Elicitation`, `ElicitationResult` | `hookSpecificOutput` ignored on any nonzero exit; `decision` now documented; ElicitationResult runs on user decline and cancel, skipped after an Elicitation answer, `content` replaces the whole object | `nonzero-json-ignored` replaces `nonzero-structured`; uncertainties rewritten; decline/cancel positives; official output | correction, documentation |
+| `PostCompact`, `SessionEnd` | `terminalSequence` fires on any exit; SessionEnd budget ignores plugin timeouts | nonzero split; budget uncertainty | documentation (resolves uncertainty) |
+| `PreCompact`, `PostCompact` | `auto` also covers idle compaction (2.1.299 terminal, 2.1.314 VS Code and Desktop); proactive vs recovery block | `trigger` description; uncertainties | documentation |
+| `Notification` | `auth_storage_failure` (2.1.288), `plugin_notification`; `idle_prompt` timing (2.1.288 fix) | examples; timing uncertainty | additive |
+| `SubagentStart` | plugin-scoped `agent_type`; web-fetch managed-only | uncertainty; `plugin-agent` positive | documentation |
+| `ConfigChange`, `CwdChanged`, `DirectoryAdded`, `PreModelSwitch`, `PostModelSwitch` | firing scope spelled out (non-firing saves, main-conversation-only `cd`, `/add-dir` exclusions, model-switch triggers) | uncertainties | documentation |
 | `StopFailure` | reference drops `overloaded`; 529 reports `server_error` | uncertainty; enum kept | documentation |
 | `MessageDisplay` | one call per message in non-interactive runs | uncertainty; positive | documentation |
 | `SessionStart`, `InstructionsLoaded`, `PreCompact`, `PostCompact`, `TaskCreated`, `TeammateIdle` | `agent_id`/`agent_type` sent in more cases (2.1.288, 2.1.290, 2.1.323) | positives; uncertainties | additive |
 | `PermissionDenied` | `retry` message narrowed (2.1.331) | uncertainty | behavioral (wording only) |
-| `WorktreeCreate`, `WorktreeRemove` | symlink refusal on EnterWorktree since 2.1.325; plugin hooks with `--worktree` since 2.1.300; `terminalSequence` conflict | uncertainties | correction |
+| `WorktreeCreate`, `WorktreeRemove` | symlink refusal on EnterWorktree since 2.1.325; plugin hooks with `--worktree` since 2.1.300; `terminalSequence` conflict; new trigger contexts, kept subagent and workflow worktrees, ExitWorktree `discard_changes`, background-delete checks, failure reporting no longer in the debug log | uncertainties | correction, documentation |
 | `Setup` | reference now says command-only | uncertainty rewritten | documentation |
 
 ## Event inventory change
@@ -489,7 +506,8 @@ PreToolUse positive `code-mode-cd-prefix` (`tool_input:
 
 ### Exit 2 with a missing-file message
 
-Merged from CC-SHARED-3 and CC-A-3.
+Merged from CC-SHARED-3, CC-A-3, CC-B-5 (modified), and the CC-B
+verifier's TeammateIdle note.
 
 - `cc-hooks.md:821`: "**`Stop`, `SubagentStop`, `TaskCompleted`, and a
   plugin's `UserPromptSubmit` hook**: when your hook exits 2 with nothing on
@@ -497,37 +515,62 @@ Merged from CC-SHARED-3 and CC-A-3.
   directory`, Claude Code treats the run as a non-blocking error."
 - `:992`: "Claude can't repair a hook that won't run".
 - Changelog `:786` [2.1.327] "Fixed a Stop hook that failed to run being
-  shown as having reported a problem" is the likely, unconfirmed origin of
-  at least the Stop part. Nothing dates the UserPromptSubmit part.
+  shown as having reported a problem" changes only how the run is shown;
+  it is not the rule's origin (below).
+- CLI bundle: the 2.1.285 build (`gFn`) and the 2.1.332 build (`b_o`,
+  exported as `exitTwoMeansMissingScript`) both contain
+  `(e==="Stop"||e==="SubagentStop"||e==="TaskCompleted"||e==="TeammateIdle"||Boolean(pluginId)&&e==="UserPromptSubmit")&&!stdout.trim()&&/no such file|can't open/i.test(stderr)`,
+  and return false when the hook's stdio was cut before end of stream
+  (`stdioIncomplete` or `stdioClosedWithoutEnd`; 2.1.332 then logs "the
+  exit-2 block stands"). The 2.1.285 build already emits
+  `hook_non_blocking_error` "Hook script appears to be missing … Treating
+  as non-blocking".
 
 The case is realistic: `python3 missing.py` exits 2 with `[Errno 2] No
-such file or directory`. How Claude Code matches the text (substring,
-ENOENT, localized shell messages, node `Cannot find module`) is
-undocumented.
+such file or directory`. The reference does not say how the text is
+matched. The CLI answers it: a case-insensitive `no such file` or `can't
+open` substring on stderr, with stdout empty after trimming whitespace. A
+localized shell message, dash's `cannot open … No such file` (still
+matched through the second half), or node's `Cannot find module` (not
+matched) behave accordingly. The CLI also applies the rule to
+`TeammateIdle`, which the reference omits.
 
-Snapshot: `exit-2` is `continue` (Stop, SubagentStop) or `deny`
-(TaskCompleted, UserPromptSubmit) for any stderr; no plugin-origin
+Snapshot: `exit-2` is `continue` (Stop, SubagentStop, TeammateIdle) or
+`deny` (TaskCompleted, UserPromptSubmit) for any stderr; no plugin-origin
 dimension exists.
 
-Classification: behavioral (probably 2.1.327).
+Classification: correction (a snapshot-time omission). The rule is in the
+2.1.285 build, so the earlier "probably 2.1.327" call is withdrawn.
 
-Proposed contract change: `Stop`, `SubagentStop`, and `TaskCompleted` gain
-`exit-2-missing-file` (exit exactly 2, stdout forbidden, stderr required
-with `semantic_format: missing-file-diagnostic`, effect
-`nonblocking-error`, stderr role user-message), listed before `exit-2`,
-with an uncertainty that the matching rule is unspecified.
-`UserPromptSubmit` gets an uncertainty only, because the rule applies only
-to plugin-sourced hooks and the contract has no provenance dimension.
+Proposed contract change:
+
+- `Stop`, `SubagentStop`, and `TaskCompleted` gain `exit-2-missing-file`,
+  listed before `exit-2`:
+  - exit exactly 2;
+  - stdout `optional`, `opaque`, `semantic_format:
+    empty-or-whitespace-only`;
+  - stderr required, `semantic_format: contains-no-such-file-or-cant-open`;
+  - effect `nonblocking-error`, stderr role user-message.
+- A shared uncertainty records the missing version, the CLI-only match
+  rule, and the stdio-cut exception.
+- `TeammateIdle` gets an uncertainty only. The rule rests on CLI
+  inspection alone, so it is not cataloged, and there is no "stays
+  continue" control either.
+- `UserPromptSubmit` gets an uncertainty only, because the rule applies
+  only to plugin-sourced hooks and the contract has no provenance
+  dimension.
 
 Native impact:
 
 - `StopOutput::blocking_error` (`catalog.rs:1544`), `SubagentStopOutput`
-  (`:1579`), `TaskCompletedOutput` (`:1622`), and
-  `UserPromptSubmitOutput::blocking_error` (`:2201`) emit exit 2 with empty
-  stdout and caller stderr. A wrapper whose message quotes a tool's `No
-  such file or directory` is silently downgraded. Document it on those
-  constructors and point to `into_blocking_error` with a JSON block, which
-  keeps stdout non-empty. Changing `blocking_error`'s bytes would move it
+  (`:1579`), `TaskCompletedOutput` (`:1622`), `TeammateIdleOutput`
+  (`:1644`), and `UserPromptSubmitOutput::blocking_error` (`:2201`) emit
+  exit 2 with empty stdout and caller stderr. A wrapper whose message
+  quotes a tool's `No such file or directory` or `can't open` is silently
+  downgraded. Document it on those constructors and point to
+  `into_blocking_error` with a JSON block, which keeps stdout non-empty.
+  TaskCompleted and TeammateIdle need the new block builders for that (see
+  their section below). Changing `blocking_error`'s bytes would move it
   from `command-exit-2` to `exit-2-structured`, so do not.
 - `hookkit-runtime` `FailClosed` lowers `UserPromptSubmit` (and an
   identified-but-unknown event with no name) to exit 2 with empty stdout
@@ -547,10 +590,12 @@ Fixtures: Stop `command-exit-2-missing-file` (exit 2, stderr
 directory`) → `exit-2-missing-file`; Stop with stdout
 `{"decision":"block","reason":"Run tests."}` and the same stderr →
 `exit-2-structured` (negative: non-empty stdout disables the rule); Stop
-stderr `tests failed` → `exit-2`; the same pair on SubagentStop and
-TaskCompleted; PreToolUse exit 2 with `No such file or directory` → `exit-2`
-(deny; the rule is scoped). Runtime test: `FailClosed` UserPromptSubmit
-lowering with a `NotFound` cause yields non-empty JSON stdout and exit 2.
+`command-exit-2-missing-file-blank-stdout` (stdout `\n`, the same stderr)
+→ `exit-2-missing-file`; Stop stderr `tests failed` → `exit-2`; the same
+cases on SubagentStop and TaskCompleted; PreToolUse exit 2 with `No such
+file or directory` → `exit-2` (deny; the rule is scoped). Runtime test:
+`FailClosed` UserPromptSubmit lowering with a `NotFound` cause yields
+non-empty JSON stdout and exit 2.
 
 ### `continue: false` with exit 2, and `continue` on `PreToolUse`
 
@@ -571,7 +616,10 @@ Merged from CC-SHARED-4, CC-A-9, and CC-SHARED-16.
   longer re-runs a turn `continue: false` stopped.
 
 No changelog entry introduces the `:852` precedence or the `:1109`
-statement, so both are probably snapshot-time omissions.
+statement, so both are probably snapshot-time omissions. CC-B-4 confirms
+it for `:852`. The 2.1.285 CLI already set `preventContinuation` from any
+JSON `continue: false`, and its Stop-hook loop handles that flag beside
+`blockingError` in the same way as the 2.1.332 build.
 
 Snapshot: Stop and SubagentStop `exit-2-structured` is `continue` for any
 schema-valid JSON; the PreToolUse and PostToolUse output schemas have an
@@ -1502,6 +1550,32 @@ failing test names.\n`) → `compaction-instructions`;
 test for `compaction_instructions`; `PreCompactOutput::no_op()` emits no
 bytes.
 
+#### Idle compaction (`PreCompact`, `PostCompact`)
+
+From CC-B-7. The `auto` matcher row now covers "Auto-compact when the
+conversation reaches the auto-compact window, and idle compaction"
+(`cc-hooks.md:3415`; PostCompact `:3451`). Idle compaction was added in the
+terminal in `:2976` [2.1.299] and in VS Code and Claude Desktop's Code tab in
+`:2218` [2.1.314]. `:3419` spells out what a block does to automatic
+compaction. If compaction was triggered proactively, before the context
+limit (idle compaction included), Claude Code skips it and the
+conversation continues. If it was triggered to recover from a context-limit
+error the API already returned, the error surfaces and the request fails.
+The snapshot's `trigger` enum is unchanged, and no uncertainty described
+either point.
+
+Classification: documentation, plus a behavioral widening of `auto` (2.1.299,
+2.1.314). No schema change.
+
+Applied:
+
+- `trigger` gets a description on both events.
+- A shared `COMPACTION_AUTO` uncertainty on both events.
+- A PreCompact uncertainty for proactive versus recovery blocks.
+
+Native: `CompactTrigger::Auto` rustdoc (`values.rs:320-321`, "at the
+auto-compact window") should add idle compaction.
+
 ### `Stop` and `SubagentStop`
 
 Missing-file and `continue: false` items as above. Also, from CC-CL-6:
@@ -1521,6 +1595,108 @@ uncertainty for the relabeling. Positives on Stop and SubagentStop:
 and `background-mcp-task` (`type: "MCP task"`, `server`, `tool`). No
 native change (`background_tasks` is untyped).
 
+CC-B additions (documentation; uncertainties only, applied):
+
+- SubagentStop's `background_tasks` and `session_crons` "are scoped to the
+  parent session, not the subagent" (`cc-hooks.md:2718`, CC-B-13).
+- The reference still says the transcript "isn't guaranteed to include the
+  final message at Stop time on all versions" (`:2868`), despite the
+  2.1.331 fix; the Stop uncertainty says so (CC-B missed). The 2.1.332 CLI
+  also passes `flushTranscriptFirst` for TaskCompleted and TeammateIdle
+  (absent from 2.1.285). That is undocumented and not encoded.
+- `:2388` [2.1.311]: "Fixed `SubagentStop` hooks running about twice a
+  minute for each running subagent instead of once when it finishes"
+  (CC-B missed). The reference never mentions it, and the changelog does
+  not say which releases had the bug, so a consumer on 2.1.285-2.1.310 may
+  see repeated SubagentStop events. Low-priority uncertainty.
+
+### `SubagentStart` and `SubagentStop`: matchers and the web-fetch subagent
+
+From CC-B-15 (confirmed). Documentation only; the changelog has no entry.
+
+- A plugin's subagent reports the plugin-scoped `agent_type`, such as
+  `my-plugin:reviewer`. "The colon places a plugin-scoped name on the
+  regular-expression path, so anchor the matcher" (`cc-hooks.md:2662`; the
+  matcher table at `:300` lists `^my-plugin:reviewer$`).
+- For the built-in web-fetch subagent, Claude Code runs SubagentStart and
+  SubagentStop hooks "from managed settings only" (`:2666`, `:2706`).
+- "A `matcher` that names agent types doesn't match an empty `agent_type`.
+  A hook whose matcher is omitted, `""`, or `"*"`, or is a regular
+  expression that matches an empty string, runs for events with an empty
+  `agent_type` too" (`:2714`; the related fix is pre-pin, `:4930`
+  [2.1.275]).
+
+Applied:
+
+- A shared `SUBAGENT_MATCHER_NOTE` uncertainty on both events.
+- The SubagentStop internal-agent uncertainty gains the empty-matcher rule.
+- Synthetic positive `plugin-agent` (`agent_type: "my-plugin:reviewer"`) on
+  both events.
+
+Native: `CatalogInput::agent_type` rustdoc (`catalog.rs:117-121`) can note
+the plugin-scoped form. No API change.
+
+### `TaskCompleted` and `TeammateIdle`: top-level `decision: "block"`
+
+From CC-B-3 (modified).
+
+- `cc-hooks.md:2833` (TaskCompleted): "**JSON `{"decision": "block",
+  "reason": "..."}`**: the task stays open. Claude receives `reason` and
+  keeps working."
+- `:3017` (TeammateIdle): "the teammate receives `reason` and continues
+  working."
+- `:1212` (decision table): "Exit code 2 or `decision: "block"` keeps the
+  teammate working or the task open. With `continue: false`, the teammate
+  goes idle."
+- `:2834`, `:3018`: `continue: false` sends the teammate idle "even if
+  another of your … hooks blocks". On a `TaskUpdate` call, TaskCompleted
+  ignores `continue: false`.
+
+The snapshot's two `output.command.schema.json` files allowed only
+`continue`, `stopReason`, `suppressOutput`, `systemMessage`, and
+`terminalSequence` with `additionalProperties: false`. A documented exit-0
+block therefore classified as `invalid-json`, a non-blocking error, while
+Claude Code keeps the task open.
+
+This is not new behavior. The 2.1.285 CLI's generic JSON processor already
+mapped `decision: "block"` to a blocking error for every event
+(`case"block":B.permissionBehavior="deny",B.blockingError={blockingError:e.reason||"Blocked by hook",…}`),
+and TaskCompleted and TeammateIdle consume `blockingError`. The 2026-09-29
+audit added `decision` to TaskCreated only. Changelog `:1192` [2.1.326]
+("`decision: "block"` to hold in more cases") names no event and is not
+cited.
+
+Classification: correction (relaxing).
+
+Applied:
+
+- `Seed::top_level_block()` on both events, without
+  `block_reason_required`. `reason` is optional because the reference
+  shows it but does not require it, and the CLI defaults the message.
+- `reason` descriptions on both events.
+- An output example `block` on both events.
+- Process cases `command-block` (exit 0 → `structured`) and
+  `command-exit-2-block` (exit 2 with the block JSON → `exit-2-structured`:
+  `deny` on TaskCompleted, `continue` on TeammateIdle).
+- Uncertainties for the correction, for `continue: false` winning over
+  another hook's block, and (TaskCompleted) for the `TaskUpdate` split.
+- Source: `claude-hooks-reference` only, with no version floor.
+
+Native: `TaskCompletedOutput` (`catalog.rs:1613-1630`) and
+`TeammateIdleOutput` (`:1632-1652`) have `blocking_error` and
+`into_blocking_error` but no `block_builders!`. Add them, documenting that
+another hook's `continue: false` overrides the block, and the TaskUpdate
+exception. That also gives these events a JSON block to recommend over the
+missing-file-prone `blocking_error`.
+
+Native tests:
+
+- `TaskCompletedOutput::block("Tests not passing.")` and
+  `TeammateIdleOutput::block(..)` emit exact bytes at exit 0 and validate
+  against the new schemas.
+- `tests/snapshot_contract.rs` declares or classifies `command-block`,
+  `command-exit-2-block`, and the missing-file `-blank-stdout` cases.
+
 ### `TaskCreated`, `TaskCompleted`, `TeammateIdle`, `InstructionsLoaded`, and compaction events: `agent_id`
 
 From CC-CL-16. The common `agent_id` / `agent_type` / `effort` are sent in
@@ -1534,7 +1710,11 @@ PreCompact, PostCompact, and post-compaction SessionStart when a subagent
 compacts (`:1548` [2.1.323]). All schemas already allow the fields.
 Proposed change: positives on those seven events and versioned
 uncertainties. Native: broaden `CatalogInput::agent_id` and
-`SessionStartInput::agent_id` rustdoc.
+`SessionStartInput::agent_id` rustdoc. CC-B-12 adds CLI evidence that
+`agent_type` accompanies `agent_id` on all three task events. The 2.1.285
+build constructed their inputs with no agent fields; the 2.1.332 build
+passes `{agentId, agentType}`. The "not a `name@team` address" framing is
+dropped, because `:3713` concerns Agent results.
 
 ### `SessionStart`
 
@@ -1580,11 +1760,35 @@ list (`:299`). Additive. Proposed change: add both to the examples
 (generator `:836`) and the uncertainty. Native: `NotificationType`
 (`values.rs:254-279`) gains `AuthStorageFailure` and `PluginNotification`
 (today they parse as `Unknown(..)`). Positives `auth-storage-failure` and
-`plugin-notification` (`"title":"ci-watch"`).
+`plugin-notification` (`"title":"ci-watch"`). CC-B-1 confirms all of this.
+
+`idle_prompt` timing comes from the CC-B verifier's missed list, and the
+slice's "Notification unchanged apart from CC-B-1" overlooked it.
+`cc-hooks.md:2596-2600` says that `permission_prompt`, `idle_prompt`,
+`elicitation_dialog`, and `elicitation_url_dialog` "share their timing with
+desktop notifications". In terminal sessions they fire only when the user
+seems away:
+
+- `permission_prompt` and the elicitation types fire after about six
+  seconds without typing.
+- `idle_prompt` fires "about 60 seconds after Claude finishes responding,
+  and only if you haven't typed since and no background agent … is still
+  running".
+- Claude Code doesn't send `idle_prompt` "while it waits for a claude.ai
+  usage limit to reset".
+
+Changelog `:3838` [2.1.288] fixed `idle_prompt` firing while background
+agents ran.
+
+Classification: behavioral (2.1.288) plus documentation. Applied: a timing
+uncertainty. No schema change.
+
+Native: the `NotificationType::IdlePrompt` rustdoc (`values.rs:257-258`,
+"The prompt has been idle") can state the timing.
 
 ### `StopFailure`
 
-Re-derived from the CC-B slice. `cc-hooks.md:2966` now lists 11 `error`
+From CC-B-2 (confirmed). `cc-hooks.md:2966` now lists 11 `error`
 values without `overloaded` and adds "For an HTTP `529` overloaded
 response, the value is `server_error`"; the matcher list (`:308`) also
 omits it. SDK 0.3.332 `SDKAssistantMessageError` (`sdk.d.ts:4094`) and the
@@ -1643,6 +1847,55 @@ with `{"hookSpecificOutput":{"hookEventName":"ElicitationResult","action":"decli
 (`{"decision":"block","reason":"r","hookSpecificOutput":{"hookEventName":"Elicitation","action":"accept"}}`)
 → decline.
 
+CC-B-8 and CC-B-9 confirm the above. The CLI also checks `decision:
+"block"` before `hookSpecificOutput` and returns `{}` when no `action` is
+present. CC-B-9 adds CLI-only evidence on the open question. In the 2.1.285
+build, `blocked` is computed from a stdout `decision: "block"` at any exit
+code (`_n=en.decision==="block", xn=status===2||_n`), so exit 1 or 3-255
+with a block probably still declines. `ELICITATION_NONZERO` now says so as
+a CLI-inspection note. `command-nonzero-decision-block` stays
+`nonzero-json-ignored` until the CLI is accepted as a source.
+
+Remainders from CC-B-8 and the CC-B verifier's missed list (documentation;
+the changelog has no entry):
+
+- `cc-hooks.md:3923`: "When an Elicitation hook answers a request, Claude
+  Code sends that answer to the server without running ElicitationResult
+  hooks." Applied as an uncertainty on both events.
+- `:3969` (ElicitationResult): "Your `content` replaces the user's whole
+  `content` object, so include the fields you aren't changing. … Claude
+  Code ignores a `hookSpecificOutput` that has no `action`."
+- `:3971` (ElicitationResult): "ElicitationResult hooks also run when the
+  user declines or cancels, and your `action` replaces theirs. Check that
+  the input's `action` is `accept` before you return `accept`, or your hook
+  turns a declined request into an accepted one."
+- `:3806` (URL mode: an accept means the URL never opens) was already in
+  the Elicitation uncertainty.
+
+Applied, ElicitationResult:
+
+- Uncertainties for `:3969` and `:3971`.
+- The `cancel` uncertainty adds that whether an accept without `content`
+  forwards the user's values is undocumented.
+- Positives `user-declined` (`{"action":"decline","mode":"form"}`) and
+  `user-cancelled` (`{"action":"cancel"}`).
+- The official output `official-change-values` (the `alice@example.com`
+  block).
+- A synthesized output `content-without-action`
+  (`{"hookSpecificOutput":{"hookEventName":"ElicitationResult","content":{"name":"Ada"}}}`).
+  It is schema-valid, and its process case `command-content-without-action`
+  (exit 0) → `structured` changes nothing.
+
+Native:
+
+- `elicitation_actions!` (`catalog.rs:1656-1704`) as instantiated for
+  `ElicitationResultOutput` (`:1734-1738`) gives `accept` and
+  `accept_without_content` no warning. Document that the hook also runs on
+  a user decline or cancel and that its action replaces the user's (check
+  the input `action` first), and that `content` replaces the whole object.
+- `ElicitationOutput` can note that ElicitationResult hooks are skipped
+  after it answers.
+
 ### `Setup`
 
 From CC-SHARED-7. `cc-hooks.md:4039`: "`Setup` supports only `command`
@@ -1688,6 +1941,115 @@ EnterWorktree refuses a path through a symlink inside the project since
 keep or drop the v2.1.216 in `WorktreeCreateOutput::path` rustdoc
 (`protocol.rs:991-1002`) to match. WorktreeRemove: the `:823` conflict
 (above).
+
+CC-B-16 (modified) and the CC-B verifier's missed list add firing and
+reporting rules. The 2.1.325 symlink entry is a route floor for
+EnterWorktree; the general rule is unversioned. Classification:
+documentation, apart from the versioned changelog items. Uncertainty text
+only, with no schema or outcome change, all applied.
+
+WorktreeCreate (`cc-hooks.md:3270-3277`):
+
+- The trigger list now includes three newly listed contexts: a workflow
+  running an agent in its own worktree, a background session isolated in
+  its own worktree, and `claude remote-control` in `worktree` mode.
+- The hand-authored `worktree-create/contract.yaml` gains this list.
+
+WorktreeRemove, firing:
+
+- It fires (`:3340-3347`) when you exit an interactive worktree session
+  and choose removal, and without a prompt when an unnamed interactive
+  session exits with no changed or untracked files. Since `:2836`
+  [2.1.301], quitting no longer removes a hook-made worktree that may hold
+  unpushed commits without asking.
+- It also fires when you delete a background session, when Claude calls
+  `ExitWorktree`, and without a prompt when a remote-control worktree
+  session ends cleanly or remote control is stopped while git finds no
+  changes or new commits.
+- Subagent and workflow-agent worktrees are kept, and WorktreeRemove does
+  not run for them (`:3349`).
+- `ExitWorktree` refuses a hook-created worktree unless Claude passes
+  `discard_changes: true` (`:3351`). Related changes to the ExitWorktree
+  refusal rules are in changelog `:1210` [2.1.326] (refuses while a
+  background subagent or shell may still run there) and `:851` [2.1.327]
+  (asks before removing possibly unsaved work).
+- Change detection is git-only, so a non-git worktree looks clean
+  (`:3353`). Claude Code never deletes a hook-created worktree's branch
+  (`:3364`).
+- For a background-session delete, Claude Code verifies the stored path
+  before running the hook, refusing a symlink or a path through one below
+  the repository root. It runs the hook on a non-empty worktree only after
+  confirmation in agent view, and `claude rm` keeps the session and
+  worktree instead (`:3366`).
+
+WorktreeRemove, results and reporting:
+
+- With no hook (`:3357-3360`), Claude Code removes the worktree as `git
+  worktree remove --force` would at exit or through `ExitWorktree`, so a
+  worktree git doesn't recognize stays on disk. Remote-control cleanup
+  keeps the worktree and shows `worktree removal failed, kept: <path>`.
+- After exit 0 there is no git fallback (`:3361`). A hook that deleted the
+  directory before a nonzero exit counts as removed (`:3362`).
+- Failures are reported in agent view (how the hook ended, the start of
+  stderr, and whether deleting again removes the directory) or on the
+  remote-control terminal (`:3403-3404`). The snapshot's "writes the hook
+  command and stderr to the debug log" is no longer stated and was
+  replaced.
+
+Native: `WorktreeRemoveOutput::failed` rustdoc (`catalog.rs:1318-1328`)
+still says Claude Code "writes the stderr to its debug log". Replace it
+with the documented reporting, and add the no-fallback-after-exit-0 and
+kept-subagent-worktree notes to `removed` (`:1311-1316`). Drop the
+v2.1.216 in `WorktreeCreateOutput::path` (`protocol.rs:991-1002`).
+
+### Firing scope: `ConfigChange`, `CwdChanged`, `DirectoryAdded`, `PreModelSwitch`, `PostModelSwitch`, `SessionEnd`
+
+From CC-B-17 (confirmed) and the CC-B verifier's DirectoryAdded note, plus
+changelog entries found while re-checking. The input enums and outcomes
+already match, so these are uncertainties only, all applied:
+
+- **ConfigChange**:
+  - Changes take effect without running the hooks when saved with "Yes,
+    and don't ask again", `/permissions`, or `/model` in the saving
+    session (another session that loads the file runs its hooks). The
+    same holds for server-managed settings, macOS managed preferences,
+    Windows registry policy, and WSL `wslInheritsWindowsSettings`
+    Windows-side files (`cc-hooks.md:3049-3053`, `:3106`).
+  - Changelog `:3681` [2.1.290] fixed sandboxed Bash on Linux firing
+    ConfigChange mid-command when the settings files were absent.
+- **CwdChanged**: fires for "a shell command in the main conversation"
+  (`:3112`). That subagent commands don't fire it is implied, not stated.
+- **DirectoryAdded**:
+  - It fires after the sandbox and permission refresh, and the hook runs
+    unsandboxed (`:3155`).
+  - It does not fire for the `--add-dir` startup flag (SessionStart covers
+    it), the `/permissions` Workspace tab, or a directory already inside a
+    working directory (`:3149-3153`).
+  - Since `:1219` [2.1.326], `/add-dir` shows a trust prompt for an
+    untrusted folder. Whether the event fires when trust is declined is
+    undocumented.
+- **PreModelSwitch**:
+  - It also runs for fast mode, the `/config` Model setting, `Option+P`
+    or `Alt+P`, and `apply_flag_settings` or Remote Control requests,
+    mapped to `command`, `picker`, and `sdk` (`:3476-3480`, `:3563`).
+  - A deny reason becomes the `set_model` error (`:3599`).
+  - `ModelSwitchSource` (`values.rs:189-210`) already documents this
+    mapping.
+- **PostModelSwitch**: runs on `opusplan` plan-mode transitions (which
+  `source` is unstated) and not for fallback-chain turns (`:3633-3636`).
+- **SessionEnd**:
+  - The 1.5 s budget rises to the highest per-hook `timeout`, up to 60 s,
+    but "Timeouts set on plugin-provided hooks don't raise the budget".
+    `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS` overrides it
+    (`:3710-3713`). The snapshot had no budget uncertainty at all.
+  - Changelog `:2894` [2.1.300] fixed SessionEnd hooks sometimes not
+    running at exit while a background command ran.
+
+Checked and not encoded:
+
+- `:1722` [2.1.321], a Windows FileChanged `watchPaths` fix.
+- `:785` [2.1.327], a display fix for failing SubagentStop, SessionEnd,
+  CwdChanged, and FileChanged hooks.
 
 ### Handler kinds and matchers
 
@@ -1832,8 +2194,14 @@ evidence, here:
   (2.1.332 MCP-skill asks).
 - `PreToolUse` `continue: false` does not block the call, and on `Stop` /
   `SubagentStop` it overrides exit 2.
+- `TaskCompleted` and `TeammateIdle` honor a top-level `decision: "block"`,
+  which their output schemas rejected (the 2.1.285 CLI already mapped it).
+- The missing-file exit-2 rule on `Stop`, `SubagentStop`, `TaskCompleted`,
+  and a plugin's `UserPromptSubmit` (and, per the CLI, `TeammateIdle`)
+  already existed at 2.1.285.
 - The `WorktreeCreate` v2.1.216 floor for the path rule is no longer
-  supported by the reference.
+  supported by the reference, and the WorktreeRemove "stderr goes to the
+  debug log" note is no longer stated.
 - The 10,000-character cap (2.1.89) and the async/`asyncRewake` process
   rules predate the pin and were never recorded.
 - Stale uncertainties: Setup "still names mcp_tool"; UserPromptSubmit
@@ -1848,26 +2216,36 @@ Native documentation that is already wrong at the pin:
 `SessionStartInput.agent_id` ("when a subagent session starts"),
 `PreCompactOutput::no_op` (`{}` becomes instructions),
 `hookkit-tool-access` "failed calls … only through PostToolUseFailure",
-and `with_continue` ("precedence over event-specific decisions") on
-PreToolUse.
+`with_continue` ("precedence over event-specific decisions") on
+PreToolUse, the Elicitation `block_builders!` text ("the hooks reference
+does not yet document it"), and `WorktreeRemoveOutput::failed` ("writes the
+stderr to its debug log").
 
 ## Evidence and classification
 
 - Additive: `PreSkillShellCommand`; UserPromptSubmit `session_title`;
   Notification values; `agent_id` cases; Stop `background_tasks` labels.
-- Behavioral: `onFailure`; the Windows default; Code Mode; the missing-file
-  exit 2; async multi-line JSON; escaping; `updatedInput` validation and
-  sandbox rules; Monitor coverage; `allow` exceptions; UserPromptSubmit
-  ordering, interrupts, replay; PostToolUse interrupts and Cowork;
-  PermissionRequest Cowork and re-ask; PermissionDenied wording; harness
-  refusals.
+- Behavioral: `onFailure`; the Windows default; Code Mode; async
+  multi-line JSON; escaping; `updatedInput` validation and sandbox rules;
+  Monitor coverage; `allow` exceptions; UserPromptSubmit ordering,
+  interrupts, replay; PostToolUse interrupts and Cowork; PermissionRequest
+  Cowork and re-ask; PermissionDenied wording; harness refusals; idle
+  compaction as `auto` (2.1.299, 2.1.314); `idle_prompt` with background
+  agents (2.1.288); the firing fixes for SubagentStop (2.1.311), SessionEnd
+  (2.1.300), ConfigChange (2.1.290), and WorktreeRemove (2.1.301).
 - Correction: PreCompact instructions; JSON-lines; deprecated `decision`;
-  Elicitation nonzero; `continue: false`; `mcp_server`; WorktreeCreate
-  floor; HTTP schema-invalid body; async and cap omissions.
+  Elicitation nonzero; `continue: false`; the missing-file exit 2 (in the
+  2.1.285 build); TaskCompleted and TeammateIdle top-level block;
+  `mcp_server`; WorktreeCreate floor; HTTP schema-invalid body; async and
+  cap omissions.
 - Documentation-only: PostCompact/SessionEnd `terminalSequence`;
   MessageDisplay single call; SessionStart semantics; PostToolBatch
   refused calls; StopFailure `overloaded`; Setup; tool inventory; handler
-  details; environment hashes.
+  details; environment hashes; ElicitationResult on user decline and
+  cancel, the skip after an Elicitation answer, and whole-object
+  `content`; subagent matchers and the web-fetch subagent; worktree firing
+  and reporting; ConfigChange, CwdChanged, DirectoryAdded, model-switch,
+  and SessionEnd firing scope.
 - Breaking for existing HookKit outputs: none in bytes. Semantically,
   `PreCompactOutput::no_op()` already injected `{}`, and
   `nonblocking_error` and `FailurePolicy::NonBlocking` block under
@@ -1875,6 +2253,10 @@ PreToolUse.
   ledger: PreCompact `plain-text` → `compaction-instructions` and the
   Elicitation outcome rename change outcome ids that conformance cases
   cite; typing `updatedInput` as `object` narrows two output schemas.
+  `exit-2-missing-file` now admits whitespace-only stdout and renames its
+  stderr `semantic_format` to `contains-no-such-file-or-cant-open`. The
+  TaskCompleted and TeammateIdle output schemas widen; no outcome id
+  changes.
 
 ## Items checked and unchanged
 
@@ -1967,14 +2349,23 @@ PreToolUse.
   still apply its fields alongside the failure?
 - `onFailure: block` on events whose exit 2 stops nothing: notice, or
   ignored? (The SDK ignores mcp_tool on Setup and SessionStart only.)
-- The missing-file match rule (substring, ENOENT, locale, exec form), and
-  why only a plugin's UserPromptSubmit.
+- The missing-file match rule: the CLI answers it (case-insensitive `no
+  such file` or `can't open` on stderr, stdout empty after trim, skipped
+  when stdio was cut), but the reference does not. Should the CLI-only
+  parts (whitespace-only stdout, TeammateIdle) stay in uncertainties, or
+  become outcomes once the CLI bundle is cited? Why only a plugin's
+  UserPromptSubmit?
 - Does the suspect-capture block apply beyond PreToolUse? Is the 10 s
   grace configurable?
 - Does `continue: false` beat exit 2 on TeammateIdle and TaskCompleted?
-- Elicitation/ElicitationResult: does top-level `decision: block` decline
-  on exit 1 or 3-255? Does ElicitationResult `cancel` forward the user's
-  values?
+- Elicitation/ElicitationResult: the CLI suggests top-level `decision:
+  block` declines on exit 1 or 3-255; the reference is silent. Does
+  ElicitationResult `cancel` forward the user's values, and does an
+  `accept` without `content` forward them or none?
+- PostModelSwitch: which `source` does an `opusplan` plan-mode transition
+  report? DirectoryAdded: does it fire when the 2.1.326 `/add-dir` trust
+  prompt is declined?
+- SubagentStop repeated firing (fixed 2.1.311): which releases had it?
 - PostCompact/SessionEnd: does exit 1 with schema-valid JSON still show
   the stderr notice?
 - PreCompact: does exit-0 JSON contribute instructions in documented terms
@@ -2019,9 +2410,21 @@ PreToolUse.
   precedent": the precedent does not transfer (the SDK closes the union);
   either modeling is defensible.
 - "The missing-file rule has no changelog entry" (CC-SHARED-3, CC-A-3):
-  2.1.327 `:786` is a likely source for the Stop part. "Fix the FailClosed
-  lowering for Stop, SubagentStop, and TaskCompleted": moot; they are not
-  gates.
+  correct after all. The interim reading that 2.1.327 `:786` was its source
+  ("probably 2.1.327", also CC-B-5) is refuted, because the 2.1.285 CLI
+  already contains the rule; `:786` only changed the display. CC-B-5's
+  "TeammateIdle is not included" and its proposed "stays `continue`"
+  TeammateIdle control are refuted by the same builds. "Fix the
+  FailClosed lowering for Stop, SubagentStop, and TaskCompleted": moot;
+  they are not gates.
+- "TaskCompleted/TeammateIdle `decision: block` is most likely new,
+  probably 2.1.326" (CC-B-3): refuted. The 2.1.285 generic JSON processor
+  already applied it, and `:1192` names no event.
+- "2.1.290 changed the hook `agent_id` from a `name@team` address"
+  (CC-B-12): unsupported; `:3713` concerns Agent results.
+- CC-B-11's open `failure_policy` metadata proposal is superseded by the
+  decided sibling-binding model. CC-B-16's "attribute to v2.1.325" is a
+  route floor for EnterWorktree, not a floor for the general path rule.
 - "Elicitation nonzero JSON is a non-blocking error" (CC-SHARED-6): too
   strong; the run is a success whose `hookSpecificOutput` is ignored, so
   the dialog proceeds (`no-op`), notice undocumented.
