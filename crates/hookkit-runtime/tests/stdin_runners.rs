@@ -157,6 +157,12 @@ fn stdin_runner_helper() {
             fail_closed(),
             |_, _, _| unreachable!("the payload is invalid"),
         ),
+        "dispatch-antigravity-pre-invocation-fail-closed" => dispatch_builtin_harness_with_options(
+            BuiltinHarness::Antigravity,
+            Some(EventId::builtin(HarnessId::ANTIGRAVITY, "PreInvocation")),
+            fail_closed(),
+            |_, _, _| Err(HookkitError::handler("prompt policy is missing")),
+        ),
         "dispatch-claude-fail-closed" => dispatch_builtin_harness_with_options(
             BuiltinHarness::ClaudeCode,
             None,
@@ -389,8 +395,9 @@ fn fail_closed_lowers_for_the_event_the_payload_names() {
 
 #[test]
 fn failures_after_resolution_are_lowered_for_the_resolved_event() {
-    // Antigravity has no discriminator: the runner resolves Stop by shape,
-    // and a handler failure there must not become an unknown-event deny.
+    // Antigravity has no documented discriminator: the runner resolves Stop
+    // by shape, despite its overlap with SessionStart, and a handler failure
+    // there must not become an unknown-event deny.
     let stop = serde_json::json!({
         "conversationId": "stdin-conversation",
         "workspacePaths": ["/tmp"],
@@ -413,8 +420,9 @@ fn failures_after_resolution_are_lowered_for_the_resolved_event() {
         outcome.stderr
     );
 
-    // A tool-call payload is shaped like both PreToolUse and PostToolUse, so
-    // without a hint nothing resolves and the unknown event is denied.
+    // A tool-call payload is shaped like PreToolUse and PostToolUse, and fits
+    // SessionStart's common fields too, so without a hint nothing resolves
+    // and the unknown event is denied.
     let tool_call = serde_json::json!({
         "conversationId": "stdin-conversation",
         "workspacePaths": ["/tmp"],
@@ -437,6 +445,13 @@ fn failures_after_resolution_are_lowered_for_the_resolved_event() {
         "{:?}",
         outcome.stderr
     );
+    for event in ["SessionStart", "PreToolUse", "PostToolUse"] {
+        assert!(
+            outcome.stderr.contains(event),
+            "{event}: {:?}",
+            outcome.stderr
+        );
+    }
 }
 
 #[test]
@@ -603,6 +618,42 @@ fn antigravity_fails_closed_with_a_json_deny_at_exit_zero() {
 }
 
 #[test]
+fn antigravity_pre_invocation_fails_closed_with_a_prompt_block_at_exit_zero() {
+    let invocation = serde_json::json!({
+        "conversationId": "stdin-conversation",
+        "workspacePaths": ["/tmp"],
+        "transcriptPath": "/tmp/stdin-transcript.jsonl",
+        "artifactDirectoryPath": "/tmp/stdin-artifacts",
+        "invocationNum": 0,
+        "initialNumSteps": 1,
+        "lastUserInput": "Fix the failing unit test"
+    });
+    let outcome = spawn(
+        "dispatch-antigravity-pre-invocation-fail-closed",
+        &serde_json::to_vec(&invocation).unwrap(),
+        &[],
+    );
+    assert_eq!(outcome.code, Some(0), "{:?}", outcome.stderr);
+    let output = json(&outcome.stdout);
+    assert_eq!(output["terminationBehavior"], "terminate");
+    let steps = output["injectSteps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1);
+    let message = steps[0]["errorMessage"]["userMessage"].as_str().unwrap();
+    assert!(
+        message.starts_with("hookkit: ")
+            && message.contains("antigravity/PreInvocation failed")
+            && message.contains("prompt policy is missing"),
+        "{message:?}"
+    );
+    assert_eq!(output.as_object().unwrap().len(), 2, "{output}");
+    assert!(
+        outcome.stderr.contains("antigravity/PreInvocation failed"),
+        "{:?}",
+        outcome.stderr
+    );
+}
+
+#[test]
 fn claude_permission_request_fails_closed_with_a_json_deny() {
     let outcome = spawn(
         "dispatch-claude-fail-closed",
@@ -620,11 +671,32 @@ fn claude_permission_request_fails_closed_with_a_json_deny() {
     // Claude's gating events deny with exit 2.
     let gate = spawn(
         "dispatch-claude-fail-closed",
-        br#"{"hook_event_name":"UserPromptSubmit"}"#,
+        br#"{"hook_event_name":"PreSkillShellCommand"}"#,
         &[],
     );
     assert_eq!(gate.code, Some(2), "{:?}", gate.stderr);
     assert_eq!(gate.stdout, "");
+    assert!(
+        gate.stderr
+            .contains("claude-code/PreSkillShellCommand failed")
+    );
+
+    // UserPromptSubmit also prints a JSON block, so a plugin hook's exit 2 is
+    // not downgraded when the diagnostic says a file is missing.
+    let gate = spawn(
+        "dispatch-claude-fail-closed",
+        br#"{"hook_event_name":"UserPromptSubmit"}"#,
+        &[],
+    );
+    assert_eq!(gate.code, Some(2), "{:?}", gate.stderr);
+    let output = json(&gate.stdout);
+    assert_eq!(output["decision"], "block");
+    assert!(
+        output["reason"]
+            .as_str()
+            .unwrap()
+            .contains("claude-code/UserPromptSubmit failed")
+    );
     assert!(gate.stderr.contains("claude-code/UserPromptSubmit failed"));
 
     // Blocking a Claude Stop would keep the agent working, so it stays

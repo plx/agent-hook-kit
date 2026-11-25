@@ -1,0 +1,564 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-tool_name
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      session_id: s1
+      tool_input:
+        command: cargo test
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      permission_mode: default
+      permission_suggestions: []
+      prompt_id: prompt-1
+      scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      transcript_path: /tmp/t.jsonl
+  - id: mcp-tool
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      mcp_server:
+        name: github
+        source: user
+      session_id: s1
+      tool_input:
+        title: Flaky test
+      tool_name: mcp__github__create_issue
+      transcript_path: /tmp/t.jsonl
+  - id: mcp-skill-ask
+    origin: synthesized
+    sources:
+    - claude-code-changelog
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      mcp_server:
+        name: docs
+        source: claudeai
+      mcp_skill:
+        name: docs:search
+        version: v3
+      session_id: s1
+      tool_input:
+        skill: docs:search
+      tool_kind: mcp_skill
+      tool_name: Skill
+      transcript_path: /tmp/t.jsonl
+  - id: monitor-call
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      session_id: s1
+      tool_input:
+        command: tail -f app.log
+        description: watch app log
+        timeout_ms: 300000
+      tool_name: Monitor
+      transcript_path: /tmp/t.jsonl
+  - id: monitor-command-via-bash-matcher
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      session_id: s1
+      tool_input:
+        command: tail -f app.log
+      tool_name: Bash
+      transcript_path: /tmp/t.jsonl
+  - id: official-example
+    origin: official
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /Users/...
+      hook_event_name: PermissionRequest
+      permission_mode: default
+      permission_suggestions:
+      - behavior: allow
+        destination: localSettings
+        rules:
+        - ruleContent: rm -rf node_modules
+          toolName: Bash
+        type: addRules
+      session_id: abc123
+      tool_input:
+        command: rm -rf node_modules
+        description: Remove node_modules directory
+      tool_name: Bash
+      transcript_path: /Users/.../.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: deny
+        interrupt: false
+        message: Blocked by policy.
+      hookEventName: PermissionRequest
+- id: exit-2-structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: deny
+        message: Blocked by policy.
+      hookEventName: PermissionRequest
+- id: set-mode-manual
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - destination: session
+          mode: manual
+          type: setMode
+      hookEventName: PermissionRequest
+- id: add-rules-and-directories
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - behavior: allow
+          destination: localSettings
+          rules:
+          - ruleContent: npm test
+            toolName: Bash
+          - toolName: mcp__github__get_issue
+          type: addRules
+        - destination: session
+          directories:
+          - /repo/related
+          type: addDirectories
+      hookEventName: PermissionRequest
+output_negative:
+- expected_keyword: type
+  expected_pointer: /hookSpecificOutput/decision/updatedInput
+  id: updated-input-not-object
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedInput: cargo test
+      hookEventName: PermissionRequest
+- expected_keyword: enum
+  expected_pointer: /hookSpecificOutput/decision/updatedPermissions/0/type
+  id: updated-permission-unknown-type
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - behavior: allow
+          destination: session
+          rules:
+          - toolName: Bash
+          type: addRule
+      hookEventName: PermissionRequest
+- expected_keyword: required
+  expected_pointer: /hookSpecificOutput/decision/updatedPermissions/0
+  id: updated-permission-without-destination
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - mode: manual
+          type: setMode
+      hookEventName: PermissionRequest
+- expected_keyword: type
+  expected_pointer: /hookSpecificOutput/decision/updatedPermissions/0
+  id: updated-permission-not-object
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - 1
+      hookEventName: PermissionRequest
+- expected_keyword: enum
+  expected_pointer: /hookSpecificOutput/decision/updatedPermissions/0/behavior
+  id: updated-permission-rule-behavior
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - behavior: approve
+          destination: session
+          rules:
+          - toolName: Bash
+          type: addRules
+      hookEventName: PermissionRequest
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwiaW50ZXJydXB0IjpmYWxzZSwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: d00be442aa7aee1eee0a1c9e6d27b662bb9c0d27509b50f3cc9da4368e04f836
+- binding: command
+  exit_code: 0
+  id: command-no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: command-plain-text
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vayBmaW5pc2hlZC4K
+  stdout_sha256: db54b54d6320eaf7a59146e70f1674ec377b7c199af059daffc92171d6e8b774
+- binding: command
+  exit_code: 0
+  id: command-plain-text-json-lines
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7Im5vdGUiOjJ9Cg==
+  stdout_sha256: 3a150299ab73b3e5974ab3aa4823ec51799349ab4a07fa27dfb0e33c57570479
+- binding: command
+  exit_code: 0
+  id: command-text-json-array
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: WyJhIiwiYiJd
+  stdout_sha256: 0473ef2dc0d324ab659d3580c1134e9d812035905c4781fdd6d529b0c6860e13
+- binding: command
+  exit_code: 0
+  id: command-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command
+  exit_code: 0
+  id: command-schema-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command
+  exit_code: 0
+  id: command-json-lines-with-field
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7InN5c3RlbU1lc3NhZ2UiOiJoaSJ9Cg==
+  stdout_sha256: c1209eeedb2c1093c830204d7e2fcc9c4565dd0941cb5d9fbd8fc477c08b3bed
+- binding: command
+  exit_code: 2
+  id: command-exit-2-ignored
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2-structured
+  outcome: exit-2-structured
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: fa89fc8b89a3cf2ced53e5360497515594c0164ec4846cf3c76fc05dc16698e9
+- binding: command
+  exit_code: 1
+  id: command-nonzero-structured
+  outcome: nonzero-structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwiaW50ZXJydXB0IjpmYWxzZSwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: d00be442aa7aee1eee0a1c9e6d27b662bb9c0d27509b50f3cc9da4368e04f836
+- binding: command
+  exit_code: 1
+  id: command-nonzero-unstructured
+  outcome: nonzero-unstructured
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwiaW50ZXJydXB0IjpmYWxzZSwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: d00be442aa7aee1eee0a1c9e6d27b662bb9c0d27509b50f3cc9da4368e04f836
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-plain-text
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vayBmaW5pc2hlZC4K
+  stdout_sha256: db54b54d6320eaf7a59146e70f1674ec377b7c199af059daffc92171d6e8b774
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-schema-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command-on-failure-block
+  exit_code: 2
+  id: command-on-failure-block-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command-on-failure-block
+  exit_code: 2
+  id: command-on-failure-block-exit-2-structured
+  outcome: exit-2-structured
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: fa89fc8b89a3cf2ced53e5360497515594c0164ec4846cf3c76fc05dc16698e9
+- binding: command-on-failure-block
+  exit_code: 1
+  id: command-on-failure-block-nonzero-structured
+  outcome: failure-blocked
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwiaW50ZXJydXB0IjpmYWxzZSwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: d00be442aa7aee1eee0a1c9e6d27b662bb9c0d27509b50f3cc9da4368e04f836
+- binding: command-on-failure-block
+  exit_code: 1
+  id: command-on-failure-block-nonzero-unstructured
+  outcome: failure-blocked
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: command-malformed-permission-update
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlBlcm1pc3Npb25SZXF1ZXN0IiwiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJhbGxvdyIsInVwZGF0ZWRQZXJtaXNzaW9ucyI6W3sidHlwZSI6InNldE1vZGUiLCJtb2RlIjoibWFudWFsIn1dfX19
+  stdout_sha256: 76ba11c09837315bf15c722be28d30620147934b28d1cd2b485e33586bdce120
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-malformed-permission-update
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlBlcm1pc3Npb25SZXF1ZXN0IiwiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJhbGxvdyIsInVwZGF0ZWRQZXJtaXNzaW9ucyI6W3sidHlwZSI6InNldE1vZGUiLCJtb2RlIjoibWFudWFsIn1dfX19
+  stdout_sha256: 76ba11c09837315bf15c722be28d30620147934b28d1cd2b485e33586bdce120
+- binding: command
+  exit_code: 0
+  id: command-set-mode-manual
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlBlcm1pc3Npb25SZXF1ZXN0IiwiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJhbGxvdyIsInVwZGF0ZWRQZXJtaXNzaW9ucyI6W3sidHlwZSI6InNldE1vZGUiLCJtb2RlIjoibWFudWFsIiwiZGVzdGluYXRpb24iOiJzZXNzaW9uIn1dfX19
+  stdout_sha256: fedd96a9353541c0e3455ca9a90dce775d5a6f7f2996ea15c5cdb9e0c695e528
+- binding: command-on-failure-block
+  exit_code: 1
+  id: command-on-failure-block-nonzero-empty
+  outcome: failure-blocked
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwiaW50ZXJydXB0IjpmYWxzZSwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: d00be442aa7aee1eee0a1c9e6d27b662bb9c0d27509b50f3cc9da4368e04f836
+- binding: http
+  exit_code: 204
+  id: http-empty
+  outcome: empty-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-non-json
+  outcome: non-json-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: cGxhaW4gdGV4dCBib2R5
+  stdout_sha256: 9fc5d90c995fdacb82e2cb454025e169a5b94d0cd31051d23e82d51338311da8
+- binding: http
+  exit_code: 200
+  id: http-schema-invalid
+  outcome: schema-invalid-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http-on-failure-block
+  exit_code: 200
+  id: http-on-failure-block-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJkZW55IiwiaW50ZXJydXB0IjpmYWxzZSwibWVzc2FnZSI6IkJsb2NrZWQgYnkgcG9saWN5LiJ9LCJob29rRXZlbnROYW1lIjoiUGVybWlzc2lvblJlcXVlc3QifX0=
+  stdout_sha256: d00be442aa7aee1eee0a1c9e6d27b662bb9c0d27509b50f3cc9da4368e04f836
+- binding: http-on-failure-block
+  exit_code: 204
+  id: http-on-failure-block-empty
+  outcome: empty-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http-on-failure-block
+  exit_code: 200
+  id: http-on-failure-block-non-json
+  outcome: non-json-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: cGxhaW4gdGV4dCBib2R5
+  stdout_sha256: 9fc5d90c995fdacb82e2cb454025e169a5b94d0cd31051d23e82d51338311da8
+- binding: http-on-failure-block
+  exit_code: 200
+  id: http-on-failure-block-schema-invalid
+  outcome: schema-invalid-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: http-on-failure-block
+  exit_code: 500
+  id: http-on-failure-block-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

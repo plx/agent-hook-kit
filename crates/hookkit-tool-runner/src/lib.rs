@@ -210,12 +210,26 @@ pub fn run_session_start_observer(cli: SessionStartCli) -> std::process::ExitCod
             ensure_session_metadata(ctx, state_dir.as_deref(), anchor.as_deref())?;
             Ok(hookkit_codex::catalog::SessionStartOutput::no_op())
         }),
+        // Antigravity's SessionStart reports a `Startup` boundary. Builds
+        // that predate it still record the first `PreInvocation` instead,
+        // when another stateful hook observes it.
+        Some(BuiltinHarness::Antigravity) => hookkit_runtime::typed::run_typed::<
+            hookkit_antigravity::SessionStart,
+            _,
+        >(move |_, _, ctx| {
+            let anchor = ctx
+                .workspace_roots()
+                .first()
+                .map(|root| PathBuf::from(root.as_str()));
+            ensure_session_metadata(ctx, state_dir.as_deref(), anchor.as_deref())?;
+            Ok(hookkit_antigravity::SessionStartOutput::no_op())
+        }),
         _ => {
             eprintln!(
                 "session-start-state-agent-hook: {}",
                 unsupported_harness(
                     &cli.harness,
-                    "it has no native SessionStart event; use --claude or --codex",
+                    "it has no native SessionStart event; use --claude, --codex, or --antigravity",
                 )
             );
             std::process::ExitCode::from(1)
@@ -234,6 +248,12 @@ fn ensure_session_metadata(
 
 /// Stable project root for a PostToolUse invocation: `CLAUDE_PROJECT_DIR` on
 /// Claude Code, otherwise the first workspace root from the native input.
+///
+/// A Codex tool event has none, because its `cwd` is the command's working
+/// directory, so a relative path then resolves against the hook's working
+/// directory: the step's environment directory, where Codex starts every
+/// tool hook and the same directory a Codex `Stop` reports as its `cwd`
+/// unless the step selected another local environment.
 fn post_tool_project_root(
     environment: &PostToolUseCommandEnvironment,
     ctx: &RuntimeContext<'_>,

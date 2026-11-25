@@ -113,3 +113,61 @@ fn argument_errors_exit_one_instead_of_the_blocking_status_two() {
     assert_eq!(help.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&help.stdout).contains("--project-root"));
 }
+
+/// Since Codex 0.166.0 a Bash command run with `workdir` reports that
+/// subdirectory as the hook cwd; without `--project-root` the repository's
+/// rules must still be found.
+#[test]
+fn workdir_subdirectory_cwd_still_finds_repository_rules() {
+    let temporary = TempDirectory::new();
+    let project = temporary.0.join("project");
+    let claude_home = temporary.0.join("empty-claude-home");
+    let state = temporary.0.join("state");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    std::fs::create_dir_all(project.join(".claude/rules")).unwrap();
+    std::fs::create_dir_all(project.join("src/nested")).unwrap();
+    std::fs::create_dir_all(&claude_home).unwrap();
+    std::fs::write(
+        project.join(".claude/rules/rust.md"),
+        "---\npaths: 'src/**/*.rs'\n---\nUse the Rust rule.\n",
+    )
+    .unwrap();
+    std::fs::write(project.join("src/nested/lib.rs"), "pub fn example() {}\n").unwrap();
+    let input = serde_json::json!({
+        "session_id": "rules-workdir-session",
+        "transcript_path": null,
+        "cwd": project.join("src").to_str().unwrap(),
+        "hook_event_name": "PreToolUse",
+        "model": "gpt-test",
+        "turn_id": "turn",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_use_id": "call",
+        "tool_input": {"command": "cat nested/lib.rs"}
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codex-claude-rules"))
+        .args([
+            format!("--claude-home={}", claude_home.display()),
+            format!("--state-dir={}", state.display()),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(&input).unwrap())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        value["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("Use the Rust rule.")
+    );
+}

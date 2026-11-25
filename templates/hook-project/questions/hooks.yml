@@ -92,7 +92,7 @@ native_hooks:
     {%- if harness_mode == "single" and "file_activity" in state_capabilities and harness in ["claude-code", "codex"] -%}
     {%- for required in ["session_start", "post_tool_use", "stop"] -%}{%- if required not in defaults -%}{{ required | tojson }},{%- endif -%}{%- endfor -%}
     {%- elif harness_mode == "single" and "file_activity" in state_capabilities and harness == "antigravity" -%}
-    {%- for required in ["pre_invocation", "post_tool_use", "stop"] -%}{%- if required not in defaults -%}{{ required | tojson }},{%- endif -%}{%- endfor -%}
+    {%- for required in ["session_start", "pre_invocation", "post_tool_use", "stop"] -%}{%- if required not in defaults -%}{{ required | tojson }},{%- endif -%}{%- endfor -%}
     {%- endif -%}
     ]
   validator: >-

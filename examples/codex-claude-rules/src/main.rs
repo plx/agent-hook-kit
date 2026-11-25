@@ -73,11 +73,10 @@ fn main() -> std::process::ExitCode {
         }
     };
     hookkit_runtime::typed::run_event::<PreToolUse, _>(move |input, _environment, runtime| {
-        let project_root = absolute_utf8_path(
-            cli.project_root
-                .as_deref()
-                .unwrap_or(input.cwd.as_std_path()),
-        )?;
+        let project_root = match cli.project_root.as_deref() {
+            Some(project_root) => absolute_utf8_path(project_root)?,
+            None => default_project_root(&absolute_utf8_path(input.cwd.as_std_path())?),
+        };
         let claude_home = cli
             .claude_home
             .clone()
@@ -263,6 +262,31 @@ fn referenced_paths(
     )
     .map_err(invalid_data)?;
     Ok(ReferencedPathReport { resolution })
+}
+
+/// The project root when `--project-root` is absent: the nearest directory,
+/// from the hook `cwd` up to its enclosing checkout (a directory holding a
+/// `.git` directory, or the `.git` file of a linked worktree), that has a
+/// `.claude/rules` directory; else that checkout; else `cwd` itself.
+///
+/// Since Codex 0.166.0 a Bash command's `cwd` is its resolved `workdir`,
+/// often a subdirectory of the repository, so `cwd` alone would miss the
+/// repository's `.claude/rules`. The search never leaves the checkout, so
+/// the user-level `~/.claude/rules` cannot make the home directory the
+/// project root. A command run outside any checkout keeps its own `cwd`;
+/// pass `--project-root` for such sessions.
+fn default_project_root(cwd: &Utf8Path) -> Utf8PathBuf {
+    let Some(checkout) = cwd
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+    else {
+        return cwd.to_path_buf();
+    };
+    cwd.ancestors()
+        .take_while(|ancestor| ancestor.starts_with(checkout))
+        .find(|ancestor| ancestor.join(".claude/rules").is_dir())
+        .unwrap_or(checkout)
+        .to_path_buf()
 }
 
 fn absolute_utf8_path(path: &Path) -> std::io::Result<Utf8PathBuf> {
@@ -584,6 +608,62 @@ mod tests {
         assert!(truncated.resolution.paths.is_empty());
         assert!(truncated.resolution.budget_exhausted);
         assert!(!truncated.resolution.unresolved.is_empty());
+    }
+
+    #[test]
+    fn workdir_cwd_finds_the_repository_rules() {
+        // Since Codex 0.166.0 a Bash command run with `workdir` reports that
+        // directory as `cwd`, so the project root is searched upward from it.
+        let directory = test_dir("rules-workdir");
+        let repo = Utf8PathBuf::from_path_buf(directory.join("repo")).unwrap();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join(".claude/rules")).unwrap();
+        std::fs::create_dir_all(repo.join("sub/deeper")).unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(
+            repo.join(".claude/rules/rust.md"),
+            "---\npaths: 'src/**/*.rs'\n---\nRust.\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("src/lib.rs"), "pub fn example() {}\n").unwrap();
+
+        for cwd in [repo.clone(), repo.join("sub"), repo.join("sub/deeper")] {
+            let root = default_project_root(&cwd);
+            assert_eq!(root, repo, "{cwd}");
+            let input = pre_tool_input_at_cwd(
+                cwd.as_str(),
+                "Bash",
+                serde_json::json!({"command": format!("cat {}/src/lib.rs", repo)}),
+            );
+            let references = referenced_paths(&input, &root, TARGET_RESOLUTION_BUDGET).unwrap();
+            let rules = discover_rules(None, &root).unwrap();
+            assert_eq!(rules.len(), 1, "{cwd}");
+            assert!(
+                references
+                    .resolution
+                    .paths
+                    .iter()
+                    .any(|path| rule_matches(&rules[0], path, &root)),
+                "{cwd}"
+            );
+        }
+
+        // A nested project with its own rules is its own root.
+        std::fs::create_dir_all(repo.join("sub/.claude/rules")).unwrap();
+        assert_eq!(
+            default_project_root(&repo.join("sub/deeper")),
+            repo.join("sub")
+        );
+        // Outside every checkout, and never above one, the cwd is kept.
+        let outside = Utf8PathBuf::from_path_buf(directory.join("scratch")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        assert_eq!(default_project_root(&outside), outside);
+        // A worktree's `.git` file also bounds the search.
+        let worktree = Utf8PathBuf::from_path_buf(directory.join("worktree")).unwrap();
+        std::fs::create_dir_all(worktree.join("pkg")).unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: elsewhere\n").unwrap();
+        assert_eq!(default_project_root(&worktree.join("pkg")), worktree);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

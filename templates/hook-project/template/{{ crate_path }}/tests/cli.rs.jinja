@@ -1,8 +1,4 @@
-{% if harness_mode == "cross" and "file_activity" in state_capabilities and "antigravity" in harnesses -%}
-use clap::{CommandFactory, Parser as _};
-{% else -%}
 use clap::CommandFactory;
-{% endif -%}
 
 #[test]
 fn command_tree_is_internally_consistent() {
@@ -77,19 +73,43 @@ fn argument_errors_exit_non_blockingly() {
 {% endif -%}
 {% if harness_mode == "cross" and "file_activity" in state_capabilities and "antigravity" in harnesses %}
 #[test]
-fn antigravity_cannot_select_exact_session_start_support() {
-    let cli = {{ package_name | replace('-', '_') }}::scaffold::cli::Cli::try_parse_from([
-        {{ binary_name | tojson }},
-        "--harness",
-        "antigravity",
-        "--config",
-        "config/generated.pkl",
-        "--state-dir",
-        "/tmp/generated-state",
-        "session-start-state",
-    ])
-    .expect("the individual arguments are syntactically valid");
+fn antigravity_session_start_state_records_the_native_start() {
+    use std::io::Write as _;
 
-    assert!(cli.validate().is_err());
+    let state_dir = std::env::temp_dir().join(format!(
+        "{}-antigravity-session-start-{}",
+        env!("CARGO_PKG_NAME"),
+        std::process::id(),
+    ));
+    let binary = env!("CARGO_BIN_EXE_{{ binary_name }}");
+    let mut child = std::process::Command::new(binary)
+        .args(["--harness", "antigravity", "--state-dir"])
+        .arg(&state_dir)
+        .arg("session-start-state")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the generated hook binary should start");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(include_bytes!("../fixtures/antigravity/session_start.json"))
+        .expect("the fixture must reach hook stdin");
+    let output = child
+        .wait_with_output()
+        .expect("the generated hook binary should finish");
+    let recorded = state_dir.is_dir();
+    let _ = std::fs::remove_dir_all(&state_dir);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Antigravity requires a JSON response; the no-op injects no steps.
+    assert_eq!(output.stdout, b"{}");
+    assert!(recorded, "the session state root must be created");
 }
 {% endif -%}

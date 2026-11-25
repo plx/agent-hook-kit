@@ -1,0 +1,56 @@
+format_version: 1
+sources:
+  - id: codex-hooks-reference
+    kind: official-documentation
+    authority: primary
+    url: https://learn.chatgpt.com/docs/hooks.md
+    retrieved: 2026-11-25
+    content_sha256: 37cdbfc3b9d19925f88af3e680399fd61bd3d15979961302160f97698cc5a841
+    reproducibility: content-hash-only
+    limitations:
+      - 'The mutable Markdown endpoint has no checked-in capture; the hash covers the decoded 49,306-byte body of `curl --fail --silent --show-error --location --compressed https://learn.chatgpt.com/docs/hooks.md` (https://developers.openai.com/codex/hooks.md served identical bytes) and cannot be re-verified after the page changes. Line numbers below refer to that body.'
+      - 'It supersedes the 46,965-byte body hashed 724881d81f1a9fdb35ea42d4851a11b1f6606bbc6e9d2d05c1e8c466fc25c630 that commit-ff6aec9-r1 (retrieved 2026-09-29) and commit-ff6aec9-r2 (retrieved 2026-09-30) recorded. That body was never captured, so planning/audits/2026-11-25-codex-hooks.md reviewed the difference against what commit-ff6aec9-r2 encodes and the 2026-09-29 and 2026-09-30 audit notes: the page now documents the PreModelRequest and PostModelRequest events, the SessionStart `fork` source and mid-turn compact dispatch, the SessionEnd triggers, matcher and tool-coverage tables, output spilling, code-mode effects, and a rewritten cloud-orchestration section.'
+      - 'The page is the release behavior reference (lines 1151-1152) but still describes the session cwd for tool hooks (lines 200 and 489), although since Codex 0.166.0 tool-event stdin `cwd` can be a local command''s execution directory; the pinned generated schemas and source control where they disagree.'
+      - 'Its PermissionRequest section says the reserved `updatedInput`, `updatedPermissions`, and `interrupt` fields "fail closed" (lines 901-903); the pinned source discards the handler''s whole decision instead, which the PermissionRequest contract records.'
+      - 'Its PreModelRequest and PostModelRequest section (lines 974-986) documents only the rust-v0.164.0 through rust-v0.170.0 field set: it omits `kind`, `request_id`, `attempt_number`, `thread_id`, and `response_id`, which the pinned rust-v0.172.0 generated schema includes, calls the PostModelRequest additions "three additional fields", and mentions neither exit-0 stderr visibility, the per-open hook pairing, nor `mcp_tool` pricing. Because the omitted fields ship in the pinned tag, not only on `main`, the release-reference sentence (lines 1151-1152) does not make the page control; the tag''s generated schema and source do.'
+      - '"Hooks use an existing MCP connection. They don''t start or reconnect servers." (line 306) is stale since Codex 0.164.0: a hook call waits for its server and may start a dormant one within the hook timeout.'
+      - 'The MCP field table''s `timeout` "Defaults to `600`" (line 274) omits the one-second default and one-to-three-second clamp that Interrupt `mcp_tool` handlers share with command handlers, and since Codex 0.164.0 its "active execution timeout" also covers the plugin-trust scan.'
+      - '"new or changed hooks are marked for review and skipped until trusted" (lines 69-72) does not hold for a plugin hook whose bundle changed after approval: since Codex 0.164.0 it stays registered and records a failed run on every match (lines 418-419 say only that a changed bundled script needs a new review).'
+      - 'The spill path `<temp_dir>/hook_outputs/<session_id>/<uuid>.txt` (line 543) names the session id, but the source keys the directory by the hook registry''s thread id, which differs in subagents.'
+      - 'SessionEnd runs "after a conversation has been idle and isn''t open in any connected client for 30 minutes" (lines 698-702), but the pinned core source defaults `thread_unload_delay_secs` to 60 seconds, configurable per configuration or thread; the SessionEnd contract records the source default and does not encode 30 minutes.'
+      - '"Subagent hooks use the parent session id" (line 487); every producer sends the root session id that all descendant threads share. The `permission_mode` list (lines 496-499) names five values, but the pinned source sends only `default` and `bypassPermissions`.'
+      - '"The `matcher` field is a regex string" (line 423) is imprecise: a pattern made only of letters, digits, `_`, and `|` is an exact match on its alternatives.'
+      - 'Its PermissionRequest section says that without a deny "an `allow` lets the request proceed without surfacing the approval prompt" (lines 897-899), but since Codex 0.167.0 core/src/tools/approvals.rs ignores a hook allow for a command, in any execution environment, matched by a managed `requirements.toml` prefix rule with `decision = "prompt-user"` and still asks a person; the pinned source controls, and the PermissionRequest contract records the checkpoint.'
+      - '`transcript_path` is the "Path to the session transcript file" (line 488) and `agent_transcript_path` the "Path to the subagent transcript file" (line 1073), but on a subagent thread the pinned source sends the subagent''s own rollout as `transcript_path`, except that SubagentStop sends the immediate parent thread''s rollout there; the contracts of the events that run on subagent threads record this.'
+      - 'The page ends with a "Plain-text aliases" renderer glossary (lines 1157-1159) that has no protocol meaning.'
+  - id: codex-generated-schemas
+    kind: official-source
+    authority: primary
+    url: https://github.com/openai/codex/tree/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/hooks/schema/generated
+    retrieved: 2026-11-25
+    revision: 3d86e43b075adeba2193ec5c22ac92f55afd82e6
+    license: Apache-2.0
+    reproducibility: vendored
+    limitations:
+      - 'Vendored in ff3ab73 with MANIFEST.sha256 (24 files, tag rust-v0.172.0). The 23 files shared with ff6aec96948b70d94983af2641a6b67c94faeff5 are byte-identical to that vendor tree; the only addition is model-request.command.input.schema.json (SHA-256 5182c45dad9a6f6ece6ded590052323ccd80aaa9ae3649e04a107936fc7a13b0), which PreModelRequest and PostModelRequest share through a root `oneOf` on `hook_event_name`. Each event''s input schema is derived from its branch; no model-request output schema exists.'
+  - id: codex-hooks-source
+    kind: official-source
+    authority: primary
+    url: https://github.com/openai/codex/tree/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/hooks
+    retrieved: 2026-11-25
+    revision: 3d86e43b075adeba2193ec5c22ac92f55afd82e6
+    license: Apache-2.0
+    reproducibility: pinned-revision
+    limitations:
+      - 'Re-reviewed on 2026-11-25 for this revision (tag rust-v0.172.0) against ff6aec96948b70d94983af2641a6b67c94faeff5, notably src/lib.rs, events/model_request.rs, events/common.rs, events/pre_tool_use.rs, events/permission_request.rs, events/post_tool_use.rs, engine/mod.rs, engine/discovery.rs, engine/dispatcher.rs, engine/command_runner.rs, engine/mcp_runner.rs, engine/plugin_trust.rs, engine/plugin_fingerprint.rs, engine/matcher.rs, and output_spill.rs. engine/output_parser.rs has no diff, and the existing events'' parsers changed only in input serialization, context metadata, and the environment-scoped PermissionRequest allow filter.'
+      - 'Hooks commits that exist only on main or in rust-v0.173.0 and rust-v0.174.0 pre-releases (per-handler `onFailure`, price-overflow rejection, MCP SessionStart encrypted content, structured code-mode PostToolUse results, interrupted start-hook retry) are not part of this revision and are not encoded.'
+  - id: codex-core-source
+    kind: official-source
+    authority: primary
+    url: https://github.com/openai/codex/tree/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/core
+    retrieved: 2026-11-25
+    revision: 3d86e43b075adeba2193ec5c22ac92f55afd82e6
+    license: Apache-2.0
+    reproducibility: pinned-revision
+    limitations:
+      - 'Re-reviewed on 2026-11-25 for this revision, notably hook_runtime.rs, hook_runtime/sampling.rs (model-request hook pairing), client/response_delivery.rs, hook_environment_executor.rs, hook_mcp_executor.rs, tools/registry.rs (PreToolUse cwd and updatedInput selector preservation), tools/approvals.rs (PermissionRequest cwd, and with exec_policy.rs and tools/orchestrator.rs the managed `prompt-user` checkpoint that overrides a hook allow), session/turn.rs (a blocked UserPromptSubmit prompt and its discarded reason), tools/context.rs (PostToolUse cwd), tools/sandboxing.rs, tools/handlers/unified_exec/exec_command.rs, session/rollout_budget.rs, codex_thread.rs (direct Guardian review), and config/mod.rs (`thread_unload_delay_secs`). PostModelRequest value rules also rely on codex-rs/protocol/src/protocol.rs (TokenUsage serialization) and codex-rs/protocol/src/error.rs (error display text) at the same revision.'

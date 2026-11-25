@@ -173,7 +173,11 @@ blocking_error!(
     "Cancels the switch; stderr is shown to the user."
 );
 into_blocking_error!(PreModelSwitchOutput);
-nonblocking_error!(PreModelSwitch, PreModelSwitchOutput);
+nonblocking_error!(
+    PreModelSwitch,
+    PreModelSwitchOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it cancels the switch."
+);
 universal_builders!(PreModelSwitchOutput: continue_session, stop_reason, system_message, terminal_sequence);
 
 impl PreModelSwitchOutput {

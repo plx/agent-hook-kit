@@ -1,0 +1,125 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:pre-skill-shell-command:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "command_name": {
+      "description": "Name of the skill or command that is loading, such as pr-summary, or my-plugin:deploy for a plugin's skill.",
+      "type": "string"
+    },
+    "command_source": {
+      "description": "Where the skill or command comes from. Open string: the examples are the documented values, and the Agent SDK types the field optional.",
+      "examples": [
+        "userSettings",
+        "projectSettings",
+        "policySettings",
+        "plugin",
+        "builtin"
+      ],
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": true,
+      "properties": {
+        "level": {
+          "description": "Open string: the Agent SDK types it as string; the examples are the documented levels.",
+          "examples": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "hook_event_name": {
+      "const": "PreSkillShellCommand"
+    },
+    "invoked_by": {
+      "description": "user when the user typed the skill's name or an Agent SDK app sent it; claude when Claude or a session-scoped scheduled task invoked the skill; other for anything else, such as a subagent that preloads the skill. Modeled as an open string; HookKit treats an unrecognized value as other.",
+      "examples": [
+        "user",
+        "claude",
+        "other"
+      ],
+      "type": "string"
+    },
+    "permission_mode": {
+      "description": "Open string: the Agent SDK types it as string; the examples are the documented modes.",
+      "examples": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "description": "Session scratchpad directory; absent when the session has none or the temp directory is unavailable (Claude Code v2.1.257 or later).",
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "tool_input": {
+      "additionalProperties": true,
+      "properties": {
+        "command": {
+          "description": "The shell command as it would run, with arguments filled in.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "tool_name": {
+      "description": "The tool that runs the command, Bash or PowerShell.",
+      "examples": [
+        "Bash",
+        "PowerShell"
+      ],
+      "type": "string"
+    },
+    "tool_use_id": {
+      "description": "ID of this command; it names no tool call in the transcript.",
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "tool_name",
+    "tool_input",
+    "tool_use_id",
+    "command_name",
+    "invoked_by"
+  ],
+  "type": "object"
+}

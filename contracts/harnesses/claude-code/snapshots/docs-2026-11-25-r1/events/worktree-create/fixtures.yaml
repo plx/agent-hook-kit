@@ -1,0 +1,144 @@
+format_version: 1
+input:
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      cwd: /repo
+      hook_event_name: WorktreeCreate
+      name: feature-auth
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      session_id: s2
+      transcript_path: /tmp/t.jsonl
+      cwd: /repo
+      prompt_id: prompt-1
+      scratchpad_dir: /tmp/claude-501/-repo/s2/scratchpad
+      hook_event_name: WorktreeCreate
+      name: bold-oak-a3f2
+      future_field: retained
+  negative:
+  - id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      cwd: /repo
+      hook_event_name: WorktreeRemove
+      name: feature-auth
+    expected_pointer: /hook_event_name
+    expected_keyword: const
+  - id: missing-name
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+      cwd: /repo
+      hook_event_name: WorktreeCreate
+    expected_pointer: ''
+    expected_keyword: required
+output:
+- id: http-created
+  schema: http-response
+  origin: synthesized
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      hookEventName: WorktreeCreate
+      worktreePath: /tmp/hookkit-worktree
+output_negative:
+- id: missing-worktree-path
+  schema: http-response
+  origin: regression
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      hookEventName: WorktreeCreate
+  expected_pointer: /hookSpecificOutput
+  expected_keyword: required
+process:
+- id: command-created
+  binding: command
+  outcome: created
+  exit_code: 0
+  stdout_base64: L3RtcC9ob29ra2l0LXdvcmt0cmVlCg==
+  stdout_sha256: d5669f21f2e7cfab412026b7f982b02bd0c94f4a360d9ed2d8d652481f75df07
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- id: command-created-after-banner
+  binding: command
+  outcome: created
+  exit_code: 0
+  stdout_base64: G1sxbVdlbGNvbWUgdG8genNoG1swbQpDaGVja2VkIG91dCByZXZpc2lvbiA0Mi4KL3RtcC9ob29ra2l0LXdvcmt0cmVlCgo=
+  stdout_sha256: fcbedc3d0172150a6c67515464435a4f70b9b9633284f502feb1f23e3d314e8a
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- id: command-missing-path
+  binding: command
+  outcome: missing-path
+  exit_code: 0
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- id: command-refused-path
+  binding: command
+  outcome: refused-path
+  exit_code: 0
+  stdout_base64: L3RtcC8uLi90bXAvaG9va2tpdC13b3JrdHJlZQo=
+  stdout_sha256: e438d7006e1faeeab561f9d1f378a5dfb0c18ffa6afa7b16ff3c7cd1f775912a
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- id: command-failed
+  binding: command
+  outcome: failed
+  exit_code: 1
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- id: command-failed-invalid-stdout
+  binding: command
+  outcome: failed
+  exit_code: 1
+  stdout_base64: e2ludmFsaWQtanNvbg==
+  stdout_sha256: 9b60fca5ee82ffb9afc0d382b727815b0b0e70a096b08a1ccb82cc2ec8909066
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- id: http-created
+  binding: http
+  outcome: created
+  exit_code: 200
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6Ildvcmt0cmVlQ3JlYXRlIiwid29ya3RyZWVQYXRoIjoiL3RtcC9ob29ra2l0LXdvcmt0cmVlIn19
+  stdout_sha256: b17028b13e3600c653f46cfa120516b60df6aacddb9cb2a6923c2c584409a314
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- id: http-missing-path
+  binding: http
+  outcome: missing-path
+  exit_code: 200
+  stdout_base64: e30=
+  stdout_sha256: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- id: http-error
+  binding: http
+  outcome: failed
+  exit_code: 500
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

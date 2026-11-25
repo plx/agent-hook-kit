@@ -1,5 +1,5 @@
 //! Checks the native crate against every fixture and output schema of the
-//! frozen snapshot it implements.
+//! snapshot it implements (draft or frozen).
 //!
 //! The conformance crate exercises only the registry-selected snapshot and
 //! only one representative case per outcome. This suite follows
@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Snapshot event directory and native wire name for every event.
-const EVENTS: [(&str, &str); 33] = [
+const EVENTS: [(&str, &str); 34] = [
     ("config-change", "ConfigChange"),
     ("cwd-changed", "CwdChanged"),
     ("directory-added", "DirectoryAdded"),
@@ -40,6 +40,7 @@ const EVENTS: [(&str, &str); 33] = [
     ("post-tool-use-failure", "PostToolUseFailure"),
     ("pre-compact", "PreCompact"),
     ("pre-model-switch", "PreModelSwitch"),
+    ("pre-skill-shell-command", "PreSkillShellCommand"),
     ("pre-tool-use", "PreToolUse"),
     ("session-end", "SessionEnd"),
     ("session-start", "SessionStart"),
@@ -121,7 +122,13 @@ fn wire_name(event_dir: &str) -> &'static str {
 fn the_crate_implements_exactly_the_snapshot_events() {
     let snapshot = read_yaml(snapshot_root().join("snapshot.yaml"));
     assert_eq!(snapshot["id"], SNAPSHOT_ID.as_str());
-    assert_eq!(snapshot["state"], "frozen");
+    // The crate may implement a draft before the integration step freezes
+    // and selects it; a snapshot in any other state is not implementable.
+    assert!(
+        matches!(snapshot["state"].as_str(), Some("draft" | "frozen")),
+        "snapshot state {}",
+        snapshot["state"]
+    );
     let documented: BTreeSet<(String, String)> = snapshot["events"]
         .as_array()
         .unwrap()
@@ -212,9 +219,15 @@ where
             value["session_id"].as_str(),
             "{event_dir}/{id}"
         );
+        // A PreSkillShellCommand `tool_use_id` names no tool call.
+        let tool_call_id = if E::EVENT.name() == "PreSkillShellCommand" {
+            None
+        } else {
+            value["tool_use_id"].as_str()
+        };
         assert_eq!(
             context.tool_call_id.as_ref().map(|id| id.as_str()),
-            value["tool_use_id"].as_str(),
+            tool_call_id,
             "{event_dir}/{id}"
         );
 
@@ -263,6 +276,7 @@ fn every_positive_input_fixture_parses_and_every_negative_is_rejected() {
     check_inputs::<PostToolUseFailure>("post-tool-use-failure");
     check_inputs::<PreCompact>("pre-compact");
     check_inputs::<PreModelSwitch>("pre-model-switch");
+    check_inputs::<PreSkillShellCommand>("pre-skill-shell-command");
     check_inputs::<PreToolUse>("pre-tool-use");
     check_inputs::<SessionEnd>("session-end");
     check_inputs::<SessionStart>("session-start");
@@ -329,6 +343,9 @@ fn known_event_schema_violations_are_invalid_input_for_the_hinted_event() {
         ("pre-model-switch", "to_model"),
         ("pre-tool-use", "cwd"),
         ("pre-tool-use", "tool_name"),
+        ("pre-skill-shell-command", "command_name"),
+        ("pre-skill-shell-command", "invoked_by"),
+        ("pre-skill-shell-command", "tool_input"),
     ] {
         let mut value = positive(event_dir, "minimal");
         value.as_object_mut().unwrap().remove(field);
@@ -424,6 +441,137 @@ fn typed_accessors_read_the_snapshot_fixtures() {
     assert!(input.scratchpad_dir.is_some());
 }
 
+#[test]
+fn typed_accessors_read_the_docs_2026_11_25_fixtures() {
+    use hookkit_claude::protocol::{CompactTrigger, NotificationType, SkillInvoker};
+
+    // PreSkillShellCommand: every documented field has a scoped accessor.
+    let raw = invocation(&positive("pre-skill-shell-command", "representative"));
+    let input = PreSkillShellCommand::parse(&raw).unwrap();
+    assert_eq!(input.tool_name(), Some("PowerShell"));
+    assert_eq!(input.injected_command(), Some("git log -5 --oneline"));
+    assert_eq!(input.tool_use_id(), Some("skillsh_1"));
+    assert_eq!(input.command_name(), Some("release-notes"));
+    assert_eq!(input.command_source(), Some("plugin"));
+    assert_eq!(input.invoked_by(), Some(SkillInvoker::Claude));
+    assert_eq!(input.prompt(), None);
+    let raw = invocation(&positive("pre-skill-shell-command", "subagent-preload"));
+    let input = PreSkillShellCommand::parse(&raw).unwrap();
+    assert!(input.invoked_by().unwrap().is_other());
+    assert_eq!(input.command_source(), None);
+    assert_eq!(input.agent_id(), Some("agent-1"));
+    let raw = invocation(&positive(
+        "pre-skill-shell-command",
+        "unrecognized-invoked-by",
+    ));
+    let input = PreSkillShellCommand::parse(&raw).unwrap();
+    let invoker = input.invoked_by().unwrap();
+    assert_eq!(invoker, SkillInvoker::Unknown("scheduler".into()));
+    assert!(invoker.is_other() && !invoker.is_documented());
+    let raw = invocation(&positive("pre-skill-shell-command", "plugin-skill"));
+    assert_eq!(
+        PreSkillShellCommand::parse(&raw).unwrap().command_name(),
+        Some("my-plugin:deploy")
+    );
+
+    // The same names on UserPromptExpansion; not on PreToolUse.
+    let raw = invocation(&positive("user-prompt-expansion", "mcp-skill"));
+    let input = UserPromptExpansion::parse(&raw).unwrap();
+    assert_eq!(input.command_name(), Some("docs:pdf"));
+    assert_eq!(input.injected_command(), None);
+    assert_eq!(input.invoked_by(), None);
+    let raw = invocation(&positive("pre-tool-use", "monitor-call"));
+    let input = PreToolUse::parse(&raw).unwrap();
+    assert_eq!(input.tool_name(), Some("Monitor"));
+    assert_eq!(input.injected_command(), None);
+    assert_eq!(input.command_name(), None);
+
+    // UserPromptSubmit session_title and unexpanded slash-command prompts.
+    let raw = invocation(&positive("user-prompt-submit", "representative"));
+    let input = UserPromptSubmit::parse(&raw).unwrap();
+    assert_eq!(input.session_title(), Some("Review"));
+    let raw = invocation(&positive("user-prompt-submit", "slash-command-line"));
+    let input = UserPromptSubmit::parse(&raw).unwrap();
+    assert_eq!(input.prompt(), Some("/deploy staging"));
+    assert_eq!(input.session_title(), None);
+    let raw = invocation(&positive("user-prompt-submit", "sdk-source"));
+    let input = UserPromptSubmit::parse(&raw).unwrap();
+    assert_eq!(input.field("source"), Some(&json!("loop_wakeup")));
+    let mut expansion = positive("user-prompt-expansion", "representative");
+    expansion["session_title"] = "Review".into();
+    let input = UserPromptExpansion::parse(&invocation(&expansion)).unwrap();
+    assert_eq!(input.session_title(), None);
+
+    // New notification types are documented; an unrelated one stays open.
+    for (id, kind) in [
+        ("auth-storage-failure", NotificationType::AuthStorageFailure),
+        ("plugin-notification", NotificationType::PluginNotification),
+    ] {
+        let raw = invocation(&positive("notification", id));
+        let input = Notification::parse(&raw).unwrap();
+        assert_eq!(input.notification_type(), Some(kind), "{id}");
+    }
+    let raw = invocation(&positive("notification", "plugin-notification"));
+    assert_eq!(
+        Notification::parse(&raw).unwrap().notification_title(),
+        Some("ci-watch")
+    );
+    assert_eq!(
+        NotificationType::from("plugin_notification"),
+        NotificationType::PluginNotification
+    );
+    assert!(!NotificationType::from("plugin_notifications").is_documented());
+
+    // MessageDisplay's single non-interactive call carries the whole message.
+    let raw = invocation(&positive("message-display", "non-interactive-single-call"));
+    let input = MessageDisplay::parse(&raw).unwrap();
+    assert_eq!(input.message_index(), Some(0));
+    assert_eq!(input.message_final(), Some(true));
+    assert_eq!(
+        input.message_delta(),
+        Some("Here is the plan:\n1. Build\n2. Test")
+    );
+    let raw = invocation(&positive("message-display", "interactive-empty-final"));
+    let input = MessageDisplay::parse(&raw).unwrap();
+    assert_eq!(
+        (
+            input.message_index(),
+            input.message_final(),
+            input.message_delta()
+        ),
+        (Some(2), Some(true), Some(""))
+    );
+
+    // Plugin-scoped agent types and user-declined elicitation results.
+    let raw = invocation(&positive("subagent-start", "plugin-agent"));
+    let input = SubagentStart::parse(&raw).unwrap();
+    assert_eq!(input.agent_type(), Some("my-plugin:reviewer"));
+    let raw = invocation(&positive("elicitation-result", "user-declined"));
+    let input = ElicitationResult::parse(&raw).unwrap();
+    assert_eq!(input.field("action"), Some(&json!("decline")));
+
+    // A managed PostToolUse hook sees a failed call's error as a string.
+    let raw = invocation(&positive("post-tool-use", "managed-failed-call"));
+    let input = PostToolUse::parse(&raw).unwrap();
+    assert!(input.tool_response.is_string());
+
+    // Subagent compaction carries the agent fields on SessionStart and
+    // PreCompact.
+    let raw = invocation(&positive("session-start", "subagent-compact"));
+    let input = SessionStart::parse(&raw).unwrap();
+    assert_eq!(input.agent_id.as_deref(), Some("agent-1"));
+    assert_eq!(input.source.as_str(), "compact");
+    let raw = invocation(&positive("pre-compact", "subagent-compaction"));
+    let input = PreCompact::parse(&raw).unwrap();
+    assert_eq!(input.agent_type(), Some("Explore"));
+    assert_eq!(input.compact_trigger(), Some(CompactTrigger::Auto));
+
+    // PostToolBatch items include a refused call with no marker.
+    let raw = invocation(&positive("post-tool-batch", "refused-call-in-batch"));
+    let input = PostToolBatch::parse(&raw).unwrap();
+    assert_eq!(input.tool_calls().unwrap().len(), 2);
+}
+
 fn check_schema(event_dir: &str, value: &Value) {
     let Some(validator) = output_validator(event_dir) else {
         panic!("{event_dir} has no command output schema");
@@ -468,7 +616,9 @@ fn catalog<E: EventSpec>(output: E::CommandOutput) -> ProcessEmission {
 /// Typed outputs reproducing each command output fixture and each declared
 /// process case, by fixture id.
 fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
+    let process = id.starts_with("command-");
     let id = id.strip_prefix("command-").unwrap_or(id);
+    const MISSING_FILE: &str = "/bin/sh: /repo/.claude/hooks/check.sh: No such file or directory\n";
     let emission = match (event_dir, id) {
         ("config-change", "structured" | "exit-2-structured") => {
             let output = ConfigChangeOutput::block("Configuration change rejected.");
@@ -501,6 +651,11 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("elicitation", "decision-block") => {
             catalog::<Elicitation>(ElicitationOutput::block("Declined by policy."))
         }
+        ("elicitation", "decision-block-overrides-action") => catalog::<Elicitation>(
+            ElicitationOutput::accept_without_content()
+                .with_block("r")
+                .unwrap(),
+        ),
         ("elicitation", "exit-2") => {
             catalog::<Elicitation>(ElicitationOutput::blocking_error("blocked by hook"))
         }
@@ -513,6 +668,17 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("elicitation-result", "decision-block") => {
             catalog::<ElicitationResult>(ElicitationResultOutput::block("Declined by policy."))
         }
+        ("elicitation-result", "decision-block-overrides-action") => catalog::<ElicitationResult>(
+            ElicitationResultOutput::accept(map(json!({"name": "Ada"})))
+                .with_block("r")
+                .unwrap(),
+        ),
+        ("elicitation-result", "cancel") => {
+            catalog::<ElicitationResult>(ElicitationResultOutput::cancel())
+        }
+        ("elicitation-result", "official-change-values") => catalog::<ElicitationResult>(
+            ElicitationResultOutput::accept(map(json!({"username": "alice@example.com"}))),
+        ),
         ("elicitation-result", "exit-2") => {
             catalog::<ElicitationResult>(ElicitationResultOutput::blocking_error("blocked by hook"))
         }
@@ -556,6 +722,35 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
                 .with_interrupt(false)
                 .unwrap(),
         ),
+        ("permission-request", "set-mode-manual") => catalog::<PermissionRequest>(
+            PermissionRequestOutput::allow()
+                .with_updated_permissions(vec![json!({
+                    "type": "setMode",
+                    "mode": "manual",
+                    "destination": "session",
+                })])
+                .unwrap(),
+        ),
+        ("permission-request", "add-rules-and-directories") => catalog::<PermissionRequest>(
+            PermissionRequestOutput::allow()
+                .with_updated_permissions(vec![
+                    json!({
+                        "type": "addRules",
+                        "rules": [
+                            {"toolName": "Bash", "ruleContent": "npm test"},
+                            {"toolName": "mcp__github__get_issue"},
+                        ],
+                        "behavior": "allow",
+                        "destination": "localSettings",
+                    }),
+                    json!({
+                        "type": "addDirectories",
+                        "directories": ["/repo/related"],
+                        "destination": "session",
+                    }),
+                ])
+                .unwrap(),
+        ),
         ("permission-request", "exit-2-structured") => {
             catalog::<PermissionRequest>(PermissionRequestOutput::deny("Blocked by policy."))
         }
@@ -568,7 +763,7 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
                 .with_continue(true)
                 .unwrap(),
         ),
-        ("post-compact", "nonzero") => {
+        ("post-compact", "nonzero-unstructured") => {
             catalog::<PostCompact>(PostCompactOutput::nonblocking_error("hook failed"))
         }
         ("post-model-switch", "structured") => {
@@ -582,6 +777,12 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("post-model-switch", "text-open-brace") => catalog::<PostModelSwitch>(
             PostModelSwitchOutput::text_context("{ context without a closing brace"),
         ),
+        ("post-model-switch", "text-json-array") => {
+            catalog::<PostModelSwitch>(PostModelSwitchOutput::text_context(r#"["a","b"]"#))
+        }
+        ("post-model-switch", "text-json-string") => {
+            catalog::<PostModelSwitch>(PostModelSwitchOutput::text_context(r#""quoted""#))
+        }
         ("post-model-switch", "nonzero-unstructured") => {
             catalog::<PostModelSwitch>(PostModelSwitchOutput::nonblocking_error("hook failed"))
         }
@@ -652,6 +853,17 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("pre-compact", "nonzero-unstructured") => {
             catalog::<PreCompact>(PreCompactOutput::nonblocking_error("hook failed"))
         }
+        ("pre-compact", "no-op") => catalog::<PreCompact>(PreCompactOutput::no_op()),
+        ("pre-compact", "compaction-instructions") => catalog::<PreCompact>(
+            PreCompactOutput::compaction_instructions("Preserve the failing test names.\n")
+                .unwrap(),
+        ),
+        ("pre-compact", "text-json-array") => catalog::<PreCompact>(
+            PreCompactOutput::compaction_instructions(r#"["a","b"]"#).unwrap(),
+        ),
+        ("pre-compact", "text-over-cap") => catalog::<PreCompact>(
+            PreCompactOutput::compaction_instructions("a".repeat(10_001)).unwrap(),
+        ),
         ("pre-model-switch", "structured") => catalog::<PreModelSwitch>(PreModelSwitchOutput::ask(
             "Switching now re-sends about 180k tokens to the new model. Continue?",
         )),
@@ -692,11 +904,80 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("pre-tool-use", "nonzero-unstructured") => {
             catalog::<PreToolUse>(PreToolUseOutput::nonblocking_error("hook failed"))
         }
+        ("pre-tool-use", "official-decision-control") => catalog::<PreToolUse>(
+            PreToolUseOutput::allow()
+                .with_decision_reason("My reason here")
+                .unwrap()
+                .with_updated_input(map(json!({"field_to_modify": "new value"})))
+                .unwrap()
+                .with_additional_context("Current environment: production. Proceed with caution.")
+                .unwrap(),
+        ),
+        ("pre-tool-use", "updated-input-without-decision") => catalog::<PreToolUse>(
+            PreToolUseOutput::no_op()
+                .with_updated_input(map(json!({"command": "cargo test --offline"})))
+                .unwrap(),
+        ),
+        ("pre-tool-use", "updated-input-unknown-key") => catalog::<PreToolUse>(
+            PreToolUseOutput::allow()
+                .with_updated_input(map(json!({"command": "ls", "bogus": true})))
+                .unwrap(),
+        ),
+        ("pre-tool-use", "deny-and-stop") => catalog::<PreToolUse>(
+            PreToolUseOutput::deny("Blocked.")
+                .with_continue(false)
+                .unwrap()
+                .with_stop_reason("Policy stop.")
+                .unwrap(),
+        ),
+        ("pre-tool-use", "continue-false-without-deny") => catalog::<PreToolUse>(
+            PreToolUseOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .with_stop_reason("Stop after this call.")
+                .unwrap(),
+        ),
+        ("pre-tool-use", "exit-2-continue-false") => catalog::<PreToolUse>(
+            PreToolUseOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .into_blocking_error("blocked by hook")
+                .unwrap(),
+        ),
+        ("pre-tool-use", "exit-2-missing-file") => {
+            catalog::<PreToolUse>(PreToolUseOutput::blocking_error(MISSING_FILE))
+        }
+        ("pre-tool-use", "defer") => catalog::<PreToolUse>(PreToolUseOutput::defer()),
+        ("pre-skill-shell-command", "structured") => catalog::<PreSkillShellCommand>(
+            PreSkillShellCommandOutput::deny("curl is not allowed in skills."),
+        ),
+        ("pre-skill-shell-command", "ask-refuses") => catalog::<PreSkillShellCommand>(
+            PreSkillShellCommandOutput::ask("Confirm network access."),
+        ),
+        ("pre-skill-shell-command", "decision-block") => catalog::<PreSkillShellCommand>(
+            PreSkillShellCommandOutput::block("Destructive command blocked by hook"),
+        ),
+        ("pre-skill-shell-command", "continue-false") => catalog::<PreSkillShellCommand>(
+            PreSkillShellCommandOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .with_stop_reason("Skill disabled by policy.")
+                .unwrap(),
+        ),
+        ("pre-skill-shell-command", "exit-2") => catalog::<PreSkillShellCommand>(
+            PreSkillShellCommandOutput::blocking_error("blocked by hook"),
+        ),
+        ("pre-skill-shell-command", "exit-2-skill-policy") => catalog::<PreSkillShellCommand>(
+            PreSkillShellCommandOutput::blocking_error("curl is not allowed in skills"),
+        ),
+        ("pre-skill-shell-command", "nonzero-unstructured") => catalog::<PreSkillShellCommand>(
+            PreSkillShellCommandOutput::nonblocking_error("hook failed"),
+        ),
         ("session-end", "structured") => catalog::<SessionEnd>(SessionEndOutput::no_op()),
         ("session-end", "discarded-universal-fields") => {
             catalog::<SessionEnd>(SessionEndOutput::with_system_message("Session ended."))
         }
-        ("session-end", "nonzero") => {
+        ("session-end", "nonzero-unstructured") => {
             catalog::<SessionEnd>(SessionEndOutput::nonblocking_error("hook failed"))
         }
         ("session-start", "structured") => catalog::<SessionStart>(
@@ -714,6 +995,12 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("session-start", "text-open-brace") => catalog::<SessionStart>(
             SessionStartOutput::text_context("{ context without a closing brace"),
         ),
+        ("session-start", "text-json-array") => {
+            catalog::<SessionStart>(SessionStartOutput::text_context(r#"["a","b"]"#))
+        }
+        ("session-start", "text-json-string") => {
+            catalog::<SessionStart>(SessionStartOutput::text_context(r#""quoted""#))
+        }
         ("session-start", "nonzero-unstructured") => {
             catalog::<SessionStart>(SessionStartOutput::nonblocking_error("hook failed"))
         }
@@ -735,6 +1022,14 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
                 .unwrap(),
         ),
         ("stop", "exit-2") => catalog::<Stop>(StopOutput::blocking_error("blocked by hook")),
+        ("stop", "exit-2-other-stderr") => {
+            catalog::<Stop>(StopOutput::blocking_error("tests failed"))
+        }
+        ("stop", "exit-2-missing-file-with-stdout") => catalog::<Stop>(
+            StopOutput::block("Run tests again.")
+                .into_blocking_error(MISSING_FILE)
+                .unwrap(),
+        ),
         ("stop", "nonzero-unstructured") => {
             catalog::<Stop>(StopOutput::nonblocking_error("hook failed"))
         }
@@ -761,6 +1056,14 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("subagent-stop", "exit-2") => {
             catalog::<SubagentStop>(SubagentStopOutput::blocking_error("blocked by hook"))
         }
+        ("subagent-stop", "exit-2-other-stderr") => {
+            catalog::<SubagentStop>(SubagentStopOutput::blocking_error("tests failed"))
+        }
+        ("subagent-stop", "exit-2-missing-file-with-stdout") => catalog::<SubagentStop>(
+            SubagentStopOutput::block("Run another pass.")
+                .into_blocking_error(MISSING_FILE)
+                .unwrap(),
+        ),
         ("subagent-stop", "nonzero-unstructured") => {
             catalog::<SubagentStop>(SubagentStopOutput::nonblocking_error("hook failed"))
         }
@@ -781,6 +1084,39 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("task-completed", "exit-2") => {
             catalog::<TaskCompleted>(TaskCompletedOutput::blocking_error("blocked by hook"))
         }
+        ("task-completed", "exit-2-other-stderr") => {
+            catalog::<TaskCompleted>(TaskCompletedOutput::blocking_error("tests failed"))
+        }
+        ("task-completed", "exit-2-missing-file-with-stdout") => catalog::<TaskCompleted>(
+            TaskCompletedOutput::no_op()
+                .with_system_message("Tests are still failing.")
+                .unwrap()
+                .into_blocking_error(MISSING_FILE)
+                .unwrap(),
+        ),
+        // The output example and the process cases use different reasons.
+        ("task-completed", "block") if !process => catalog::<TaskCompleted>(
+            TaskCompletedOutput::block("Tests not passing. Fix failing tests before completing."),
+        ),
+        ("task-completed", "block" | "exit-2-block") => {
+            let output = TaskCompletedOutput::block("Tests not passing.");
+            if id == "block" {
+                catalog::<TaskCompleted>(output)
+            } else {
+                catalog::<TaskCompleted>(output.into_blocking_error("blocked by hook").unwrap())
+            }
+        }
+        // The task stays open whatever triggered the event, so the exit-2
+        // form of continue: false is not rejected here.
+        ("task-completed", "exit-2-continue-false") => catalog::<TaskCompleted>(
+            TaskCompletedOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .with_stop_reason("Done.")
+                .unwrap()
+                .into_blocking_error("keep going")
+                .unwrap(),
+        ),
         ("task-completed", "nonzero-unstructured") => {
             catalog::<TaskCompleted>(TaskCompletedOutput::nonblocking_error("hook failed"))
         }
@@ -822,6 +1158,14 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("teammate-idle", "exit-2") => {
             catalog::<TeammateIdle>(TeammateIdleOutput::blocking_error("blocked by hook"))
         }
+        ("teammate-idle", "block" | "exit-2-block") => {
+            let output = TeammateIdleOutput::block("Review the remaining files first.");
+            if id == "block" {
+                catalog::<TeammateIdle>(output)
+            } else {
+                catalog::<TeammateIdle>(output.into_blocking_error("blocked by hook").unwrap())
+            }
+        }
         ("teammate-idle", "nonzero-unstructured") => {
             catalog::<TeammateIdle>(TeammateIdleOutput::nonblocking_error("hook failed"))
         }
@@ -847,6 +1191,12 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("user-prompt-expansion", "text-open-brace") => catalog::<UserPromptExpansion>(
             UserPromptExpansionOutput::text_context("{ context without a closing brace"),
         ),
+        ("user-prompt-expansion", "text-json-array") => {
+            catalog::<UserPromptExpansion>(UserPromptExpansionOutput::text_context(r#"["a","b"]"#))
+        }
+        ("user-prompt-expansion", "text-json-string") => {
+            catalog::<UserPromptExpansion>(UserPromptExpansionOutput::text_context(r#""quoted""#))
+        }
         ("user-prompt-expansion", "exit-2") => catalog::<UserPromptExpansion>(
             UserPromptExpansionOutput::blocking_error("blocked by hook"),
         ),
@@ -884,6 +1234,21 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ),
         ("user-prompt-submit", "text-open-brace") => catalog::<UserPromptSubmit>(
             UserPromptSubmitOutput::text_context("{ context without a closing brace"),
+        ),
+        ("user-prompt-submit", "text-json-array") => {
+            catalog::<UserPromptSubmit>(UserPromptSubmitOutput::text_context(r#"["a","b"]"#))
+        }
+        ("user-prompt-submit", "text-json-string") => {
+            catalog::<UserPromptSubmit>(UserPromptSubmitOutput::text_context(r#""quoted""#))
+        }
+        ("user-prompt-submit", "official-decision-control") => catalog::<UserPromptSubmit>(
+            UserPromptSubmitOutput::block("Explanation for decision")
+                .with_additional_context("My additional context here")
+                .unwrap()
+                .with_session_title("My session title")
+                .unwrap()
+                .with_suppress_original_prompt(true)
+                .unwrap(),
         ),
         ("user-prompt-submit", "exit-2") => {
             catalog::<UserPromptSubmit>(UserPromptSubmitOutput::blocking_error("blocked by hook"))
@@ -927,6 +1292,13 @@ fn every_command_output_fixture_is_reproduced_by_typed_constructors() {
                 continue;
             }
             check_schema(event_dir, &fixture["value"]);
+            if let Some(reason) = unreproduced_output_reason(event_dir, id) {
+                assert!(
+                    fixture_output(event_dir, id).is_none(),
+                    "{event_dir}/{id} is reproduced, so drop its classification ({reason})"
+                );
+                continue;
+            }
             let emission = fixture_output(event_dir, id)
                 .unwrap_or_else(|| panic!("{event_dir}/{id}: add a typed constructor"));
             assert_eq!(
@@ -938,11 +1310,109 @@ fn every_command_output_fixture_is_reproduced_by_typed_constructors() {
     }
 }
 
+/// Events whose plain-text stdout becomes context, which `text_context`
+/// reproduces byte for byte unless it is brace-delimited.
+const TEXT_CONTEXT_EVENTS: &[&str] = &[
+    "post-model-switch",
+    "session-start",
+    "user-prompt-expansion",
+    "user-prompt-submit",
+];
+
+/// Why a documented command output example is not reproduced by a typed
+/// constructor.
+fn unreproduced_output_reason(event_dir: &str, id: &str) -> Option<&'static str> {
+    Some(match (event_dir, id) {
+        ("elicitation-result", "content-without-action") => {
+            "Claude Code ignores hookSpecificOutput without an action; no_op() has the same effect"
+        }
+        ("setup", "discarded-hook-specific-output") => {
+            "Claude Code validates and then discards Setup additionalContext; no_op() has the same effect"
+        }
+        ("pre-tool-use", "deprecated-decision-block") => {
+            "the deprecated top-level decision, which HookKit never emits; deny(reason) is the current form"
+        }
+        ("pre-skill-shell-command", "allow-no-op" | "exit-2-structured") => {
+            "allow adds nothing on PreSkillShellCommand, so there is no allow constructor; no_op() lets the command run"
+        }
+        ("pre-skill-shell-command", "updated-input-refuses") => {
+            "updatedInput is never applied there and only blocks the command; deny(reason) blocks with a reason"
+        }
+        ("pre-skill-shell-command", "pretooluse-format-deny") => {
+            "typed outputs use the event's own hookEventName; deny(reason) is the same answer"
+        }
+        _ => return None,
+    })
+}
+
 /// Why a documented process case is not reproduced by a typed constructor.
 fn undeclared_reason(event_dir: &str, id: &str) -> Option<&'static str> {
     Some(match (event_dir, id) {
         (_, "command-invalid-json" | "command-schema-invalid-json") => {
             "malformed JSON that typed constructors never emit"
+        }
+        (_, "command-json-lines-with-field") => {
+            "several JSON lines, one setting a field, which Claude Code fails to parse; typed constructors emit one JSON object"
+        }
+        (
+            "pre-compact",
+            "command-plain-text-json-lines" | "command-compaction-instructions-open-brace",
+        ) => {
+            "brace-delimited text, which compaction_instructions rejects because Claude Code may parse it as JSON"
+        }
+        (_, "command-plain-text-json-lines") => {
+            "plain text that Claude Code only logs for this event; text_context exists only where plain text becomes context"
+        }
+        (_, "command-text-json-array")
+            if !TEXT_CONTEXT_EVENTS.contains(&event_dir) && event_dir != "pre-compact" =>
+        {
+            "plain text that Claude Code only logs for this event; text_context exists only where plain text becomes context"
+        }
+        (
+            _,
+            "command-nonzero-decision-block"
+            | "command-nonzero-allow-json"
+            | "command-nonzero-terminal-sequence",
+        ) => {
+            "JSON with a failing exit other than 2; typed constructors emit JSON only with exit 0 or 2"
+        }
+        (
+            "stop" | "subagent-stop" | "task-completed",
+            "command-exit-2-missing-file" | "command-exit-2-missing-file-python",
+        )
+        | ("user-prompt-submit", "command-exit-2-missing-file") => {
+            "blocking_error emits these bytes when its message quotes a missing file, which Claude Code downgrades to a non-blocking error (on UserPromptSubmit for plugin hooks); blocking_error documents the hazard, and a JSON block through into_blocking_error avoids it"
+        }
+        (
+            "stop" | "subagent-stop" | "task-completed",
+            "command-exit-2-missing-file-blank-stdout",
+        ) => "whitespace-only stdout with exit 2, which typed constructors never emit",
+        ("stop" | "subagent-stop", "command-exit-2-continue-false") => {
+            "into_blocking_error rejects continue: false here, because it ends the turn instead of continuing it"
+        }
+        ("teammate-idle", "command-exit-2-continue-false") => {
+            "into_blocking_error rejects continue: false here, because it sends the teammate idle instead of keeping it working"
+        }
+        ("permission-request", "command-malformed-permission-update") => {
+            "an updatedPermissions entry without a destination, which with_updated_permissions rejects"
+        }
+        ("elicitation-result", "command-content-without-action") => {
+            "Claude Code ignores hookSpecificOutput without an action; no constructor emits one"
+        }
+        ("pre-skill-shell-command", "command-allow" | "command-exit-2-structured") => {
+            "allow adds nothing on PreSkillShellCommand, so there is no allow constructor; no_op() lets the command run"
+        }
+        ("pre-skill-shell-command", "command-updated-input-refuses") => {
+            "updatedInput is never applied there and only blocks the command; deny(reason) blocks with a reason"
+        }
+        ("pre-skill-shell-command", "command-pretooluse-format-deny") => {
+            "typed outputs use the event's own hookEventName; deny(reason) is the same answer"
+        }
+        (
+            "pre-tool-use",
+            "command-deprecated-decision-block" | "command-deprecated-decision-approve",
+        ) => {
+            "the deprecated top-level decision, which HookKit never emits; deny(reason) and allow() are the current forms"
         }
         (
             _,
@@ -956,8 +1426,8 @@ fn undeclared_reason(event_dir: &str, id: &str) -> Option<&'static str> {
         (_, "command-text-json-lines") => {
             "text_context re-routes brace-delimited text to structured additionalContext"
         }
-        (_, "command-no-op") => {
-            "no_op() prints `{}`, the structured outcome with no fields, which has the same effect as empty stdout; typed constructors print empty stdout only for WorktreeRemove"
+        (_, "command-no-op") if event_dir != "pre-compact" => {
+            "no_op() prints `{}`, the structured outcome with no fields, which has the same effect as empty stdout; typed constructors print empty stdout only for WorktreeRemove and PreCompact"
         }
         (_, "command-plain-text") => {
             "plain text that Claude Code only logs for this event; text_context exists only where plain text becomes context"
@@ -1125,17 +1595,50 @@ fn documented_output_negatives_are_unrepresentable() {
                 ("pre-model-switch", "defer-rejected" | "additional-context-rejected") => {}
                 // SetupOutput has no hook-specific builder; the deprecated
                 // `with_context` emits `{}`.
-                ("setup", "hook-specific-output-rejected") => {
+                ("setup", "additional-context-not-string") => {
                     let value = emitted_json(
                         event_dir,
                         &catalog::<Setup>(SetupOutput::with_context("Dependencies installed.")),
                     );
                     assert_eq!(value, Some(json!({})));
                 }
+                // `with_updated_permissions` rejects an entry that does not
+                // match the documented entry shape.
+                (
+                    "permission-request",
+                    "updated-permission-unknown-type"
+                    | "updated-permission-without-destination"
+                    | "updated-permission-not-object"
+                    | "updated-permission-rule-behavior",
+                ) => {
+                    let entries =
+                        fixture["value"]["hookSpecificOutput"]["decision"]["updatedPermissions"]
+                            .as_array()
+                            .unwrap()
+                            .clone();
+                    assert!(
+                        PermissionRequestOutput::allow()
+                            .with_updated_permissions(entries)
+                            .is_err(),
+                        "{event_dir}/{id}"
+                    );
+                }
                 // A command WorktreeCreate hook prints a path, never JSON.
                 ("worktree-create", "missing-worktree-path") => {}
                 // Every block constructor and builder sets `reason`.
                 ("stop" | "subagent-stop", "block-without-reason") => {}
+                // `with_updated_input` takes a JSON object (`Map`).
+                ("permission-request" | "pre-tool-use", "updated-input-not-object") => {}
+                // PreToolUseOutput has no top-level decision builder.
+                ("pre-tool-use", "deprecated-decision-deny") => {}
+                // PreSkillShellCommandOutput has no context builder, no approve
+                // decision, and always names its own event.
+                (
+                    "pre-skill-shell-command",
+                    "additional-context-rejected"
+                    | "approve-rejected"
+                    | "pretooluse-format-approve-rejected",
+                ) => {}
                 _ => panic!("{event_dir}/{id}: classify this output negative"),
             }
             if let Some(validator) = output_validator(event_dir) {
@@ -1493,6 +1996,22 @@ fn every_typed_output_constructor_satisfies_the_output_schema() {
         "pre-compact",
         vec![
             catalog::<PreCompact>(PreCompactOutput::no_op()),
+            catalog::<PreCompact>(PreCompactOutput::compaction_instructions("Keep it.").unwrap()),
+            catalog::<PreCompact>(PreCompactOutput::no_op().with_block("no").unwrap()),
+            // A terminal sequence must come with a block; see
+            // `pre_compact_json_at_exit_0_must_block`.
+            catalog::<PreCompact>(
+                PreCompactOutput::no_op()
+                    .with_terminal_sequence("\u{7}")
+                    .unwrap()
+                    .with_block("no")
+                    .unwrap(),
+            ),
+            catalog::<PreCompact>(
+                PreCompactOutput::no_op()
+                    .into_blocking_error("stderr")
+                    .unwrap(),
+            ),
             catalog::<PreCompact>(
                 PreCompactOutput::block("no")
                     .with_terminal_sequence("\u{7}")
@@ -1531,35 +2050,55 @@ fn every_typed_output_constructor_satisfies_the_output_schema() {
         ),
         (
             "task-completed",
-            vec![catalog::<TaskCompleted>(
-                TaskCompletedOutput::no_op()
-                    .with_continue(false)
-                    .unwrap()
-                    .with_stop_reason("r")
-                    .unwrap()
-                    .with_system_message("m")
-                    .unwrap()
-                    .with_terminal_sequence("\u{7}")
-                    .unwrap()
-                    .with_suppress_output(true)
-                    .unwrap(),
-            )],
+            vec![
+                catalog::<TaskCompleted>(
+                    TaskCompletedOutput::no_op()
+                        .with_continue(false)
+                        .unwrap()
+                        .with_stop_reason("r")
+                        .unwrap()
+                        .with_system_message("m")
+                        .unwrap()
+                        .with_terminal_sequence("\u{7}")
+                        .unwrap()
+                        .with_suppress_output(true)
+                        .unwrap(),
+                ),
+                catalog::<TaskCompleted>(TaskCompletedOutput::block("no")),
+                catalog::<TaskCompleted>(
+                    TaskCompletedOutput::no_op()
+                        .with_system_message("m")
+                        .unwrap()
+                        .with_block("no")
+                        .unwrap()
+                        .into_blocking_error("")
+                        .unwrap(),
+                ),
+            ],
         ),
         (
             "teammate-idle",
-            vec![catalog::<TeammateIdle>(
-                TeammateIdleOutput::no_op()
-                    .with_continue(false)
-                    .unwrap()
-                    .with_stop_reason("r")
-                    .unwrap()
-                    .with_system_message("m")
-                    .unwrap()
-                    .with_terminal_sequence("\u{7}")
-                    .unwrap()
-                    .with_suppress_output(true)
-                    .unwrap(),
-            )],
+            vec![
+                catalog::<TeammateIdle>(
+                    TeammateIdleOutput::no_op()
+                        .with_continue(false)
+                        .unwrap()
+                        .with_stop_reason("r")
+                        .unwrap()
+                        .with_system_message("m")
+                        .unwrap()
+                        .with_terminal_sequence("\u{7}")
+                        .unwrap()
+                        .with_suppress_output(true)
+                        .unwrap(),
+                ),
+                catalog::<TeammateIdle>(TeammateIdleOutput::block("no")),
+                catalog::<TeammateIdle>(
+                    TeammateIdleOutput::block("no")
+                        .into_blocking_error("stderr")
+                        .unwrap(),
+                ),
+            ],
         ),
     ] {
         all_json(event_dir, outputs);
@@ -1672,6 +2211,45 @@ fn every_typed_output_constructor_satisfies_the_output_schema() {
         )));
     }
     all_json("pre-tool-use", pre_tool);
+
+    all_json(
+        "pre-skill-shell-command",
+        vec![
+            catalog::<PreSkillShellCommand>(PreSkillShellCommandOutput::no_op()),
+            catalog::<PreSkillShellCommand>(PreSkillShellCommandOutput::deny("no")),
+            catalog::<PreSkillShellCommand>(PreSkillShellCommandOutput::ask("sure?")),
+            catalog::<PreSkillShellCommand>(
+                PreSkillShellCommandOutput::defer()
+                    .with_decision_reason("later")
+                    .unwrap(),
+            ),
+            catalog::<PreSkillShellCommand>(PreSkillShellCommandOutput::block("no")),
+            catalog::<PreSkillShellCommand>(
+                PreSkillShellCommandOutput::deny("no")
+                    .with_decision_reason("again")
+                    .unwrap()
+                    .with_block("no")
+                    .unwrap()
+                    .with_continue(false)
+                    .unwrap()
+                    .with_stop_reason("r")
+                    .unwrap()
+                    .with_system_message("m")
+                    .unwrap()
+                    .with_terminal_sequence("\u{7}")
+                    .unwrap()
+                    .with_suppress_output(true)
+                    .unwrap(),
+            ),
+            catalog::<PreSkillShellCommand>(
+                PreSkillShellCommandOutput::deny("no")
+                    .into_blocking_error("")
+                    .unwrap(),
+            ),
+            catalog::<PreSkillShellCommand>(PreSkillShellCommandOutput::blocking_error("no")),
+            catalog::<PreSkillShellCommand>(PreSkillShellCommandOutput::nonblocking_error("x")),
+        ],
+    );
 
     all_json(
         "user-prompt-submit",
@@ -1902,4 +2480,356 @@ fn catalog_inputs_built_outside_the_parsers_never_panic() {
     value["hook_event_name"] = "Stop".into();
     let direct: CatalogInput = serde_json::from_value(value).unwrap();
     assert_eq!(direct.event_id(), Stop::EVENT);
+}
+
+/// Events whose snapshot catalogs the `command-on-failure-block` binding, the
+/// `"onFailure": "block"` configuration (Claude Code v2.1.295 or later) on an
+/// event where it changes what a failure does.
+const ON_FAILURE_BLOCK_EVENTS: &[&str] = &[
+    "config-change",
+    "elicitation",
+    "elicitation-result",
+    "permission-request",
+    "post-tool-batch",
+    "post-tool-use",
+    "post-tool-use-failure",
+    "pre-compact",
+    "pre-model-switch",
+    "pre-skill-shell-command",
+    "pre-tool-use",
+    "task-created",
+    "user-prompt-expansion",
+    "user-prompt-submit",
+];
+
+fn read_contract(event_dir: &str) -> Value {
+    read_yaml(
+        snapshot_root()
+            .join("events")
+            .join(event_dir)
+            .join("contract.yaml"),
+    )
+}
+
+fn outcome_effect<'a>(binding: &'a Value, id: &str) -> &'a str {
+    binding["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outcome| outcome["id"] == id)
+        .and_then(|outcome| outcome["effect"].as_str())
+        .unwrap_or_else(|| panic!("no {id} outcome"))
+}
+
+fn case_bytes(case: &Value) -> (Vec<u8>, Vec<u8>, u64) {
+    let engine = base64::engine::general_purpose::STANDARD;
+    (
+        engine
+            .decode(case["stdout_base64"].as_str().unwrap())
+            .unwrap(),
+        engine
+            .decode(case["stderr_base64"].as_str().unwrap())
+            .unwrap(),
+        case["exit_code"].as_u64().unwrap(),
+    )
+}
+
+fn same_bytes(emission: &ProcessEmission, case: &Value) -> bool {
+    let (stdout, stderr, exit_code) = case_bytes(case);
+    let stdout_equal = match (
+        serde_json::from_slice::<Value>(emission.stdout()),
+        serde_json::from_slice::<Value>(&stdout),
+    ) {
+        (Ok(actual), Ok(expected)) => actual == expected,
+        _ => emission.stdout() == stdout.as_slice(),
+    };
+    stdout_equal
+        && emission.stderr() == stderr.as_slice()
+        && u64::from(emission.exit_code()) == exit_code
+}
+
+/// Under `"onFailure": "block"`, `nonblocking_error` takes the event's
+/// exit-2 effect (a deny on PermissionRequest), as its rustdoc says, while
+/// every declared typed response keeps its outcome.
+#[test]
+fn on_failure_block_turns_nonblocking_errors_into_the_exit_2_effect() {
+    let descriptors = hookkit_claude::protocol::events();
+    for (event_dir, name) in EVENTS {
+        let contract = read_contract(event_dir);
+        let binding = &contract["bindings"]["command-on-failure-block"];
+        assert_eq!(
+            !binding.is_null(),
+            ON_FAILURE_BLOCK_EVENTS.contains(&event_dir),
+            "{event_dir}: command-on-failure-block binding"
+        );
+        if binding.is_null() {
+            continue;
+        }
+        assert_eq!(binding["kind"], "process", "{event_dir}");
+        let failure = outcome_effect(binding, "failure-blocked");
+        if event_dir == "permission-request" {
+            assert_eq!(failure, "deny");
+        } else {
+            assert_eq!(
+                failure,
+                outcome_effect(&contract["bindings"]["command"], "exit-2"),
+                "{event_dir}: failure-blocked takes the exit-2 effect"
+            );
+        }
+
+        let fixtures = fixtures(event_dir);
+        let cases = fixture_list(&fixtures, "/process");
+        let counterpart = |suffix: &str| {
+            cases.iter().find(|case| {
+                case["binding"] == "command-on-failure-block"
+                    && fixture_id(case) == format!("command-on-failure-block-{suffix}")
+            })
+        };
+        let failed = counterpart("nonzero-unstructured").unwrap_or_else(|| {
+            panic!("{event_dir}: no on-failure-block nonzero-unstructured case")
+        });
+        assert_eq!(failed["outcome"], "failure-blocked", "{event_dir}");
+        let emission = fixture_output(event_dir, "command-nonzero-unstructured").unwrap();
+        assert!(
+            same_bytes(&emission, failed),
+            "{event_dir}: nonblocking_error reproduces the failure-blocked case"
+        );
+
+        let descriptor = descriptors
+            .iter()
+            .find(|descriptor| descriptor.event().name() == name)
+            .unwrap();
+        for id in descriptor.conformance_cases() {
+            let suffix = id.strip_prefix("command-").unwrap();
+            if suffix == "nonzero-unstructured" {
+                continue;
+            }
+            let Some(case) = counterpart(suffix) else {
+                continue;
+            };
+            let emission = fixture_output(event_dir, id).unwrap();
+            if same_bytes(&emission, case) {
+                assert_ne!(
+                    case["outcome"], "failure-blocked",
+                    "{event_dir}/{id}: a typed response fails under onFailure: block"
+                );
+            }
+        }
+    }
+}
+
+/// Claude Code caps hook strings at 10,000 characters and escapes
+/// `<system-reminder>` tags itself; typed builders pass text through
+/// unchanged and the schemas set no length limit.
+#[test]
+fn capped_and_escaped_strings_are_emitted_unchanged() {
+    for text in [
+        "a".repeat(10_001),
+        "<system-reminder>x</system-reminder>".to_owned(),
+    ] {
+        let emission = catalog::<PostToolUse>(PostToolUseOutput::with_context(text.clone()));
+        let value = emitted_json("post-tool-use", &emission).unwrap();
+        assert_eq!(value["hookSpecificOutput"]["additionalContext"], text);
+
+        let emission = catalog::<UserPromptSubmit>(
+            UserPromptSubmitOutput::no_op()
+                .with_system_message(text.clone())
+                .unwrap(),
+        );
+        let value = emitted_json("user-prompt-submit", &emission).unwrap();
+        assert_eq!(value["systemMessage"], text);
+
+        let emission = catalog::<SessionStart>(SessionStartOutput::text_context(text.clone()));
+        assert_eq!(emission.stdout(), text.as_bytes());
+    }
+}
+
+/// The input fixtures added for docs-2026-11-25-r1 that exercise shapes the
+/// typed inputs keep as raw JSON: Monitor, Code Mode, and PowerShell calls on
+/// PreToolUse, Monitor calls on PermissionRequest and PostToolUse, and an
+/// MCP-skill PermissionRequest, each re-serialize exactly.
+#[test]
+fn new_tool_shapes_round_trip_through_the_raw_tool_input() {
+    for (event_dir, id, tool) in [
+        ("pre-tool-use", "monitor-call", "Monitor"),
+        ("pre-tool-use", "monitor-ws", "Monitor"),
+        ("pre-tool-use", "monitor-command-via-bash-matcher", "Bash"),
+        ("pre-tool-use", "code-mode-repl", "REPL"),
+        ("pre-tool-use", "code-mode-cd-prefix", "Bash"),
+        ("pre-tool-use", "powershell-tool", "PowerShell"),
+        ("permission-request", "mcp-skill-ask", "Skill"),
+        ("permission-request", "monitor-call", "Monitor"),
+        (
+            "permission-request",
+            "monitor-command-via-bash-matcher",
+            "Bash",
+        ),
+    ] {
+        let value = positive(event_dir, id);
+        let event = EventId::builtin(HarnessId::CLAUDE_CODE, wire_name(event_dir));
+        let decoded = ClaudeCode::decode(&event, &invocation(&value)).unwrap();
+        let hookkit_claude::protocol::AnyInput::Catalog(input) = decoded else {
+            panic!("{event_dir} is a catalog event");
+        };
+        assert_eq!(input.tool_name(), Some(tool), "{event_dir}/{id}");
+        assert_eq!(
+            serde_json::to_value(&input).unwrap(),
+            value,
+            "{event_dir}/{id}"
+        );
+    }
+    let value = positive("post-tool-use", "monitor-call");
+    let input = PostToolUse::parse(&invocation(&value)).unwrap();
+    assert_eq!(input.tool_name, "Monitor");
+    assert_eq!(input.tool_input, value["tool_input"]);
+    assert_eq!(input.tool_response, value["tool_response"]);
+    assert_eq!(serde_json::to_value(&input).unwrap(), value);
+    let raw = invocation(&positive("permission-request", "mcp-skill-ask"));
+    let input = PermissionRequest::parse(&raw).unwrap();
+    assert_eq!(input.mcp_server().unwrap().name, "docs");
+    assert_eq!(input.field("tool_kind"), Some(&json!("mcp_skill")));
+}
+
+/// Claude Code uses the stdout of a PreCompact hook that exits 0 without
+/// blocking as compaction instructions, JSON included, so a typed JSON
+/// response at exit 0 must block; the empty `no_op`, plain instructions, a
+/// block, and exit 2 still emit.
+#[test]
+fn pre_compact_json_at_exit_0_must_block() {
+    #[allow(deprecated)]
+    let discarded = PreCompactOutput::no_op().with_continue(true).unwrap();
+    for (label, output) in [
+        (
+            "terminal sequence",
+            PreCompactOutput::no_op()
+                .with_terminal_sequence("\u{7}")
+                .unwrap(),
+        ),
+        ("deprecated discarded field", discarded),
+    ] {
+        let error = PreCompact::emit(output).expect_err(label).to_string();
+        assert!(error.contains("must block"), "{label}: {error}");
+    }
+
+    for output in [
+        PreCompactOutput::no_op(),
+        PreCompactOutput::compaction_instructions("Keep the test names.").unwrap(),
+        PreCompactOutput::block("Save state first.")
+            .with_terminal_sequence("\u{7}")
+            .unwrap(),
+        PreCompactOutput::no_op()
+            .with_terminal_sequence("\u{7}")
+            .unwrap()
+            .into_blocking_error("blocked")
+            .unwrap(),
+    ] {
+        let emission = catalog::<PreCompact>(output);
+        if emission.exit_code() == 0 {
+            if let Some(value) = emitted_json("pre-compact", &emission) {
+                assert_eq!(value["decision"], "block", "{value}");
+            }
+        }
+    }
+}
+
+/// `with_updated_permissions` accepts every documented entry shape,
+/// including the input's suggestions echoed back, and its output always
+/// satisfies the typed entry schema; it rejects what the schema rejects.
+#[test]
+fn permission_updates_follow_the_documented_entry_shape() {
+    let official = positive("permission-request", "official-example");
+    let suggestions = official["permission_suggestions"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!suggestions.is_empty());
+    let valid = [
+        json!({"type": "setMode", "mode": "bypassPermissions", "destination": "cliArg"}),
+        json!({"type": "setMode", "mode": "futureMode", "destination": "session", "extra": 1}),
+        json!({"type": "removeRules", "rules": [{"toolName": "Bash"}], "behavior": "deny", "destination": "userSettings"}),
+        json!({"type": "replaceRules", "rules": [], "behavior": "ask", "destination": "projectSettings"}),
+        json!({"type": "removeDirectories", "directories": ["/tmp/a"], "destination": "localSettings"}),
+    ];
+    for entries in [suggestions, valid.to_vec()] {
+        let emission = catalog::<PermissionRequest>(
+            PermissionRequestOutput::allow()
+                .with_updated_permissions(entries)
+                .unwrap(),
+        );
+        emitted_json("permission-request", &emission).expect("JSON");
+    }
+    for invalid in [
+        json!("addRules"),
+        json!({"type": "setMode", "mode": "plan"}),
+        json!({"type": "setMode", "destination": "session"}),
+        json!({"type": "setMode", "mode": 1, "destination": "session"}),
+        json!({"type": "addRule", "destination": "session"}),
+        json!({"type": "addRules", "behavior": "allow", "destination": "session"}),
+        json!({"type": "addRules", "rules": [{"ruleContent": "x"}], "behavior": "allow", "destination": "session"}),
+        json!({"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": 1}], "behavior": "allow", "destination": "session"}),
+        json!({"type": "addRules", "rules": [], "behavior": "approve", "destination": "session"}),
+        json!({"type": "addDirectories", "directories": "/tmp", "destination": "session"}),
+        json!({"type": "addDirectories", "directories": [1], "destination": "session"}),
+        json!({"type": "addDirectories", "directories": [], "destination": "global"}),
+    ] {
+        assert!(
+            PermissionRequestOutput::allow()
+                .with_updated_permissions(vec![invalid.clone()])
+                .is_err(),
+            "{invalid}"
+        );
+        let value = json!({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow", "updatedPermissions": [invalid]}}});
+        assert!(
+            !output_validator("permission-request")
+                .unwrap()
+                .is_valid(&value),
+            "{value}"
+        );
+    }
+}
+
+/// `continue: false` printed with exit 2 sends a teammate idle, so the
+/// TeammateIdle exit-2 form rejects it, while on TaskCompleted, where the
+/// task stays open either way, it is the documented exit-2-structured case.
+#[test]
+fn teammate_continue_false_and_exit_2() {
+    let error = TeammateIdleOutput::no_op()
+        .with_continue(false)
+        .unwrap()
+        .with_stop_reason("Done.")
+        .unwrap()
+        .into_blocking_error("keep going")
+        .expect_err("continue: false sends the teammate idle")
+        .to_string();
+    assert!(error.contains("teammate idle"), "{error}");
+    assert!(
+        TeammateIdleOutput::block("again")
+            .with_continue(false)
+            .unwrap()
+            .into_blocking_error("")
+            .is_err()
+    );
+    // At exit 0 it is the documented way to let the teammate go idle.
+    let emission = catalog::<TeammateIdle>(
+        TeammateIdleOutput::no_op()
+            .with_continue(false)
+            .unwrap()
+            .with_stop_reason("Done.")
+            .unwrap(),
+    );
+    assert_eq!(emission.exit_code(), 0);
+
+    let contract = read_contract("teammate-idle");
+    assert_eq!(
+        outcome_effect(&contract["bindings"]["command"], "exit-2-continue-false"),
+        "stop"
+    );
+    let fixtures = fixtures("task-completed");
+    let case = fixture_list(&fixtures, "/process")
+        .iter()
+        .find(|case| fixture_id(case) == "command-exit-2-continue-false")
+        .unwrap();
+    assert_eq!(case["outcome"], "exit-2-structured");
+    let emission = fixture_output("task-completed", "command-exit-2-continue-false").unwrap();
+    assert!(same_bytes(&emission, case));
 }

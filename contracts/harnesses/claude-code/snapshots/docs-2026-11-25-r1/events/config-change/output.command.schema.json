@@ -1,0 +1,33 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:config-change:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "description": "Accepted but discarded on this event.",
+      "type": "boolean"
+    },
+    "decision": {
+      "const": "block"
+    },
+    "reason": {
+      "description": "Accepted but never shown.",
+      "type": "string"
+    },
+    "stopReason": {
+      "description": "Accepted but never shown: this event discards continue.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

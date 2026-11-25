@@ -179,7 +179,24 @@ impl ToolAccessAnalyzer {
     /// which take precedence over generic structured-field analysis. The
     /// report retains both recovered candidates and every known gap; it does
     /// not claim to be a complete runtime I/O trace.
+    ///
+    /// A Claude Code `PostToolUse` whose `tool_response` is a JSON string
+    /// does not show that the call succeeded: hooks from managed settings
+    /// also run after failed calls and then receive the error text. Its
+    /// `Direct` candidates are therefore reported as `Conditional`.
     pub fn analyze_call(&self, call: &ToolCallRef<'_>) -> ToolAccessReport {
+        let mut report = self.analyze_call_evidence(call);
+        if unconfirmed_claude_post_tool(call) {
+            for candidate in &mut report.candidates {
+                if candidate.certainty == AccessCertainty::Direct {
+                    candidate.certainty = AccessCertainty::Conditional;
+                }
+            }
+        }
+        report
+    }
+
+    fn analyze_call_evidence(&self, call: &ToolCallRef<'_>) -> ToolAccessReport {
         match &call.shell_call {
             ShellToolCallMatch::Matched(shell_call) => self.analyze_shell(call, shell_call),
             ShellToolCallMatch::Malformed(error) => ToolAccessReport {
@@ -314,13 +331,26 @@ impl ToolAccessAnalyzer {
     }
 }
 
+/// Whether `call` is a Claude Code `PostToolUse` whose string `tool_response`
+/// may be a failed call's error text rather than a result.
+fn unconfirmed_claude_post_tool(call: &ToolCallRef<'_>) -> bool {
+    call.phase == ToolPhase::Post
+        && call.harness() == &hookkit_core::HarnessId::CLAUDE_CODE
+        && call.event.name() == "PostToolUse"
+        && matches!(
+            call.response,
+            Some(JsonRef::Value(serde_json::Value::String(_)))
+        )
+}
+
 /// Labels shell paths resolved relative to the shell's working directory.
 ///
 /// A cwd read from the tool's own arguments (such as Antigravity
 /// `run_command.Cwd` or a Codex `workdir`, absolute or joined onto the hook
 /// directory) is the invocation directory. A fallback the profile marks as
 /// unverified ([`ShellCwdOrigin::UnverifiedFallback`], as for Codex `Bash`,
-/// whose payload omits the `workdir` that can move the command) yields
+/// whose `cwd` is the host directory rather than the `workdir` for a command
+/// in a remote execution environment) yields
 /// [`PathBase::SessionCwd`]. Any other fallback takes the call's
 /// [`ToolCallRef::cwd_base`].
 fn shell_relative_base(

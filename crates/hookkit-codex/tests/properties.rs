@@ -1,8 +1,9 @@
 //! Property tests for Codex's exact hook-output dialect.
 
 use hookkit_codex::catalog::{
-    SessionStart, SessionStartOutput, SessionStartSource, Stop, StopOutput, SubagentStop,
-    SubagentStopOutput, UserPromptSubmit, UserPromptSubmitOutput,
+    ModelRequestKind, ModelRequestStatus, PostModelRequest, PostModelRequestOutput,
+    PreModelRequest, PreModelRequestOutput, SessionStart, SessionStartOutput, SessionStartSource,
+    Stop, StopOutput, SubagentStop, SubagentStopOutput, UserPromptSubmit, UserPromptSubmitOutput,
 };
 use hookkit_codex::protocol::{
     PermissionMode, PostToolUse, PostToolUseOutput, PreToolUse, PreToolUseOutput,
@@ -160,6 +161,65 @@ proptest! {
         prop_assert_eq!(serde_json::to_value(&mode).unwrap(), json.clone());
         let source: SessionStartSource = serde_json::from_value(json.clone()).unwrap();
         prop_assert_eq!(source.as_str(), value.as_str());
-        prop_assert_eq!(serde_json::to_value(&source).unwrap(), json);
+        prop_assert_eq!(serde_json::to_value(&source).unwrap(), json.clone());
+        let kind: ModelRequestKind = serde_json::from_value(json.clone()).unwrap();
+        prop_assert_eq!(kind.as_str(), value.as_str());
+        prop_assert_eq!(serde_json::to_value(&kind).unwrap(), json.clone());
+        let status: ModelRequestStatus = serde_json::from_value(json.clone()).unwrap();
+        prop_assert_eq!(status.as_str(), value.as_str());
+        prop_assert_eq!(serde_json::to_value(&status).unwrap(), json);
+    }
+
+    /// Property: model-request outputs never write stdout and never exit 2,
+    /// so no output can look like a control directive Codex would ignore;
+    /// their stderr is emitted verbatim.
+    #[test]
+    fn model_request_outputs_only_carry_stderr(message in any::<String>()) {
+        for (emission, exit) in [
+            (PreModelRequest::emit(PreModelRequestOutput::failure(message.clone())).unwrap(), 1),
+            (PostModelRequest::emit(PostModelRequestOutput::failure(message.clone())).unwrap(), 1),
+            (PreModelRequest::emit(PreModelRequestOutput::diagnostic(message.clone())).unwrap(), 0),
+            (PostModelRequest::emit(PostModelRequestOutput::diagnostic(message.clone())).unwrap(), 0),
+        ] {
+            prop_assert!(emission.stdout().is_empty());
+            prop_assert_eq!(emission.stderr(), message.as_bytes());
+            prop_assert_eq!(emission.exit_code(), exit);
+        }
+    }
+
+    /// Property: every `u32` attempt number and every `i64` usage count is
+    /// typed exactly and the input re-serializes to the native payload.
+    #[test]
+    fn model_request_numbers_round_trip(
+        attempt in any::<u32>(),
+        counts in prop::array::uniform6(any::<i64>()),
+        with_cache_write in any::<bool>(),
+    ) {
+        let [input, cached, cache_write, output, reasoning, total] = counts;
+        let mut usage = serde_json::json!({
+            "input_tokens": input, "cached_input_tokens": cached,
+            "output_tokens": output, "reasoning_output_tokens": reasoning,
+            "total_tokens": total
+        });
+        if with_cache_write {
+            usage["cache_write_input_tokens"] = cache_write.into();
+        }
+        let value = serde_json::json!({
+            "session_id": "s", "thread_id": "t", "turn_id": "turn", "cwd": "/repo",
+            "transcript_path": null, "model": "m", "kind": "sampling", "request_id": "r",
+            "attempt_number": attempt, "hook_event_name": "PostModelRequest",
+            "status": "completed", "error": null, "response_id": "resp", "token_usage": usage
+        });
+        let raw = hookkit_core::RawInvocation::parse(serde_json::to_vec(&value).unwrap()).unwrap();
+        let parsed = PostModelRequest::parse(&raw).unwrap();
+        prop_assert_eq!(parsed.attempt_number(), Some(attempt));
+        let typed = parsed.token_usage().unwrap();
+        prop_assert_eq!(
+            (typed.input_tokens, typed.cached_input_tokens, typed.output_tokens,
+             typed.reasoning_output_tokens, typed.total_tokens),
+            (input, cached, output, reasoning, total)
+        );
+        prop_assert_eq!(typed.cache_write_input_tokens, if with_cache_write { cache_write } else { 0 });
+        prop_assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
     }
 }

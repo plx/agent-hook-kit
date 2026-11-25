@@ -53,9 +53,12 @@ The entity projection supplies the consumer with a set of exact, descendant,
 glob, or workspace targets while retaining detailed evidence and gaps. A short
 append lock makes concurrent writes safe. Pass `--state-dir PATH` to choose
 another common state root. A relative path resolves against the harness
-project root (`CLAUDE_PROJECT_DIR` on Claude Code, otherwise the input's first
-workspace root), never the hook's current directory, and an explicit root is
-used as given and never chmodded.
+project root (`CLAUDE_PROJECT_DIR` on Claude Code, the first workspace path
+on Antigravity), not the hook's current directory, which follows the agent's
+`cd`. A Codex tool event reports no project root, because its `cwd` is the
+tool command's working directory, so there a relative path resolves against
+the hook's working directory: the step's environment directory, where Codex
+starts every tool hook. An explicit root is used as given and never chmodded.
 
 The shipped `turn-completion-agent-hook` first reconciles workspace mtimes from
 the previous durable cursor (using current-session start metadata to bootstrap),
@@ -74,8 +77,9 @@ default because a dirty working tree cannot distinguish agent edits from
 changes that predated the session.
 
 A checked-in Codex fixture makes the state layout easy to inspect. Its `cwd`
-is a placeholder `/repo`, which a relative `--state-dir` would resolve against,
-so pass an absolute state directory:
+is a placeholder `/repo`, and a relative `--state-dir` would resolve against
+the shell's current directory, so pass an absolute state directory to make the
+location explicit:
 
 ```bash
 cargo build -p session-modified-file-tracker
@@ -99,9 +103,11 @@ combined result for a complete audit log.
 - The aligned `PostToolUse` API makes the Claude Code, Codex, and Antigravity
   executable genuinely shared while preserving native input and output arms.
 - Antigravity is offered as a mode because its `PostToolUse` payload carries the
-  originating tool call and arguments. It does not carry a tool result, and its
-  missing precise session-start producer makes initial mtime reconciliation
-  best effort.
+  originating tool call and arguments. It does not carry a tool result. Its
+  `SessionStart` (from `antigravity/docs-2026-11-25-r1`) gives
+  `session-start-state-agent-hook --antigravity` a precise session start; on
+  builds that predate that event, initial mtime reconciliation stays best
+  effort.
 - Claude Code sends failed tool calls to `PostToolUseFailure` rather than
   `PostToolUse`, even when the call wrote files first (for example
   `sed -i ... && pytest` with failing tests). On Claude Code the observer

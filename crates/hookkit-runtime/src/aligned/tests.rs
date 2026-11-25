@@ -198,7 +198,9 @@ fn claude_codex_pair_families_parse_and_emit_their_exact_portable_floors() {
         claude: json!({"trigger": "auto", "custom_instructions": null}),
         codex: json!({"turn_id": "t", "trigger": "auto"}),
         output: |harness: &HarnessId| PreCompactOutput::no_op(harness),
-        claude_stdout: Some(json!({})),
+        // Claude Code adds any exit-0 PreCompact stdout, `{}` included, to
+        // the compaction instructions, so the Claude no-op prints nothing.
+        claude_stdout: None,
         codex_stdout: None
     );
     assert_pair_family!(
@@ -340,12 +342,22 @@ fn pair_only_portable_block_and_deny_helpers_use_exact_native_shapes() {
         }),
     ) {
         let selected = harness.clone();
+        let claude = harness == HarnessId::CLAUDE_CODE;
         let emission = execute_user_prompt_submit(harness, bytes, &variables, move |_, _, _| {
             UserPromptSubmitOutput::block(&selected, "blocked")
         })
         .unwrap();
         assert_eq!(emission.exit_code(), 2);
-        assert!(emission.stdout().is_empty());
+        if claude {
+            // Non-empty stdout keeps Claude Code from downgrading a plugin
+            // hook's exit 2 when the reason says a file is missing.
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(emission.stdout()).unwrap(),
+                json!({"decision": "block", "reason": "blocked"})
+            );
+        } else {
+            assert!(emission.stdout().is_empty());
+        }
         assert_eq!(emission.stderr(), b"blocked");
     }
 }
@@ -526,7 +538,8 @@ fn aligned_pre_tool_allow_is_explicit_approval_where_the_harness_supports_it() {
             }})),
             // Codex cannot express an explicit approval.
             "codex" => None,
-            "antigravity" => Some(json!({"decision": "allow"})),
+            // `allow` is a pass-through in the current Antigravity reference.
+            "antigravity" => Some(json!({"decision": "auto_approve"})),
             _ => unreachable!(),
         };
         assert_eq!(stdout(&emission), expected, "{expected_harness}");

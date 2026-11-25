@@ -126,7 +126,7 @@ The shipped producer is `file-activity-agent-hook` from
 `hookkit-tool-runner`. Bind it to Claude/Codex/Antigravity PostToolUse (and,
 on Claude Code, also to `PostToolUseFailure`) and give it the same
 `--state-dir` as `turn-completion-agent-hook`
-and, where supported, `session-start-state-agent-hook`. The older
+and `session-start-state-agent-hook`. The older
 `session-modified-file-tracker` example is only a compatibility wrapper around
 that library-owned observer.
 
@@ -137,7 +137,10 @@ the same `tool_name` and `tool_input`. Library consumers can observe it with
 native input; without that binding such writes are recovered only by the mtime
 fallback. An Antigravity `PostToolUse` payload without `toolCall` (the IDE
 reference shape) and a relative Antigravity path without any workspace root
-are recorded as coverage gaps rather than as "nothing written".
+are recorded as coverage gaps rather than as "nothing written". A Claude Code
+`PostToolUse` does not prove that the call succeeded: hooks from managed
+settings also run after some failed calls, with the error text as a string
+`tool_response`, and such an observation yields no `Direct` evidence.
 
 Documented harness built-ins are analyzed from exact argument contracts in
 `hookkit-tool-access`: Claude `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, Codex
@@ -145,15 +148,18 @@ Documented harness built-ins are analyzed from exact argument contracts in
 `replace_file_content`, and `multi_replace_file_content` (PascalCase
 `TargetFile`) all produce direct evidence, as do shell commands. Tools that are
 documented not to touch files, such as `TodoWrite`, `WebFetch`, `update_plan`,
-or `search_web`, produce no evidence and no coverage gap. Antigravity's missing
-precise session-start producer still makes mtime reconciliation a best-effort
-fallback.
+or `search_web`, produce no evidence and no coverage gap. Antigravity
+documents `SessionStart` from `antigravity/docs-2026-11-25-r1`; on builds that
+predate it there is no precise session-start producer, so the inferred
+invocation-zero boundary or the first hook observation bounds the first mtime
+scan.
 
 A relative path whose tool working directory was not observable is resolved
 against the hook's session directory (`PathBase::SessionCwd` in
-`hookkit-tool-access`). Codex `Bash` payloads omit the `workdir` argument that
-can run the command elsewhere, so `echo x > out.txt` may have written
-`packages/api/out.txt` rather than `out.txt`. Such evidence is kept but
-downgraded to `Heuristic` certainty, and each tool call records one coverage
-gap naming those paths, so a missed file is recovered only by the mtime
-fallback.
+`hookkit-tool-access`). Codex `Bash` payloads omit the `workdir` argument;
+since Codex 0.166.0 a local command reports the resolved workdir as its `cwd`,
+but a command in a remote execution environment reports the host's step
+directory, so `echo x > out.txt` may have written a file elsewhere than
+`<cwd>/out.txt`. Such evidence is kept but downgraded to `Heuristic`
+certainty, and each tool call records one coverage gap naming those paths, so
+a missed file is recovered only by the mtime fallback.

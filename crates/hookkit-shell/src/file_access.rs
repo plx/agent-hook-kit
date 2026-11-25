@@ -58,8 +58,9 @@ impl<'a> FileInferenceContext<'a> {
     ///
     /// The context does not carry [`ShellToolCallRef::cwd_origin`]. When it
     /// is [`ShellCwdOrigin::UnverifiedFallback`](crate::ShellCwdOrigin::UnverifiedFallback)
-    /// (Codex `Bash`, whose payload omits the `workdir` that can move the
-    /// command), relative operands still resolve against that directory with
+    /// (Codex `Bash`, whose `cwd` is the host directory rather than the
+    /// `workdir` for a command in a remote execution environment), relative
+    /// operands still resolve against that directory with
     /// [`PathBase::InvocationCwd`] and no unresolved gap, although the command
     /// may run elsewhere. Callers must check the origin themselves before
     /// treating such resolved paths as the files the command touches.

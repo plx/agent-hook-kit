@@ -2118,6 +2118,10 @@ const FROZEN_LEDGER: &[(&str, &str)] = &[
         "eae132375311f705ab6a8b6c8dcbc947797f47cbc837767ec873859c797891c9",
     ),
     (
+        "harnesses/antigravity/snapshots/docs-2026-11-25-r1/snapshot.yaml",
+        "f845e2aef88ee62c381119e4d9fb4662d4057e21a88fe574f5cddbdbb218adba",
+    ),
+    (
         "harnesses/claude-code/snapshots/docs-2026-07-12-r1/snapshot.yaml",
         "91fcb7739acb1500afaeabded55591f4353beb5c21017b5f719a19ba2c2cc4d9",
     ),
@@ -2138,6 +2142,10 @@ const FROZEN_LEDGER: &[(&str, &str)] = &[
         "0ee2aa35b2710bee24309e9c618e4931858daa91a236c99ea96808a296197e82",
     ),
     (
+        "harnesses/claude-code/snapshots/docs-2026-11-25-r1/snapshot.yaml",
+        "ad761c087142e34d701ed04a84042eb7f995ee55ecf9ca2a3ff20bc3f8791795",
+    ),
+    (
         "harnesses/codex/snapshots/commit-1e59dc5-r1/snapshot.yaml",
         "9d0a961c29057e9e3c4777a4b262503665ff9f29c304fbb409ec05ab5b39c6f4",
     ),
@@ -2156,6 +2164,10 @@ const FROZEN_LEDGER: &[(&str, &str)] = &[
     (
         "harnesses/codex/snapshots/commit-ff6aec9-r2/snapshot.yaml",
         "521b9cd86ff64171cd74f602053c6145f3ab2a6ebac93c4bf331f45d3306d701",
+    ),
+    (
+        "harnesses/codex/snapshots/commit-3d86e43-r1/snapshot.yaml",
+        "85cc1e0ae676866d69a4b43d56d84cc3b911e0fd97397554548d8f6c72dfbe7a",
     ),
     (
         "supplements/command-environments/command-environments-2026-08-05-r2/supplement.yaml",
@@ -2180,6 +2192,10 @@ const FROZEN_LEDGER: &[(&str, &str)] = &[
     (
         "supplements/command-environments/command-environments-2026-09-30-r2/supplement.yaml",
         "ef1e9090ccb354a2f0ff7d4157b05c42f3f7fe10482f4035f42be116d761755f",
+    ),
+    (
+        "supplements/command-environments/command-environments-2026-11-25-r1/supplement.yaml",
+        "c143ed3f2dbdb064401e95cfc63e75fdbd7f3b0039a45b89925738eaedeb4c2e",
     ),
 ];
 
@@ -5086,8 +5102,8 @@ mod tests {
             check_template_catalog(&root).expect("current template catalog should be valid");
         check_generated_question_catalog(&root, &events, &alignments, &archetypes, &compatibility)
             .expect("generated Copier data should be current");
-        // 33 Claude Code, 12 Codex, and 5 Antigravity events.
-        assert_eq!(events.events.len(), 50);
+        // 34 Claude Code, 14 Codex, and 6 Antigravity events.
+        assert_eq!(events.events.len(), 54);
         assert_eq!(alignments.alignments.len(), 11);
     }
 
@@ -5212,13 +5228,13 @@ mod tests {
         };
 
         assert!(
-            find("claude-code/docs-2026-09-30-r1/DirectoryAdded")
+            find("claude-code/docs-2026-11-25-r1/DirectoryAdded")
                 .support
                 .note
                 .contains("source")
         );
         assert!(
-            find("claude-code/docs-2026-09-30-r1/SessionStart")
+            find("claude-code/docs-2026-11-25-r1/SessionStart")
                 .support
                 .note
                 .contains("source=fork")
@@ -5233,14 +5249,14 @@ mod tests {
             "PostCompact",
             "WorktreeRemove",
         ] {
-            let scaffold = find(&format!("claude-code/docs-2026-09-30-r1/{event}"));
+            let scaffold = find(&format!("claude-code/docs-2026-11-25-r1/{event}"));
             assert!(scaffold.capabilities.output_ignored, "{event}");
             assert!(!scaffold.capabilities.post_action_feedback, "{event}");
         }
         // A WorktreeRemove hook that exits 0 counts the worktree as removed
         // and replaces Claude Code's `git worktree remove` fallback, so a
         // starter that deletes nothing must not report success.
-        let worktree_remove = find("claude-code/docs-2026-09-30-r1/WorktreeRemove");
+        let worktree_remove = find("claude-code/docs-2026-11-25-r1/WorktreeRemove");
         assert_eq!(worktree_remove.starter.strategy, "must_implement");
         assert!(
             worktree_remove
@@ -5249,26 +5265,26 @@ mod tests {
                 .contains("implement WorktreeRemove cleanup")
         );
         assert!(
-            find("claude-code/docs-2026-09-30-r1/PreModelSwitch")
+            find("claude-code/docs-2026-11-25-r1/PreModelSwitch")
                 .capabilities
                 .true_pre_action_block
         );
         assert!(
-            !find("claude-code/docs-2026-09-30-r1/PostModelSwitch")
+            !find("claude-code/docs-2026-11-25-r1/PostModelSwitch")
                 .capabilities
                 .true_pre_action_block
         );
-        let codex_session_end = find("codex/commit-ff6aec9-r2/SessionEnd");
+        let codex_session_end = find("codex/commit-3d86e43-r1/SessionEnd");
         assert!(codex_session_end.capabilities.output_ignored);
         assert!(codex_session_end.starter.expression.ends_with("::no_op()"));
-        let codex_interrupt = find("codex/commit-ff6aec9-r2/Interrupt");
+        let codex_interrupt = find("codex/commit-3d86e43-r1/Interrupt");
         assert!(!codex_interrupt.capabilities.true_pre_action_block);
         assert!(codex_interrupt.starter.expression.ends_with("::no_op()"));
-        let antigravity_post_tool = find("antigravity/docs-2026-09-30-r1/PostToolUse");
+        let antigravity_post_tool = find("antigravity/docs-2026-11-25-r1/PostToolUse");
         assert!(antigravity_post_tool.support.note.contains("typed"));
         assert!(!antigravity_post_tool.capabilities.tool_result);
         assert!(
-            find("antigravity/docs-2026-09-30-r1/Stop")
+            find("antigravity/docs-2026-11-25-r1/Stop")
                 .starter
                 .expression
                 .ends_with("::allow_stop()")

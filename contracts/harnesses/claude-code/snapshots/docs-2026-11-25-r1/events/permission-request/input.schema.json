@@ -1,0 +1,142 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:permission-request:input",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "effort": {
+      "additionalProperties": true,
+      "properties": {
+        "level": {
+          "description": "Open string: the Agent SDK types it as string; the examples are the documented levels.",
+          "examples": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "hook_event_name": {
+      "const": "PermissionRequest"
+    },
+    "mcp_server": {
+      "additionalProperties": true,
+      "description": "Present for MCP tools (Claude Code v2.1.274 or later). Inspection of the Claude Code 2.1.332 CLI during the audit, not cited as a source, suggests it is also sent for the ask raised before a skill that an MCP server provides loads, where it names that server. The source vocabulary is open.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "examples": [
+            "sdk",
+            "plugin",
+            "user",
+            "project",
+            "local",
+            "dynamic",
+            "managed",
+            "enterprise",
+            "claudeai",
+            "agent"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "source"
+      ],
+      "type": "object"
+    },
+    "permission_mode": {
+      "description": "Open string: the Agent SDK types it as string; the examples are the documented modes.",
+      "examples": [
+        "default",
+        "plan",
+        "acceptEdits",
+        "auto",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "permission_suggestions": {
+      "description": "Permission updates Claude Code suggests for this request, in the entry shape updatedPermissions uses; not an exact list of the options the dialog shows.",
+      "items": {
+        "additionalProperties": true,
+        "description": "Open-world: type and destination stay open strings whose examples are the documented values, and type selects the other fields.",
+        "properties": {
+          "destination": {
+            "examples": [
+              "session",
+              "localSettings",
+              "projectSettings",
+              "userSettings",
+              "cliArg"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "examples": [
+              "addRules",
+              "replaceRules",
+              "removeRules",
+              "setMode",
+              "addDirectories",
+              "removeDirectories"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "destination"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "prompt_id": {
+      "type": "string"
+    },
+    "scratchpad_dir": {
+      "description": "Session scratchpad directory; absent when the session has none or the temp directory is unavailable (Claude Code v2.1.257 or later).",
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "tool_input": {},
+    "tool_name": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "hook_event_name",
+    "tool_name",
+    "tool_input"
+  ],
+  "type": "object"
+}

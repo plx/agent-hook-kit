@@ -188,10 +188,15 @@ pub struct NativeContext {
     /// What these are depends on the harness:
     ///
     /// - Claude Code and Codex have no workspace-root field, so their
-    ///   adapters store the event's `cwd`. That is the session's current
-    ///   working directory, which moves when the agent runs `cd`; it is not
-    ///   a stable project root. On Claude Code the stable project root is
-    ///   `CLAUDE_PROJECT_DIR`, available from the command environment.
+    ///   adapters store the event's `cwd`. On Claude Code that is the
+    ///   session's current working directory, which moves when the agent
+    ///   runs `cd`; it is not a stable project root. On Claude Code the
+    ///   stable project root is `CLAUDE_PROJECT_DIR`, available from the
+    ///   command environment. Codex's tool events (`PreToolUse`,
+    ///   `PermissionRequest`, `PostToolUse`) store nothing, because since
+    ///   Codex 0.166.0 their `cwd` is the tool command's working directory
+    ///   (a local Bash command's resolved `workdir`); the native input still
+    ///   carries it.
     /// - Antigravity stores the event's `workspacePaths`, which are the
     ///   workspace roots. The list may be empty.
     ///

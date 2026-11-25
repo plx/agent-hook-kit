@@ -1,0 +1,326 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: provide-context
+      exit:
+        exact: 0
+      id: text-context
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: protocol-value
+        semantic_format: not-brace-delimited-or-fieldless-json-lines
+        trailing_newline: allowed
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error-context-dropped
+      exit:
+        exact: 0
+      id: invalid-json
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: brace-delimited-except-fieldless-json-lines
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        exact: 2
+      id: exit-2
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: user-message
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 2
+      id: exit-2-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: user-message
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-unstructured
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: user-message
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+  http:
+    kind: http
+    method: POST
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: json
+        presence: required
+        role: http-body
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: empty-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: non-json-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: not-a-json-object
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: schema-invalid-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: json-object-failing-output-schema
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 599
+          min: 300
+      id: non-success
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: body
+      content_kind: json
+      framing: one-http-message
+    request_content_type: application/json
+    response_content_type: application/json
+event:
+  category: model
+  identification:
+    discriminator:
+      const: PostModelSwitch
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: post_model_switch
+  wire_name: PostModelSwitch
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- http
+- mcp_tool
+harness: claude-code
+id: claude-code/docs-2026-11-25-r1/PostModelSwitch
+schemas:
+  input:
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+  outputs:
+  - assurance:
+      confidence: low
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+snapshot: docs-2026-11-25-r1
+uncertainties:
+- PostModelSwitch requires Claude Code v2.1.251 or later and cannot block; requested_model is null when source is auto and is the restored setting when source is resume.
+- PostModelSwitch runs after a requested switch, an automatic model fallback, a setting such as opusplan entering or leaving plan mode, and the model restore on resume; the reference does not say which source an opusplan transition reports. It does not run when a model from a fallback model chain serves one turn, because the session's model is unchanged.
+- Plain-text stdout or additionalContext is delivered with the next request; output from a hook still running five seconds after the next prompt rolls over to the following request, and only the last switch's output is delivered.
+- Exit status 2 renders stderr as a hook error notice for the user; Claude does not see it.
+- Exit status 2 cannot block this event. A schema-valid JSON object printed with exit 2 is read as on exit 0, because Claude Code reads JSON on every exit code; the reference does not say whether the exit-2 notice is still shown then, so the exit-2-structured outcome keeps stderr as a user message.
+- Stdout whose trimmed text starts with { and ends with } is parsed as JSON (Claude Code v2.1.248 or later); a parse or schema-validation failure is a non-blocking error and the text is not added as context. Anything else is plain text, including a JSON array or a quoted JSON string. Output of two or more lines that each parse as JSON, the first starting with { and the last ending with }, remains plain text when no line is a JSON output object that sets a field, and is a parse failure when one is.
+- Exit status 2 is described only by the exact exit-2 outcomes; the 1-255 nonzero outcomes model the reference's other exit codes and apply to status 2 only where no exit-2 outcome exists.
+- 'A hook that runs in PowerShell (shell: powershell, or a shell-form hook on Windows without Git Bash) did not take the exit-2 outcomes before Claude Code v2.1.309, nor before v2.1.316 when its command begins with a type cast, param, using, or an attribute.'
+- An HTTP connection failure has no status and takes this event's failure effect (a non-blocking error on most events), and a timeout cancels the hook, so neither is an outcome here. Any non-2xx status is a failure, so non-success covers 300-599; whether Claude Code follows a redirect before it judges the status is undocumented.
+- 'The outcomes describe onFailure unset or continue. onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later; ignored for async and asyncRewake command hooks) makes a failure do what exit code 2 does on this event. For a hook that cannot start, a timeout, invalid JSON, or a nonzero exit without schema-valid JSON, that is the same notice, log line, or no-op as a non-blocking error, so no on-failure-block binding is cataloged. nonzero-structured does change: a schema-valid JSON object printed with an exit code other than 0 or 2 counts as a failure (this event''s exit-2 row) instead of a success, and whether its fields, including terminalSequence, still apply and how that failure is reported are undocumented.'
+- 'Each additionalContext, systemMessage, and initialUserMessage string, and plain stdout measured whole, is capped at 10,000 characters per hook (since Claude Code v2.1.89): longer output is saved to a file in the session directory and replaced by the file path and a preview of up to 2,000 characters, Claude is not asked to read the file, and the cap has no setting. The schemas set no maxLength because longer text is accepted and spilled.'
+- Since Claude Code v2.1.292, a <system-reminder> or </system-reminder> tag in a hook string reaches Claude with that tag's < replaced by &lt;.
+- Claude Code 2.1.332 shortens text over about 50,000 characters when a hook blocks or fails during a turn, or after /compact, with a very large log (changelog only); which text it cuts, and where, is not documented.
+- 'These bindings model synchronous command hooks. A command hook that sets async or asyncRewake is not modeled: decision fields such as decision, permissionDecision, and continue have no effect; after it exits, additionalContext and systemMessage reach Claude on the next turn and are not shown to the user; its JSON must be alone on stdout or on a line of its own (spanning several lines requires v2.1.295 or later), and a field with the wrong type is dropped on its own; Claude Code does not enforce timeout on async hooks but does on asyncRewake hooks; an asyncRewake exit 2 wakes Claude at once with stderr, or stdout when stderr is empty; and onFailure and terminalSequence do not apply.'
+- A hook that isn't async and leaves a background process holding its stdout or stderr takes up to 10 seconds to finish after its own process exits, and output printed after Claude Code stops reading is discarded. The reference states the resulting block (stdio went quiet; refusing to honor the suspect capture) only for a PreToolUse allow; whether it applies on this event is unknown.

@@ -19,10 +19,10 @@ change.
 ## What This Repository Provides
 
 - Native input/output models for every command-hook event in the selected
-  contract snapshots, 50 in all (see [Supported harnesses](#supported-harnesses)):
-  - `hookkit-claude` (33 Claude Code events)
-  - `hookkit-codex` (12 Codex events)
-  - `hookkit-antigravity` (5 Antigravity events)
+  contract snapshots, 54 in all (see [Supported harnesses](#supported-harnesses)):
+  - `hookkit-claude` (34 Claude Code events)
+  - `hookkit-codex` (14 Codex events)
+  - `hookkit-antigravity` (6 Antigravity events)
 - First-class command-hook environment models, including deterministic map-based
   parsing and automatic capture in stdin/stdout runners:
   - [`docs/command-environments.md`](docs/command-environments.md)
@@ -102,14 +102,14 @@ snapshots, and conformance fails if they drift apart.
 
 | Harness | Selected snapshot | Events | Refresh audit |
 | --- | --- | --- | --- |
-| Claude Code | `claude-code/docs-2026-09-30-r1` (Claude Code 2.1.285) | 33, including `PreModelSwitch` and `PostModelSwitch` | [`2026-09-30-claude-code-hooks.md`](planning/audits/2026-09-30-claude-code-hooks.md) |
-| Codex | `codex/commit-ff6aec9-r2` (`rust-v0.159.2`) | 12, including `Interrupt` | [`2026-09-30-codex-hooks.md`](planning/audits/2026-09-30-codex-hooks.md) |
-| Antigravity | `antigravity/docs-2026-09-30-r1` (2.0, CLI, and IDE) | 5 | [`2026-09-30-antigravity-hooks.md`](planning/audits/2026-09-30-antigravity-hooks.md) |
+| Claude Code | `claude-code/docs-2026-11-25-r1` (Claude Code 2.1.332) | 34, including `PreSkillShellCommand` | [`2026-11-25-claude-code-hooks.md`](planning/audits/2026-11-25-claude-code-hooks.md) |
+| Codex | `codex/commit-3d86e43-r1` (`rust-v0.172.0`) | 14, including `PreModelRequest` and `PostModelRequest` | [`2026-11-25-codex-hooks.md`](planning/audits/2026-11-25-codex-hooks.md) |
+| Antigravity | `antigravity/docs-2026-11-25-r1` (App, CLI, IDE extensions, and IDE) | 6, including `SessionStart` | [`2026-11-25-antigravity-hooks.md`](planning/audits/2026-11-25-antigravity-hooks.md) |
 
 <!-- markdownlint-enable MD013 -->
 
 The command-process environment is recorded separately in supplement
-`command-environments-2026-09-30-r2` and summarized in
+`command-environments-2026-11-25-r1` and summarized in
 [`docs/command-environments.md`](docs/command-environments.md).
 
 ### Claude Code notes
@@ -124,11 +124,19 @@ The command-process environment is recorded separately in supplement
   `additionalContext`.
 - `PreToolUseOutput::allow()` auto-approves the call and skips the permission
   prompt. A hook that only adds context or has no objection should return
-  `no_op()` or `with_context(..)`.
+  `no_op()` or `with_context(..)`. To stop a call, use `deny(..)`: in auto
+  mode `ask(..)` does not gate a `SubagentHandback` call, which runs without
+  a prompt, and `defer()` is honored only in a `-p` run where Claude made a
+  single tool call. Even a deny can be overridden by a mod's `tool.check`
+  approval in a setup with no managed settings, no `managed-mcp.json`, and no
+  Team or Enterprise `/login` as the session's credential.
 - `PermissionRequest` ignores exit 2; only `PermissionRequestOutput::deny(..)`
-  denies. `Setup`, `InstructionsLoaded`, `Notification`, `StopFailure`,
-  `SessionEnd`, and `PostCompact` discard every JSON output field except
-  `terminalSequence`; builders for discarded fields are deprecated.
+  denies. `with_updated_permissions` rejects an entry that does not match the
+  documented permission-update shape, because Claude Code would drop the
+  whole response, allow included, over one malformed entry. `Setup`,
+  `InstructionsLoaded`, `Notification`, `StopFailure`, `SessionEnd`, and
+  `PostCompact` discard every JSON output field except `terminalSequence`;
+  builders for discarded fields are deprecated.
 - `WorktreeRemove` is decided by exit code alone, so a HookKit runtime error
   (exit 1) blocks the removal while the worktree still exists. A
   `UserPromptSubmit` block reason is shown only to the user, never to Claude,
@@ -138,7 +146,52 @@ The command-process environment is recorded separately in supplement
 - On `Stop` and `SubagentStop`, `with_context` keeps Claude working just as a
   block does, subject to `stop_hook_active` and the continuation cap. A hook
   that only reports should return `no_op()`, adding a user notice with
-  `with_system_message`.
+  `with_system_message`. There `continue: false` takes precedence over exit 2
+  and ends the turn, so `into_blocking_error` rejects a response that sets it.
+  `TaskCompleted` and `TeammateIdle` also accept a top-level `block(reason)`.
+  On `TeammateIdle`, too, `continue: false` takes precedence over exit 2 and
+  sends the teammate idle, so its `into_blocking_error` rejects it as well; on
+  `TaskCompleted` the task stays open either way.
+- Exit 2 with blank stdout and a stderr that says a file is missing or cannot
+  be opened (such as a Rust `NotFound` error) is a non-blocking error on
+  `Stop`, `SubagentStop`, `TaskCompleted`, and a plugin's `UserPromptSubmit`.
+  Keep a structured response on stdout (`into_blocking_error`) when such text
+  can be the block reason.
+- `PreCompact` stdout becomes the compaction instructions, so its `no_op()`
+  prints nothing rather than `{}`, and
+  `PreCompactOutput::compaction_instructions(text)` writes instructions
+  (cut at 10,000 characters since v2.1.314). A JSON response printed at
+  exit 0 must therefore block: emitting one without a top-level
+  `decision: "block"`, such as `no_op().with_terminal_sequence(..)`, fails.
+  Pair a terminal sequence with `with_block(..)` or `into_blocking_error(..)`.
+- `PreSkillShellCommand` (v2.1.332 or later) runs before an injected command,
+  a shell command that runs while a skill or a command such as
+  `/security-review` loads; `PreToolUse` hooks do not fire for it.
+  `CatalogInput::injected_command()` returns the command.
+  `PreSkillShellCommandOutput` can only refuse it (`deny`, `ask`, `defer`,
+  `block`, or exit 2); it has no `allow` and no rewrite. Register a shell
+  policy on both `PreToolUse` and `PreSkillShellCommand` with the matcher
+  `Bash|PowerShell`, in a settings file or plugin: in auto mode, Claude can
+  run a command that needs approval afterward as an ordinary tool call,
+  which fires `PreToolUse` instead. `hookkit-shell`'s Claude adapter
+  (`ShellToolCallExt::shell_tool_call` on `CatalogInput`) returns the
+  injected command as a pre-phase call when `tool_name` is `Bash`, exactly as
+  for a `Bash` `PreToolUse`; `PowerShell` reports `ShellToolCallMatch::NotShell`
+  (the analyzer does not parse PowerShell). `hookkit-tool-access` does not
+  observe the event and reports a `MissingToolCall` gap, so for file-access
+  analysis treat the injected command as a custom `ToolCallRef` with
+  `CLAUDE_BASH_PROFILE` registered, as `examples/forbidden-file-guard` does.
+- A hook failure (exit 1, a crash, a timeout, a missing binary, or invalid
+  JSON) lets the action proceed unless the hook entry sets
+  `"onFailure": "block"` (v2.1.295 or later), which makes a failure do what
+  exit 2 does (on `PermissionRequest` it denies). Only Claude Code can block
+  when the hook binary cannot start, so register a policy hook in exec form,
+  for example
+  `{"type": "command", "command": "/path/to/guard", "args": [], "onFailure": "block"}`,
+  as well as running it under `FailurePolicy::FailClosed`. Exec form also
+  keeps the behavior the same on Windows without Git Bash, where a failing
+  shell-form `PreToolUse`, `PermissionRequest`, or `PreSkillShellCommand`
+  hook blocks even with `onFailure` unset.
 - Exit-0 stderr reaches only Claude Code's debug log. User-visible notices
   belong in `systemMessage`.
 
@@ -149,48 +202,106 @@ The command-process environment is recorded separately in supplement
   `{"systemMessage": ...}` (`InterruptOutput::no_op` or `system_message`); it
   cannot block. It has no Claude Code counterpart, so it is not an aligned
   family.
+- `PreModelRequest` and `PostModelRequest` (`hookkit_codex::catalog`) run
+  around each attempt to open a model response stream. They only observe:
+  Codex never parses their stdout, and every non-zero exit, 2 included, is a
+  plain failure, so their outputs offer only `no_op`, `diagnostic`, and
+  `failure`. Unlike every other Codex event, non-blank stderr becomes an
+  error entry at every exit code, including 0. A synchronous handler holds up
+  every attempt for up to its timeout (600 seconds by default), so register
+  telemetry hooks with `async: true`; a background handler's stderr is never
+  shown. `CatalogInput` exposes their fields (`kind`, `attempt_number`,
+  `status`, `token_usage`, and others).
 - `SessionStart` reports the `fork` source, which maps to a fork session
   boundary; an unknown source parses as `Unknown` and claims no boundary.
-- `no_op()` emits empty stdout on every event, which is Codex's no-op. Codex
-  ignores stderr from a hook that exits 0, so user notices belong in
-  `with_system_message`. Other non-zero exits, and exit 2 with blank stderr,
-  fail open; Codex shows their stderr only for `PreCompact`, `PostCompact`,
-  and `SessionEnd`.
+- `no_op()` emits empty stdout on every event, which is Codex's no-op. Except
+  on the model-request events, Codex ignores stderr from a hook that exits 0,
+  so user notices belong in `with_system_message`. Other non-zero exits, and
+  exit 2 with blank stderr, fail open; on the other 12 events Codex shows
+  their stderr only for `PreCompact`, `PostCompact`, and `SessionEnd`.
 - A blank (after trimming) block reason or exit-2 stderr is an emission error,
   because Codex would treat it as a failed hook and not block. Text context
   that starts with `{` or `[` is sent as structured `additionalContext`.
+- A `UserPromptSubmit` block (exit 2, `decision: block`, or
+  `continue: false`) drops the prompt, and its reason never reaches the
+  model: Codex shows it only in the hook run's completion entries (a
+  feedback entry for an exit-2 or `decision: block` reason, a stop entry for
+  a `continue: false` `stopReason`), which the TUI displays and `codex exec`
+  does not print. Any `additionalContext` is still recorded.
+- `PermissionRequestOutput::allow()` cannot approve a `Bash` command that a
+  managed `requirements.toml` `prompt-user` rule matches (Codex 0.167.0): a
+  person decides, or Codex rejects the command when no capable client is
+  connected, and stdin does not mark the case. A deny still applies.
 - A synchronous `continue: false` means different things per event. On
   `PostToolUse` it replaces the tool result the model sees and the turn goes
   on; on `PreCompact` and `PostCompact` it aborts the turn, for manual and
   automatic compaction alike.
 - `apply_patch` hooks carry the patch text in `tool_input.command`, for example
   `{"command": "*** Begin Patch\n*** Update File: src/lib.rs\n...*** End Patch\n"}`.
-  Tool events report the step's own working directory in `cwd`.
+- Since Codex 0.166.0 the `cwd` of `PreToolUse`, `PermissionRequest`, and
+  `PostToolUse` is the tool command's working directory (a local Bash
+  command's resolved `workdir`), which need not be a project root, so those
+  events report no workspace roots. `AnyInput::command_cwd()` returns it.
+  Codex still starts every tool hook in the step's environment directory,
+  which a `Stop` also reports as its `cwd` unless the step selected another
+  local environment.
 - Do not configure HookKit control hooks with `async: true` (Codex ignores the
   control output of background hooks), and note that command hooks do not run
   under Codex cloud orchestration.
+- Since Codex 0.164.0 a plugin hook's approval is bound to the plugin
+  bundle's contents: Codex hashes the whole plugin root before every run, and
+  a changed or unreadable bundle, or one with a symlink, fails the run without
+  launching the hook. Ship no symlinks, keep logs, build output, and other
+  mutable state in `PLUGIN_DATA` (`CodexPluginEnvironment::data`), and never
+  write under `PLUGIN_ROOT`; rebuilding a bundled binary requires a new
+  review.
+- Do not set `onFailure` on Codex hooks. `rust-v0.172.0` silently ignores the
+  key, and later pre-releases give it blocking semantics that this snapshot
+  does not model.
 
 ### Antigravity notes
 
-- Every input carries five common fields: `conversationId`, `workspacePaths`,
+- `SessionStart` (`hookkit_antigravity::SessionStart`) fires once when a new
+  conversation session starts. It receives only the common fields and may
+  inject steps; its payload fits every other event's shape too, so select it
+  with an explicit hint.
+- Every input carries the common fields `conversationId`, `workspacePaths`,
   `transcriptPath`, `artifactDirectoryPath`, and the optional `modelName`
-  (`model_name`). `workspacePaths` may be empty, and `PostToolUse.toolCall`
-  may be absent (`Option<ToolCall>`) on IDE builds. A tool that takes no
-  arguments may send `toolCall.args` as `null` or leave it out; both read as
-  an empty `args` map. An empty `error` means success; use `error_message()`
-  or `failed()` instead of `error.is_some()`.
+  (`model_name`) and `lastUserInput` (`last_user_input`). CLI 1.5.4 and later
+  also send `hookEventName`, `cwd`, and `toolCall.id`, and CLI 1.5.6 and later
+  the `Stop` field `continuation_active`, according to the release notes
+  only; all are optional. `workspacePaths` may be empty, and
+  `PostToolUse.toolCall` may be absent (`Option<ToolCall>`), as in the IDE
+  reference example. A tool that takes no arguments may send `toolCall.args`
+  as `null` or leave it out; both read as an empty `args` map. An empty
+  `error` means success; use `error_message()` or `failed()` instead of
+  `error.is_some()`.
 - Built-in file tools take PascalCase arguments, such as
   `view_file {"AbsolutePath": ...}` and `write_to_file {"TargetFile": ...}`.
-- `PreToolUseOutput::allow()` auto-approves and bypasses Ask presets. There is
-  no pass-through decision; `PreToolUseOutput::ask()` defers to the user's
-  normal policy. Duplicate `permissionOverrides` are removed on emission.
+- The current reference makes `PreToolUseOutput::allow()` a pass-through to
+  the next hook or the default policy, and `auto_approve()` the explicit
+  approval. The redefinition is undated, so on an older build `allow` still
+  auto-approves. `ask()` prompts unless an Always Allow grant covers the
+  call; it never approves, which is why the aligned `pass_through` uses it.
+  `with_overwrite(args)` shallow-merges keys into `toolCall.args`. Duplicate
+  `permissionOverrides` are removed on emission.
+- Inject steps: use `InjectStep::system_message` for agent instructions;
+  `ephemeral_message` is deprecated upstream, and the `toolCall` step is no
+  longer documented. `PreInvocationOutput::block(message)` shows the user an
+  error and stops before the model is called (documented from CLI 1.4.11).
 - Stop: use `StopOutput::continue_with(reason)` or `StopOutput::allow_stop()`.
   `continue` is capped by the harness, so it is not a hard gate, and `reason`
   has a documented effect only with `continue`. Near-misses such as
   `"Continue"` are rejected at emission.
-- The reference documents no exit-code semantics. Antigravity 2.0 v2.12.0 and
-  later report a failing hook as an error and continue; do not assume a failing
-  `PreToolUse` hook lets the tool run.
+- Hooks fail open: the plugin authoring guide says any non-zero exit is
+  logged and ignored, and the hooks reference defines no exit codes. A
+  failing `PreToolUse` or `PreInvocation` guard therefore enforces nothing;
+  one that must block when it breaks has to answer at exit 0, which
+  `FailurePolicy::FailClosed` does. A `hooks.json` handler times out after
+  30 seconds by default (60 seconds for hooks converted by
+  `agy plugin import`).
+- Hooks loaded from a plugin receive `PLUGIN_ROOT` and `PLUGIN_DATA` (CLI
+  1.5.3 and later), exposed as `AntigravityCommandEnvironment::plugin`.
 
 ## Prerequisites
 
@@ -369,9 +480,9 @@ The aligned helpers are not interchangeable, because the harnesses give
 | Helper | Claude Code | Codex | Antigravity |
 | --- | --- | --- | --- |
 | `pass_through` | `{}`: the normal permission flow decides | empty stdout: the normal approval flow decides | `{"decision":"ask"}`: prompts unless an Always Allow grant covers the call |
-| `allow` | `permissionDecision: "allow"`: explicit auto-approval, no prompt | no equivalent; lowers to empty stdout (`explicit_allow_supported` returns `false`) | `{"decision":"allow"}`: auto-approves and bypasses Ask presets |
+| `allow` | `permissionDecision: "allow"`: explicit auto-approval, no prompt | no equivalent; lowers to empty stdout (`explicit_allow_supported` returns `false`) | `{"decision":"auto_approve"}`: approves where the default policy would prompt, honoring explicit user rules |
 | `deny` | `permissionDecision: "deny"`, reason shown to Claude | `permissionDecision: "deny"` | `{"decision":"deny"}` with the reason |
-| `rewrite` | `updatedInput` with the caller's `RewriteApproval` (`AutoApprove` or `Ask(reason)`) | `updatedInput`; approval policy still runs | unsupported |
+| `rewrite` | `updatedInput` with the caller's `RewriteApproval` (`AutoApprove` or `Ask(reason)`) | `updatedInput`; approval policy still runs | unsupported: the native `overwrite` only merges keys |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -402,8 +513,10 @@ blocks a Claude Code compaction when it fails; see
 [Failure policy](#failure-policy));
 `PostCompactOutput::with_system_notice` is a documented no-op on Claude Code,
 which discards `PostCompact` `systemMessage` (see `system_notice_delivered`);
-and a `UserPromptSubmitOutput::block` reason is shown to the Claude Code user
-only. A pair-only marker, or any harness without an aligned adapter, fails
+and a `UserPromptSubmitOutput::block` reason never reaches the model on
+either harness, but Claude Code shows it to the user while Codex records it
+only as the hook run's feedback entry (shown in the TUI, not by `codex exec`).
+A pair-only marker, or any harness without an aligned adapter, fails
 with `HookkitError::UnsupportedHarness` before the payload is parsed.
 
 The aligned runners take canonical harness identities (`claude-code`, `codex`,
@@ -414,11 +527,16 @@ those failures are still lowered for Claude Code, so the guard blocks rather
 than fails open.
 
 Aligned inputs report locations the way the native payloads do.
-`workspace_roots()` is `[cwd]` on Claude Code and Codex and `workspacePaths`
-on Antigravity. Claude Code's `cwd` follows `cd` in the Bash tool, so use
+`workspace_roots()` is `[cwd]` on Claude Code and on Codex's turn-scoped
+events, empty on Codex's tool events (whose `cwd` has been the tool command's
+working directory since Codex 0.166.0), and `workspacePaths` on Antigravity.
+Claude Code's `cwd` follows `cd` in the Bash tool, so use
 `project_roots(environment)` (Claude Code's `CLAUDE_PROJECT_DIR`, Codex's
 `cwd`, Antigravity's `workspacePaths`) for configuration discovery and
-project-relative matching, and `cwd()` to resolve relative operands.
+project-relative matching, and `cwd()` to resolve relative operands. On a
+Codex tool event `project_roots()` is that command directory, which can be a
+subdirectory of the project or lie outside it, so discover configuration
+upward from it or from the paths involved.
 `project_roots()` names the checkout the session started in: after Claude Code
 enters a git worktree, `CLAUDE_PROJECT_DIR` stays at the main checkout while
 `cwd` and the edited files move into the worktree. A hook that acts on the
@@ -506,16 +624,18 @@ identities and resolution provenance above, the original `RawInvocation`,
 workspace roots, and only those typed session/conversation/turn/tool-call paths
 or identifiers that the native event supplied. It does not probe alternate key
 casing, recursively mine arbitrary JSON, or invent a current directory. Its
-workspace roots are the input `cwd` on Claude Code and Codex (Claude's moves
-with `cd`; `CLAUDE_PROJECT_DIR` in the command environment is the stable root)
-and `workspacePaths` on Antigravity, which may be empty.
+workspace roots are the input `cwd` on Claude Code and on Codex's turn-scoped
+events (Claude's moves with `cd`; `CLAUDE_PROJECT_DIR` in the command
+environment is the stable root), none on Codex's `PreToolUse`,
+`PermissionRequest`, and `PostToolUse`, whose `cwd` is the tool command's
+working directory, and `workspacePaths` on Antigravity, which may be empty.
 
 The `run_*` adapters capture only the environment names declared by the selected
 harness type. In-memory `execute_*` APIs instead accept an explicit
 `EnvironmentVariables` map, keeping tests deterministic and free of
 process-global environment mutation. See the
 [command-hook environment reference](docs/command-environments.md) for the full
-50-event matrix, handler-binding boundary, and migration notes.
+54-event matrix, handler-binding boundary, and migration notes.
 
 ### Diagnostics and process streams
 
@@ -570,11 +690,14 @@ percent-encoded fields (session, turn, tool call, label).
 By default (`FailurePolicy::NonBlocking`) a failed runner exits 1 with empty
 stdout. Claude Code and Codex treat exit 1 as a non-blocking hook error: the
 pending action proceeds, and Claude Code shows the first stderr line to the
-user. A policy hook therefore fails *open* by default. The exception is Claude
-Code `WorktreeCreate` and `WorktreeRemove`, which any non-zero exit fails
-(removal fails while the directory remains), so a failure there blocks under
-either policy and `FailureResponse::fails_closed` reports it. Guards should opt
-into `FailurePolicy::FailClosed`:
+user. Antigravity logs and ignores any non-zero exit. A policy hook therefore
+fails *open* by default. The exception is Claude Code `WorktreeCreate` and
+`WorktreeRemove`, which any non-zero exit fails (removal fails while the
+directory remains), so a failure there blocks under either policy and
+`FailureResponse::fails_closed` reports it. A Claude Code hook entry with
+`"onFailure": "block"` also blocks on the exit 1, which the runner cannot see,
+so `fails_closed` is a lower bound. Guards should opt into
+`FailurePolicy::FailClosed`:
 
 ```rust
 use hookkit_codex::protocol::{PreToolUse, PreToolUseOutput};
@@ -596,11 +719,13 @@ pending action:
 
 | Harness | Events | Fail-closed response |
 | --- | --- | --- |
-| Claude Code | `PreToolUse`, `UserPromptSubmit`, `UserPromptExpansion`, `PostToolBatch`, `PreCompact`, `PreModelSwitch`, `ConfigChange`, `Elicitation`, `ElicitationResult`, `TaskCreated`, `WorktreeCreate`, `WorktreeRemove` | exit 2, diagnostic on stderr |
+| Claude Code | `PreToolUse`, `PreSkillShellCommand`, `UserPromptExpansion`, `PostToolBatch`, `PreCompact`, `PreModelSwitch`, `ConfigChange`, `Elicitation`, `ElicitationResult`, `TaskCreated`, `WorktreeCreate`, `WorktreeRemove` | exit 2, diagnostic on stderr |
+| Claude Code | `UserPromptSubmit` | exit 2, diagnostic on stderr, and `{"decision":"block","reason":...}` on stdout, so a plugin hook's missing-file diagnostic is not downgraded to a non-blocking error |
 | Claude Code | `PermissionRequest` (ignores exit 2) | exit 0 with a JSON `behavior: "deny"` decision |
 | Codex | `PreToolUse`, `PermissionRequest`, `UserPromptSubmit` | exit 2, diagnostic on stderr |
 | Antigravity | `PreToolUse` | exit 0 with `{"decision":"deny","reason":...}` |
-| any | observers and Stop-like events | exit 1, as for `NonBlocking` |
+| Antigravity | `PreInvocation` | exit 0 with `{"injectSteps":[{"errorMessage":{"userMessage":...}}],"terminationBehavior":"terminate"}`, which blocks the prompt |
+| any | observers, Stop-like events, and the Codex model-request events | exit 1, as for `NonBlocking` |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -665,7 +790,8 @@ cat fixtures/codex/pre_tool_use.json \
   | cargo run -q -p codex-bash-guard
 ```
 
-Antigravity pre-invocation reminder:
+Antigravity pre-invocation reminder (the fixture is invocation 0 of a
+multi-root workspace; a later `invocationNum` prints `{}`):
 
 ```bash
 cat fixtures/antigravity/pre_invocation.json \
@@ -688,9 +814,11 @@ limitation notes:
 
 - [`codex-claude-rules`](examples/codex-claude-rules/README.md) lazily injects
   path-scoped files from Claude Code's user and project rules directories.
-- [`forbidden-file-guard`](examples/forbidden-file-guard/README.md) selects a
-  native pre-tool contract with `--harness=claude|codex|antigravity` and merges
-  home/project YAML policy.
+- [`forbidden-file-guard`](examples/forbidden-file-guard/README.md) guards
+  Claude Code `PreToolUse` and `PreSkillShellCommand` (`--harness=claude`,
+  selected-harness runner) and Codex/Antigravity `PreToolUse`
+  (`--harness=codex|antigravity`, aligned runner), and merges home/project
+  YAML policy.
 - [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
   demonstrates the shipped file-activity observer while retaining the former
   example command and flags as compatibility aliases.
@@ -711,8 +839,11 @@ The CLI accepts `--claude`, `--codex`, `--antigravity`, or
 to load a single Pkl file directly (bypassing discovery). A relative
 `--config` resolves against the harness project root (`CLAUDE_PROJECT_DIR` on
 Claude Code, otherwise the input's first workspace root), not the hook's
-current directory. A usage error prints a diagnostic naming the binary and
-exits 1, never the harness-blocking exit 2; `--help` exits 0.
+current directory, which Claude Code moves with `cd`. A Codex tool event
+reports no workspace root, so there it resolves against the hook's working
+directory: the step directory where Codex starts every tool hook. A usage
+error prints a diagnostic naming the binary and exits 1, never the
+harness-blocking exit 2; `--help` exits 0.
 
 A tool call that wrote no existing file returns the native no-op before any Pkl
 is evaluated. Otherwise the runner lowers its results to the native channels:
@@ -728,7 +859,9 @@ and is reported the same way, as an `error:` notice leading `systemMessage`
 with earlier tools' feedback kept in `additionalContext`: a failed PostToolUse
 hook's stderr never reaches the agent, Claude shows the user only its first
 line, and Codex drops it. On Antigravity, which has no channel, it is a hook
-error. Full tool output stays in the diagnostics artifacts.
+error, which Antigravity logs and ignores: the diagnostic never reaches the
+agent, and CLI 1.4.3 and later keep the tool's result. Full tool output stays
+in the diagnostics artifacts.
 
 Tool commands never outlive the hook. Each runs in a process group whose
 watchdog kills it when the hook process dies, including when Codex SIGKILLs
@@ -753,9 +886,13 @@ cat fixtures/claude/stop.json \
 (These fixture runs use the Claude environment exported above and an absolute
 state directory, because the fixtures' placeholder project directory does not
 exist.) Use the same `--state-dir` for `file-activity-agent-hook`. A relative
-`--state-dir` resolves against the harness project root (`CLAUDE_PROJECT_DIR`
-on Claude Code, otherwise the input's first workspace root), never the hook's
-current directory, which Claude Code moves with `cd`. On Claude Code both
+`--state-dir` resolves against the harness project root: `CLAUDE_PROJECT_DIR`
+on Claude Code, never the hook's current directory, which Claude Code moves
+with `cd`, and otherwise the input's first workspace root. A Codex
+`PostToolUse` reports no workspace root, so `file-activity-agent-hook`
+resolves it there against the hook's working directory, the step directory,
+which a Codex `Stop` also reports as its `cwd` unless the step selected
+another local environment. On Claude Code both
 runners work in the session's working root: `CLAUDE_PROJECT_DIR`, or the
 linked Git worktree of the same repository that the session entered (Claude
 keeps `CLAUDE_PROJECT_DIR` at the main checkout while `cwd` follows the
@@ -787,11 +924,13 @@ Stop semantics are designed not to trap the agent:
 - `failFast` skips only the failing tool's remaining remedies.
 - A block that would repeat unchanged (same manual-fix file contents,
   operational problems, and strict gaps) is allowed to stop, with a note to the
-  user, when `stop_hook_active` marks a continuation (Claude Code, Codex), and
-  always on Antigravity, which has no such signal.
+  user, when `stop_hook_active` (Claude Code, Codex) or Antigravity's
+  `continuation_active` (CLI 1.5.6 and later) marks a continuation, and always
+  on an Antigravity build that sends no such signal.
 - After eight consecutive blocked attempts in one continuation chain, the next
   Stop is allowed with a note, matching Claude Code's own continuation cap on
-  Codex and Antigravity, which have none.
+  Codex, which has none, and on Antigravity, whose cap is undocumented in
+  size.
 - An Antigravity Stop whose `terminationReason` is `max_steps_exceeded` or
   `error` is allowed without running any tool, so `decision: "continue"` never
   re-enters a loop the harness is ending; the work stays queued.
@@ -810,10 +949,12 @@ cat fixtures/claude/session_start.json \
       --claude --state-dir "${TMPDIR:-/tmp}/hookkit-demo-state"
 ```
 
-Codex uses `--codex`. Every later
+Codex uses `--codex` and Antigravity `--antigravity`. Every later
 `SessionState::ensure` still refreshes typed project metadata automatically;
 without a start binding, the timestamp is explicitly marked as a
-first-observed fallback.
+first-observed fallback. On Antigravity builds that predate `SessionStart`
+(documented from `antigravity/docs-2026-11-25-r1`), an invocation hook that
+calls `ensure` can still capture the inferred invocation-zero boundary.
 
 ### Deferred hook suite
 
@@ -824,7 +965,7 @@ state root:
 
 | Purpose | Claude | Codex | Antigravity |
 | --- | --- | --- | --- |
-| Precise session lower bound | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` | unavailable |
+| Precise session lower bound | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` | `SessionStart` → `session-start-state-agent-hook` |
 | File-activity producer | `PostToolUse` and `PostToolUseFailure` → `file-activity-agent-hook` | `PostToolUse` → `file-activity-agent-hook` | `PostToolUse` → `file-activity-agent-hook` |
 | Deferred consumer | `Stop` → `turn-completion-agent-hook` | `Stop` → `turn-completion-agent-hook` | `Stop` → `turn-completion-agent-hook` |
 
@@ -846,10 +987,9 @@ turn-completion-agent-hook --claude --state-dir .context/hookkit-state
 ```
 
 Use the matching selector consistently for each harness. Every runner also
-accepts `--harness=claude|codex|antigravity` (the session-start observer only
-`claude|codex`); the three stateful hooks accept `--state-dir=PATH`, and turn
-completion accepts `--config PATH`. Antigravity has no precise session-start
-binding, but its PostToolUse tool-call arguments (PascalCase, for example
+accepts `--harness=claude|codex|antigravity`; the three stateful hooks accept
+`--state-dir=PATH`, and turn completion accepts `--config PATH`. Antigravity
+PostToolUse tool-call arguments (PascalCase, for example
 `write_to_file {"TargetFile": ...}`) provide direct activity evidence; Codex
 `apply_patch` evidence comes from the patch text in `tool_input.command`.
 Filesystem-mtime and optional Git-dirty reconciliation remain fallbacks for
@@ -865,15 +1005,21 @@ When `--config` is not used the runner loads, in order:
 3. each `<ancestor>/.agent-hook-kit/post-tool-use.local.pkl` walking up from
    the start directory (root → leaf, intended to be `.gitignore`d)
 
-The start directory is the input's first workspace root (Codex `cwd`,
-Antigravity's first `workspacePaths` entry, or, for an Antigravity
-conversation without a workspace, the deepest directory containing the written
-files). On Claude Code both runners start from the session's working root,
-`CLAUDE_PROJECT_DIR` or the linked worktree the session entered, never the
-`cwd` that follows `cd`. The home directory's own file is only
-the home layer, and the project root is the deepest directory holding a
-project or local config (never `$HOME`). Later files override earlier ones;
-`settings.fileActivity` and `settings.deferredReporting` merge field by field.
+The start directory is the input's first workspace root: a Codex `Stop`'s
+`cwd` or Antigravity's first `workspacePaths` entry. A Codex `PostToolUse` has
+none, because its `cwd` is the tool command's working directory, so the
+post-tool runner starts from the hook's working directory (the step
+directory) when that contains at least one written file, and otherwise from
+the deepest directory containing them, as it does for an Antigravity
+conversation without a workspace. A command that also writes a log or
+temporary file elsewhere therefore keeps the project's configuration, and
+patterns still match that file by its absolute path. On Claude Code both
+runners start from the session's working root, `CLAUDE_PROJECT_DIR` or the
+linked worktree the session entered, never the `cwd` that follows `cd`. The
+home directory's own file is only the home layer, and the project root is the
+deepest directory holding a project or local config (never `$HOME`). Later
+files override earlier ones; `settings.fileActivity` and
+`settings.deferredReporting` merge field by field.
 A file can opt out of earlier state with `merge { resetAll = true }`,
 `merge { reset = new Listing { "tools"; "run" } }`, or
 `merge { resetTools = new Listing { "ruff" } }`. All layers are evaluated by
@@ -958,7 +1104,7 @@ run = new Listing<String> { "ruff"; "prettier" }
 | `settings.diagnosticsDirectory` | `".agent-hook-kit/post-tool-use"` | Where the immediate runner writes diagnostic artifacts (relative to the project root). The Stop runner writes into session state instead. |
 | `settings.missingToolPolicy` | `"user-notice"` | What to do when a configured tool executable is missing: `"user-notice"` reports it (at Stop without blocking or re-queueing its files), `"hard-failure"` stops the run and reports an error (through `systemMessage` on Claude Code and Codex, as a hook error on Antigravity; at Stop it blocks), and `"harness-block"` blocks through the native decision. |
 | `settings.commandTimeoutSeconds` | `300` | Deadline for each external tool command; `0` disables it. A command that runs longer is killed with its whole process group and reported as an operational failure. It bounds one command; see `runTimeoutSeconds` for the total. |
-| `settings.runTimeoutSeconds` | `540` | Budget for all external tool commands of one hook invocation together; `0` disables it. Each command gets the smaller of `commandTimeoutSeconds` and the budget left, and a command that would start after the budget is spent is reported as an operational failure instead of running. The default fits Claude Code's and Codex's 600-second default hook timeout; lower both deadlines below any shorter hook timeout you configure (Antigravity defaults to 30 seconds). |
+| `settings.runTimeoutSeconds` | `540` | Budget for all external tool commands of one hook invocation together; `0` disables it. Each command gets the smaller of `commandTimeoutSeconds` and the budget left, and a command that would start after the budget is spent is reported as an operational failure instead of running. The default fits Claude Code's and Codex's 600-second default hook timeout; lower both deadlines below any shorter hook timeout you configure (Antigravity defaults to 30 seconds for `hooks.json` handlers and 60 seconds for hooks converted by `agy plugin import`). |
 | `settings.fileActivity.filesystemMtime` | `true` | Reconcile mtime evidence through a durable cutoff before each Stop. |
 | `settings.fileActivity.vcs` | `"disabled"` | Optional `"git-dirty"` fallback; broad because it cannot identify which dirty changes came from the agent. |
 | `settings.fileActivity.timestampToleranceMillis` | `2000` | Clock-resolution slack subtracted from every mtime scan's lower bound. |
@@ -1111,16 +1257,22 @@ Git-dirty reconciliation recover only best-effort candidates.
   - atomically claims each matched rule in session state before injecting its
     body as additional context.
 - `forbidden-file-guard`:
-  - uses one aligned handler for Claude, Codex, and Antigravity pre-tool events,
+  - handles Claude Code `PreToolUse` and `PreSkillShellCommand` through the
+    selected Claude Code harness API, reusing the aligned `PreToolUse`
+    handler for tool calls, and Codex/Antigravity `PreToolUse` through the
+    aligned API,
   - merges additive YAML glob policy from home and workspace configuration,
     resolved against the stable project root, the current `cwd`, and the
     checkout enclosing it,
   - applies inspect-known, deny-unresolved, and deny-all-shell postures (OR-ed
     across settings and layers) to bounded structured, patch, and shell access
-    evidence, treating Codex shell operands relative to an unreported
-    `workdir` as uncertain,
-  - answers non-matches with the aligned pass-through, never `allow`, and
-    fails closed, including on argument errors.
+    evidence, treating relative Codex shell operands as uncertain, because a
+    command in a remote execution environment reports the host's step
+    directory as `cwd` (a local command reports its resolved `workdir` since
+    Codex 0.166.0) and the payload does not say which case applies,
+  - answers non-matches with a pass-through (the aligned `pass_through`, or
+    `PreSkillShellCommandOutput::no_op` for an injected command), never
+    `allow`, and fails closed, including on argument errors.
 - `file-activity-agent-hook`:
   - uses the aligned post-tool API for Codex and Antigravity and the selected
     Claude Code harness API for Claude's `PostToolUse` and

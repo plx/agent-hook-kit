@@ -16,9 +16,9 @@
 //! | Helper | Claude Code | Codex | Antigravity |
 //! | :- | :- | :- | :- |
 //! | [`PreToolUseOutput::pass_through`] | empty output: the normal permission flow decides | empty stdout: the normal approval flow decides | `{"decision":"ask"}`: prompts unless an "Always Allow" grant covers the call |
-//! | [`PreToolUseOutput::allow`] | `permissionDecision: "allow"`: auto-approves and skips the permission prompt | no equivalent; lowers to empty stdout, so the normal approval flow decides | `{"decision":"allow"}`: auto-approves and bypasses Ask presets |
+//! | [`PreToolUseOutput::allow`] | `permissionDecision: "allow"`: auto-approves and skips the permission prompt | no equivalent; lowers to empty stdout, so the normal approval flow decides | `{"decision":"auto_approve"}`: approves where the default policy would prompt, honoring explicit user rules |
 //! | [`PreToolUseOutput::deny`] | `permissionDecision: "deny"`; the reason is shown to Claude | `permissionDecision: "deny"` | `{"decision":"deny"}` with the reason |
-//! | [`PreToolUseOutput::rewrite`] | `updatedInput` with the caller's [`RewriteApproval`] | `allow` plus `updatedInput`: replaces the input; approval policy still runs | unsupported |
+//! | [`PreToolUseOutput::rewrite`] | `updatedInput` with the caller's [`RewriteApproval`] | `allow` plus `updatedInput`: replaces the input; approval policy still runs | unsupported: `overwrite` only merges keys |
 //!
 //! A guard that only objects to some calls must answer every other call with
 //! [`PreToolUseOutput::pass_through`]. Answering with
@@ -33,17 +33,27 @@
 //!   `cd` in the Bash tool and moves into a worktree when Claude enters one.
 //!   The stable project root where the session started is only available as
 //!   `CLAUDE_PROJECT_DIR` in the command environment.
-//! - Codex's input `cwd` is the turn's configured working directory.
+//! - Codex's input `cwd` is the turn's configured working directory on
+//!   turn-scoped events such as `Stop`. On the tool events it is, since
+//!   Codex 0.166.0, the tool command's working directory: a local Bash
+//!   command's resolved `workdir`, otherwise the step's environment
+//!   directory. Codex starts every tool hook in that step directory.
 //! - Antigravity sends `workspacePaths`, the mounted workspace roots (possibly
-//!   none), and no working directory.
+//!   none). Its reference documents no working directory; CLI 1.5.4 and
+//!   later also send the agent's working directory as `cwd`, according to
+//!   their release notes, and `cwd()` returns it only when it is present.
 //!
 //! `workspace_roots()` reports what the native input carries: `[cwd]` for
-//! Claude Code and Codex, and `workspacePaths` for Antigravity. It matches
-//! [`hookkit_core::RuntimeContext::workspace_roots`]. `project_roots()` takes
-//! the command environment as well and returns the stable roots:
-//! `CLAUDE_PROJECT_DIR` for Claude Code, `cwd` for Codex, and `workspacePaths`
-//! for Antigravity. Use `project_roots()` for configuration discovery and
-//! project-relative matching, and `cwd()` to resolve relative operands.
+//! Claude Code and for Codex turn-scoped events, nothing for Codex tool
+//! events (whose `cwd` is a command directory), and `workspacePaths` for
+//! Antigravity. It matches [`hookkit_core::RuntimeContext::workspace_roots`].
+//! `project_roots()` takes the command environment as well and returns the
+//! stable roots: `CLAUDE_PROJECT_DIR` for Claude Code, `cwd` for Codex, and
+//! `workspacePaths` for Antigravity. Use `project_roots()` for configuration
+//! discovery and project-relative matching, and `cwd()` to resolve relative
+//! operands. On a Codex tool event `project_roots()` is the command
+//! directory, which can be a subdirectory of the project or lie outside it,
+//! so discover configuration upward from it or from the paths involved.
 //!
 //! `project_roots()` names the checkout the session started in, not
 //! necessarily the one the agent is working in. After Claude Code enters a
@@ -218,16 +228,19 @@ impl PreToolUseInput {
     }
 
     /// Returns the locations the native input carries: `[cwd]` for Claude
-    /// Code and Codex, and `workspacePaths` for Antigravity.
+    /// Code, nothing for Codex, and `workspacePaths` for Antigravity.
     ///
     /// Claude Code's `cwd` is the agent's current directory, which follows
-    /// `cd` and worktree switches, so it is not a stable root. Use
+    /// `cd` and worktree switches, so it is not a stable root. Since Codex
+    /// 0.166.0 Codex's `cwd` is the tool command's working directory, not a
+    /// workspace root, so the Codex arm is empty, as in
+    /// [`hookkit_core::RuntimeContext::workspace_roots`]. Use
     /// [`Self::project_roots`] for configuration discovery and
     /// project-relative matching. No arm allocates.
     pub fn workspace_roots(&self) -> Cow<'_, [Utf8PathBuf]> {
         match self {
             Self::Claude(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
-            Self::Codex(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
+            Self::Codex(_) => Cow::Borrowed(&[]),
             Self::Antigravity(input) => Cow::Borrowed(&input.workspace_paths),
         }
     }
@@ -235,13 +248,16 @@ impl PreToolUseInput {
     /// Returns the stable project roots for this invocation.
     ///
     /// Claude Code reports `CLAUDE_PROJECT_DIR` from `environment`, Codex its
-    /// configured `cwd`, and Antigravity its `workspacePaths` (possibly
-    /// empty). When `environment` belongs to another harness, which the
-    /// aligned runtime never produces, this falls back to
-    /// [`Self::workspace_roots`].
+    /// `cwd`, and Antigravity its `workspacePaths` (possibly empty). When
+    /// `environment` belongs to another harness, which the aligned runtime
+    /// never produces, this falls back to [`Self::workspace_roots`], except
+    /// that the Codex arm always reports `cwd`.
     ///
-    /// On Claude Code this stays at the session's original checkout after the
-    /// agent enters a git worktree; see the
+    /// Codex's `cwd` is the command's working directory: the step's
+    /// environment directory, or since Codex 0.166.0 a local Bash command's
+    /// resolved `workdir`, which can be a subdirectory of the project or lie
+    /// outside it. On Claude Code this stays at the session's original
+    /// checkout after the agent enters a git worktree; see the
     /// [module documentation](self#roots-and-working-directories).
     pub fn project_roots<'a>(
         &'a self,
@@ -251,6 +267,7 @@ impl PreToolUseInput {
             (Self::Claude(_), PreToolUseCommandEnvironment::Claude(environment)) => {
                 Cow::Borrowed(std::slice::from_ref(&environment.project_dir))
             }
+            (Self::Codex(input), _) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
             _ => self.workspace_roots(),
         }
     }
@@ -258,13 +275,16 @@ impl PreToolUseInput {
     /// Returns the native working directory when that event carries one.
     ///
     /// On Claude Code this is the agent's current directory, which follows
-    /// `cd`; relative tool operands resolve against it. Antigravity supplies
-    /// workspace roots rather than a working directory.
+    /// `cd`; relative tool operands resolve against it. Antigravity
+    /// documents workspace roots rather than a working directory: its arm
+    /// returns the agent's working directory only when the payload carries
+    /// the `cwd` that CLI 1.5.4 and later send according to their release
+    /// notes, and `None` otherwise.
     pub fn cwd(&self) -> Option<&Utf8Path> {
         match self {
             Self::Claude(input) => Some(&input.cwd),
             Self::Codex(input) => Some(&input.cwd),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.cwd.as_deref(),
         }
     }
 
@@ -288,14 +308,17 @@ impl PreToolUseInput {
 
     /// Returns the native tool-call identifier (`tool_use_id`).
     ///
-    /// Antigravity sends no tool-call identifier, so its arm returns `None`.
+    /// Antigravity's arm returns `toolCall.id`, which CLI 1.5.4 and later
+    /// send according to their release notes, when it is a non-blank string;
+    /// it returns `None` when the payload omits it or sends a non-string
+    /// value. See [`hookkit_antigravity::ToolCall::id_str`].
     pub fn tool_call_id(&self) -> Option<&str> {
         match self {
             Self::Claude(input) => input
                 .field("tool_use_id")
                 .and_then(serde_json::Value::as_str),
             Self::Codex(input) => Some(&input.tool_use_id),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.tool_call.id_str(),
         }
     }
 }
@@ -319,11 +342,12 @@ pub enum PreToolUseOutput {
 /// Permission decision Claude Code receives with a rewritten tool input.
 ///
 /// Claude Code documents no `updatedInput` form that leaves the permission
-/// flow unchanged: `allow` auto-approves the rewritten call and `ask` always
-/// prompts the user, while `defer` ignores `updatedInput`. The caller must
-/// therefore choose. Codex has no such choice: a Codex rewrite only replaces
-/// the input, and Codex's normal approval policy still runs, so this value
-/// does not affect the Codex arm.
+/// flow unchanged: `allow` auto-approves the rewritten call and `ask` sends
+/// it to the permission prompt (with the auto-mode exceptions described on
+/// [`RewriteApproval::Ask`]), while `defer` ignores `updatedInput`. The
+/// caller must therefore choose. Codex has no such choice: a Codex rewrite
+/// only replaces the input, and Codex's normal approval policy still runs, so
+/// this value does not affect the Codex arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RewriteApproval {
@@ -338,8 +362,16 @@ pub enum RewriteApproval {
     /// rewritten call. The reason is shown to the user, not to Claude.
     ///
     /// This is the least-privilege choice. It prompts even where Claude
-    /// Code's normal policy would have run the call silently, including in
-    /// auto mode.
+    /// Code's normal policy would have run the call silently. In auto mode it
+    /// normally sends the call to the permission prompt without the
+    /// classifier deciding it, with two exceptions
+    /// (claude-code/docs-2026-11-25-r1): the classifier can deny a call that
+    /// Claude Code's own checks also flag (a write to a protected path, a
+    /// command asking to run outside the sandbox) before any prompt appears,
+    /// and a `SubagentHandback` call, which delivers a subagent's report,
+    /// shows no prompt and runs even if the classifier objects. `ask` does
+    /// not gate `SubagentHandback`; only a `deny`
+    /// ([`PreToolUseOutput::deny`]) stops it.
     Ask(String),
 }
 
@@ -350,12 +382,19 @@ impl PreToolUseOutput {
     /// - Claude Code: empty output (`{}`), so its permission flow decides.
     /// - Codex: empty stdout, so its approval flow decides.
     /// - Antigravity: `{"decision":"ask"}`. Antigravity requires a decision on
-    ///   every response and documents no pass-through value, so `ask` is the
-    ///   closest neutral answer: it respects "Always Allow" settings and cached
-    ///   grants, and prompts only where none covers the call. It can still
-    ///   prompt for a call that Antigravity's default policy would have run
-    ///   without asking. That is the deliberate least-privilege trade-off;
-    ///   [`Self::allow`] would instead auto-approve every call.
+    ///   every response. The current reference documents `allow` as the
+    ///   pass-through to the next hook or default policy, but it does not
+    ///   date that redefinition, and builds that still have the earlier
+    ///   meaning auto-approve every call answered `allow`. `ask` approves
+    ///   nothing on any build: it respects "Always Allow" settings and cached
+    ///   grants, and prompts only where none covers the call. It can
+    ///   therefore prompt for a call that Antigravity's default policy would
+    ///   have run without asking, such as a terminal command the Default
+    ///   permission preset runs in the sandbox. That is the deliberate
+    ///   least-privilege trade-off: an extra prompt costs an interruption,
+    ///   while `allow` on an earlier build would silently approve every call
+    ///   the guard lets through. Revisit it once the change to `allow` is
+    ///   dated.
     ///
     /// Use this, not [`Self::allow`], for every call a guard does not object
     /// to.
@@ -381,8 +420,16 @@ impl PreToolUseOutput {
     /// - Claude Code: `permissionDecision: "allow"` skips the permission
     ///   prompt. Only deny and ask rules, and the actions no permission mode
     ///   auto-approves, are still enforced.
-    /// - Antigravity: `{"decision":"allow"}` auto-approves the call and
-    ///   bypasses the prompts that Ask presets would show.
+    /// - Antigravity: `{"decision":"auto_approve"}` approves the call where
+    ///   the default policy would prompt, while honoring explicit
+    ///   user-configured rules (and, from CLI 1.5.7, an organization's
+    ///   admin-enforced review). `allow` is not used: the current reference
+    ///   makes it a pass-through, and builds that predate that redefinition
+    ///   auto-approve on it. A build that predates `auto_approve` may treat it
+    ///   as an unknown decision. What it then does with the call is
+    ///   undocumented; if it reports a hook error, which Antigravity fails
+    ///   open on, the call proceeds under the default policy, which may
+    ///   prompt, so the approval degrades rather than escalates.
     /// - Codex: cannot express an explicit approval. It rejects
     ///   `permissionDecision: "allow"` without `updatedInput`, so this helper
     ///   lowers to empty stdout and Codex's normal approval flow still runs.
@@ -398,7 +445,7 @@ impl PreToolUseOutput {
                 hookkit_codex::protocol::PreToolUseOutput::no_op(),
             )),
             BuiltinHarness::Antigravity => Ok(Self::Antigravity(
-                hookkit_antigravity::PreToolUseOutput::allow(),
+                hookkit_antigravity::PreToolUseOutput::auto_approve(),
             )),
             _ => Err(unsupported(harness, "PreToolUse")),
         }
@@ -407,9 +454,10 @@ impl PreToolUseOutput {
     /// Reports whether [`Self::allow`] is an explicit auto-approval on
     /// `harness`.
     ///
-    /// Returns `true` for Claude Code and Antigravity. Returns `false` for
-    /// Codex, where [`Self::allow`] lowers to "no decision" and Codex's normal
-    /// approval flow still runs, and for harnesses with no aligned adapter.
+    /// Returns `true` for Claude Code and Antigravity, whose `auto_approve`
+    /// is a documented approval. Returns `false` for Codex, where
+    /// [`Self::allow`] lowers to "no decision" and Codex's normal approval
+    /// flow still runs, and for harnesses with no aligned adapter.
     pub fn explicit_allow_supported(harness: &HarnessId) -> bool {
         matches!(
             BuiltinHarness::from_id(harness),
@@ -456,8 +504,10 @@ impl PreToolUseOutput {
     ///   Codex treats as an input replacement only: its sandbox and approval
     ///   policy still apply to the rewritten call. `approval` is ignored.
     ///
-    /// Input replacement is not part of the three-harness floor: Antigravity's
-    /// pre-tool output cannot replace tool input, so it fails with
+    /// Input replacement is not part of the three-harness floor. Antigravity's
+    /// `overwrite` only shallow-merges keys into the original arguments, so
+    /// it cannot remove a key and cannot express a complete replacement from
+    /// the new input alone; Antigravity fails with
     /// [`HookkitError::UnsupportedHarness`].
     pub fn rewrite(
         harness: &HarnessId,
@@ -481,7 +531,7 @@ impl PreToolUseOutput {
             )),
             BuiltinHarness::Antigravity => Err(HookkitError::UnsupportedHarness {
                 harness: harness.clone(),
-                message: "Antigravity pre-tool output cannot replace tool input".into(),
+                message: "Antigravity pre-tool output can only merge keys into tool input, not replace it".into(),
             }),
             _ => Err(unsupported(harness, "PreToolUse")),
         }
@@ -545,14 +595,15 @@ impl PostToolUseInput {
     }
 
     /// Returns the locations the native input carries: `[cwd]` for Claude
-    /// Code and Codex, and `workspacePaths` for Antigravity.
+    /// Code, nothing for Codex, and `workspacePaths` for Antigravity.
     ///
     /// See [`PreToolUseInput::workspace_roots`] for why Claude Code's entry
-    /// is not a stable root; prefer [`Self::project_roots`].
+    /// is not a stable root and the Codex arm is empty; prefer
+    /// [`Self::project_roots`].
     pub fn workspace_roots(&self) -> Cow<'_, [Utf8PathBuf]> {
         match self {
             Self::Claude(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
-            Self::Codex(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
+            Self::Codex(_) => Cow::Borrowed(&[]),
             Self::Antigravity(input) => Cow::Borrowed(&input.workspace_paths),
         }
     }
@@ -562,8 +613,10 @@ impl PostToolUseInput {
     ///
     /// These name the checkout the session started in. After Claude Code
     /// enters a git worktree, the file a tool just edited lies in the
-    /// worktree instead, so a post-edit formatter must not run here blindly;
-    /// see the [module documentation](self#roots-and-working-directories) and
+    /// worktree instead, so a post-edit formatter must not run here blindly.
+    /// Codex's `cwd` is the command's working directory, which since Codex
+    /// 0.166.0 is a local Bash command's resolved `workdir`; see the
+    /// [module documentation](self#roots-and-working-directories) and
     /// [`PreToolUseInput::project_roots`].
     pub fn project_roots<'a>(
         &'a self,
@@ -573,6 +626,7 @@ impl PostToolUseInput {
             (Self::Claude(_), PostToolUseCommandEnvironment::Claude(environment)) => {
                 Cow::Borrowed(std::slice::from_ref(&environment.project_dir))
             }
+            (Self::Codex(input), _) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
             _ => self.workspace_roots(),
         }
     }
@@ -580,13 +634,15 @@ impl PostToolUseInput {
     /// Returns the native working directory when that event carries one.
     ///
     /// On Claude Code this is the agent's current directory, which follows
-    /// `cd`. Antigravity supplies workspace roots rather than a working
-    /// directory.
+    /// `cd`. Antigravity documents workspace roots rather than a working
+    /// directory: its arm returns the agent's working directory only when
+    /// the payload carries the `cwd` that CLI 1.5.4 and later send according
+    /// to their release notes, and `None` otherwise.
     pub fn cwd(&self) -> Option<&Utf8Path> {
         match self {
             Self::Claude(input) => Some(&input.cwd),
             Self::Codex(input) => Some(&input.cwd),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.cwd.as_deref(),
         }
     }
 
@@ -618,12 +674,15 @@ impl PostToolUseInput {
 
     /// Returns the native tool-call identifier (`tool_use_id`).
     ///
-    /// Antigravity sends no tool-call identifier, so its arm returns `None`.
+    /// Antigravity's arm returns `toolCall.id`, which CLI 1.5.4 and later
+    /// send according to their release notes, when it is a non-blank string;
+    /// it returns `None` when the payload omits `toolCall` or its `id`, or
+    /// sends a non-string value.
     pub fn tool_call_id(&self) -> Option<&str> {
         match self {
             Self::Claude(input) => Some(&input.tool_use_id),
             Self::Codex(input) => Some(&input.tool_use_id),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.tool_call.as_ref().and_then(|call| call.id_str()),
         }
     }
 }
@@ -696,9 +755,10 @@ three_harness_environment!(
 ///   while background work is still running (`fullyIdle: false`).
 ///
 /// A hook that asks the agent to continue should consult
-/// [`Self::stop_hook_active`] on Claude Code and Codex, and
-/// [`Self::termination_reason`] and [`Self::fully_idle`] on Antigravity,
-/// before re-entering a loop the harness is trying to end.
+/// [`Self::stop_hook_active`] (on Antigravity it is known only from CLI
+/// 1.5.6), and on Antigravity also [`Self::termination_reason`] and
+/// [`Self::fully_idle`], before re-entering a loop the harness is trying to
+/// end.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TurnCompletionInput {
@@ -759,26 +819,33 @@ impl TurnCompletionInput {
     }
 
     /// Returns the native working directory when that event carries one.
+    ///
+    /// Antigravity's arm returns the `cwd` that CLI 1.5.4 and later send
+    /// according to their release notes, and `None` otherwise.
     pub fn cwd(&self) -> Option<&Utf8Path> {
         match self {
             Self::Claude(input) => Some(&input.cwd),
             Self::Codex(input) => Some(&input.cwd),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.cwd.as_deref(),
         }
     }
 
-    /// Returns Claude Code's and Codex's `stop_hook_active` loop guard: `true`
-    /// when the agent is already continuing because a stop hook blocked an
-    /// earlier stop.
+    /// Returns the loop guard: `true` when the agent is already continuing
+    /// because a stop hook blocked an earlier stop.
     ///
-    /// Antigravity sends no loop guard, so its arm returns `None`.
+    /// Claude Code and Codex send `stop_hook_active`. Antigravity CLI 1.5.6
+    /// and later send `continuation_active` according to their release
+    /// notes; the Antigravity arm reads it (or a camelCase
+    /// `continuationActive`) through
+    /// [`hookkit_antigravity::StopInput::continuation_active_flag`] and
+    /// returns `None`, meaning unknown, when the payload carries neither.
     pub fn stop_hook_active(&self) -> Option<bool> {
         match self {
             Self::Claude(input) => input
                 .field("stop_hook_active")
                 .and_then(serde_json::Value::as_bool),
             Self::Codex(input) => input.stop_hook_active(),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.continuation_active_flag(),
         }
     }
 
@@ -957,19 +1024,22 @@ macro_rules! claude_codex_alignment {
                 }
             }
 
-            /// Returns the location the native input carries: its `cwd`.
+            /// Returns the location the native input carries: its `cwd`,
+            /// except on Codex `PermissionRequest`, whose `cwd` is a tool
+            /// action's working directory and which therefore carries none.
             ///
             /// Claude Code's `cwd` follows `cd`, so prefer
             /// `project_roots` for configuration discovery.
             pub fn workspace_roots(&self) -> Cow<'_, [Utf8PathBuf]> {
                 match self {
                     Self::Claude(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
-                    Self::Codex(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
+                    Self::Codex(input) => Cow::Borrowed(input.workspace_roots()),
                 }
             }
 
             /// Returns the stable project roots for this invocation: Claude
-            /// Code's `CLAUDE_PROJECT_DIR`, or Codex's `cwd`.
+            /// Code's `CLAUDE_PROJECT_DIR`, or Codex's `cwd` (on
+            /// `PermissionRequest` the action's working directory).
             pub fn project_roots<'a>(
                 &'a self,
                 environment: &'a $environment,
@@ -978,6 +1048,7 @@ macro_rules! claude_codex_alignment {
                     (Self::Claude(_), $environment::Claude(environment)) => {
                         Cow::Borrowed(std::slice::from_ref(&environment.project_dir))
                     }
+                    (Self::Codex(input), _) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
                     _ => self.workspace_roots(),
                 }
             }
@@ -1068,8 +1139,17 @@ impl PermissionRequestOutput {
     /// Builds the selected harness's native approval, which answers the
     /// permission dialog on the user's behalf.
     ///
-    /// This grants the permission without showing the dialog. A hook that
-    /// only observes permission requests should return [`Self::no_op`].
+    /// On Claude Code this normally grants the permission without showing the
+    /// dialog, within the limits documented on
+    /// [`hookkit_claude::catalog::PermissionRequestOutput::allow`] (a matching
+    /// deny rule still applies). On Codex an allow from an environment-scoped
+    /// managed hook has no effect (0.165.0), and an allow cannot approve a
+    /// `Bash` command that a managed `requirements.toml` `prompt-user` rule
+    /// matches (0.167.0): a person still decides, or Codex rejects the command
+    /// when no capable client is connected; see
+    /// [`hookkit_codex::catalog::PermissionRequestOutput::allow`]. A deny
+    /// still applies on both harnesses. A hook that only observes permission
+    /// requests should return [`Self::no_op`].
     pub fn allow(harness: &HarnessId) -> hookkit_core::Result<Self> {
         match select_pair(harness, "PermissionRequest")? {
             PairHarness::Claude => Ok(Self::Claude(
@@ -1140,7 +1220,9 @@ claude_codex_alignment!(
 );
 
 impl PreCompactOutput {
-    /// Builds the selected harness's native observer/no-op response.
+    /// Builds the selected harness's native observer/no-op response. On
+    /// Claude Code it prints nothing, because Claude Code adds any exit-0
+    /// PreCompact stdout, `{}` included, to the compaction instructions.
     ///
     /// Deliberately no portable block helper is provided: Claude's
     /// compaction block and Codex's broader execution stop are not equivalent.
@@ -1204,7 +1286,7 @@ impl PostCompactOutput {
     ///
     /// - Codex shows the top-level `systemMessage` as a warning.
     /// - Claude Code discards a `PostCompact` hook's `systemMessage`
-    ///   (claude-code/docs-2026-09-30-r1) and has no other user notice for a
+    ///   (claude-code/docs-2026-11-25-r1) and has no other user notice for a
     ///   successful hook, so the Claude arm is the no-op and `message` is
     ///   dropped. [`Self::system_notice_delivered`] reports this.
     pub fn with_system_notice(
@@ -1561,13 +1643,23 @@ impl UserPromptSubmitOutput {
     /// Blocks prompt submission with a reason using each harness's exit-2
     /// path.
     ///
-    /// The audiences differ. Claude Code stops the prompt before it reaches
-    /// Claude and shows the reason to the user only; it is not added to
-    /// Claude's context, and the block message still ends with the prompt
-    /// text (claude-code/docs-2026-09-30-r1). Codex rejects the prompt and
-    /// reports the reason as the blocking reason. A reason that is empty
-    /// after trimming is rejected for every harness: Codex ignores a blank
-    /// exit-2 reason and submits the prompt.
+    /// On both harnesses the reason stays out of the model's context. Claude
+    /// Code stops the prompt before it reaches Claude and shows the reason to
+    /// the user only; the block message still ends with the prompt text
+    /// (claude-code/docs-2026-11-25-r1). The Claude arm exits 2 with the
+    /// reason on stderr and also prints `{"decision":"block","reason":…}` on
+    /// stdout: Claude Code treats a plugin hook's exit 2 with empty stdout as
+    /// a non-blocking error, and lets the prompt through, when stderr says a
+    /// file is missing (`no such file`, `can't open`), and the JSON keeps
+    /// stdout non-empty. Codex drops the prompt without recording it and
+    /// discards the reason in its core (codex/commit-3d86e43-r1): the reason
+    /// appears only as the hook run's feedback entry, which the interactive
+    /// UI shows and `codex exec` does not print, never to the agent. Codex
+    /// ignores the stdout of a handler that exits 2, but still records for
+    /// the model any `additionalContext` from the other matching handlers, or
+    /// from one that blocks with JSON `decision: block` instead of exiting 2.
+    /// A reason that is empty after trimming is rejected for every harness:
+    /// Codex ignores a blank exit-2 reason and submits the prompt.
     pub fn block(harness: &HarnessId, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         let reason = require_reason(
             reason.into(),
@@ -1575,7 +1667,8 @@ impl UserPromptSubmitOutput {
         )?;
         match select_pair(harness, "UserPromptSubmit")? {
             PairHarness::Claude => Ok(Self::Claude(
-                hookkit_claude::catalog::UserPromptSubmitOutput::blocking_error(reason),
+                hookkit_claude::catalog::UserPromptSubmitOutput::block(reason.clone())
+                    .into_blocking_error(reason)?,
             )),
             PairHarness::Codex => Ok(Self::Codex(
                 hookkit_codex::catalog::UserPromptSubmitOutput::blocking_error(reason),

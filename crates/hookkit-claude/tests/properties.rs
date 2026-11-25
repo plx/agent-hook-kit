@@ -5,6 +5,7 @@
 //! are placed in structured JSON, including the fixed event discriminator.
 
 use hookkit_claude::events::{
+    PreCompact, PreCompactOutput, PreSkillShellCommand, PreSkillShellCommandOutput,
     UserPromptExpansion, UserPromptExpansionOutput, UserPromptSubmit, UserPromptSubmitOutput,
 };
 use hookkit_claude::protocol::{PostToolUse, PostToolUseOutput, SessionStart, SessionStartOutput};
@@ -169,6 +170,41 @@ proptest! {
         )
         .unwrap();
         assert_text_context_routing(emission.stdout(), &text, "UserPromptExpansion")?;
+    }
+
+    /// Property: PreCompact compaction instructions are written byte for byte
+    /// or rejected. Claude Code would parse brace-delimited text as JSON and
+    /// PreCompact has no structured field to carry it, so such text is
+    /// rejected rather than rerouted.
+    #[test]
+    fn pre_compact_instructions_are_verbatim_or_rejected(text in text_context_input()) {
+        match PreCompactOutput::compaction_instructions(text.clone()) {
+            Ok(output) => {
+                prop_assert!(!claude_parses_as_json(&text));
+                let emission = PreCompact::emit(output).unwrap();
+                prop_assert_eq!(emission.stdout(), text.as_bytes());
+                prop_assert_eq!(emission.exit_code(), 0);
+            }
+            Err(_) => prop_assert!(brace_delimited_after_wider_trim(&text)),
+        }
+    }
+
+    /// Property: every PreSkillShellCommand refusal keeps its reason verbatim
+    /// in `permissionDecisionReason` under the event's own discriminator.
+    #[test]
+    fn pre_skill_shell_command_refusals_keep_their_reason(reason in any::<String>()) {
+        for (output, decision) in [
+            (PreSkillShellCommandOutput::deny(reason.clone()), "deny"),
+            (PreSkillShellCommandOutput::ask(reason.clone()), "ask"),
+            (PreSkillShellCommandOutput::defer().with_decision_reason(reason.clone()).unwrap(), "defer"),
+        ] {
+            let emission = PreSkillShellCommand::emit(output).unwrap();
+            let value: Value = serde_json::from_slice(emission.stdout()).unwrap();
+            prop_assert_eq!(value["hookSpecificOutput"]["hookEventName"].as_str(), Some("PreSkillShellCommand"));
+            prop_assert_eq!(value["hookSpecificOutput"]["permissionDecision"].as_str(), Some(decision));
+            prop_assert_eq!(value["hookSpecificOutput"]["permissionDecisionReason"].as_str(), Some(reason.as_str()));
+            prop_assert_eq!(emission.exit_code(), 0);
+        }
     }
 
     /// Property: structured SessionStart context always carries Claude's exact

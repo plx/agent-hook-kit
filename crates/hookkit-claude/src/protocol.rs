@@ -16,16 +16,16 @@ use crate::model_switch::{
 pub use crate::values::{
     CacheTtl, CompactTrigger, Effort, EffortLevel, McpServer, McpServerSource, ModelSwitchPricing,
     ModelSwitchSource, NotificationType, PermissionMode, SessionEndReason, SessionSource,
-    StopFailureError,
+    SkillInvoker, StopFailureError,
 };
 
 /// Claude Code protocol documentation snapshot implemented by this crate.
-pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-09-30-r1");
+pub const SNAPSHOT_ID: SnapshotId = SnapshotId::builtin("docs-2026-11-25-r1");
 
 /// Expands to the [`ContractId`] of a Claude event in the selected snapshot.
 macro_rules! contract_id {
     ($name:literal) => {
-        hookkit_core::ContractId::builtin(concat!("claude-code/docs-2026-09-30-r1/", $name))
+        hookkit_core::ContractId::builtin(concat!("claude-code/docs-2026-11-25-r1/", $name))
     };
 }
 pub(crate) use contract_id;
@@ -41,6 +41,8 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
             "command-structured",
             "command-text",
             "command-text-open-brace",
+            "command-text-json-array",
+            "command-text-json-string",
             "command-nonzero-unstructured",
         ]),
         D::command::<PostToolUse>(&[
@@ -62,6 +64,8 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
             "command-structured",
             "command-text",
             "command-text-open-brace",
+            "command-text-json-array",
+            "command-text-json-string",
             "command-nonzero-unstructured",
         ]),
     ];
@@ -97,10 +101,13 @@ pub struct SessionStartInput {
     pub hook_event_name: String,
     /// Cause of the session boundary.
     pub source: SessionSource,
-    /// Subagent identifier when a subagent session starts.
+    /// Subagent identifier, sent when the event fires inside a subagent, as
+    /// when a subagent's conversation is compacted (source `compact`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
-    /// Subagent type when a subagent session starts.
+    /// Agent name: the subagent's type when the event fires inside a
+    /// subagent, and the session's agent when it was started with
+    /// `--agent`; a subagent's type takes precedence over `--agent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
     /// Optional nested effort setting.
@@ -115,7 +122,7 @@ pub struct SessionStartInput {
     /// Prompt identifier associated with session startup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_id: Option<String>,
-    /// Existing or requested session title.
+    /// The session's custom title, present when one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_title: Option<String>,
     /// Session scratchpad directory (Claude Code v2.1.257 or later).
@@ -237,6 +244,13 @@ impl SessionStartOutput {
     ///
     /// Refine it with the `with_*` builders, for example
     /// [`Self::with_session_title`] or [`Self::with_initial_user_message`].
+    ///
+    /// Claude Code caps `additionalContext` at 10,000 characters per hook:
+    /// longer text is saved to a file in the session directory and replaced
+    /// by its path and a preview of up to 2,000 characters, and Claude is not
+    /// asked to read the file. Since Claude Code v2.1.292 the `<` of a
+    /// `<system-reminder>` or `</system-reminder>` tag reaches Claude as
+    /// `&lt;`. HookKit emits the string unchanged.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self::structured_with(Some(context.into()), None)
     }
@@ -269,7 +283,9 @@ impl SessionStartOutput {
     /// with `{` and ends with `}` as JSON and drop it when it is not a valid
     /// response. Such text is therefore emitted as structured
     /// `additionalContext` instead, so the context always reaches Claude.
-    /// Other text is written verbatim, without a trailing newline.
+    /// Other text, including a JSON array or a quoted JSON string, is written
+    /// verbatim, without a trailing newline. The cap and escaping described
+    /// on [`Self::with_context`] apply to plain stdout measured whole.
     pub fn text_context(context: impl Into<String>) -> Self {
         let context = context.into();
         if crate::catalog::parsed_as_json(&context) {
@@ -281,7 +297,7 @@ impl SessionStartOutput {
 
     /// Reports a non-blocking hook error: exits 1 with required stderr, which
     /// Claude Code shows the user as a hook error notice. Claude does not see
-    /// it and the session proceeds.
+    /// it and the session proceeds, whatever the hook's `onFailure`.
     pub fn nonblocking_error(message: impl Into<String>) -> Self {
         Self(SessionStartOutcome::NonblockingError(message.into()))
     }
@@ -324,6 +340,10 @@ impl SessionStartOutput {
 
     /// Sets `initialUserMessage`, the first user message of a non-interactive
     /// `-p` session. It creates a turn even when no prompt was provided.
+    ///
+    /// Claude Code caps the string at 10,000 characters per hook: longer
+    /// text is saved to a file and replaced by its path and a preview of up
+    /// to 2,000 characters.
     pub fn with_initial_user_message(
         mut self,
         message: impl Into<String>,
@@ -375,7 +395,7 @@ impl SessionStartOutput {
     /// Sets the universal `suppressOutput` field, which Claude Code accepts
     /// but ignores.
     #[deprecated(
-        note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-30-r1)"
+        note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-11-25-r1)"
     )]
     pub fn with_suppress_output(mut self, suppress: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.suppress_output = Some(suppress);
@@ -383,7 +403,8 @@ impl SessionStartOutput {
     }
 
     /// Sets the universal top-level `systemMessage`, a warning shown to the
-    /// user.
+    /// user. Claude Code caps it at 10,000 characters per hook, like
+    /// `additionalContext`.
     pub fn with_system_message(mut self, message: impl Into<String>) -> hookkit_core::Result<Self> {
         self.structured_mut()?.system_message = Some(message.into());
         Ok(self)
@@ -496,6 +517,13 @@ pub struct PostToolUseInput {
     /// Native tool-call identifier.
     pub tool_use_id: String,
     /// Tool result in its native JSON shape.
+    ///
+    /// It does not prove the call succeeded: in the main conversation,
+    /// hooks from managed settings also run after some failed calls, and
+    /// this is then the error text as a JSON string (since Claude Code
+    /// 2.1.328 not for calls refused before they ran). In Code Mode a hook
+    /// matching `REPL` receives the code's `result`, `stdout`, `stderr`, and
+    /// `toolsUsed`, also when the code throws.
     pub tool_response: serde_json::Value,
     /// MCP server that owns the tool, for MCP tools (Claude Code v2.1.274 or
     /// later).
@@ -618,6 +646,13 @@ impl PostToolUseOutput {
 
     /// Creates a structured response that adds `additionalContext` for
     /// Claude next to the tool result.
+    ///
+    /// Claude Code caps `additionalContext` at 10,000 characters per hook:
+    /// longer text is saved to a file in the session directory and replaced
+    /// by its path and a preview of up to 2,000 characters, and Claude is not
+    /// asked to read the file. Since Claude Code v2.1.292 the `<` of a
+    /// `<system-reminder>` or `</system-reminder>` tag reaches Claude as
+    /// `&lt;`. HookKit emits the string unchanged.
     pub fn with_context(context: impl Into<String>) -> Self {
         Self(PostToolUseOutcome::Structured(Box::new(
             StructuredPostToolUseOutput {
@@ -671,8 +706,13 @@ impl PostToolUseOutput {
     }
 
     /// Reports a non-blocking hook error: exits 1 with required stderr, which
-    /// Claude Code shows the user as a hook error notice. Claude does not see
-    /// it.
+    /// Claude Code shows the user as a hook error notice. With the hook's
+    /// `onFailure` unset or `continue`, Claude does not see it.
+    ///
+    /// With `"onFailure": "block"` (Claude Code v2.1.295 or later) a failure
+    /// of the hook, this exit included, does what exit 2 does here instead:
+    /// Claude sees the text as feedback. Nothing is blocked, because the
+    /// tool already ran.
     pub fn nonblocking_error(message: impl Into<String>) -> Self {
         Self(PostToolUseOutcome::NonblockingError(message.into()))
     }
@@ -736,7 +776,10 @@ impl PostToolUseOutput {
     ///
     /// Claude Code caps the note at 2,000 UTF-16 code units shared by every
     /// hook for one call and ignores it for async hooks; longer text is not
-    /// rejected here.
+    /// rejected here. For hooks from settings files, plugins, skills, and
+    /// agent frontmatter the classifier treats the note as unverified
+    /// context that never establishes user intent; only an in-process Agent
+    /// SDK callback may relay user intent.
     pub fn with_classifier_context(
         mut self,
         context: impl Into<String>,
@@ -747,7 +790,8 @@ impl PostToolUseOutput {
 
     /// Sets `updatedMCPToolOutput`, replacing an MCP tool's output before
     /// Claude sees it. Claude Code recommends
-    /// [`Self::with_updated_tool_output`], which works for every tool.
+    /// [`Self::with_updated_tool_output`], which works for every tool. The
+    /// Cowork exclusions described there apply.
     pub fn with_updated_mcp_tool_output(
         mut self,
         output: serde_json::Value,
@@ -759,6 +803,12 @@ impl PostToolUseOutput {
     /// Sets `updatedToolOutput`, replacing the tool's output before Claude
     /// sees it. For built-in tools the value must match the tool's output
     /// shape or Claude Code ignores it.
+    ///
+    /// In Cowork cloud sessions Claude Code ignores a replaced output for
+    /// some tools, such as `AskUserQuestion` and `ExitPlanMode` (Claude Code
+    /// v2.1.321 or later). After a Ctrl+Enter turn end while the tool runs,
+    /// Claude Code kills a command hook still running after 10 seconds
+    /// (v2.1.319 or later), whatever its timeout.
     pub fn with_updated_tool_output(
         mut self,
         output: serde_json::Value,
@@ -783,7 +833,7 @@ impl PostToolUseOutput {
     /// Sets the universal `suppressOutput` field, which Claude Code accepts
     /// but ignores.
     #[deprecated(
-        note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-30-r1)"
+        note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-11-25-r1)"
     )]
     pub fn with_suppress_output(mut self, suppress_output: bool) -> hookkit_core::Result<Self> {
         self.structured_mut()?.suppress_output = Some(suppress_output);
@@ -994,12 +1044,13 @@ impl WorktreeCreateOutput {
     /// Claude Code reads the last non-empty stdout line after stripping ANSI
     /// escape codes, resolves a relative path against the hook's working
     /// directory (collapsing `.` and `..`), and refuses an absolute path that
-    /// contains `.` or `..` segments (v2.1.216 or later). The path is
-    /// therefore rejected when it is empty, contains a line break or an
-    /// escape character, or is absolute with a `.` or `..` component. Claude
-    /// Code also refuses a path that passes through a symlink below the
-    /// repository root; that needs filesystem access and is not checked here.
-    /// The path is emitted as exact UTF-8 text without a trailing newline.
+    /// contains `.` or `..` segments. The path is therefore rejected when it
+    /// is empty, contains a line break or an escape character, or is
+    /// absolute with a `.` or `..` component. Claude Code also refuses a
+    /// path that passes through a symlink below the repository root, for an
+    /// `EnterWorktree` call too since Claude Code 2.1.325; that needs
+    /// filesystem access and is not checked here. The path is emitted as
+    /// exact UTF-8 text without a trailing newline.
     pub fn path(path: hookkit_core::Utf8PathBuf) -> hookkit_core::Result<Self> {
         validate_worktree_path(&path)?;
         Ok(Self(WorktreeCreateOutcome::Created {
@@ -1210,6 +1261,8 @@ pub enum Event {
     PostToolUseFailure,
     /// Selects [`crate::catalog::PreCompact`].
     PreCompact,
+    /// Selects [`crate::catalog::PreSkillShellCommand`].
+    PreSkillShellCommand,
     /// Selects [`crate::catalog::PreToolUse`].
     PreToolUse,
     /// Selects [`crate::catalog::SessionEnd`].
@@ -1262,6 +1315,7 @@ impl Event {
             Self::PostToolBatch => "PostToolBatch",
             Self::PostToolUseFailure => "PostToolUseFailure",
             Self::PreCompact => "PreCompact",
+            Self::PreSkillShellCommand => "PreSkillShellCommand",
             Self::PreToolUse => "PreToolUse",
             Self::SessionEnd => "SessionEnd",
             Self::Setup => "Setup",
@@ -1881,6 +1935,7 @@ mod tests {
             Event::PostToolBatch,
             Event::PostToolUseFailure,
             Event::PreCompact,
+            Event::PreSkillShellCommand,
             Event::PreToolUse,
             Event::SessionEnd,
             Event::Setup,

@@ -16,7 +16,7 @@ use crate::ClaudeCommandEnvironment;
 use crate::protocol::{SNAPSHOT_ID, contract_id, deserialize_input, require_event};
 use crate::values::{
     CompactTrigger, Effort, McpServer, NotificationType, PermissionMode, SessionEndReason,
-    StopFailureError,
+    SkillInvoker, StopFailureError,
 };
 
 /// Shared input envelope for the command events in this module.
@@ -30,7 +30,10 @@ use crate::values::{
 ///
 /// The exact parser that produced an input fixes its [`Self::event_id`].
 /// Parsers check that every required event field is present with its
-/// documented JSON type. Typed accessors return `None` when the field is
+/// documented JSON type, and that `UserPromptSubmit` `session_title` is a
+/// string when present (the snapshot rejects any other type). Other optional
+/// fields are not checked, so a malformed one never fails a gating hook.
+/// Typed accessors return `None` when the field is
 /// absent or has a different type; accessors documented for particular
 /// events also return `None` for every other event, so a field such as
 /// `reason` is never read with the wrong meaning. Prefer them to
@@ -116,27 +119,81 @@ impl CatalogInput {
 
     /// Subagent type. Always present on `SubagentStart` and `SubagentStop`;
     /// may be empty on `SubagentStop` for internal agents.
+    ///
+    /// A plugin's subagent reports a plugin-scoped name such as
+    /// `my-plugin:reviewer`, and a hook matcher that names agent types never
+    /// matches an empty `agent_type`.
     pub fn agent_type(&self) -> Option<&str> {
         self.string("agent_type")
     }
 
     /// Harness-native tool name. Present on `PreToolUse`,
-    /// `PermissionRequest`, `PostToolUseFailure`, and `PermissionDenied`.
+    /// `PermissionRequest`, `PostToolUseFailure`, `PermissionDenied`, and
+    /// `PreSkillShellCommand`, where it names the shell tool that would run
+    /// the injected command (`Bash` or `PowerShell`).
     pub fn tool_name(&self) -> Option<&str> {
         self.string("tool_name")
     }
 
     /// Tool arguments in their native JSON shape. Present on the same events
-    /// as [`Self::tool_name`].
+    /// as [`Self::tool_name`]; on `PreSkillShellCommand` it is an object
+    /// whose `command` [`Self::injected_command`] reads.
     pub fn tool_input(&self) -> Option<&Value> {
         self.fields.get("tool_input")
     }
 
     /// Native tool-call identifier. Present on `PreToolUse`,
     /// `PostToolUseFailure`, and `PermissionDenied`; `PermissionRequest`
-    /// does not carry one.
+    /// does not carry one. On `PreSkillShellCommand` it identifies the
+    /// injected command and names no tool call in the transcript, so the
+    /// event's [`hookkit_core::NativeContext::tool_call_id`] stays `None`.
     pub fn tool_use_id(&self) -> Option<&str> {
         self.string("tool_use_id")
+    }
+
+    /// The shell command an injected skill or command line would run, with
+    /// its arguments filled in, for `PreSkillShellCommand`
+    /// (`tool_input.command`).
+    pub fn injected_command(&self) -> Option<&str> {
+        (self.event_name() == "PreSkillShellCommand")
+            .then(|| {
+                self.fields
+                    .get("tool_input")
+                    .and_then(|input| input.get("command"))
+                    .and_then(Value::as_str)
+            })
+            .flatten()
+    }
+
+    /// Name of the skill or command being loaded or expanded, for
+    /// `PreSkillShellCommand` and `UserPromptExpansion`, such as
+    /// `pr-summary`, or `my-plugin:deploy` for a plugin's skill.
+    pub fn command_name(&self) -> Option<&str> {
+        self.scoped_string(
+            &["PreSkillShellCommand", "UserPromptExpansion"],
+            "command_name",
+        )
+    }
+
+    /// Where the skill or command comes from, for `PreSkillShellCommand` and
+    /// `UserPromptExpansion`, such as `userSettings`, `projectSettings`,
+    /// `policySettings`, `plugin`, or `builtin`.
+    ///
+    /// The vocabulary is open, and the Agent SDK types the field optional,
+    /// so `None` does not mean the source is unknown to Claude Code.
+    pub fn command_source(&self) -> Option<&str> {
+        self.scoped_string(
+            &["PreSkillShellCommand", "UserPromptExpansion"],
+            "command_source",
+        )
+    }
+
+    /// Who invoked the skill whose injected command is about to run, for
+    /// `PreSkillShellCommand`. Treat [`SkillInvoker::Unknown`] as
+    /// [`SkillInvoker::Other`].
+    pub fn invoked_by(&self) -> Option<SkillInvoker> {
+        self.scoped_string(&["PreSkillShellCommand"], "invoked_by")
+            .map(SkillInvoker::from)
     }
 
     /// MCP server that owns the tool, for MCP tools on Claude Code v2.1.274
@@ -148,8 +205,23 @@ impl CatalogInput {
     }
 
     /// Prompt text for `UserPromptSubmit` and `UserPromptExpansion`.
+    ///
+    /// On `UserPromptSubmit` a typed skill or custom command arrives as the
+    /// line the user typed (for example `/deploy staging`), not its expanded
+    /// content, because the hook runs before expansion (Claude Code v2.1.299
+    /// or later). The prompt is not always typed by a person: the hook also
+    /// fires when a scheduled task or `/loop` iteration fires, when a
+    /// background subagent reports back, and when another session sends the
+    /// main conversation a message.
     pub fn prompt(&self) -> Option<&str> {
         self.scoped_string(&["UserPromptSubmit", "UserPromptExpansion"], "prompt")
+    }
+
+    /// The session's custom title, for `UserPromptSubmit`; sent only when
+    /// one is set. `SessionStart` carries the same field on
+    /// [`crate::protocol::SessionStartInput::session_title`].
+    pub fn session_title(&self) -> Option<&str> {
+        self.scoped_string(&["UserPromptSubmit"], "session_title")
     }
 
     /// Whether a Stop hook already continued this turn, for `Stop` and
@@ -248,6 +320,9 @@ impl CatalogInput {
     }
 
     /// Tool calls in the completed batch, for `PostToolBatch`.
+    ///
+    /// An item does not prove the call ran: a call refused before it ran can
+    /// appear without any marker (stated in Claude Code 2.1.328).
     pub fn tool_calls(&self) -> Option<&[Value]> {
         (self.event_name() == "PostToolBatch")
             .then(|| {
@@ -259,12 +334,41 @@ impl CatalogInput {
             .flatten()
     }
 
+    /// The newly completed text of the streamed message, for
+    /// `MessageDisplay`. In non-interactive runs (Agent SDK queries and
+    /// `claude -p`) the hook runs once per message and this is the whole
+    /// message.
+    pub fn message_delta(&self) -> Option<&str> {
+        self.scoped_string(&["MessageDisplay"], "delta")
+    }
+
+    /// Zero-based position of this batch within the message, for
+    /// `MessageDisplay`; always `0` in non-interactive runs.
+    pub fn message_index(&self) -> Option<u64> {
+        (self.event_name() == "MessageDisplay")
+            .then(|| self.fields.get("index").and_then(Value::as_u64))
+            .flatten()
+    }
+
+    /// Whether this is the message's last batch, for `MessageDisplay`;
+    /// always `true` in non-interactive runs. An interactive message can end
+    /// with an empty final batch.
+    pub fn message_final(&self) -> Option<bool> {
+        (self.event_name() == "MessageDisplay")
+            .then(|| self.fields.get("final").and_then(Value::as_bool))
+            .flatten()
+    }
+
     pub(crate) fn context(&self) -> NativeContext {
         NativeContext {
             workspace_roots: vec![self.cwd.clone()],
             session_id: SessionId::new(&self.session_id).ok(),
             transcript_path: Some(self.transcript_path.clone()),
-            tool_call_id: self.tool_use_id().and_then(|id| ToolCallId::new(id).ok()),
+            // A `PreSkillShellCommand` `tool_use_id` names no tool call.
+            tool_call_id: (self.event_name() != "PreSkillShellCommand")
+                .then(|| self.tool_use_id())
+                .flatten()
+                .and_then(|id| ToolCallId::new(id).ok()),
             ..NativeContext::default()
         }
     }
@@ -297,6 +401,7 @@ const CATALOG_EVENTS: &[&str] = &[
     "PostToolBatch",
     "PostToolUseFailure",
     "PreCompact",
+    "PreSkillShellCommand",
     "PreToolUse",
     "SessionEnd",
     "Setup",
@@ -324,6 +429,11 @@ pub(crate) enum FieldKind {
     Bool,
     Array,
     NullableString,
+    /// An object whose `command` member is a string (`PreSkillShellCommand`
+    /// `tool_input`).
+    CommandObject,
+    /// A string when present; the field may be absent.
+    OptionalString,
 }
 
 impl FieldKind {
@@ -334,7 +444,13 @@ impl FieldKind {
             Self::Bool => value.is_boolean(),
             Self::Array => value.is_array(),
             Self::NullableString => value.is_string() || value.is_null(),
+            Self::CommandObject => value.get("command").is_some_and(Value::is_string),
+            Self::OptionalString => value.is_string(),
         }
+    }
+
+    fn optional(self) -> bool {
+        matches!(self, Self::OptionalString)
     }
 
     fn describe(self) -> &'static str {
@@ -344,6 +460,8 @@ impl FieldKind {
             Self::Bool => "a boolean",
             Self::Array => "an array",
             Self::NullableString => "a string or null",
+            Self::CommandObject => "an object with a string command",
+            Self::OptionalString => "a string",
         }
     }
 }
@@ -359,6 +477,7 @@ pub(crate) fn require_fields(
             message,
         };
         match invocation.json().get(field) {
+            None if kind.optional() => {}
             None => return Err(invalid(format!("missing required field {field}"))),
             Some(value) if !kind.accepts(value) => {
                 return Err(invalid(format!(
@@ -445,6 +564,9 @@ enum Outcome {
     Text(String),
     /// Exit 0 with empty stdout.
     Empty,
+    /// Exit 0 with empty stdout, which becomes a JSON object as soon as a
+    /// structured field is added (`PreCompactOutput::no_op`).
+    EmptyObject,
     /// Exit 2 with a JSON object on stdout and stderr, which may be empty
     /// only when the JSON makes a blocking decision.
     BlockingJson {
@@ -507,6 +629,16 @@ impl CatalogOutput {
         Self::new::<E>(Outcome::Empty)
     }
 
+    /// Empty stdout that a structured builder turns into a JSON object.
+    pub(crate) fn empty_until_structured<E: EventSpec>() -> Self {
+        Self::new::<E>(Outcome::EmptyObject)
+    }
+
+    /// Plain text written verbatim at exit 0.
+    pub(crate) fn text<E: EventSpec>(text: String) -> Self {
+        Self::new::<E>(Outcome::Text(text))
+    }
+
     /// A JSON object holding exactly `fields` at the top level.
     pub(crate) fn top_level<E: EventSpec>(
         fields: impl IntoIterator<Item = (&'static str, Value)>,
@@ -549,7 +681,7 @@ impl CatalogOutput {
         if parsed_as_json(&text) {
             Self::hook_specific::<E>([("additionalContext", text.into())])
         } else {
-            Self::new::<E>(Outcome::Text(text))
+            Self::text::<E>(text)
         }
     }
 
@@ -586,6 +718,9 @@ impl CatalogOutput {
     }
 
     fn object_mut(&mut self) -> hookkit_core::Result<&mut Map<String, Value>> {
+        if matches!(self.outcome, Outcome::EmptyObject) {
+            self.outcome = Outcome::Json(Map::new());
+        }
         match &mut self.outcome {
             Outcome::Json(value) => Ok(value),
             _ => Err(hookkit_core::HookkitError::InvalidProcessEmission(
@@ -656,10 +791,14 @@ impl CatalogOutput {
     /// `stderr` is rejected here, while the caller can still choose another
     /// response, rather than when the output is emitted.
     pub(crate) fn into_blocking(self, stderr: impl Into<String>) -> hookkit_core::Result<Self> {
-        let Outcome::Json(value) = self.outcome else {
-            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "only a structured JSON response can exit 2 with stdout",
-            ));
+        let value = match self.outcome {
+            Outcome::Json(value) => value,
+            Outcome::EmptyObject => Map::new(),
+            _ => {
+                return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                    "only a structured JSON response can exit 2 with stdout",
+                ));
+            }
         };
         let stderr = stderr.into();
         require_exit_2_message(&value, &stderr)?;
@@ -669,6 +808,28 @@ impl CatalogOutput {
         })
     }
 
+    /// [`Self::into_blocking`] for `Stop`, `SubagentStop`, and
+    /// `TeammateIdle`, where `continue: false` takes precedence over exit 2
+    /// and ends the agent's work instead of keeping it going, so a response
+    /// that sets it is rejected with `precedence` as the error.
+    pub(crate) fn into_blocking_keeping_work(
+        self,
+        stderr: impl Into<String>,
+        precedence: &'static str,
+    ) -> hookkit_core::Result<Self> {
+        let stops = self
+            .object()
+            .and_then(|value| value.get("continue"))
+            .and_then(Value::as_bool)
+            == Some(false);
+        if stops {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                precedence,
+            ));
+        }
+        self.into_blocking(stderr)
+    }
+
     pub(crate) fn event_id(&self) -> EventId {
         self.event.clone()
     }
@@ -676,9 +837,17 @@ impl CatalogOutput {
     pub(crate) fn emit(self) -> hookkit_core::Result<ProcessEmission> {
         let contract = self.contract;
         match self.outcome {
+            Outcome::Json(value)
+                if self.event == <PreCompact as EventSpec>::EVENT
+                    && value.get("decision").and_then(Value::as_str) != Some("block") =>
+            {
+                Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                    "a PreCompact response printed at exit 0 must block: Claude Code uses the stdout of a PreCompact hook that exits 0 without blocking, JSON included, as compaction instructions; add with_block(..), exit 2 with into_blocking_error(..), or use no_op() or compaction_instructions(..)",
+                ))
+            }
             Outcome::Json(value) => ProcessEmission::command_json(contract, &value),
             Outcome::Text(value) => Ok(ProcessEmission::command_text(contract, value)),
-            Outcome::Empty => Ok(ProcessEmission::command_empty(contract)),
+            Outcome::Empty | Outcome::EmptyObject => Ok(ProcessEmission::command_empty(contract)),
             Outcome::BlockingJson { value, stderr } => {
                 require_exit_2_message(&value, &stderr)?;
                 Ok(ProcessEmission::command_unchecked(
@@ -703,9 +872,13 @@ impl CatalogOutput {
 }
 
 macro_rules! output_type {
-    ($output:ident, $name:literal) => {
+    ($output:ident, $name:literal $(, $extra:literal)* $(,)?) => {
         #[derive(Debug, Clone)]
         #[doc = concat!("Native response from a Claude Code `", $name, "` command hook.")]
+        $(
+            #[doc = ""]
+            #[doc = $extra]
+        )*
         pub struct $output(CatalogOutput);
     };
 }
@@ -784,8 +957,60 @@ macro_rules! universal_builders {
     };
     (@active continue_session) => {
         /// Sets Claude's universal top-level `continue` control. `false`
-        /// stops Claude after the hook runs, taking precedence over
-        /// event-specific decisions.
+        /// stops Claude entirely after the hook runs, and `stopReason` is
+        /// shown to the user.
+        pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("continue", continue_session.into())
+                .map(Self)
+        }
+    };
+    (@active continue_without_blocking) => {
+        /// Sets Claude's universal top-level `continue` control. `false`
+        /// stops Claude after the hook runs but does not block this tool
+        /// call: with `allow`, or with no decision, the call still runs.
+        /// Pair it with `deny(..)` to block the call as well; with exit 2
+        /// (`into_blocking_error`) the call stays blocked either way.
+        pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("continue", continue_session.into())
+                .map(Self)
+        }
+    };
+    (@active continue_aborts_skill) => {
+        /// Sets Claude's universal top-level `continue` control. `false`
+        /// makes invoking the skill fail with `Operation stopped by hook:
+        /// <stopReason>`, and none of its injected commands runs, because
+        /// Claude Code collects the hooks' answers before it runs the first
+        /// one.
+        pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("continue", continue_session.into())
+                .map(Self)
+        }
+    };
+    (@active continue_teammate) => {
+        /// Sets Claude's universal top-level `continue` control. `false`
+        /// sends the teammate idle, and wins over another matching hook's
+        /// `block` and over exit 2. On `TeammateIdle`, where exit 2 asks the
+        /// teammate to keep working, `into_blocking_error` therefore rejects
+        /// a response that sets it. On `TaskCompleted` it applies only when
+        /// a teammate finishing its turn triggered the event, and the task
+        /// stays open while the teammate goes idle; it is ignored when the
+        /// TaskUpdate tool triggered the event. The `stopReason` appears in
+        /// the teammate's transcript.
+        pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("continue", continue_session.into())
+                .map(Self)
+        }
+    };
+    (@active continue_over_block) => {
+        /// Sets Claude's universal top-level `continue` control. `false`
+        /// ends the turn: it takes precedence over a `block` decision and
+        /// over exit 2, so the conversation does not continue, and
+        /// `into_blocking_error` therefore rejects a response that sets it.
+        /// To keep Claude working, leave the field out.
         pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("continue", continue_session.into())
@@ -805,9 +1030,32 @@ macro_rules! universal_builders {
     (@active system_message) => {
         /// Sets the universal top-level `systemMessage`, a warning shown to
         /// the user.
+        ///
+        /// Claude Code caps the string at 10,000 characters per hook: longer
+        /// text is saved to a file in the session directory and replaced by
+        /// its path and a preview of up to 2,000 characters. HookKit does not
+        /// reject longer text.
         pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("systemMessage", message.into().into())
+                .map(Self)
+        }
+    };
+    (@active terminal_sequence_when_blocking) => {
+        /// Requests emission of an allowlisted terminal notification
+        /// sequence (OSC 0/1/2/9/99/777 or BEL). Claude Code writes it only in
+        /// an interactive session with its interface on screen.
+        ///
+        /// Claude Code uses the stdout of a hook that exits 0 without
+        /// blocking as compaction instructions, so emitting this response
+        /// fails unless it also blocks, with [`Self::with_block`] or
+        /// [`Self::into_blocking_error`].
+        pub fn with_terminal_sequence(
+            self,
+            sequence: impl Into<String>,
+        ) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("terminalSequence", sequence.into().into())
                 .map(Self)
         }
     };
@@ -838,7 +1086,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, continue_session) => {
         /// Sets the universal `continue` field, which Claude Code discards
         /// for this event.
-        #[deprecated(note = "Claude Code discards `continue` for this event (claude-code/docs-2026-09-30-r1)")]
+        #[deprecated(note = "Claude Code discards `continue` for this event (claude-code/docs-2026-11-25-r1)")]
         pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("continue", continue_session.into())
@@ -848,7 +1096,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, stop_reason) => {
         /// Sets the universal `stopReason` field, which has no effect because
         /// Claude Code discards `continue` for this event.
-        #[deprecated(note = "Claude Code discards `continue` and `stopReason` for this event (claude-code/docs-2026-09-30-r1)")]
+        #[deprecated(note = "Claude Code discards `continue` and `stopReason` for this event (claude-code/docs-2026-11-25-r1)")]
         pub fn with_stop_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("stopReason", reason.into().into())
@@ -858,7 +1106,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, system_message) => {
         /// Sets the universal `systemMessage` field, which Claude Code
         /// discards for this event.
-        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-09-30-r1)")]
+        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-11-25-r1)")]
         pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("systemMessage", message.into().into())
@@ -868,7 +1116,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, terminal_sequence) => {
         /// Sets the universal `terminalSequence` field, which Claude Code
         /// ignores for this event.
-        #[deprecated(note = "Claude Code ignores this event's JSON output, including `terminalSequence` (claude-code/docs-2026-09-30-r1)")]
+        #[deprecated(note = "Claude Code ignores this event's JSON output, including `terminalSequence` (claude-code/docs-2026-11-25-r1)")]
         pub fn with_terminal_sequence(
             self,
             sequence: impl Into<String>,
@@ -882,7 +1130,7 @@ macro_rules! discarded_builders {
         /// Sets the universal `suppressOutput` field. Claude Code accepts it
         /// but ignores it on every event: a successful hook's stdout is never
         /// shown in the transcript.
-        #[deprecated(note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-09-30-r1)")]
+        #[deprecated(note = "Claude Code accepts `suppressOutput` but ignores it on every event (claude-code/docs-2026-11-25-r1)")]
         pub fn with_suppress_output(self, suppress: bool) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("suppressOutput", suppress.into())
@@ -892,7 +1140,7 @@ macro_rules! discarded_builders {
     (@discarded $event:ident, system_message_constructor) => {
         /// Creates a response carrying only a `systemMessage`, which Claude
         /// Code discards for this event.
-        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-09-30-r1); use `no_op`")]
+        #[deprecated(note = "Claude Code discards `systemMessage` for this event (claude-code/docs-2026-11-25-r1); use `no_op`")]
         pub fn with_system_message(message: impl Into<String>) -> Self {
             Self($crate::catalog::CatalogOutput::top_level::<$event>([(
                 "systemMessage",
@@ -911,6 +1159,14 @@ macro_rules! context_builders {
                         "Creates a structured response that adds `additionalContext` for Claude ",
                         $where_, "."
                     )]
+            ///
+            /// Claude Code caps `additionalContext` at 10,000 characters per
+            /// hook: longer text is saved to a file in the session directory
+            /// and replaced by its path and a preview of up to 2,000
+            /// characters, and Claude is not asked to read the file. Since
+            /// Claude Code v2.1.292 the `<` of a `<system-reminder>` or
+            /// `</system-reminder>` tag reaches Claude as `&lt;`. HookKit
+            /// emits the string unchanged.
             pub fn with_context(additional_context: impl Into<String>) -> Self {
                 Self($crate::catalog::CatalogOutput::hook_specific::<$event>([(
                     "additionalContext",
@@ -919,7 +1175,8 @@ macro_rules! context_builders {
             }
 
             /// Sets `hookSpecificOutput.additionalContext` on a structured
-            /// response, replacing any earlier value.
+            /// response, replacing any earlier value. The cap and escaping
+            /// described on `with_context` apply.
             pub fn with_additional_context(
                 self,
                 additional_context: impl Into<String>,
@@ -943,8 +1200,16 @@ macro_rules! text_context {
             /// starts with `{` and ends with `}` as JSON and drop it when it is
             /// not a valid response. Such text is therefore emitted as
             /// structured `additionalContext` instead, so the context always
-            /// reaches Claude. Other text is written verbatim, without a
-            /// trailing newline.
+            /// reaches Claude. Other text, including a JSON array or a quoted
+            /// JSON string, is written verbatim, without a trailing newline.
+            ///
+            /// Claude Code caps plain stdout, measured whole, and
+            /// `additionalContext` at 10,000 characters per hook: longer text
+            /// is saved to a file in the session directory and replaced by
+            /// its path and a preview of up to 2,000 characters. Since Claude
+            /// Code v2.1.292 the `<` of a `<system-reminder>` or
+            /// `</system-reminder>` tag reaches Claude as `&lt;`. HookKit
+            /// emits the text unchanged.
             pub fn text_context(context: impl Into<String>) -> Self {
                 Self($crate::catalog::CatalogOutput::text_context::<$event>(
                     context.into(),
@@ -1041,6 +1306,70 @@ macro_rules! into_blocking_error {
             }
         }
     };
+    ($output:ident, continue_over_block) => {
+        impl $output {
+            /// Emits this structured response on stdout while exiting 2 with
+            /// `message` on stderr, so Claude keeps working.
+            ///
+            /// Claude Code reads the JSON fields and uses a JSON `block`
+            /// `reason` as the message when the JSON makes one. If the JSON
+            /// fails validation the exit 2 stands and `message` is the reason.
+            ///
+            /// A response that sets `continue: false` is rejected: on this
+            /// event `continue: false` takes precedence over exit 2 and ends
+            /// the turn, the opposite of what exit 2 asks for. Return it at
+            /// exit 0 instead.
+            ///
+            /// `message` may be empty when the JSON makes a `block` decision;
+            /// the process then exits 2 with empty stderr, which the snapshot
+            /// allows. Without such a decision an empty `message` is rejected
+            /// here, so the handler can still choose another response. No
+            /// field can be added afterwards.
+            pub fn into_blocking_error(
+                self,
+                message: impl Into<String>,
+            ) -> hookkit_core::Result<Self> {
+                self.0
+                    .into_blocking_keeping_work(
+                        message,
+                        "continue: false takes precedence over exit 2 here and ends the turn; return it at exit 0 instead",
+                    )
+                    .map(Self)
+            }
+        }
+    };
+    ($output:ident, continue_sends_teammate_idle) => {
+        impl $output {
+            /// Emits this structured response on stdout while exiting 2 with
+            /// `message` on stderr, so the teammate keeps working.
+            ///
+            /// Claude Code reads the JSON fields and uses a JSON `block`
+            /// `reason` as the message when the JSON makes one. If the JSON
+            /// fails validation the exit 2 stands and `message` is the reason.
+            ///
+            /// A response that sets `continue: false` is rejected: on this
+            /// event `continue: false` takes precedence over exit 2 and sends
+            /// the teammate idle, the opposite of what exit 2 asks for. Return
+            /// it at exit 0 instead.
+            ///
+            /// `message` may be empty when the JSON makes a `block` decision;
+            /// the process then exits 2 with empty stderr, which the snapshot
+            /// allows. Without such a decision an empty `message` is rejected
+            /// here, so the handler can still choose another response. No
+            /// field can be added afterwards.
+            pub fn into_blocking_error(
+                self,
+                message: impl Into<String>,
+            ) -> hookkit_core::Result<Self> {
+                self.0
+                    .into_blocking_keeping_work(
+                        message,
+                        "continue: false takes precedence over exit 2 here and sends the teammate idle; return it at exit 0 instead",
+                    )
+                    .map(Self)
+            }
+        }
+    };
 }
 pub(crate) use into_blocking_error;
 
@@ -1069,12 +1398,21 @@ macro_rules! into_feedback_error {
 }
 
 /// Generates the exit-1 user-notice constructor.
+///
+/// Each extra literal becomes another paragraph of the rustdoc, for events
+/// where `onFailure: "block"` or the host platform turns the failure into a
+/// block.
 macro_rules! nonblocking_error {
-    ($event:ident, $output:ident) => {
+    ($event:ident, $output:ident $(, $extra:literal)* $(,)?) => {
         impl $output {
             /// Reports a non-blocking hook error: exits 1 with required stderr,
             /// which Claude Code shows the user as a `<hook> hook error`
-            /// notice. The action proceeds and Claude does not see the text.
+            /// notice. With the hook's `onFailure` unset or `continue`, the
+            /// action proceeds and Claude does not see the text.
+            $(
+                #[doc = ""]
+                #[doc = $extra]
+            )*
             pub fn nonblocking_error(message: impl Into<String>) -> Self {
                 Self($crate::catalog::CatalogOutput::nonblocking::<$event>(
                     message,
@@ -1155,7 +1493,7 @@ impl SetupOutput {
     /// Creates an empty response. Claude Code discards every Setup output
     /// field, including `additionalContext`, so this emits `{}`.
     #[deprecated(
-        note = "Claude Code discards Setup output, including `additionalContext` (claude-code/docs-2026-09-30-r1); this now emits `{}`, use `no_op`"
+        note = "Claude Code discards Setup output, including `additionalContext` (claude-code/docs-2026-11-25-r1); this now emits `{}`, use `no_op`"
     )]
     pub fn with_context(additional_context: impl Into<String>) -> Self {
         let _ = additional_context.into();
@@ -1311,7 +1649,11 @@ impl WorktreeRemoveOutput {
     /// Reports that the worktree was removed: exits 0 with empty stdout.
     ///
     /// Claude Code reads only the exit code and nothing else from the hook,
-    /// so the hook itself must have deleted the directory.
+    /// so the hook itself must have deleted the directory: after exit 0
+    /// Claude Code does not fall back to git. It never deletes a branch of a
+    /// hook-created worktree either, so delete any branch the
+    /// `WorktreeCreate` hook made here. Hook-created worktrees that
+    /// subagents and workflow agents keep never reach this event.
     pub fn removed() -> Self {
         Self(CatalogOutput::empty::<WorktreeRemove>())
     }
@@ -1320,9 +1662,12 @@ impl WorktreeRemoveOutput {
     /// `message`, which may be empty, to stderr.
     ///
     /// Claude Code fails the removal when `worktree_path` still exists
-    /// afterwards, leaving the worktree on disk with no git fallback, and
-    /// writes the stderr to its debug log. Any nonzero exit, including the
-    /// HookKit runtime's exit-1 error path, has this effect.
+    /// afterwards, leaving the worktree on disk with no git fallback. The
+    /// failure is reported in agent view for a background session's delete,
+    /// and as `worktree removal failed, kept: <path>` on the terminal for a
+    /// Remote Control cleanup; where stderr itself goes is not documented.
+    /// Any nonzero exit, including the HookKit runtime's exit-1 error path,
+    /// has this effect.
     pub fn failed(message: impl Into<String>, exit_code: u8) -> hookkit_core::Result<Self> {
         CatalogOutput::failure::<WorktreeRemove>(message, exit_code).map(Self)
     }
@@ -1330,7 +1675,7 @@ impl WorktreeRemoveOutput {
     /// Creates an exit-0 response with `{}` on stdout, which Claude Code
     /// ignores; the worktree counts as removed.
     #[deprecated(
-        note = "WorktreeRemove has no JSON output (claude-code/docs-2026-09-30-r1); use `removed`"
+        note = "WorktreeRemove has no JSON output (claude-code/docs-2026-11-25-r1); use `removed`"
     )]
     pub fn no_op() -> Self {
         Self(CatalogOutput::empty_object::<WorktreeRemove>())
@@ -1407,7 +1752,9 @@ discarded_builders!(PermissionDenied, PermissionDeniedOutput: suppress_output);
 
 impl PermissionDeniedOutput {
     /// Chooses whether to tell the model it may retry the denied call.
-    /// Claude Code ignores `retry: true` for no-verdict denials.
+    /// Claude Code ignores `retry: true` for no-verdict denials. Since
+    /// Claude Code 2.1.331 the retry message tells Claude to make the
+    /// refused call again only if the user asked for that call.
     pub fn retry(retry: bool) -> Self {
         Self(CatalogOutput::hook_specific::<PermissionDenied>([(
             "retry",
@@ -1434,11 +1781,19 @@ blocking_error!(
     "Blocks the change (except `policy_settings`); stderr goes only to the debug log."
 );
 into_blocking_error!(ConfigChangeOutput);
-nonblocking_error!(ConfigChange, ConfigChangeOutput);
+nonblocking_error!(
+    ConfigChange,
+    ConfigChangeOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it blocks the change (except `policy_settings`)."
+);
 universal_builders!(ConfigChangeOutput: terminal_sequence);
 discarded_builders!(ConfigChange, ConfigChangeOutput: continue_session, stop_reason, system_message, suppress_output);
 
-output_type!(PreCompactOutput, "PreCompact");
+output_type!(
+    PreCompactOutput,
+    "PreCompact",
+    "When the hook exits 0 and does not block, Claude Code uses its stdout as instructions for the compaction summary (see [`Self::compaction_instructions`]). Inspection of the Claude Code 2.1.285 and 2.1.332 builds suggests that this holds for JSON too, so a structured response that does not block, such as `no_op().with_terminal_sequence(..)`, would add its JSON text to the instructions and echo it to the user. [`Self::no_op`] therefore prints nothing, and emitting a JSON response at exit 0 without a top-level `decision: \"block\"` fails: pair a terminal sequence, or any deprecated discarded field, with [`Self::with_block`] or [`Self::into_blocking_error`], or leave it out.",
+);
 event_spec!(
     PreCompact,
     PreCompactOutput,
@@ -1446,7 +1801,6 @@ event_spec!(
     Context,
     ["trigger": String, "custom_instructions": NullableString]
 );
-no_op!(PreCompact, PreCompactOutput);
 block_builders!(
     PreCompact,
     PreCompactOutput,
@@ -1458,9 +1812,51 @@ blocking_error!(
     "Blocks compaction; for a manual `/compact` the stderr is shown to the user."
 );
 into_blocking_error!(PreCompactOutput);
-nonblocking_error!(PreCompact, PreCompactOutput);
-universal_builders!(PreCompactOutput: terminal_sequence);
+nonblocking_error!(
+    PreCompact,
+    PreCompactOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it blocks compaction."
+);
+universal_builders!(PreCompactOutput: terminal_sequence_when_blocking);
 discarded_builders!(PreCompact, PreCompactOutput: continue_session, stop_reason, system_message, suppress_output);
+
+impl PreCompactOutput {
+    /// Creates a response that adds nothing: exits 0 with empty stdout.
+    ///
+    /// Unlike the other events' `no_op`, this prints no `{}`, because Claude
+    /// Code would add the text `{}` to the compaction instructions. A
+    /// structured builder such as [`Self::with_block`] still turns it into a
+    /// JSON object, which must then block (or exit 2 through
+    /// [`Self::into_blocking_error`]) to be emitted.
+    pub fn no_op() -> Self {
+        Self(CatalogOutput::empty_until_structured::<PreCompact>())
+    }
+
+    /// Writes `instructions` verbatim to stdout at exit 0, which Claude Code
+    /// uses as instructions for the compaction summary.
+    ///
+    /// Text whose trimmed form starts with `{` and ends with `}` is rejected:
+    /// Claude Code would parse it as JSON and, failing that, drop it with a
+    /// hook error. PreCompact has no `additionalContext` to carry such text
+    /// instead, so reword it. A JSON array or a quoted JSON string is plain
+    /// text and is accepted.
+    ///
+    /// Keep the text under 10,000 characters: since Claude Code v2.1.314
+    /// longer output is cut at that cap and a marker is appended (it is not
+    /// saved to a file as other hook output is). How the instructions
+    /// combine with the text a user passes to `/compact`, which the input's
+    /// [`CatalogInput::custom_instructions`] reports, is undocumented, and
+    /// they appear to be ignored when a subagent compacts.
+    pub fn compaction_instructions(instructions: impl Into<String>) -> hookkit_core::Result<Self> {
+        let instructions = instructions.into();
+        if parsed_as_json(&instructions) {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "PreCompact compaction instructions must not be brace-delimited, or Claude Code parses them as JSON",
+            ));
+        }
+        Ok(Self(CatalogOutput::text::<PreCompact>(instructions)))
+    }
+}
 
 output_type!(PostToolBatchOutput, "PostToolBatch");
 event_spec!(PostToolBatch, PostToolBatchOutput, "PostToolBatch", Tool, ["tool_calls": Array]);
@@ -1482,7 +1878,11 @@ blocking_error!(
     "Stops the agentic loop; stderr is shown to the user and stays in the conversation."
 );
 into_blocking_error!(PostToolBatchOutput);
-nonblocking_error!(PostToolBatch, PostToolBatchOutput);
+nonblocking_error!(
+    PostToolBatch,
+    PostToolBatchOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it stops the agentic loop."
+);
 universal_builders!(PostToolBatchOutput: continue_session, stop_reason, system_message, terminal_sequence);
 discarded_builders!(PostToolBatch, PostToolBatchOutput: suppress_output);
 
@@ -1511,7 +1911,11 @@ block_builders!(
     "The tool already failed, so this adds `reason` as feedback for Claude."
 );
 block_with_context!(PostToolUseFailure, PostToolUseFailureOutput);
-nonblocking_error!(PostToolUseFailure, PostToolUseFailureOutput);
+nonblocking_error!(
+    PostToolUseFailure,
+    PostToolUseFailureOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: Claude sees the text as feedback. Nothing is blocked, because the tool already failed."
+);
 universal_builders!(PostToolUseFailureOutput: continue_session, stop_reason, system_message, terminal_sequence);
 discarded_builders!(PostToolUseFailure, PostToolUseFailureOutput: suppress_output);
 
@@ -1544,11 +1948,15 @@ block_with_context!(Stop, StopOutput);
 blocking_error!(
     Stop,
     StopOutput,
-    "Prevents Claude from stopping; stderr is shown to Claude."
+    "Prevents Claude from stopping; stderr is shown to Claude. Since stdout stays empty, Claude Code treats exit 2 whose stderr says a file is missing (a case-insensitive `no such file` or `can't open`, such as a quoted `No such file or directory`) as a non-blocking error instead; to block on such text, print a JSON `block` decision with `into_blocking_error`, which keeps stdout non-empty."
 );
-into_blocking_error!(StopOutput);
-nonblocking_error!(Stop, StopOutput);
-universal_builders!(StopOutput: continue_session, stop_reason, system_message, terminal_sequence);
+into_blocking_error!(StopOutput, continue_over_block);
+nonblocking_error!(
+    Stop,
+    StopOutput,
+    "Claude Code ignores `onFailure` on this event, so a failure never blocks the stop."
+);
+universal_builders!(StopOutput: continue_over_block, stop_reason, system_message, terminal_sequence);
 discarded_builders!(Stop, StopOutput: suppress_output);
 
 output_type!(SubagentStopOutput, "SubagentStop");
@@ -1579,11 +1987,15 @@ block_with_context!(SubagentStop, SubagentStopOutput);
 blocking_error!(
     SubagentStop,
     SubagentStopOutput,
-    "Prevents the subagent from stopping; stderr is shown to the subagent."
+    "Prevents the subagent from stopping; stderr is shown to the subagent. Since stdout stays empty, Claude Code treats exit 2 whose stderr says a file is missing (a case-insensitive `no such file` or `can't open`, such as a quoted `No such file or directory`) as a non-blocking error instead; to block on such text, print a JSON `block` decision with `into_blocking_error`, which keeps stdout non-empty."
 );
-into_blocking_error!(SubagentStopOutput);
-nonblocking_error!(SubagentStop, SubagentStopOutput);
-universal_builders!(SubagentStopOutput: continue_session, stop_reason, system_message, terminal_sequence);
+into_blocking_error!(SubagentStopOutput, continue_over_block);
+nonblocking_error!(
+    SubagentStop,
+    SubagentStopOutput,
+    "Claude Code ignores `onFailure` on this event, so a failure never blocks the stop."
+);
+universal_builders!(SubagentStopOutput: continue_over_block, stop_reason, system_message, terminal_sequence);
 discarded_builders!(SubagentStop, SubagentStopOutput: suppress_output);
 
 output_type!(TaskCreatedOutput, "TaskCreated");
@@ -1606,7 +2018,11 @@ blocking_error!(
     "Rolls back the task creation; stderr is returned to Claude."
 );
 into_blocking_error!(TaskCreatedOutput);
-nonblocking_error!(TaskCreated, TaskCreatedOutput);
+nonblocking_error!(
+    TaskCreated,
+    TaskCreatedOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it rolls back the task creation and returns the text to Claude."
+);
 universal_builders!(TaskCreatedOutput: system_message, terminal_sequence);
 discarded_builders!(TaskCreated, TaskCreatedOutput: continue_session, stop_reason, suppress_output);
 
@@ -1619,14 +2035,23 @@ event_spec!(
     ["task_id": String, "task_subject": String]
 );
 no_op!(TaskCompleted, TaskCompletedOutput);
+block_builders!(
+    TaskCompleted,
+    TaskCompletedOutput,
+    "Keeps the task open and returns `reason` to Claude, like exit 2. A `continue: false` from this or another matching hook, even one that exits 2, sends the teammate idle with the task still open when a teammate finishing its turn triggered the event; when the TaskUpdate tool triggered it, `continue: false` is ignored and the block holds."
+);
 blocking_error!(
     TaskCompleted,
     TaskCompletedOutput,
-    "Prevents the task from being marked completed; stderr is shown to Claude."
+    "Prevents the task from being marked completed; stderr is shown to Claude. Since stdout stays empty, Claude Code treats exit 2 whose stderr says a file is missing (a case-insensitive `no such file` or `can't open`, such as a quoted `No such file or directory`) as a non-blocking error instead; to block on such text, print a JSON `block` decision with `into_blocking_error`, which keeps stdout non-empty."
 );
 into_blocking_error!(TaskCompletedOutput);
-nonblocking_error!(TaskCompleted, TaskCompletedOutput);
-universal_builders!(TaskCompletedOutput: continue_session, stop_reason, system_message, terminal_sequence);
+nonblocking_error!(
+    TaskCompleted,
+    TaskCompletedOutput,
+    "Claude Code ignores `onFailure` on this event, so a failure never keeps the task open."
+);
+universal_builders!(TaskCompletedOutput: continue_teammate, stop_reason, system_message, terminal_sequence);
 discarded_builders!(TaskCompleted, TaskCompletedOutput: suppress_output);
 
 output_type!(TeammateIdleOutput, "TeammateIdle");
@@ -1641,14 +2066,23 @@ event_spec!(
     ["teammate_name": String]
 );
 no_op!(TeammateIdle, TeammateIdleOutput);
+block_builders!(
+    TeammateIdle,
+    TeammateIdleOutput,
+    "Keeps the teammate working and returns `reason` to it as feedback, like exit 2. Another matching hook's `continue: false` overrides the block, and exit 2, and sends the teammate idle."
+);
 blocking_error!(
     TeammateIdle,
     TeammateIdleOutput,
-    "Prevents the teammate from going idle; stderr is shown to the teammate."
+    "Prevents the teammate from going idle; stderr is shown to the teammate. Since stdout stays empty, Claude Code treats exit 2 whose stderr says a file is missing (a case-insensitive `no such file` or `can't open`, such as a quoted `No such file or directory`) as a non-blocking error instead (the hooks reference lists the rule for `Stop`, `SubagentStop`, and `TaskCompleted`; inspection of the Claude Code CLI suggests it applies here too); to block on such text, print a JSON `block` decision with `into_blocking_error`, which keeps stdout non-empty."
 );
-into_blocking_error!(TeammateIdleOutput);
-nonblocking_error!(TeammateIdle, TeammateIdleOutput);
-universal_builders!(TeammateIdleOutput: continue_session, stop_reason, system_message, terminal_sequence);
+into_blocking_error!(TeammateIdleOutput, continue_sends_teammate_idle);
+nonblocking_error!(
+    TeammateIdle,
+    TeammateIdleOutput,
+    "Claude Code ignores `onFailure` on this event, so a failure never keeps the teammate working."
+);
+universal_builders!(TeammateIdleOutput: continue_teammate, stop_reason, system_message, terminal_sequence);
 discarded_builders!(TeammateIdle, TeammateIdleOutput: suppress_output);
 
 // ---------------------------------------------------------------------------
@@ -1656,11 +2090,15 @@ discarded_builders!(TeammateIdle, TeammateIdleOutput: suppress_output);
 // ---------------------------------------------------------------------------
 
 macro_rules! elicitation_actions {
-    ($event:ident, $output:ident, $subject:literal) => {
+    ($event:ident, $output:ident, $subject:literal $(, $accept_note:literal)* $(,)?) => {
         impl $output {
             #[doc = concat!(
                                 "Accepts ", $subject, " with form field values in `content`."
                             )]
+            $(
+                #[doc = ""]
+                #[doc = $accept_note]
+            )*
             pub fn accept(content: Map<String, Value>) -> Self {
                 Self($crate::catalog::CatalogOutput::hook_specific::<$event>([
                     ("action", "accept".into()),
@@ -1672,6 +2110,10 @@ macro_rules! elicitation_actions {
                                 "Accepts ", $subject, " without `content`, as for a URL-mode ",
                                 "elicitation, which has no form fields."
                             )]
+            $(
+                #[doc = ""]
+                #[doc = $accept_note]
+            )*
             pub fn accept_without_content() -> Self {
                 Self($crate::catalog::CatalogOutput::hook_specific::<$event>([(
                     "action",
@@ -1698,7 +2140,11 @@ macro_rules! elicitation_actions {
     };
 }
 
-output_type!(ElicitationOutput, "Elicitation");
+output_type!(
+    ElicitationOutput,
+    "Elicitation",
+    "When an Elicitation hook answers a request, Claude Code sends that answer to the server without running `ElicitationResult` hooks. Claude Code applies `hookSpecificOutput` only at exit 0, and a decline from one hook overrides another hook's accept or cancel.",
+);
 event_spec!(
     Elicitation,
     ElicitationOutput,
@@ -1711,14 +2157,18 @@ elicitation_actions!(Elicitation, ElicitationOutput, "the elicitation");
 block_builders!(
     Elicitation,
     ElicitationOutput,
-    "Declines the elicitation (Claude Code v2.1.284 changelog; the hooks reference does not yet document it, and where `reason` is shown is unknown)."
+    "Declines the elicitation, overriding an `action` in the same output (Claude Code v2.1.284 or later). Claude Code shows `reason` nowhere: neither the user nor the server learns why."
 );
 blocking_error!(
     Elicitation,
     ElicitationOutput,
-    "Denies the elicitation; stderr is shown nowhere."
+    "Declines the elicitation (the server receives `decline`); stderr is shown nowhere."
 );
-nonblocking_error!(Elicitation, ElicitationOutput);
+nonblocking_error!(
+    Elicitation,
+    ElicitationOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it declines the elicitation."
+);
 universal_builders!(ElicitationOutput: terminal_sequence);
 discarded_builders!(Elicitation, ElicitationOutput: continue_session, stop_reason, system_message, suppress_output);
 
@@ -1734,19 +2184,24 @@ no_op!(ElicitationResult, ElicitationResultOutput);
 elicitation_actions!(
     ElicitationResult,
     ElicitationResultOutput,
-    "the response in place of the user's result"
+    "the response in place of the user's result",
+    "ElicitationResult hooks also run when the user declines or cancels, and the returned `action` replaces the user's, so check that the input's `action` is `accept` before accepting, or a declined request becomes an accepted one. `content` replaces the user's whole `content` object, so include the fields the hook does not change.",
 );
 block_builders!(
     ElicitationResult,
     ElicitationResultOutput,
-    "Declines the response (Claude Code v2.1.284 changelog; the hooks reference does not yet document it, and where `reason` is shown is unknown)."
+    "Declines the response, overriding an `action` in the same output (Claude Code v2.1.284 or later). Claude Code shows `reason` nowhere: neither the user nor the server learns why."
 );
 blocking_error!(
     ElicitationResult,
     ElicitationResultOutput,
     "Changes the effective action to decline; stderr is shown nowhere."
 );
-nonblocking_error!(ElicitationResult, ElicitationResultOutput);
+nonblocking_error!(
+    ElicitationResult,
+    ElicitationResultOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it changes the effective action to decline."
+);
 universal_builders!(ElicitationResultOutput: terminal_sequence);
 discarded_builders!(ElicitationResult, ElicitationResultOutput: continue_session, stop_reason, system_message, suppress_output);
 
@@ -1784,7 +2239,12 @@ event_spec!(
     ["tool_name": String, "tool_input": Any]
 );
 no_op!(PermissionRequest, PermissionRequestOutput);
-nonblocking_error!(PermissionRequest, PermissionRequestOutput);
+nonblocking_error!(
+    PermissionRequest,
+    PermissionRequestOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, denies the request instead, carrying the failure message.",
+    "On Windows without Git Bash, a failure of a shell-form command hook blocks even with `onFailure` unset (Claude Code v2.1.299, extended in v2.1.309 and v2.1.310). Register HookKit binaries in exec form (`\"command\": \"<hook>\", \"args\": []`) and set `onFailure` explicitly so a failure behaves the same on every platform."
+);
 universal_builders!(PermissionRequestOutput: continue_session, stop_reason, system_message, terminal_sequence);
 discarded_builders!(PermissionRequest, PermissionRequestOutput: suppress_output);
 
@@ -1811,7 +2271,21 @@ impl PermissionRequestOutput {
     }
 
     /// Grants the permission. Deny and ask rules are still evaluated, so
-    /// this does not override a matching deny rule.
+    /// this does not override a matching deny rule, unless a mod overrides
+    /// the rule.
+    ///
+    /// Limits:
+    ///
+    /// - For a call that reaches a `--permission-prompt-tool` or an Agent
+    ///   SDK `canUseTool` callback, the hooks run alongside that host and
+    ///   whichever decides first applies.
+    /// - A hook with a Bash matcher also runs on shell commands Claude starts
+    ///   with the Monitor tool (Claude Code v2.1.314 or later), where `allow`
+    ///   and `updatedInput` have no effect; a matcher that includes `Monitor`
+    ///   receives the Monitor call's own input, where they apply.
+    /// - In Cowork cloud sessions a `setMode` permission update is ignored
+    ///   (2.1.300), and auto-mode hooks cannot approve shell commands or
+    ///   subagents (2.1.299).
     ///
     /// Refine it with [`Self::with_updated_input`] and
     /// [`Self::with_updated_permissions`].
@@ -1862,7 +2336,7 @@ impl PermissionRequestOutput {
     /// `message` still denies: stderr is then empty, which the snapshot
     /// allows next to a decision.
     #[deprecated(
-        note = "Claude Code ignores exit 2 on PermissionRequest and discards its stderr (claude-code/docs-2026-09-30-r1); use `deny(message)`"
+        note = "Claude Code ignores exit 2 on PermissionRequest and discards its stderr (claude-code/docs-2026-11-25-r1); use `deny(message)`"
     )]
     pub fn blocking_error(message: impl Into<String>) -> Self {
         let message = message.into();
@@ -1915,6 +2389,15 @@ impl PermissionRequestOutput {
 
     /// Replaces the tool input on an `allow` decision. The object replaces
     /// the whole input and is re-evaluated against deny and ask rules.
+    ///
+    /// Since Claude Code 2.1.300 the input is validated like Claude's own:
+    /// unknown keys are dropped and input the tool rejects denies the call.
+    /// Since 2.1.323 a rewrite that fails the permission check is asked
+    /// again or refused; since 2.1.326 a command rewritten while approving
+    /// stays in the sandbox if the original was checked as sandboxed, unless
+    /// the rewrite adds `dangerouslyDisableSandbox: true`; and since 2.1.328
+    /// a rewrite to a sandbox-excluded command runs outside the sandbox. It
+    /// has no effect on a Monitor command that reached a Bash matcher.
     pub fn with_updated_input(self, input: Map<String, Value>) -> hookkit_core::Result<Self> {
         self.require_behavior(
             PermissionRequestBehavior::Allow,
@@ -1924,11 +2407,41 @@ impl PermissionRequestOutput {
     }
 
     /// Applies permission update entries on an `allow` decision.
+    ///
+    /// Each entry is a JSON object whose `type` selects its fields, as the
+    /// hooks reference's entry table and the Agent SDK's `PermissionUpdate`
+    /// union define them:
+    ///
+    /// - `addRules`, `replaceRules`, `removeRules`: `rules`, an array of
+    ///   `{"toolName": .., "ruleContent"?: ..}` objects, `behavior` (`allow`,
+    ///   `deny`, or `ask`), and `destination`;
+    /// - `setMode`: `mode` (such as `default`, `acceptEdits`, or `manual`,
+    ///   an alias for `default`) and `destination`;
+    /// - `addDirectories`, `removeDirectories`: `directories`, an array of
+    ///   path strings, and `destination`.
+    ///
+    /// `destination` is `session`, `localSettings`, `projectSettings`,
+    /// `userSettings`, or `cliArg`. Claude Code fails the whole output's
+    /// schema validation over one malformed entry, which loses the allow (or
+    /// denies the request under `"onFailure": "block"`), so such an entry is
+    /// rejected here instead. Extra keys and an unlisted `mode` are kept.
+    /// Echoing an entry of the input's `permission_suggestions` is the
+    /// documented way to build one.
+    ///
+    /// Caveats: `setMode` with `bypassPermissions` takes effect only if bypass
+    /// mode was available when the session launched, is a no-op when
+    /// `disableBypassPermissionsMode` disables the mode or the session
+    /// starts in restricted mode, and is never persisted as `defaultMode`;
+    /// an `allow` rule for an MCP tool that sets `ruleContent` matches no
+    /// call.
     pub fn with_updated_permissions(self, permissions: Vec<Value>) -> hookkit_core::Result<Self> {
         self.require_behavior(
             PermissionRequestBehavior::Allow,
             "updatedPermissions applies only to an allow decision",
         )?;
+        for entry in &permissions {
+            check_permission_update(entry)?;
+        }
         self.with_decision_field("updatedPermissions", permissions.into())
     }
 
@@ -1942,19 +2455,88 @@ impl PermissionRequestOutput {
     }
 }
 
+/// Checks one `updatedPermissions` entry against the snapshot's entry shape.
+fn check_permission_update(entry: &Value) -> hookkit_core::Result<()> {
+    fn invalid(message: &'static str) -> hookkit_core::HookkitError {
+        hookkit_core::HookkitError::InvalidProcessEmission(message)
+    }
+    let entry = entry
+        .as_object()
+        .ok_or_else(|| invalid("a permission update entry must be a JSON object"))?;
+    let string = |name: &str| entry.get(name).and_then(Value::as_str);
+    match string("destination") {
+        Some("session" | "localSettings" | "projectSettings" | "userSettings" | "cliArg") => {}
+        _ => {
+            return Err(invalid(
+                "a permission update entry needs a destination of session, localSettings, projectSettings, userSettings, or cliArg",
+            ));
+        }
+    }
+    let strings = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().all(Value::is_string))
+    };
+    match string("type") {
+        Some("addRules" | "replaceRules" | "removeRules") => {
+            if !matches!(string("behavior"), Some("allow" | "deny" | "ask")) {
+                return Err(invalid(
+                    "a rules permission update needs a behavior of allow, deny, or ask",
+                ));
+            }
+            let rules_ok = entry
+                .get("rules")
+                .and_then(Value::as_array)
+                .is_some_and(|rules| {
+                    // `get` finds nothing in a rule that is not an object.
+                    rules.iter().all(|rule| {
+                        rule.get("toolName").is_some_and(Value::is_string)
+                            && rule.get("ruleContent").is_none_or(Value::is_string)
+                    })
+                });
+            if !rules_ok {
+                return Err(invalid(
+                    "a rules permission update needs rules: an array of {toolName, ruleContent?} objects with string values",
+                ));
+            }
+        }
+        Some("setMode") => {
+            if string("mode").is_none() {
+                return Err(invalid("a setMode permission update needs a string mode"));
+            }
+        }
+        Some("addDirectories" | "removeDirectories") => {
+            if !strings(entry.get("directories")) {
+                return Err(invalid(
+                    "a directories permission update needs directories: an array of path strings",
+                ));
+            }
+        }
+        _ => {
+            return Err(invalid(
+                "a permission update entry needs a type of addRules, replaceRules, removeRules, setMode, addDirectories, or removeDirectories",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Permission decision returned by a Claude pre-tool hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum PreToolPermissionDecision {
     /// Skip the permission prompt. Claude Code auto-approves the call,
-    /// except for actions no mode auto-approves.
+    /// except for the cases listed on [`PreToolUseOutput::allow`].
     Allow,
     /// Deny the pending tool call.
     Deny,
-    /// Ask the user for permission.
+    /// Ask the user for permission; see [`PreToolUseOutput::ask`] for the
+    /// auto-mode exceptions.
     Ask,
-    /// Pause a non-interactive tool call so an integration can resume it later.
+    /// Pause a non-interactive tool call so an integration can resume it
+    /// later; honored only in a `-p` run where Claude made a single tool
+    /// call, as [`PreToolUseOutput::defer`] describes.
     Defer,
 }
 
@@ -1985,8 +2567,14 @@ blocking_error!(
     "Blocks the tool call; stderr is shown to Claude. No JSON decision can override it."
 );
 into_blocking_error!(PreToolUseOutput);
-nonblocking_error!(PreToolUse, PreToolUseOutput);
-universal_builders!(PreToolUseOutput: continue_session, stop_reason, system_message, terminal_sequence);
+nonblocking_error!(
+    PreToolUse,
+    PreToolUseOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it denies the call.",
+    "In Code Mode on Claude Code v2.1.329 or later, a timeout with `onFailure` unset also refuses a call made from Claude's code.",
+    "On Windows without Git Bash, a failure of a shell-form command hook blocks even with `onFailure` unset (Claude Code v2.1.299, extended in v2.1.309 and v2.1.310). Register HookKit binaries in exec form (`\"command\": \"<hook>\", \"args\": []`) and set `onFailure` explicitly so a failure behaves the same on every platform."
+);
+universal_builders!(PreToolUseOutput: continue_without_blocking, stop_reason, system_message, terminal_sequence);
 discarded_builders!(PreToolUse, PreToolUseOutput: suppress_output);
 
 impl PreToolUseOutput {
@@ -2002,9 +2590,15 @@ impl PreToolUseOutput {
     ///
     /// Prefer this over [`Self::allow`] for context-only hooks: `allow`
     /// skips the permission prompt and auto-approves the call. To rewrite the
-    /// call without auto-approving it, use [`Self::ask`] with
-    /// [`Self::with_updated_input`]; see that builder for why a rewrite
-    /// without a decision is not documented.
+    /// call without auto-approving it, add [`Self::with_updated_input`] to
+    /// this response or to [`Self::no_op`], or combine it with [`Self::ask`]
+    /// to show the rewrite to the user.
+    ///
+    /// Claude Code caps `additionalContext` at 10,000 characters per hook:
+    /// longer text is saved to a file in the session directory and replaced
+    /// by its path and a preview of up to 2,000 characters. Since Claude Code
+    /// v2.1.292 the `<` of a `<system-reminder>` or `</system-reminder>` tag
+    /// reaches Claude as `&lt;`. HookKit emits the string unchanged.
     pub fn with_context(additional_context: impl Into<String>) -> Self {
         Self(CatalogOutput::hook_specific::<PreToolUse>([(
             "additionalContext",
@@ -2012,14 +2606,40 @@ impl PreToolUseOutput {
         )]))
     }
 
-    /// Skips the permission prompt and auto-approves the call, except for
-    /// actions no permission mode auto-approves and for `AskUserQuestion` and
-    /// `ExitPlanMode`, which also need [`Self::with_updated_input`]. Deny and
-    /// ask rules are still evaluated.
+    /// Skips the permission prompt and auto-approves the call. Deny and ask
+    /// rules are still evaluated whatever the hook returns, and when several
+    /// hooks answer, `deny` beats `defer`, which beats `ask`, which beats
+    /// `allow`.
+    ///
+    /// `allow` does not skip approval for:
+    ///
+    /// - actions no permission mode auto-approves, and `AskUserQuestion` and
+    ///   `ExitPlanMode`, which also need [`Self::with_updated_input`];
+    /// - reads from network paths such as UNC paths and `/net` automounts
+    ///   (Claude Code v2.1.292 or later), and shell writes to files the file
+    ///   tools refuse (v2.1.287);
+    /// - tools an Agent SDK app marks `always_ask`, unless the permission
+    ///   mode approves the call, and MCP tools marked
+    ///   `anthropic/requiresUserInteraction`;
+    /// - connector tools an organization set to `ask`, in sessions where that
+    ///   setting reaches Claude Code;
+    /// - in plan mode, any call other than `ExitPlanMode` that is not
+    ///   read-only (v2.1.299);
+    /// - MCP calls in Cowork cloud auto mode, where `allow` counts as no
+    ///   answer (v2.1.314);
+    /// - shell commands Claude starts with the Monitor tool when the hook
+    ///   matched them through a Bash matcher (v2.1.314), where `allow` and
+    ///   `updatedInput` have no effect.
+    ///
+    /// If the tool's own permission check errors after an `allow`, the call
+    /// is decided as if no hook answered (v2.1.323). If the script prints an
+    /// allow and then leaves a background process holding its stdout or
+    /// stderr, Claude Code blocks the call.
     ///
     /// A hook that only wants to add context should not choose `allow`; use
     /// [`Self::with_context`] or [`Self::no_op`] instead. A rewrite that
-    /// should not auto-approve belongs on [`Self::ask`].
+    /// should not auto-approve belongs on a response without a decision or
+    /// on [`Self::ask`].
     pub fn allow() -> Self {
         Self::with_decision(PreToolPermissionDecision::Allow, None)
     }
@@ -2030,7 +2650,16 @@ impl PreToolUseOutput {
     }
 
     /// Asks the user to confirm the call; `reason` is shown to the user but
-    /// not to Claude. In auto mode this still forces a permission prompt.
+    /// not to Claude. In a `-p` run with no permission host, which denies the
+    /// ask, Claude reads the reason in the tool result.
+    ///
+    /// In auto mode this normally sends the call to the permission prompt,
+    /// with two exceptions: the classifier can deny a call that Claude Code's
+    /// own checks also flag (a write to a protected path, a command that asks
+    /// to run outside the sandbox) before any prompt appears, and a
+    /// `SubagentHandback` call, which delivers a subagent's report, runs with
+    /// no prompt even if the classifier objects. `ask` therefore does not
+    /// gate `SubagentHandback`; use [`Self::deny`] to stop one.
     pub fn ask(reason: impl Into<String>) -> Self {
         Self::with_decision(PreToolPermissionDecision::Ask, Some(reason.into()))
     }
@@ -2038,6 +2667,17 @@ impl PreToolUseOutput {
     /// Pauses a non-interactive tool call so an integration can resume it
     /// later. Claude Code ignores `updatedInput` and `additionalContext` with
     /// this decision, so the corresponding builders reject it.
+    ///
+    /// Claude Code honors `defer` only in a `-p` run, and only when Claude
+    /// made a single tool call in the turn. Otherwise it logs a warning and
+    /// ignores the decision: in an interactive session the hook result is
+    /// dropped, and when Claude makes several tool calls at once the call
+    /// goes through the normal permission flow and may run. Do not rely on
+    /// `defer` to keep a call from running; use [`Self::deny`] for that.
+    ///
+    /// On `claude -p --resume` the deferred call fires `PreToolUse` again, so
+    /// the hook decides it afresh; a repeated `defer` with a resume prompt
+    /// lets Claude answer without running the call.
     pub fn defer() -> Self {
         Self::with_decision(PreToolPermissionDecision::Defer, None)
     }
@@ -2085,18 +2725,28 @@ impl PreToolUseOutput {
             .map(Self)
     }
 
-    /// Replaces the whole tool input before execution. Permission rules are
-    /// evaluated against the returned input. Rejected for `deny` and `defer`,
-    /// where Claude Code ignores it.
+    /// Replaces the whole tool input before execution. Permission rules and
+    /// a Bash command's auto-background eligibility are evaluated against
+    /// the returned input. Rejected for `deny` and `defer`, where Claude Code
+    /// ignores it.
     ///
-    /// The pinned reference documents `updatedInput` only with a decision:
-    /// combine it with [`Self::allow`] to auto-approve the rewritten call, or
-    /// with [`Self::ask`] to show it to the user, which is the documented way
-    /// to rewrite without auto-approving. HookKit still emits it on a
-    /// response without a decision, but the reference does not say whether
-    /// Claude Code applies the rewrite and keeps its normal permission flow
-    /// there or drops it and runs the original input, so do not rely on that
-    /// form for a sanitizing rewrite.
+    /// With [`Self::allow`] the rewritten call is auto-approved, with
+    /// [`Self::ask`] it is shown to the user, and without a decision (on
+    /// [`Self::no_op`] or [`Self::with_context`]) the rewrite goes through
+    /// the normal permission flow. In auto mode Claude Code can deny a call
+    /// whose input a hook changed after auto mode reviewed it, and if Claude
+    /// repeats the changed input exactly, the hook runs again and any
+    /// rewrite it returns is dropped; settings and plugin command hooks may
+    /// rewrite Bash, PowerShell, Monitor, Edit, Write, and NotebookEdit calls
+    /// without that denial. In plan mode the rewrite still applies.
+    ///
+    /// Since Claude Code 2.1.300 the input is validated like Claude's own:
+    /// unknown keys are dropped and a rejected input denies the call. Since
+    /// 2.1.326 a command rewritten while approving stays in the sandbox if
+    /// the original was checked as sandboxed, unless the rewrite adds
+    /// `dangerouslyDisableSandbox: true`. A rewrite has no effect on a
+    /// Monitor command that reached a Bash matcher, and a rewrite of a
+    /// Monitor call must keep its `description` and `timeout_ms`.
     pub fn with_updated_input(self, input: Map<String, Value>) -> hookkit_core::Result<Self> {
         if matches!(self.decision(), Some("deny" | "defer")) {
             return Err(hookkit_core::HookkitError::InvalidProcessEmission(
@@ -2107,7 +2757,8 @@ impl PreToolUseOutput {
     }
 
     /// Adds `additionalContext` for Claude next to the tool result. Rejected
-    /// for `defer`, where Claude Code ignores it.
+    /// for `defer`, where Claude Code ignores it. The cap and escaping
+    /// described on [`Self::with_context`] apply.
     pub fn with_additional_context(
         self,
         additional_context: impl Into<String>,
@@ -2124,12 +2775,138 @@ impl PreToolUseOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Injected skill commands.
+// ---------------------------------------------------------------------------
+
+/// Permission decision a `PreSkillShellCommand` hook can return. Every
+/// decision but `Allow` keeps the injected command from running.
+///
+/// There is no constructor for `allow`, which adds nothing: the command runs
+/// unless another hook blocks it, exactly as with
+/// [`PreSkillShellCommandOutput::no_op`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SkillCommandDecision {
+    Deny,
+    Ask,
+    Defer,
+}
+
+impl SkillCommandDecision {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+            Self::Defer => "defer",
+        }
+    }
+}
+
+output_type!(
+    PreSkillShellCommandOutput,
+    "PreSkillShellCommand",
+    "`PreSkillShellCommand` (Claude Code v2.1.332 or later) runs before an injected command: a shell command, written as ``!`<command>` `` or in a ` ```! ` block, that runs while a skill or a command such as `/security-review` loads. `PreToolUse` hooks don't fire for injected commands. Earlier releases run injected commands without calling the hook, and v2.1.331 and earlier warn about an unknown hook event when a settings file names it.",
+    "The hook can only block an injected command, never approve or change one, so this type has no `allow` and no input rewrite: exit 0 with no decision ([`Self::no_op`]) lets the command run unless another hook blocks it. A blocked command does not run, the skill still loads, and Claude reads `[not run: blocked by hook: <reason>]` in place of the command's output. While Remote Control is connected the reason goes only to the debug log.",
+    "For a hook that must block, register it in a settings file or a plugin (a skill's own frontmatter hooks do not run for its first load in a session, for loads inside a subagent, or for forked skills), with the matcher `Bash|PowerShell`, synchronously (an async hook cannot block), and with `\"onFailure\": \"block\"`. The hook runs after the permission check on injected commands, and also in `bypassPermissions` mode; in auto mode a command that would need approval does not run while the skill loads, and Claude may run it afterwards as a tool call, which fires `PreToolUse`, so keep the policy on both events.",
+    "The emitted JSON uses this event's own `hookEventName`. Claude Code also accepts the `PreToolUse` output format here so one script can serve both events.",
+);
+// `command_source` is not checked: the Agent SDK types it optional, the
+// snapshot has no negative for it, and a parse failure would let a blocking
+// hook's command run (fail open), as on `UserPromptExpansion`. It is still
+// retained when sent, and `command_source()` reads it only as a string.
+event_spec!(
+    PreSkillShellCommand,
+    PreSkillShellCommandOutput,
+    "PreSkillShellCommand",
+    Tool,
+    [
+        "tool_name": String,
+        "tool_input": CommandObject,
+        "tool_use_id": String,
+        "command_name": String,
+        "invoked_by": String,
+    ]
+);
+no_op!(PreSkillShellCommand, PreSkillShellCommandOutput);
+block_builders!(
+    PreSkillShellCommand,
+    PreSkillShellCommandOutput,
+    "Keeps the injected command from running, like [`Self::deny`]; `reason` is the reason Claude reads in place of the command's output."
+);
+blocking_error!(
+    PreSkillShellCommand,
+    PreSkillShellCommandOutput,
+    "Keeps the injected command from running; stderr is the reason Claude reads in place of the command's output, and when the user typed the skill's name a `Not run in /<name>` line shows it to the user."
+);
+into_blocking_error!(PreSkillShellCommandOutput);
+nonblocking_error!(
+    PreSkillShellCommand,
+    PreSkillShellCommandOutput,
+    "When the user typed the skill's name, a `Ran anyway in /<name>` line reports that the command ran after the hook failed.",
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: the command does not run.",
+    "In a Code Mode session where Claude has already run code, a timeout blocks the command by default.",
+    "On Windows without Git Bash, a failure of a shell-form command hook blocks even with `onFailure` unset. Register HookKit binaries in exec form (`\"command\": \"<hook>\", \"args\": []`) and set `onFailure` explicitly so a failure behaves the same on every platform."
+);
+universal_builders!(PreSkillShellCommandOutput: continue_aborts_skill, stop_reason, terminal_sequence);
+discarded_builders!(PreSkillShellCommand, PreSkillShellCommandOutput: suppress_output);
+
+impl PreSkillShellCommandOutput {
+    fn refusal(decision: SkillCommandDecision, reason: Option<String>) -> Self {
+        let reason = reason.map(|reason| ("permissionDecisionReason", Value::from(reason)));
+        Self(CatalogOutput::hook_specific::<PreSkillShellCommand>(
+            std::iter::once(("permissionDecision", decision.as_str().into())).chain(reason),
+        ))
+    }
+
+    /// Keeps the injected command from running; `reason` is the reason
+    /// Claude reads in place of the command's output.
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self::refusal(SkillCommandDecision::Deny, Some(reason.into()))
+    }
+
+    /// Returns `permissionDecision: "ask"`, which on this event does not
+    /// ask anyone: a skill cannot wait for approval, so Claude Code blocks
+    /// the command the same way as [`Self::deny`], with `reason` as the
+    /// reason.
+    pub fn ask(reason: impl Into<String>) -> Self {
+        Self::refusal(SkillCommandDecision::Ask, Some(reason.into()))
+    }
+
+    /// Returns `permissionDecision: "defer"`, which on this event blocks
+    /// the command the same way as [`Self::deny`]. Add a reason with
+    /// [`Self::with_decision_reason`].
+    pub fn defer() -> Self {
+        Self::refusal(SkillCommandDecision::Defer, None)
+    }
+
+    /// Sets `permissionDecisionReason`, the reason Claude reads for the
+    /// blocked command. Rejected when the response makes no decision.
+    pub fn with_decision_reason(self, reason: impl Into<String>) -> hookkit_core::Result<Self> {
+        if self.0.specific_field("permissionDecision").is_none() {
+            return Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                "permissionDecisionReason requires a permission decision",
+            ));
+        }
+        self.0
+            .with_specific("permissionDecisionReason", reason.into().into())
+            .map(Self)
+    }
+
+    /// Sets the universal top-level `systemMessage`. Whether Claude Code
+    /// shows it to the user on this event is undocumented.
+    pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
+        self.0
+            .with_top_level("systemMessage", message.into().into())
+            .map(Self)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Prompt events.
 // ---------------------------------------------------------------------------
 
 output_type!(UserPromptExpansionOutput, "UserPromptExpansion");
 // `command_source` is not required: the Agent SDK types it optional
-// (0.3.223 and 0.3.285), and a parse failure would let a blocking hook's
+// (0.3.223 through 0.3.332), and a parse failure would let a blocking hook's
 // expansion through (fail open). It is still retained when sent.
 event_spec!(
     UserPromptExpansion,
@@ -2162,7 +2939,11 @@ blocking_error!(
     "Blocks the expansion; stderr is shown to the user."
 );
 into_blocking_error!(UserPromptExpansionOutput);
-nonblocking_error!(UserPromptExpansion, UserPromptExpansionOutput);
+nonblocking_error!(
+    UserPromptExpansion,
+    UserPromptExpansionOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it blocks the expansion."
+);
 universal_builders!(UserPromptExpansionOutput: continue_session, stop_reason, system_message, terminal_sequence);
 discarded_builders!(UserPromptExpansion, UserPromptExpansionOutput: suppress_output);
 
@@ -2170,10 +2951,11 @@ impl UserPromptExpansionOutput {
     /// Sets `hookSpecificOutput.suppressOriginalPrompt`, which omits the
     /// original prompt from the block message when the expansion is blocked.
     ///
-    /// Agent SDK 0.3.285 types this field for `UserPromptExpansion` ("When
-    /// decision is \"block\", omit the original prompt from the block
-    /// message"). The pinned hooks reference documents it only for
-    /// `UserPromptSubmit`; the claude-code/docs-2026-09-30-r1 output schema
+    /// Agent SDK 0.3.285 and 0.3.332 type this field for
+    /// `UserPromptExpansion` ("When decision is \"block\", omit the original
+    /// prompt from the block message"). The pinned hooks reference documents
+    /// it only for
+    /// `UserPromptSubmit`; the claude-code/docs-2026-11-25-r1 output schema
     /// accepts it here as an optional, SDK-typed field. Whether a given
     /// Claude Code release honors it for this event, and what it does on an
     /// exit-2 block, is unverified.
@@ -2185,7 +2967,13 @@ impl UserPromptExpansionOutput {
 }
 
 output_type!(UserPromptSubmitOutput, "UserPromptSubmit");
-event_spec!(UserPromptSubmit, UserPromptSubmitOutput, "UserPromptSubmit", Prompt, ["prompt": String]);
+event_spec!(
+    UserPromptSubmit,
+    UserPromptSubmitOutput,
+    "UserPromptSubmit",
+    Prompt,
+    ["prompt": String, "session_title": OptionalString]
+);
 no_op!(UserPromptSubmit, UserPromptSubmitOutput);
 context_builders!(
     UserPromptSubmit,
@@ -2196,15 +2984,19 @@ text_context!(UserPromptSubmit, UserPromptSubmitOutput);
 block_builders!(
     UserPromptSubmit,
     UserPromptSubmitOutput,
-    "Stops the prompt before it reaches Claude; `reason` is shown to the user and not added to context. By default the block message still ends with the prompt text; see `with_suppress_original_prompt`."
+    "Stops the prompt before it reaches Claude; `reason` is shown to the user and not added to context. By default the block message still ends with the prompt text; see `with_suppress_original_prompt`. For a typed skill or command the hook runs before expansion, so a block also stops the command and the shell commands its skill injects."
 );
 blocking_error!(
     UserPromptSubmit,
     UserPromptSubmitOutput,
-    "Stops the prompt before it reaches Claude; stderr is shown to the user and not added to Claude's context. The block message ends with the prompt text; to leave it out, exit 2 with JSON instead: `no_op().with_suppress_original_prompt(true)` followed by `into_blocking_error`."
+    "Stops the prompt before it reaches Claude; stderr is shown to the user and not added to Claude's context. The block message ends with the prompt text; to leave it out, exit 2 with JSON instead: `no_op().with_suppress_original_prompt(true)` followed by `into_blocking_error`. For a plugin's hook, stdout stays empty, so Claude Code treats exit 2 whose stderr says a file is missing (a case-insensitive `no such file` or `can't open`, such as a quoted `No such file or directory`) as a non-blocking error and lets the prompt through; a plugin hook that may quote such text should block with `block(..)`, at exit 0 or through `into_blocking_error`."
 );
 into_blocking_error!(UserPromptSubmitOutput);
-nonblocking_error!(UserPromptSubmit, UserPromptSubmitOutput);
+nonblocking_error!(
+    UserPromptSubmit,
+    UserPromptSubmitOutput,
+    "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it stops the prompt. A timeout (30 seconds by default) otherwise discards the hook's output, `additionalContext` included, and the prompt proceeds."
+);
 universal_builders!(UserPromptSubmitOutput: continue_session, stop_reason, system_message, terminal_sequence);
 discarded_builders!(UserPromptSubmit, UserPromptSubmitOutput: suppress_output);
 
@@ -2262,7 +3054,11 @@ impl UserPromptSubmitOutput {
 /// Fixtures that show malformed or discouraged output (invalid JSON, JSON
 /// with a failing exit other than 2, exit 2 with invalid stdout, output that
 /// Claude Code ignores or only logs, empty stdout that `no_op`'s `{}`
-/// replaces) are not declared.
+/// replaces except on `PreCompact`, exit 2 that Claude Code downgrades
+/// because stderr quotes a missing file, answers a builder deliberately
+/// cannot express) are not declared. Only the `command` binding is declared:
+/// the `command-on-failure-block` binding describes the hook's
+/// `onFailure` setting, not its output.
 pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     use hookkit_core::NativeEventDescriptor as D;
     const EXIT_2: &[&str] = &[
@@ -2275,6 +3071,8 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
         "command-structured",
         "command-text",
         "command-text-open-brace",
+        "command-text-json-array",
+        "command-text-json-string",
         "command-exit-2",
         "command-exit-2-structured",
         "command-nonzero-unstructured",
@@ -2283,6 +3081,8 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
         "command-structured",
         "command-text",
         "command-text-open-brace",
+        "command-text-json-array",
+        "command-text-json-string",
         "command-exit-2",
         "command-exit-2-structured",
         "command-exit-2-suppress-original-prompt",
@@ -2295,7 +3095,66 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
         "command-exit-2",
         "command-nonzero-unstructured",
     ];
-    const DISCARDED_WITH_NOTICE: &[&str] = &["command-structured", "command-nonzero"];
+    const DISCARDED_WITH_NOTICE: &[&str] = &["command-structured", "command-nonzero-unstructured"];
+    const PRE_COMPACT: &[&str] = &[
+        "command-structured",
+        "command-no-op",
+        "command-compaction-instructions",
+        "command-text-json-array",
+        "command-text-over-cap",
+        "command-exit-2",
+        "command-exit-2-structured",
+        "command-nonzero-unstructured",
+    ];
+    const PRE_TOOL_USE: &[&str] = &[
+        "command-structured",
+        "command-updated-input-without-decision",
+        "command-defer",
+        "command-continue-false-without-deny",
+        "command-exit-2",
+        "command-exit-2-missing-file",
+        "command-exit-2-structured",
+        "command-exit-2-continue-false",
+        "command-nonzero-unstructured",
+    ];
+    const PRE_SKILL_SHELL_COMMAND: &[&str] = &[
+        "command-structured",
+        "command-ask-refuses",
+        "command-decision-block",
+        "command-continue-false",
+        "command-exit-2",
+        "command-exit-2-skill-policy",
+        "command-nonzero-unstructured",
+    ];
+    // Stop and SubagentStop: a JSON block keeps the turn going even when
+    // stderr quotes a missing file, which a bare exit 2 does not.
+    const STOP: &[&str] = &[
+        "command-structured",
+        "command-exit-2",
+        "command-exit-2-other-stderr",
+        "command-exit-2-structured",
+        "command-exit-2-missing-file-with-stdout",
+        "command-nonzero-unstructured",
+    ];
+    const TASK_COMPLETED: &[&str] = &[
+        "command-structured",
+        "command-block",
+        "command-exit-2",
+        "command-exit-2-other-stderr",
+        "command-exit-2-structured",
+        "command-exit-2-block",
+        "command-exit-2-continue-false",
+        "command-exit-2-missing-file-with-stdout",
+        "command-nonzero-unstructured",
+    ];
+    const TEAMMATE_IDLE: &[&str] = &[
+        "command-structured",
+        "command-block",
+        "command-exit-2",
+        "command-exit-2-structured",
+        "command-exit-2-block",
+        "command-nonzero-unstructured",
+    ];
     vec![
         D::command::<ConfigChange>(EXIT_2),
         D::command::<CwdChanged>(WATCH),
@@ -2307,21 +3166,26 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
         D::command::<MessageDisplay>(&["command-structured"]),
         D::command::<Notification>(&["command-structured"]),
         D::command::<PermissionDenied>(&["command-structured"]),
-        D::command::<PermissionRequest>(&["command-structured", "command-nonzero-unstructured"]),
+        D::command::<PermissionRequest>(&[
+            "command-structured",
+            "command-set-mode-manual",
+            "command-nonzero-unstructured",
+        ]),
         D::command::<PostCompact>(DISCARDED_WITH_NOTICE),
         D::command::<PostToolBatch>(EXIT_2),
         D::command::<PostToolUseFailure>(EXIT_2),
-        D::command::<PreCompact>(EXIT_2),
-        D::command::<PreToolUse>(EXIT_2),
+        D::command::<PreCompact>(PRE_COMPACT),
+        D::command::<PreSkillShellCommand>(PRE_SKILL_SHELL_COMMAND),
+        D::command::<PreToolUse>(PRE_TOOL_USE),
         D::command::<SessionEnd>(DISCARDED_WITH_NOTICE),
         D::command::<Setup>(&["command-structured"]),
-        D::command::<Stop>(EXIT_2),
+        D::command::<Stop>(STOP),
         D::command::<StopFailure>(&["command-structured", "command-terminal-sequence"]),
         D::command::<SubagentStart>(&["command-structured", "command-nonzero-unstructured"]),
-        D::command::<SubagentStop>(EXIT_2),
-        D::command::<TaskCompleted>(EXIT_2),
+        D::command::<SubagentStop>(STOP),
+        D::command::<TaskCompleted>(TASK_COMPLETED),
         D::command::<TaskCreated>(EXIT_2),
-        D::command::<TeammateIdle>(EXIT_2),
+        D::command::<TeammateIdle>(TEAMMATE_IDLE),
         D::command::<UserPromptExpansion>(TEXT_CONTEXT),
         D::command::<UserPromptSubmit>(USER_PROMPT_SUBMIT),
         D::command::<WorktreeRemove>(&["command-removed", "command-failed", "command-exit-2"]),
@@ -2348,6 +3212,7 @@ pub fn identification_descriptors() -> Vec<hookkit_core::IdentificationDescripto
         D::definitive::<PostToolBatch>(POINTER, "PostToolBatch"),
         D::definitive::<PostToolUseFailure>(POINTER, "PostToolUseFailure"),
         D::definitive::<PreCompact>(POINTER, "PreCompact"),
+        D::definitive::<PreSkillShellCommand>(POINTER, "PreSkillShellCommand"),
         D::definitive::<PreToolUse>(POINTER, "PreToolUse"),
         D::definitive::<SessionEnd>(POINTER, "SessionEnd"),
         D::definitive::<Setup>(POINTER, "Setup"),
@@ -2385,6 +3250,7 @@ pub fn decode(event: &EventId, raw: &RawInvocation) -> hookkit_core::Result<Opti
         "PostToolBatch" => PostToolBatch::parse(raw)?,
         "PostToolUseFailure" => PostToolUseFailure::parse(raw)?,
         "PreCompact" => PreCompact::parse(raw)?,
+        "PreSkillShellCommand" => PreSkillShellCommand::parse(raw)?,
         "PreToolUse" => PreToolUse::parse(raw)?,
         "SessionEnd" => SessionEnd::parse(raw)?,
         "Setup" => Setup::parse(raw)?,
@@ -3131,5 +3997,356 @@ mod tests {
         for text in ["\u{200b}{}", "{}\u{180e}"] {
             assert!(!parsed_as_json(text), "{text:?}");
         }
+    }
+
+    fn pre_skill_shell_command() -> Value {
+        envelope(
+            "PreSkillShellCommand",
+            serde_json::json!({
+                "tool_name": "Bash",
+                "tool_input": {"command": "git log -1 --format=%H"},
+                "tool_use_id": "skillsh_1",
+                "command_name": "release-notes",
+                "invoked_by": "user",
+            }),
+        )
+    }
+
+    #[test]
+    fn pre_skill_shell_command_round_trips_and_checks_its_required_fields() {
+        let mut value = pre_skill_shell_command();
+        value["future"] = serde_json::json!({"nested": [1, 2]});
+        value["tool_input"]["extra"] = true.into();
+        let input = PreSkillShellCommand::parse(&raw(value.clone())).unwrap();
+        assert_eq!(input.event_id(), PreSkillShellCommand::EVENT);
+        assert_eq!(input.injected_command(), Some("git log -1 --format=%H"));
+        assert_eq!(input.invoked_by(), Some(SkillInvoker::User));
+        assert_eq!(serde_json::to_value(&input).unwrap(), value);
+        assert_eq!(
+            decode(&PreSkillShellCommand::EVENT, &raw(value))
+                .unwrap()
+                .unwrap()
+                .event_id(),
+            PreSkillShellCommand::EVENT
+        );
+
+        // A future invoker parses into the open arm, which counts as other.
+        let mut value = pre_skill_shell_command();
+        value["invoked_by"] = "future".into();
+        let invoker = PreSkillShellCommand::parse(&raw(value))
+            .unwrap()
+            .invoked_by()
+            .unwrap();
+        assert_eq!(invoker, SkillInvoker::Unknown("future".into()));
+        assert!(invoker.is_other());
+        assert_eq!(SkillInvoker::from("future"), invoker);
+
+        for (field, bad) in [
+            ("tool_input", serde_json::json!("git log")),
+            ("tool_input", serde_json::json!({})),
+            ("tool_input", serde_json::json!({"command": 1})),
+            ("invoked_by", serde_json::json!(1)),
+        ] {
+            let mut value = pre_skill_shell_command();
+            value[field] = bad.clone();
+            assert!(
+                matches!(
+                    PreSkillShellCommand::parse(&raw(value)),
+                    Err(hookkit_core::HookkitError::InvalidInputForHint { message, .. })
+                        if message.contains(field)
+                ),
+                "{field} = {bad}"
+            );
+        }
+        for field in ["command_name", "invoked_by", "tool_use_id", "tool_name"] {
+            let mut value = pre_skill_shell_command();
+            value.as_object_mut().unwrap().remove(field);
+            assert!(PreSkillShellCommand::parse(&raw(value)).is_err(), "{field}");
+        }
+
+        // The optional `command_source` is not checked, so a malformed one
+        // cannot fail a blocking hook open; the accessor reads only a string.
+        for bad in [serde_json::json!(false), serde_json::Value::Null] {
+            let mut value = pre_skill_shell_command();
+            value["command_source"] = bad.clone();
+            let input = PreSkillShellCommand::parse(&raw(value.clone())).unwrap();
+            assert_eq!(input.command_source(), None, "{bad}");
+            assert_eq!(serde_json::to_value(&input).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn pre_skill_shell_command_context_names_no_tool_call() {
+        // Its `tool_use_id` identifies the injected command, not a tool call
+        // in the transcript.
+        let input = PreSkillShellCommand::parse(&raw(pre_skill_shell_command())).unwrap();
+        assert_eq!(input.tool_use_id(), Some("skillsh_1"));
+        let context = input.context();
+        assert_eq!(context.tool_call_id, None);
+        assert_eq!(
+            context.session_id.as_ref().map(SessionId::as_str),
+            Some("s")
+        );
+    }
+
+    #[test]
+    fn pre_skill_shell_command_outputs_can_only_refuse() {
+        let emit = |output| PreSkillShellCommand::emit(output).unwrap();
+        assert_eq!(emit(PreSkillShellCommandOutput::no_op()).stdout(), b"{}");
+        for (output, decision) in [
+            (PreSkillShellCommandOutput::deny("no curl"), "deny"),
+            (PreSkillShellCommandOutput::ask("no curl"), "ask"),
+            (
+                PreSkillShellCommandOutput::defer()
+                    .with_decision_reason("no curl")
+                    .unwrap(),
+                "defer",
+            ),
+        ] {
+            let value = stdout_json(&emit(output));
+            assert_eq!(
+                value,
+                serde_json::json!({"hookSpecificOutput": {
+                    "hookEventName": "PreSkillShellCommand",
+                    "permissionDecision": decision,
+                    "permissionDecisionReason": "no curl",
+                }})
+            );
+            assert!(makes_blocking_decision(value.as_object().unwrap()) == (decision == "deny"));
+        }
+        assert!(
+            PreSkillShellCommandOutput::no_op()
+                .with_decision_reason("r")
+                .is_err()
+        );
+        let blocked = emit(PreSkillShellCommandOutput::blocking_error(
+            "curl is not allowed",
+        ));
+        assert_eq!(
+            (blocked.exit_code(), blocked.stdout(), blocked.stderr()),
+            (2, &b""[..], &b"curl is not allowed"[..])
+        );
+        let failed = emit(PreSkillShellCommandOutput::nonblocking_error("boom"));
+        assert_eq!((failed.exit_code(), failed.stderr()), (1, &b"boom"[..]));
+        let stopped = stdout_json(&emit(
+            PreSkillShellCommandOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .with_stop_reason("Skill disabled.")
+                .unwrap(),
+        ));
+        assert_eq!(
+            stopped,
+            serde_json::json!({"continue": false, "stopReason": "Skill disabled."})
+        );
+    }
+
+    #[test]
+    fn pre_compact_no_op_prints_nothing_and_instructions_are_verbatim() {
+        // Claude Code appends any exit-0 stdout, `{}` included, to the
+        // compaction instructions.
+        let emission = PreCompact::emit(PreCompactOutput::no_op()).unwrap();
+        assert_eq!(
+            (emission.exit_code(), emission.stdout(), emission.stderr()),
+            (0, &b""[..], &b""[..])
+        );
+        let emission = PreCompact::emit(
+            PreCompactOutput::compaction_instructions("Preserve the failing test names.\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(emission.stdout(), b"Preserve the failing test names.\n");
+        assert_eq!(emission.exit_code(), 0);
+        for text in ["{keep all}", " {\"a\":1}\n", "{\"note\":1}\n{\"note\":2}\n"] {
+            assert!(
+                PreCompactOutput::compaction_instructions(text).is_err(),
+                "{text:?}"
+            );
+        }
+        let long = "a".repeat(10_001);
+        let emission =
+            PreCompact::emit(PreCompactOutput::compaction_instructions(long.clone()).unwrap())
+                .unwrap();
+        assert_eq!(emission.stdout(), long.as_bytes());
+
+        // Structured builders still turn the empty response into JSON.
+        let value = stdout_json(
+            &PreCompact::emit(PreCompactOutput::no_op().with_block("save first").unwrap()).unwrap(),
+        );
+        assert_eq!(
+            value,
+            serde_json::json!({"decision": "block", "reason": "save first"})
+        );
+        let emission = PreCompact::emit(
+            PreCompactOutput::no_op()
+                .into_blocking_error("blocked")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!((emission.exit_code(), emission.stdout()), (2, &b"{}"[..]));
+        assert!(
+            PreCompactOutput::compaction_instructions("x")
+                .unwrap()
+                .with_terminal_sequence("\u{7}")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn continue_false_cannot_exit_2_where_it_ends_the_turn() {
+        // On Stop and SubagentStop `continue: false` beats exit 2 and ends the
+        // turn, the opposite of a block; on TeammateIdle it sends the
+        // teammate idle instead of keeping it working.
+        assert!(
+            StopOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .into_blocking_error("x")
+                .is_err()
+        );
+        assert!(
+            TeammateIdleOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .into_blocking_error("x")
+                .is_err()
+        );
+        // On TaskCompleted the task stays open either way.
+        let emission = TaskCompleted::emit(
+            TaskCompletedOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .into_blocking_error("x")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(emission.exit_code(), 2);
+        assert!(
+            SubagentStopOutput::block("again")
+                .with_continue(false)
+                .unwrap()
+                .into_blocking_error("")
+                .is_err()
+        );
+        // `continue: true` and no `continue` still exit 2.
+        let emission = Stop::emit(
+            StopOutput::block("again")
+                .with_continue(true)
+                .unwrap()
+                .into_blocking_error("")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(emission.exit_code(), 2);
+        // On PreToolUse the call stays blocked either way.
+        let emission = PreToolUse::emit(
+            PreToolUseOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .into_blocking_error("blocked")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(emission.exit_code(), 2);
+        assert_eq!(
+            stdout_json(&emission),
+            serde_json::json!({"continue": false})
+        );
+    }
+
+    #[test]
+    fn blocking_error_bytes_are_unchanged_by_the_missing_file_rule() {
+        // Claude Code downgrades these to non-blocking errors when stderr
+        // quotes a missing file; the bytes stay `command-exit-2`.
+        for emission in [
+            Stop::emit(StopOutput::blocking_error("x")).unwrap(),
+            SubagentStop::emit(SubagentStopOutput::blocking_error("x")).unwrap(),
+            TaskCompleted::emit(TaskCompletedOutput::blocking_error("x")).unwrap(),
+            TeammateIdle::emit(TeammateIdleOutput::blocking_error("x")).unwrap(),
+            UserPromptSubmit::emit(UserPromptSubmitOutput::blocking_error("x")).unwrap(),
+        ] {
+            assert_eq!(
+                (emission.exit_code(), emission.stdout(), emission.stderr()),
+                (2, &b""[..], &b"x"[..])
+            );
+        }
+        // The JSON form keeps stdout non-empty, so the block holds.
+        let emission = TaskCompleted::emit(
+            TaskCompletedOutput::block("Tests not passing.")
+                .into_blocking_error("python3: can't open file 'x.py'")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(emission.exit_code(), 2);
+        assert!(!emission.stdout().is_empty());
+    }
+
+    #[test]
+    fn task_completed_and_teammate_idle_block_with_a_top_level_decision() {
+        let emission =
+            TaskCompleted::emit(TaskCompletedOutput::block("Tests not passing.")).unwrap();
+        assert_eq!(
+            emission.stdout(),
+            br#"{"decision":"block","reason":"Tests not passing."}"#
+        );
+        assert_eq!(emission.exit_code(), 0);
+        let value = stdout_json(
+            &TeammateIdle::emit(
+                TeammateIdleOutput::no_op()
+                    .with_block("Review the remaining files first.")
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            value,
+            serde_json::json!({"decision": "block", "reason": "Review the remaining files first."})
+        );
+        // The block reason serves as the exit-2 message.
+        let emission = TeammateIdle::emit(
+            TeammateIdleOutput::block("again")
+                .into_blocking_error("")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!((emission.exit_code(), emission.stderr()), (2, &b""[..]));
+    }
+
+    #[test]
+    fn new_accessors_are_scoped_to_their_events() {
+        let prompt = envelope(
+            "UserPromptSubmit",
+            serde_json::json!({"prompt": "/deploy staging", "session_title": "Review"}),
+        );
+        let input = UserPromptSubmit::parse(&raw(prompt)).unwrap();
+        assert_eq!(input.session_title(), Some("Review"));
+        assert_eq!(input.command_name(), None);
+        let mistyped = envelope(
+            "UserPromptSubmit",
+            serde_json::json!({"prompt": "hi", "session_title": 7}),
+        );
+        assert!(UserPromptSubmit::parse(&raw(mistyped)).is_err());
+
+        let input = PreToolUse::parse(&raw(pre_tool_use())).unwrap();
+        assert_eq!(input.session_title(), None);
+        assert_eq!(input.injected_command(), None);
+        assert_eq!(input.invoked_by(), None);
+        assert_eq!(input.message_delta(), None);
+
+        let display = envelope(
+            "MessageDisplay",
+            serde_json::json!({
+                "turn_id": "t", "message_id": "m", "index": 3, "final": false, "delta": "x",
+            }),
+        );
+        let input = MessageDisplay::parse(&raw(display)).unwrap();
+        assert_eq!(
+            (
+                input.message_index(),
+                input.message_final(),
+                input.message_delta()
+            ),
+            (Some(3), Some(false), Some("x"))
+        );
     }
 }

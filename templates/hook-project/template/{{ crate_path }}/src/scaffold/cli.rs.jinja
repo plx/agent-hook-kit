@@ -68,25 +68,11 @@ impl Cli {
         })
     }
 {%- endif %}
-{% if harness_mode == "cross" and "file_activity" in state_capabilities and "antigravity" in harnesses %}
-    /// Validate command/harness compatibility for programmatic callers.
-    pub fn validate(self) -> Result<Self, clap::Error> {
-        if matches!(self.harness, Harness::Antigravity)
-            && matches!(&self.command, Command::SessionStartState)
-        {
-            return Err(clap::Error::raw(
-                clap::error::ErrorKind::InvalidValue,
-                "session-start-state supports Claude Code and Codex only; Antigravity uses inferred first-observation bootstrap",
-            ));
-        }
-        Ok(self)
-    }
-{% else %}
+
     /// Validate command/harness compatibility for programmatic callers.
     pub fn validate(self) -> Result<Self, clap::Error> {
         Ok(self)
     }
-{% endif -%}
 }
 
 {% if guard_only -%}
@@ -169,7 +155,7 @@ pub enum Command {
     {{ variant(stable_id) }},
 {%- endfor %}
 {%- if starter == "deferred_quality" or "file_activity" in state_capabilities %}
-    /// Record an exact Claude Code or Codex session-start lower bound.
+    /// Record an exact session-start lower bound from a native SessionStart.
     #[command(name = "session-start-state")]
     SessionStartState,
 {%- endif %}

@@ -1,7 +1,7 @@
 //! Claude Code native hook input/output types.
 //!
-//! The crate implements the frozen Claude Code contract snapshot named by
-//! [`protocol::SNAPSHOT_ID`]. Every implemented event's [`hookkit_core::EventSpec`]
+//! The crate implements the Claude Code contract snapshot named by
+//! [`protocol::SNAPSHOT_ID`] (Claude Code 2.1.332, Agent SDK 0.3.332). Every implemented event's [`hookkit_core::EventSpec`]
 //! is re-exported from [`events`], whichever module defines it:
 //!
 //! - [`protocol`] holds the events with dedicated typed inputs
@@ -9,7 +9,8 @@
 //!   and the forward-compatible input value types;
 //! - [`model_switch`] holds `PreModelSwitch` and `PostModelSwitch`;
 //! - [`catalog`] holds the events that share [`catalog::CatalogInput`], which
-//!   exposes typed accessors for the high-traffic fields.
+//!   exposes typed accessors for the high-traffic fields, including
+//!   `PreSkillShellCommand` (Claude Code v2.1.332 or later).
 //!
 //! Harness-sent enum values that the snapshot does not document parse as an
 //! `Unknown(String)` arm instead of failing, so a newer Claude Code release
@@ -38,12 +39,45 @@
 //!   feedback for Claude, and `nonblocking_error` exits 1 with stderr that
 //!   Claude Code shows the user as a hook error notice. Events where Claude
 //!   Code ignores or only logs failures have no error constructor.
+//! - `nonblocking_error` and every other failure (a hook that cannot start,
+//!   times out, or prints invalid JSON) is non-blocking only while the hook's
+//!   `onFailure` setting is unset or `continue`. With `"onFailure": "block"`
+//!   (Claude Code v2.1.295 or later) a failure does what exit 2 does on the
+//!   event, and on `PermissionRequest` it denies; `Stop`, `SubagentStop`,
+//!   `TaskCompleted`, and `TeammateIdle` ignore the setting. On Windows
+//!   without Git Bash a shell-form `PreToolUse`, `PermissionRequest`, or
+//!   `PreSkillShellCommand` command hook's failure blocks even with the
+//!   setting unset. Each `nonblocking_error` says what applies to its event.
 //! - Claude Code reads JSON stdout on every exit code, so
 //!   `into_blocking_error` and `into_feedback_error` keep a structured
 //!   response on stdout while exiting 2; a blocking hook then still blocks if
 //!   its JSON is rejected. Their message may be empty when the JSON makes a
 //!   blocking decision, whose reason Claude Code then shows; otherwise an
-//!   empty message is rejected when the response is built.
+//!   empty message is rejected when the response is built. A JSON response
+//!   whose exit code is neither 0 nor 2 counts as a failure under
+//!   `"onFailure": "block"`, so typed constructors never emit one. On `Stop`,
+//!   `SubagentStop`, and `TeammateIdle`, where `continue: false` takes
+//!   precedence over exit 2 and ends the agent's work, `into_blocking_error`
+//!   rejects a response that sets it.
+//! - Every builder describes a synchronous command hook. A hook registered
+//!   with `async` or `asyncRewake` cannot block or control Claude: decision
+//!   fields, `continue`, and `terminalSequence` have no effect, and
+//!   `additionalContext` and `systemMessage` reach Claude on the next turn
+//!   instead of the user.
+//! - Claude Code caps `additionalContext`, `systemMessage`,
+//!   `initialUserMessage`, and plain stdout at 10,000 characters per hook
+//!   (longer text is saved to a file and replaced by its path and a short
+//!   preview; `PreCompact` instructions are cut instead) and, since v2.1.292,
+//!   escapes `<system-reminder>` tags. Builders emit text unchanged.
+//! - `no_op` prints `{}`, the structured response with no fields, except on
+//!   `PreCompact`, where Claude Code would add that text to the compaction
+//!   instructions, so it prints nothing. For the same reason a `PreCompact`
+//!   JSON response printed at exit 0 must block: emitting one without a
+//!   top-level `decision: "block"`, such as
+//!   `no_op().with_terminal_sequence(..)`, fails.
+//! - `PermissionRequestOutput::with_updated_permissions` rejects an entry
+//!   that does not match the documented permission update shape, because
+//!   Claude Code fails the whole output over it.
 //! - `text_context` writes plain text verbatim, except that text Claude Code
 //!   would parse as JSON (trimmed text starting with `{` and ending with
 //!   `}`) is sent as structured `additionalContext` so it is never dropped.
@@ -63,9 +97,10 @@
 //!   takes a JSON object (`Map`) instead of a `Value`, and
 //!   `SessionStartOutput` and `PostToolUseOutput` are opaque types built only
 //!   through their constructors.
-//! - The emitted JSON satisfies the snapshot's output schema, except for
+//! - The emitted JSON satisfies the snapshot's output schema, including
 //!   `UserPromptExpansionOutput::with_suppress_original_prompt`, a field the
-//!   Agent SDK types for that event but the snapshot does not list.
+//!   Agent SDK types for that event and the snapshot accepts although the
+//!   hooks reference does not document it there.
 #![deny(missing_docs)]
 
 pub mod catalog;
@@ -75,7 +110,7 @@ pub mod model_switch;
 pub mod protocol;
 mod values;
 
-/// The frozen Claude Code contract snapshot this crate implements, at the
+/// The Claude Code contract snapshot this crate implements, at the
 /// crate root like `hookkit_antigravity::SNAPSHOT`; the same value as
 /// [`protocol::SNAPSHOT_ID`].
 pub use protocol::SNAPSHOT_ID as SNAPSHOT;

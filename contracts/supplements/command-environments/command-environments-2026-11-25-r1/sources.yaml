@@ -1,0 +1,222 @@
+format_version: 1
+sources:
+- id: claude-hooks-reference
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/hooks.md
+  retrieved: 2026-11-25
+  content_sha256: d16003851f60562eaa793e6270316b17550f8e24691214d7d798e5a503537c79
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown page has no checked-in capture; the hash covers the decoded 301732-byte body returned by `curl --fail --silent --show-error --location --compressed`, the retrieval that claude-code/docs-2026-11-25-r1 pins. A re-fetch for this supplement on 2026-11-25 returned the same bytes. Line numbers below refer to that body.
+  - It supersedes the retrieval that command-environments-2026-09-30-r2 and claude-code/docs-2026-09-30-r1 pinned (sha256 5129d58370ed4d7910c6e86537e0592b2902ea5bf0a8682721c5484f5d46f566, 248570 bytes), which was never captured; the difference was reviewed against what that supplement encodes and planning/audits/2026-11-25-claude-code-hooks.md. The environment statements it cited are unchanged - CLAUDE_ENV_FILE for exactly SessionStart, Setup, CwdChanged, and FileChanged (line 1445), CLAUDE_PROJECT_DIR and the plugin path exports in exec and shell form (line 493), CLAUDE_PLUGIN_OPTION_<KEY> for shell-form plugin hooks (line 497), CLAUDE_CODE_REMOTE and CLAUDE_CODE_BRIDGE_SESSION_ID (line 417), and parent-environment inheritance (line 777). The common-input table now also says that $CLAUDE_EFFORT holds the effort.level value (line 763).
+  - CwdChanged and FileChanged exports to CLAUDE_ENV_FILE persist only until the next CwdChanged event, when Claude Code clears them (lines 3193 and 3313); SessionStart and Setup exports persist for the session. No sentence promises that CLAUDE_ENV_FILE is set, and the reference examples guard it with `[ -n "$CLAUDE_ENV_FILE" ]`.
+  - CLAUDE_ENV_FILE is also unavailable to a hook that runs in PowerShell, through "shell" set to "powershell" or by default on Windows without Git Bash, even on the four events above (line 1445); the `shell` field is ignored for an exec-form hook (line 459). The environment-file profile is optional, so its absence there is expected. Since Claude Code v2.1.296, PowerShell tool commands receive the file's variables only when every line, across what the session's hooks wrote and any script the user set CLAUDE_ENV_FILE to before launch, is blank, a comment, or a plain assignment, never in a sandboxed PowerShell command, and on Windows not for a value that contains `/` or `\` (lines 1434-1441).
+  - PreSkillShellCommand (Claude Code v2.1.332 or later) is documented without an environment rule of its own (lines 1659-1730). Its event_profiles entry, the PreToolUse profiles without environment-file, is inferred from the event-independent statements (handlers run with Claude Code's environment, line 415; the environment reference's rows for hook commands name no event) and from the four-event CLAUDE_ENV_FILE rule; a plugin may define the hook (line 1669), so the plugin profiles apply.
+  - A hook process inherits the parent environment apart from the OTEL_* exporter variables, the credentials that CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 strips, and, in a session with the HIPAA configuration, Anthropic credentials (line 777), so any profile variable can also appear as inherited ambient state. There is no $CLAUDE_MODEL variable (line 775).
+- id: claude-environment-reference
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/env-vars.md
+  retrieved: 2026-11-25
+  content_sha256: 30cd22fe95a40ced8d175d368d5e915441014255f40965e681d2a3dcbdff317e
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown page has no checked-in capture; the hash covers the decoded 194781-byte body returned by `curl --fail --silent --show-error --location --compressed`. Line numbers below refer to that body.
+  - It supersedes the retrieval that command-environments-2026-09-30-r2 pinned (sha256 f49dad1f82b0207d81e5a011ad119db820ac35f05b88ffb7828e5d668ae47b1a, 156688 bytes), which was never captured, so the difference was reviewed against the rows that supplement models. The rows for CLAUDECODE (line 191), CLAUDE_CODE_BRIDGE_SESSION_ID (222), CLAUDE_CODE_CHILD_SESSION (225, now also naming Monitor tool subprocesses), CLAUDE_CODE_MESSAGING_SOCKET and CLAUDE_CODE_MESSAGING_TOKEN (349-350), CLAUDE_CODE_PROPAGATE_TRACEPARENT (381, TRACEPARENT for hook subprocesses), CLAUDE_CODE_REMOTE and CLAUDE_CODE_REMOTE_SESSION_ID (384-385), CLAUDE_CODE_SESSION_ID (400), CLAUDE_EFFORT (455), CLAUDE_ENV_FILE (459), and CLAUDE_PID (461) still match the profiles. Apart from CLAUDE_JOB_DIR (below), no other row names a variable that Claude Code sets in the environment of hook commands.
+  - CLAUDE_PID requires Claude Code v2.1.214, CLAUDE_CODE_MESSAGING_SOCKET v2.1.224, CLAUDE_CODE_MESSAGING_TOKEN v2.1.228, CLAUDE_CODE_BRIDGE_SESSION_ID v2.1.199, and CLAUDE_CODE_CHILD_SESSION v2.1.172; older releases omit them.
+  - CLAUDE_PID is documented as Claude Code's own process ID without a stated format; the metadata language has no integer value kind, so the profile records it as opaque. Claude Code never exports a value that is not a positive decimal process ID, so consumers treat any other value as inherited state and ignore it rather than failing the hook.
+  - The CLAUDE_ENV_FILE row (line 459) also lets a user set the variable before launch, to a script that Claude Code runs before each Bash command. Neither this page nor the hooks reference says whether a hook then receives that path, so a value on one of the four environment-file events does not prove that Claude Code created the file, and a value on any other event is inherited state.
+  - CLAUDE_JOB_DIR (line 460) is set for each background session, and shell commands that the session runs inherit it, so a hook can inherit it too; it is session state rather than a hook variable and is not modeled. CLAUDE_CODE_SHELL_PREFIX (line 402) is user configuration that wraps hook commands other than PowerShell and exec-form hooks; it is not hook state.
+- id: claude-plugins-reference
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/plugins-reference.md
+  retrieved: 2026-11-25
+  content_sha256: bcd6278cef41259de55b509ae9d9f91c9d2fba1c369798ec1a6667738ae32986
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown page has no checked-in capture; the hash covers the decoded 43583-byte body returned by `curl --fail --silent --show-error --location --compressed`. https://code.claude.com/docs/en/plugins/manifest-reference.md, which the hooks reference links, served identical bytes on the same day.
+  - It supersedes the retrieval that command-environments-2026-09-30-r2 pinned (sha256 2ec613e87106d52bcba2883e4b58c222ce622676f4b14fee0db9c89eb2f8c270), which was never captured. Its environment-variable section still lists CLAUDE_PLUGIN_ROOT, CLAUDE_PLUGIN_DATA, CLAUDE_PROJECT_DIR, and CLAUDE_PLUGIN_OPTION_<KEY> for hook commands (line 569) and exports CLAUDE_PLUGIN_OPTION_<KEY> to hook processes for every option (line 495).
+- id: claude-plugin-components
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/plugins/components.md
+  retrieved: 2026-11-25
+  content_sha256: 1737d81c9c68f055970b0b78cf621946644daf940bda65a8c3125d4b35ae5d1b
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown page has no checked-in capture; the hash covers the decoded 38271-byte body returned by `curl --fail --silent --show-error --location --compressed`. It supersedes the retrieval that command-environments-2026-09-30-r2 pinned (sha256 97fa2babb277ddb65be0d85aad1a3099d1ca34ffdf193ed98be1ce7270408fed), which was never captured.
+  - It states that every plugin hook process receives CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA, plus CLAUDE_PLUGIN_OPTION_<KEY> for each user configuration value (line 364). A plugin agent's `hooks` frontmatter is ignored (line 314); the page does not say whether hooks declared in a plugin skill's frontmatter receive the plugin variables.
+- id: claude-cross-session-messaging
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/cross-session-messaging.md
+  retrieved: 2026-11-25
+  content_sha256: d68cba02a8597a58825ae954e0c25265c0108e3926c13fb5b0c72028b70a37f0
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown page has no checked-in capture; the hash covers the decoded 37464-byte body returned by `curl --fail --silent --show-error --location --compressed`. It supersedes the retrieval that command-environments-2026-09-30-r2 pinned (sha256 886e6885d8702664ac582edfa129ffc21e103370982beba15c3782cadcaf3620), which was never captured.
+  - It still states that a session that starts with messaging on exports CLAUDE_CODE_MESSAGING_SOCKET before any hook runs, including SessionStart (lines 248-249), and exports CLAUDE_CODE_MESSAGING_TOKEN alongside it (line 255); the token is therefore modeled as its own profile, conditional on the socket, rather than as an independent variable.
+- id: claude-cloud-environments
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/cloud-environments.md
+  retrieved: 2026-11-25
+  content_sha256: 31e38896dbbeb74ebc5471b05bfd8f3d57134d2e2d7063945466032849a15720
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown page has no checked-in capture; the hash covers the decoded 67124-byte body returned by `curl --fail --silent --show-error --location --compressed`. It supersedes the retrieval that command-environments-2026-09-30-r2 pinned (sha256 3e2302313abbce06b21a6e546fdce7cf11ea2c499edad90cf1d4a7892d9c69d1), which was never captured.
+  - Its "Link output back to the session" section documents CLAUDE_CODE_REMOTE_SESSION_ID (line 370), and its dependency-install hook example scopes itself with the CLAUDE_CODE_REMOTE=true check, which is never true locally (lines 515-535).
+- id: claude-self-hosted-environments
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/self-hosted-environments.md
+  retrieved: 2026-11-25
+  content_sha256: 33bed9e7f6541408584e9a6bd8ebb42bc4e3fb05d7131bfce8105e0980ff9ef9
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown page has no checked-in capture; the hash covers the decoded 21742-byte body returned by `curl --fail --silent --show-error --location --compressed`. It supersedes the retrieval that command-environments-2026-09-30-r2 pinned (sha256 ec3fc5f32240b70024c1f31a5cf977f0d438f5a5db1375ee83cc0dcb365f5c9c), which was never captured.
+  - It defines self-hosted environments as running Claude Code cloud sessions on customer infrastructure. It states no Claude Code version for self-hosted environments (its only version, v2.1.280, concerns when the runner releases a session; the v2.1.224 floor comes from claude-code-changelog) and names neither CLAUDE_CODE_REMOTE nor CLAUDE_CODE_REMOTE_SESSION_ID.
+- id: claude-self-hosted-environments-configuration
+  kind: official-documentation
+  authority: primary
+  url: https://code.claude.com/docs/en/self-hosted-environments-configuration.md
+  retrieved: 2026-11-25
+  content_sha256: ac98c78146986c3ab14e895b711c395842b265a37f4902bd2ca8f56f2542af45
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown page has no checked-in capture; the hash covers the decoded 106366-byte body returned by `curl --fail --silent --show-error --location --compressed`. It supersedes the retrieval that command-environments-2026-09-30-r2 pinned (sha256 a25215686aa188cb3d0be3038fc6d8053e7000cfe8e9e7be67d6fb1eff00f4ff, 46313 bytes), which was never captured.
+  - Its wrapper-script table documents CLAUDE_CODE_REMOTE_SESSION_ID (tagged `cse_...` form) and CLAUDE_CODE_REMOTE_SESSION_UUID in the environment the self-hosted runner gives the Claude Code child, which hook commands inherit (lines 42-43); that is the direct evidence that self-hosted sessions carry the cloud-session id. It now also says that the runner sets CLAUDE_CODE_REMOTE in that environment, telling a wrapper that rebuilds the child's environment to carry it over unchanged (line 49), which corroborates the environment reference's general cloud-session rule for the marker.
+  - The runner variables CLAUDE_CODE_REMOTE_SESSION_UUID and CLAUDE_CODE_REMOTE_SLACK_THREAD_URL, CLAUDE_CODE_REMOTE_SLACK_THREAD_TS, and CLAUDE_CODE_REMOTE_SLACK_CHANNEL_ID (lines 43-46) are not modeled. The self-hosted runner, not Claude Code, sets them, only in self-hosted sessions; the Slack variables are set for Claude Tag sessions, each independently and each possibly unset, and Claude Code hooks can read them (line 56). They reach a hook as inherited session state, like the other runner-provided variables.
+  - The other variables that the runner sets in the wrapper's environment, which the Claude Code child inherits when the wrapper execs it (lines 34-54), such as CCR_SESSION_ACCOUNT_EMAIL, CLAUDE_RUNNER_CLIENT_PLATFORM, CLAUDE_CONFIG_DIR, CLAUDE_CODE_REMOTE_MCP_CONFIG, and, by line 49, CLAUDE_CODE_ENVIRONMENT_KIND, are runner configuration or credentials that a hook can inherit, not hook state, and are not modeled.
+  - Its runner lifecycle hooks (checkout, post-session, spawn-runner) run on the runner host, outside the session, and are not Claude Code command hooks; the CLAUDE_RUNNER_* variables that only they receive are not hook state.
+- id: claude-code-changelog
+  kind: official-release-notes
+  authority: primary
+  url: https://raw.githubusercontent.com/anthropics/claude-code/d66368052c9303ce022c017a5b59d62ebd57d1e7/CHANGELOG.md
+  retrieved: 2026-11-25
+  revision: d66368052c9303ce022c017a5b59d62ebd57d1e7
+  content_sha256: 4192cfdae7e1401a199984dcc4910cdb8491550eadb2150a541d55d4464aa5ad
+  reproducibility: pinned-revision
+  limitations:
+  - The release notes pinned by claude-code/docs-2026-11-25-r1, through Claude Code 2.1.332 (1423161 bytes). They supersede the pin at 2282079d6ac8824ec4b72a432a03e0c636e0512f (sha256 0937ba0c7c5e7c5272c65aa0b24e0a5e6cc57e8e0e263f5a0559b5800cf2f217, through 2.1.285) that command-environments-2026-09-30-r2 cited.
+  - Cited for the self-hosted environment version floor ("## 2.1.224" - "Added self-hosted environments"), the effort floor ("## 2.1.133" - "Hooks now receive the active effort level via the `effort.level` JSON input field and the `$CLAUDE_EFFORT` environment variable"), and PreSkillShellCommand ("## 2.1.332" - "Added a `PreSkillShellCommand` hook event").
+  - 'Its other hook-process variable entries are "## 1.0.58" ("Hooks: Added CLAUDE_PROJECT_DIR env var for hook commands") and "## 2.1.78" (the `${CLAUDE_PLUGIN_DATA}` plugin variable). "## 2.1.207" tells shell-form plugin hooks to read `$CLAUDE_PLUGIN_OPTION_<KEY>` but does not add that variable. The 1.0.58, 2.1.78, and 2.1.133 floors all predate the Claude Code v2.1.172 CLAUDE_CODE_CHILD_SESSION floor of the baseline profile, so they narrow no accepted environment.'
+  - It has no CLAUDE_PID, CLAUDE_CODE_MESSAGING_SOCKET, CLAUDE_CODE_MESSAGING_TOKEN, CLAUDE_CODE_BRIDGE_SESSION_ID, CLAUDE_CODE_CHILD_SESSION, or CLAUDE_CODE_REMOTE_SESSION_ID entry, so those floors come from the environment reference.
+  - The 2.1.286-2.1.332 entries add or remove no modeled variable. Those that touch the hook environment are reviewed and not encoded - CLAUDE_ENV_FILE persistence fixes (2.1.295 in-app `/resume` and `/branch`, 2.1.318 cloud Setup, 2.1.330 `claude -p --continue`), PowerShell commands receiving CLAUDE_ENV_FILE variables (2.1.296), a user mod's `$.env.set` no longer changing managed-settings command hooks (2.1.299), background-session hooks no longer inheriting FORCE_COLOR=3 (2.1.295), VS Code no longer passing ELECTRON_RUN_AS_NODE (2.1.331), a `claude -p` that a self-hosted session's script or hook starts no longer inheriting the session's own retry setting (2.1.327), and the self-hosted runner setting CLAUDE_RUNNER_SESSION_UUID and CLAUDE_CODE_REMOTE_SESSION_UUID "for the session and its checkout, post-session and spawn-runner hooks" (2.1.328), although the configuration page lists CLAUDE_RUNNER_SESSION_UUID only for the runner's lifecycle hooks.
+- id: codex-hooks-source
+  kind: official-source
+  authority: primary
+  url: https://github.com/openai/codex/tree/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/hooks
+  retrieved: 2026-11-25
+  revision: 3d86e43b075adeba2193ec5c22ac92f55afd82e6
+  license: Apache-2.0
+  reproducibility: pinned-revision
+  limitations:
+  - Tag rust-v0.172.0, the revision that codex/commit-3d86e43-r1 pins; it supersedes ff6aec96948b70d94983af2641a6b67c94faeff5 (tag rust-v0.159.2), which command-environments-2026-09-30-r2 cited. engine/discovery.rs append_plugin_hook_sources inserts PLUGIN_ROOT, CLAUDE_PLUGIN_ROOT, PLUGIN_DATA, and CLAUDE_PLUGIN_DATA for every plugin-discovered handler, whatever its event, including Interrupt and, since Codex 0.164.0, PreModelRequest and PostModelRequest, whose handlers run through the same engine/dispatcher.rs handler execution as the other events.
+  - Since Codex 0.149.0, engine/command_runner.rs starts every locally executed hook from an empty environment and replays the snapshot that registry.rs Hooks::new captured from Codex's own process environment when the session's hook registry was created (kept across reconfiguration), then applies the handler variables. Variables in that snapshot are inherited ambient state outside this contract.
+  - The replay and the credential scrub (see codex-protocol-source) apply to locally executed hooks only. Since Codex 0.165.0 a handler declared by an execution environment (an environment-scoped hook) is routed by engine/command_runner.rs to that environment's executor (see codex-core-source), and engine/discovery.rs gives environment sources no handler variables, so such a hook never receives the plugin variables and has no modeled variable. The plugin-paths activation, a hook discovered from a Codex plugin, already excludes it.
+  - Since Codex 0.154.0 plugin hook sources are refreshed per turn when the plugin store changes, so PLUGIN_ROOT and PLUGIN_DATA can change between turns of one session while the environment snapshot is not refreshed. On memory-consolidation turns, engine/mod.rs runs_for_memory_consolidation keeps only policy (managed, system, and unattributed required) and executor-scoped handlers, so plugin command hooks, like user, project, and session-flag hooks, do not run there.
+  - Since Codex 0.164.0 a plugin hook's approval is bound to the plugin bundle's contents. Unless hook trust is bypassed, before every run of a non-builtin plugin hook with a saved approval Codex hashes the whole plugin root inside the handler's timeout (engine/plugin_fingerprint.rs), and fails the run without launching the hook when the contents changed since approval ("plugin contents changed; hook approval required", engine/plugin_trust.rs), when an entry is a symlink or special file, or when the root is not a directory. Mutable state, logs, and build output therefore belong in PLUGIN_DATA, never under PLUGIN_ROOT.
+- id: codex-protocol-source
+  kind: official-source
+  authority: primary
+  url: https://github.com/openai/codex/tree/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/protocol
+  retrieved: 2026-11-25
+  revision: 3d86e43b075adeba2193ec5c22ac92f55afd82e6
+  license: Apache-2.0
+  reproducibility: pinned-revision
+  limitations:
+  - Tag rust-v0.172.0; supersedes ff6aec96948b70d94983af2641a6b67c94faeff5, which command-environments-2026-09-30-r2 cited. src/shell_environment.rs NON_INHERITABLE_ENV_VARS lists nine names - CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN, NODE_REPL_AUTH_TOKEN, CODEX_GUARDIAN_DECISIONS_API_KEY (since Codex 0.162.0), OPENAI_FEDERATION_RULE_ID, OPENAI_IDENTITY_TOKEN_FILE, OPENAI_IDENTITY_TOKEN_SOURCE, OPENAI_SPIFFE_AUDIENCE, and OPENAI_SPIFFE_ID (these three since Codex 0.171.0), and OPENAI_WORKLOAD_IDENTITY_CONTEXT; ff6aec9 listed five. The local hook command runner removes them, compared case-insensitively, from both the replayed snapshot and the handler variables for every event, and the exec server applies the same list to environment-scoped hooks. SPIFFE_ENDPOINT_SOCKET is defined in the same file but not removed, so a hook can inherit it.
+  - CODEX_SESSION_ID and CODEX_THREAD_ID are set for shell-tool and unified-exec processes, not for hooks; a hook can see them only ambiently from an outer Codex session, so they are not hook identity. Since Codex 0.163.0 CODEX_TOOL_CALL_ID (set_tool_call_id_env_var) labels a shell tool's command process with its tool call; hooks never set it, and a hook sees it only ambiently through the environment snapshot, naming an outer call. It is not hook identity; a hook's tool call is the JSON tool_use_id.
+  - src/hooks.rs HookEventsToml accepts PreModelRequest and PostModelRequest keys, and, since Codex 0.165.0, defines HookHandlerConfig, whose command handlers have command, commandWindows, timeout, async, statusMessage, and additionalContextLimit and no env setting.
+- id: codex-config-source
+  kind: official-source
+  authority: primary
+  url: https://github.com/openai/codex/tree/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config
+  retrieved: 2026-11-25
+  revision: 3d86e43b075adeba2193ec5c22ac92f55afd82e6
+  license: Apache-2.0
+  reproducibility: pinned-revision
+  limitations:
+  - Tag rust-v0.172.0; supersedes ff6aec96948b70d94983af2641a6b67c94faeff5, which command-environments-2026-09-30-r2 cited. src/hook_config.rs now re-exports HookEventsToml and HookHandlerConfig from codex-rs/protocol/src/hooks.rs (see codex-protocol-source) and adds only the hooks-file wrapper, per-hook state (enabled, trusted hashes), and the managed-hooks requirements (managed directories and hooks); command handlers still have no env setting, so plugin discovery is the only source of hook-specific variables.
+- id: codex-core-source
+  kind: official-source
+  authority: primary
+  url: https://github.com/openai/codex/tree/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/core
+  retrieved: 2026-11-25
+  revision: 3d86e43b075adeba2193ec5c22ac92f55afd82e6
+  license: Apache-2.0
+  reproducibility: pinned-revision
+  limitations:
+  - Tag rust-v0.172.0, first cited by this supplement; codex/commit-3d86e43-r1 pins the same tree. src/hook_environment_executor.rs runs environment-scoped hooks (Codex 0.165.0 and later) on the execution environment's executor, in the environment's working directory, with an environment built from its shell_environment_policy and the handler variables, which are empty, and with no shell snapshot and no tool-call metadata, so the local replay, the plugin variables, and CODEX_TOOL_CALL_ID do not apply to them.
+- id: codex-hooks-reference
+  kind: official-documentation
+  authority: primary
+  url: https://learn.chatgpt.com/docs/hooks.md
+  retrieved: 2026-11-25
+  content_sha256: 37cdbfc3b9d19925f88af3e680399fd61bd3d15979961302160f97698cc5a841
+  reproducibility: content-hash-only
+  limitations:
+  - The mutable Markdown endpoint has no checked-in capture; the hash covers the decoded 49306-byte body returned by `curl --fail --silent --show-error --location --compressed`, the retrieval that codex/commit-3d86e43-r1 pins. A re-fetch for this supplement on 2026-11-25 returned the same bytes. Line numbers below refer to that body.
+  - It supersedes the 46965-byte body hashed 724881d81f1a9fdb35ea42d4851a11b1f6606bbc6e9d2d05c1e8c466fc25c630 that command-environments-2026-09-30-r2, codex/commit-ff6aec9-r1, and codex/commit-ff6aec9-r2 recorded. That body was never captured, so the difference was reviewed against what that supplement encodes and planning/audits/2026-11-25-codex-hooks.md.
+  - Its plugin section still lists PLUGIN_ROOT, PLUGIN_DATA, and the CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA compatibility aliases (lines 406-413) and says that a plugin update that changes a bundled script requires a new review (lines 418-419). Its PreModelRequest and PostModelRequest section (lines 972-986) makes no environment statement, and it names environment-scoped hooks only in its cloud-orchestration section (line 338); the environment rules for both come from the pinned source.
+- id: antigravity-hooks-reference
+  kind: official-documentation
+  authority: primary
+  url: https://antigravity.google/docs/hooks
+  retrieved: 2026-11-25
+  revision: 'site deploy Last-Modified Wed, 25 Nov 2026 00:55:17 GMT'
+  content_sha256: 95015b077211200defd915604f75a6cb7dc1cbadda482c6cd6a5c37569ec8680
+  reproducibility: content-hash-only
+  limitations:
+  - The unified hook reference for the Antigravity App, CLI, IDE extensions, and IDE is a mutable rendered page with site chrome and no checked-in capture; the hash covers the decoded 244063-byte HTML body returned by `curl --fail --silent --show-error --location --compressed`, the retrieval that antigravity/docs-2026-11-25-r1 pins. A re-fetch for this supplement on 2026-11-25 returned the same bytes.
+  - It supersedes the 141741-byte body hashed 051967919edfb9904511c9a47e65115cb3def61c34f6f7e14924710df215f180 that command-environments-2026-09-30-r2 and antigravity/docs-2026-09-30-r1 recorded. Neither body was captured and the Internet Archive is unreachable from the retrieval environment, so the difference was reviewed through the Markdown source. Like the earlier body, it defines all invocation state in the JSON payload and documents no hook-process environment variable.
+- id: antigravity-hooks-markdown
+  kind: official-documentation
+  authority: primary
+  url: https://antigravity.google/docs/hooks.md
+  retrieved: 2026-11-25
+  revision: 'weak ETag W/"6b0631f2-5337", Last-Modified Wed, 25 Nov 2026 00:55:14 GMT'
+  content_sha256: c500f806f5ccb285b0866d3fbbbfb4e5aa5c50b45f788446ac6ca76bd5b44f7a
+  reproducibility: content-hash-only
+  limitations:
+  - Official Markdown source of the unified hook reference, with no checked-in capture; the hash covers the decoded 21303-byte body returned by `curl --fail --silent --show-error --location --compressed`, the retrieval that antigravity/docs-2026-11-25-r1 pins. A re-fetch for this supplement on 2026-11-25 returned the same bytes. Line numbers below refer to that body.
+  - It supersedes the 16795-byte body hashed c1ce644786c46a666379af40e3983081887fa29245ead461be4235a92ffc80c3 that command-environments-2026-09-30-r2 and antigravity/docs-2026-09-30-r1 recorded, which was never captured; the difference was reviewed against what those encode.
+  - It documents no hook-process environment variable, so PLUGIN_ROOT and PLUGIN_DATA rest on the CLI release notes. It lists plugin-level hooks, packaged in an installed plugin's hooks.json, for the Antigravity App (line 15) and CLI (line 29) but not for the standalone IDE (lines 43-46), and it does not say which working directory a workspace or global hook runs in.
+- id: antigravity-cli-changelog
+  kind: official-release-notes
+  authority: primary
+  url: https://raw.githubusercontent.com/google-antigravity/antigravity-cli/bb5c8da497ef2eb2e2b98e6a092baed90c567938/CHANGELOG.md
+  retrieved: 2026-11-25
+  revision: bb5c8da497ef2eb2e2b98e6a092baed90c567938
+  content_sha256: cbbe47863d9e029d0ba8d4314c772be4fc5581a3214191a18e79d427a9725815
+  reproducibility: pinned-revision
+  limitations:
+  - CLI release notes through 1.5.16, first cited by this supplement, not vendored; the hash covers the decoded 268726-byte body of the raw file at the commit that antigravity/docs-2026-11-25-r1 pins, and a re-fetch for this supplement on 2026-11-25 returned the same bytes. Line numbers below refer to that body.
+  - '"## 1.5.3" (line 271): "Added the `PLUGIN_ROOT` and `PLUGIN_DATA` environment variables to hook commands that come from a plugin, pointing to the plugin''s folder and its persistent data folder"; the same entry says `agy plugin validate` no longer warns that they are not set for hooks. "## 1.5.6" (line 226) makes `agy plugin validate` warn when a plugin hook command uses ${PLUGIN_ROOT} or $PLUGIN_ROOT, "which older CLI versions do not set", and suggest a relative path "since hooks already run in the plugin''s folder". "## 1.3.2" (line 580) introduced a per-plugin data folder "available as PLUGIN_DATA" without naming the processes that receive it, so the hook floor is 1.5.3.'
+  - The variables are unprefixed and no entry adds CLAUDE_* aliases for them, so a PLUGIN_ROOT and PLUGIN_DATA pair inherited from an outer process, such as a Codex plugin hook (Codex sets the same two names), is indistinguishable from one Antigravity set. "## 1.4.11" (line 351) expands `${CLAUDE_PLUGIN_ROOT}` once, when `agy plugin import claude` converts a Claude Code plugin's MCP servers; it sets no variable for hook commands.
+  - Other variables named in the CLI release notes either configure the CLI itself (for example AGY_CLI_HIDE_LOGO, AGY_ADC_AUTH, ANTIGRAVITY_DISABLE_EMBEDDED_RIPGREP, CLI_GRAPHICS, GEMINI_API_KEY, and GOOGLE_GEMINI_BASE_URL) or are set for the agent's own shell commands (PAGER, GIT_PAGER, and, since 1.3.3, JJ_PAGER; GIT_EDITOR, HGEDITOR, and JJ_EDITOR since 1.3.6; PYTHONUTF8 on Windows since 1.5.1). No entry documents any of them for hook commands, so none is modeled.
+- id: antigravity-changelog
+  kind: official-release-notes
+  authority: primary
+  url: https://antigravity.google/docs/changelog.md
+  retrieved: 2026-11-25
+  revision: 'weak ETag W/"6b0631f1-a3af9", Last-Modified Wed, 25 Nov 2026 00:55:13 GMT'
+  content_sha256: f0bfcac6085100aebee39c3a1dbb8dca0bdb2f5d1642dfbd5b6db662f81ec99a
+  reproducibility: content-hash-only
+  limitations:
+  - Combined release notes for the Antigravity App, CLI, IDE Extensions, SDK, and IDE, first cited by this supplement, with no checked-in capture; the hash covers the decoded 670457-byte body returned by `curl --fail --silent --show-error --location --compressed`, the retrieval that antigravity/docs-2026-11-25-r1 pins. A re-fetch for this supplement on 2026-11-25 returned the same bytes. Line numbers below refer to that body.
+  - It mentions PLUGIN_ROOT and PLUGIN_DATA only in its Antigravity CLI section, which repeats the CLI release notes (1.5.3 at lines 2239 and 2244, 1.5.6 at line 2150, 1.3.2 at line 2833). No Antigravity App, IDE Extensions, SDK, or IDE entry mentions either variable, so whether the App and IDE set them for plugin hooks is undocumented, and the profile's activation names the CLI.
+- id: antigravity-build-plugins
+  kind: official-documentation
+  authority: primary
+  url: https://antigravity.google/docs/build-plugins.md
+  retrieved: 2026-11-25
+  revision: 'weak ETag W/"6b0631f1-8c95", Last-Modified Wed, 25 Nov 2026 00:55:13 GMT'
+  content_sha256: 587b736b48409a193d27ccb8b2ef177f56c36e5dd62c6bbede0dc86b976d32cb
+  reproducibility: content-hash-only
+  limitations:
+  - Official plugin-authoring page, first cited by this supplement, with no checked-in capture; the hash covers the decoded 35989-byte body returned by `curl --fail --silent --show-error --location --compressed`, the retrieval that antigravity/docs-2026-11-25-r1 pins. A re-fetch for this supplement on 2026-11-25 returned the same bytes. Line numbers below refer to that body.
+  - It documents PLUGIN_ROOT, the read-only plugin root, and PLUGIN_DATA, a persistent writable data directory outside the workspace, only as variables exported to every plugin MCP server process (lines 248-249 and 257). It tells hook authors to use relative paths rather than ${PLUGIN_ROOT}, because plugin hook commands run with the plugin root as their working directory (lines 255 and 461, and the validation checklist at line 582); it does not list either variable for hook processes.

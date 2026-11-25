@@ -95,7 +95,7 @@ pub(crate) use open_string_enum;
 /// snapshot constant and every contract id are spelled in one place.
 macro_rules! snapshot_literal {
     () => {
-        "commit-ff6aec9-r2"
+        "commit-3d86e43-r1"
     };
 }
 

@@ -254,7 +254,10 @@ wire_enum! {
     pub enum NotificationType {
         /// A permission prompt is waiting.
         PermissionPrompt = "permission_prompt",
-        /// The prompt has been idle.
+        /// The prompt has been idle: sent about 60 seconds after Claude
+        /// finishes, only while the user is not typing and no background
+        /// agent runs (Claude Code v2.1.288 or later), and never during a
+        /// usage-limit wait.
         IdlePrompt = "idle_prompt",
         /// Authentication succeeded.
         AuthSuccess = "auth_success",
@@ -276,6 +279,13 @@ wire_enum! {
         QuotaAutoResumeStale = "quota_auto_resume_stale",
         /// Quota auto-resume was disabled (Claude Code v2.1.234 or later).
         QuotaAutoResumeDisabled = "quota_auto_resume_disabled",
+        /// Sign-in completed but the new credentials could not be saved to
+        /// Claude Code's credential storage; sent in place of
+        /// `auth_success` (Claude Code v2.1.288 or later).
+        AuthStorageFailure = "auth_storage_failure",
+        /// A mod raised a notification with `$.ui.notify`; `title` is the
+        /// mod's name unless the mod set one.
+        PluginNotification = "plugin_notification",
     }
 }
 
@@ -284,7 +294,9 @@ wire_enum! {
     pub enum StopFailureError {
         /// The request was rate limited.
         RateLimit = "rate_limit",
-        /// The API was overloaded.
+        /// The API was overloaded. The current hooks reference no longer
+        /// lists it (an HTTP 529 reports `server_error`), but the Agent SDK
+        /// still types it, so older or other releases may send it.
         Overloaded = "overloaded",
         /// Authentication failed.
         AuthenticationFailed = "authentication_failed",
@@ -313,11 +325,40 @@ wire_enum! {
 }
 
 wire_enum! {
+    /// Who invoked the skill whose injected command a `PreSkillShellCommand`
+    /// hook receives.
+    ///
+    /// The Agent SDK closes the set to these three values, and the hooks
+    /// reference defines `other` as anything else. The snapshot keeps the set
+    /// open so a future value does not reject the payload; HookKit treats an
+    /// undocumented value like [`Self::Other`], which [`Self::is_other`] does.
+    pub enum SkillInvoker {
+        /// The user typed the skill's name, or an Agent SDK app sent it.
+        User = "user",
+        /// Claude, or a session-scoped scheduled task, invoked the skill.
+        Claude = "claude",
+        /// Anything else, such as a subagent that preloads the skill.
+        Other = "other",
+    }
+}
+
+impl SkillInvoker {
+    /// Reports whether the value is `other` or a value the snapshot does not
+    /// document, which HookKit treats like `other`.
+    pub fn is_other(&self) -> bool {
+        matches!(self, Self::Other | Self::Unknown(_))
+    }
+}
+
+wire_enum! {
     /// What triggered a Claude Code compaction.
     pub enum CompactTrigger {
         /// A manual `/compact`.
         Manual = "manual",
-        /// Automatic compaction at the auto-compact window.
+        /// Automatic compaction: at the auto-compact window, or idle
+        /// compaction of a large conversation left idle before its prompt
+        /// cache expires (terminal since Claude Code 2.1.299; VS Code and
+        /// Claude Desktop since 2.1.314).
         Auto = "auto",
     }
 }

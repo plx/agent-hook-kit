@@ -1,40 +1,58 @@
 //! Native Antigravity hook contracts.
 //!
-//! This crate implements the five command events of the frozen
-//! `antigravity/docs-2026-09-30-r1` snapshot, which records the unified hook
-//! reference shared by Antigravity 2.0, the Antigravity CLI, and the
-//! Antigravity IDE.
+//! This crate implements the six command events (`SessionStart`,
+//! `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, and
+//! `Stop`) of the `antigravity/docs-2026-11-25-r1` snapshot, which records the
+//! unified hook reference shared by the Antigravity App, the Antigravity CLI,
+//! the Antigravity IDE extensions, and the Antigravity IDE.
 //!
 //! # Wire model
 //!
 //! * Every hook receives one JSON document on stdin with camelCase fields.
-//!   The common fields are `conversationId`, `workspacePaths`,
-//!   `transcriptPath`, `artifactDirectoryPath`, and the optional `modelName`.
-//! * Every hook answers with exit code 0 and one JSON document on stdout.
+//!   The documented common fields are `conversationId`, `workspacePaths`,
+//!   `transcriptPath`, `artifactDirectoryPath`, and the optional `modelName`
+//!   and `lastUserInput`. CLI 1.5.4 and later also send `hookEventName` and
+//!   `cwd` according to its release notes; the reference does not document
+//!   them. Every one of these optional fields can be missing.
+//! * Every typed response is exit code 0 and one JSON document on stdout.
 //!   Exit-zero stderr is treated only as diagnostics.
-//! * The reference documents no nonzero-exit, timeout, or invalid-stdout
-//!   behavior. Antigravity 2.0 v2.12.0 and later report a failing hook as an
-//!   error and continue the conversation. Earlier 2.0 builds ended the
-//!   session, and the CLI and IDE notes say nothing. Do not assume that a
-//!   failing `PreToolUse` hook lets the pending tool run.
+//! * Hooks fail open. The plugin authoring guide says a plugin command hook
+//!   must exit 0 with a JSON response, and that any non-zero exit is logged
+//!   as a hook execution error and ignored; the hooks reference itself
+//!   defines no exit codes, so fail-open is inferred for workspace and
+//!   global hooks. CLI 1.4.3 and later keep a tool's result when a
+//!   `PostToolUse` hook fails to run, exits with an error, times out, or
+//!   prints invalid JSON, and Antigravity App v2.12.0 and later report a
+//!   failing hook and continue the conversation. A failing or skipped
+//!   `PreToolUse` or `PreInvocation` hook therefore enforces nothing (before
+//!   CLI 1.5.8, Windows hook commands containing double quotes were silently
+//!   skipped, and before Antigravity App v2.33.0 Windows command hooks with
+//!   quoted paths failed). A guard that must block when it breaks has to
+//!   answer at exit 0 with a blocking response, such as a `PreToolUse`
+//!   `deny` or [`PreInvocationOutput::block`]. Handlers time out after 30
+//!   seconds by default.
 //!
 //! # Forward compatibility
 //!
 //! Inputs are read tolerantly. Unknown top-level and `toolCall` fields are
-//! kept in `extra` maps. Open vocabularies such as [`TerminationReason`] keep
-//! values this snapshot does not list in an `Unknown` arm, verbatim, and a
-//! missing or `null` `toolCall.args` reads as an empty object. Input structs
-//! and the [`Event`], [`AnyInput`], and [`AnyCommandOutput`] enums are
-//! `#[non_exhaustive]`, so they can gain documented fields and events without
-//! a breaking change. Strict validation of documented values belongs to the
-//! contract schemas used by conformance, not to runtime parsing. A payload
-//! that does not fit the selected event is reported as
+//! kept in `extra` maps, `toolCall.id` is kept as raw JSON of any type, and
+//! `hookEventName` is kept verbatim and never checked against the selected
+//! event. Open vocabularies such as [`TerminationReason`] keep values this
+//! snapshot does not list in an `Unknown` arm, verbatim, and a missing or
+//! `null` `toolCall.args` reads as an empty object. Input structs, the
+//! [`SessionStartOutput`], [`PreInvocationOutput`], and [`PreToolUseOutput`]
+//! responses, and the [`Event`], [`AnyInput`], and [`AnyCommandOutput`] enums
+//! are `#[non_exhaustive]`, so they can gain documented fields and events
+//! without a breaking change. Strict validation of documented value sets
+//! belongs to the contract schemas used by conformance, not to runtime
+//! parsing, but a field of the wrong JSON type is rejected. A payload that
+//! does not fit the selected event is reported as
 //! `HookkitError::InvalidInputForHint`.
 #![deny(missing_docs)]
 
 pub mod environment;
 
-pub use environment::AntigravityCommandEnvironment;
+pub use environment::{AntigravityCommandEnvironment, AntigravityPluginEnvironment};
 
 use hookkit_core::{
     ContractId, EventCategory, EventId, EventSelector, EventSpec, HarnessId, HarnessSpec,
@@ -46,14 +64,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Antigravity protocol documentation snapshot implemented by this crate.
-pub const SNAPSHOT: SnapshotId = SnapshotId::builtin("docs-2026-09-30-r1");
+pub const SNAPSHOT: SnapshotId = SnapshotId::builtin("docs-2026-11-25-r1");
 
 /// Returns all Antigravity events with native command implementations.
+///
+/// The declared conformance cases are the snapshot's exit-zero process
+/// cases. Each event's `failure` process case (a non-zero exit, which
+/// Antigravity logs and ignores) is produced by a failing process, never by
+/// a typed output, so it is not declared here.
 pub fn events() -> Vec<NativeEventDescriptor> {
     vec![
-        NativeEventDescriptor::command::<PreInvocation>(&["inject-reminder"]),
+        NativeEventDescriptor::command::<SessionStart>(&["inject-system-message"]),
+        NativeEventDescriptor::command::<PreInvocation>(&["inject-reminder", "block-prompt"]),
         NativeEventDescriptor::command::<PostInvocation>(&["default", "force-continue"]),
-        NativeEventDescriptor::command::<PreToolUse>(&["ask"]),
+        NativeEventDescriptor::command::<PreToolUse>(&["ask", "auto-approve"]),
         NativeEventDescriptor::command::<PostToolUse>(&["no-op"]),
         NativeEventDescriptor::command::<Stop>(&["continue"]),
     ]
@@ -61,121 +85,110 @@ pub fn events() -> Vec<NativeEventDescriptor> {
 
 /// Returns event-identification metadata for the Antigravity snapshot.
 ///
-/// Invocation pairs and tool-use pairs share discriminator-free shapes and
-/// require an explicit event hint. Stop has a distinct, validated shape.
+/// No payload carries a documented discriminator. CLI 1.5.4 and later may
+/// send `hookEventName`, but the reference documents neither the field nor
+/// its values and earlier builds omit it, so identification never relies on
+/// it. `SessionStart` sends the common fields only, which every other
+/// event's payload also satisfies, so it overlaps all five. The invocation
+/// pair and the tool-use pair share discriminator-free shapes and need an
+/// explicit event hint. Stop has a distinct, validated shape and is still
+/// selected by shape, despite its overlap with `SessionStart`.
 pub fn identification_descriptors() -> Vec<IdentificationDescriptor> {
     vec![
-        IdentificationDescriptor::ambiguous::<PreInvocation>(&["PostInvocation"]),
-        IdentificationDescriptor::ambiguous::<PostInvocation>(&["PreInvocation"]),
-        IdentificationDescriptor::ambiguous::<PreToolUse>(&["PostToolUse"]),
-        IdentificationDescriptor::ambiguous::<PostToolUse>(&["PreToolUse"]),
-        IdentificationDescriptor::sound_shape::<Stop>(&[]),
+        IdentificationDescriptor::ambiguous::<SessionStart>(&[
+            "PreToolUse",
+            "PostToolUse",
+            "PreInvocation",
+            "PostInvocation",
+            "Stop",
+        ]),
+        IdentificationDescriptor::ambiguous::<PreInvocation>(&["PostInvocation", "SessionStart"]),
+        IdentificationDescriptor::ambiguous::<PostInvocation>(&["PreInvocation", "SessionStart"]),
+        IdentificationDescriptor::ambiguous::<PreToolUse>(&["PostToolUse", "SessionStart"]),
+        IdentificationDescriptor::ambiguous::<PostToolUse>(&["PreToolUse", "SessionStart"]),
+        IdentificationDescriptor::sound_shape::<Stop>(&["SessionStart"]),
     ]
 }
 
-/// Discriminator-free PreInvocation input. Unknown additions are retained.
+/// Native Antigravity input observed when a new conversation session
+/// starts, before the first model invocation.
 ///
-/// `PostInvocation` shares this wire shape; see [`PostInvocationInput`].
+/// The payload carries the common fields only, so nothing in it sets it
+/// apart from another event's payload: select the event with an explicit
+/// hint. Unknown additions are retained.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
-pub struct PreInvocationInput {
+pub struct SessionStartInput {
     /// Native conversation identifier (a UUID).
     pub conversation_id: String,
-    /// Mounted workspace roots.
-    ///
-    /// The list may be empty, for example in a conversation launched without a
-    /// workspace folder or a standalone Antigravity 2.0 conversation. The
-    /// field itself is required.
+    /// Mounted workspace roots. The list may be empty, or hold several roots
+    /// in a multi-root IDE-extension session; see
+    /// [`PreInvocationInput::workspace_paths`].
     pub workspace_paths: Vec<Utf8PathBuf>,
-    /// Path to the native `transcript.jsonl` conversation log.
-    ///
-    /// The reference calls it absolute, but every official example uses a
-    /// literal `~/` prefix. HookKit does not expand it.
+    /// Path to the native `transcript.jsonl` conversation log. It may carry a
+    /// literal `~/` prefix.
     pub transcript_path: Utf8PathBuf,
-    /// Directory holding the conversation's artifacts and screenshots.
-    ///
-    /// Like `transcript_path`, it may carry a literal `~/` prefix.
+    /// Directory holding the conversation's artifacts and screenshots. It may
+    /// carry a literal `~/` prefix.
     pub artifact_directory_path: Utf8PathBuf,
-    /// Name or identifier of the model handling the invocation, for example
-    /// `gemini-3.6-flash-medium`.
-    ///
-    /// `None` when the payload omits it: builds released before the field
-    /// was documented may not send it. An explicit JSON `null` is also read
-    /// as `None`.
+    /// Name or identifier of the model, exactly as sent; see
+    /// [`PreInvocationInput::model_name`] and
+    /// [`SessionStartInput::known_model_name`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
-    /// Zero-based sequence number of the current model invocation. The first
-    /// invocation is 0.
-    pub invocation_num: u64,
-    /// Number of steps currently present in the trajectory.
-    pub initial_num_steps: u64,
+    /// The most recent user prompt, exactly as sent; see
+    /// [`PreInvocationInput::last_user_input`].
+    ///
+    /// The official `SessionStart` example omits it, and whether it is
+    /// absent, empty, or the first prompt when a session starts is
+    /// undocumented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_user_input: Option<String>,
+    /// Event name sent by CLI 1.5.4 and later; see
+    /// [`PreInvocationInput::hook_event_name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_event_name: Option<String>,
+    /// The agent's working directory, sent by CLI 1.5.4 and later; see
+    /// [`PreInvocationInput::cwd`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<Utf8PathBuf>,
     /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Step to inject into the trajectory from an invocation hook.
-///
-/// Each step serializes as an object with exactly one of `toolCall`,
-/// `userMessage`, or `ephemeralMessage`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(untagged)]
-#[non_exhaustive]
-pub enum InjectStep {
-    /// Injects a native tool-call object. The reference documents its shape
-    /// only as "an object".
-    ToolCall {
-        /// Tool call serialized under the native `toolCall` key.
-        #[serde(rename = "toolCall")]
-        tool_call: serde_json::Map<String, serde_json::Value>,
-    },
-    /// Injects a persistent user message.
-    UserMessage {
-        /// Message serialized under the native `userMessage` key.
-        #[serde(rename = "userMessage")]
-        user_message: String,
-    },
-    /// Injects a transient system message.
-    EphemeralMessage {
-        /// Message serialized under the native `ephemeralMessage` key.
-        #[serde(rename = "ephemeralMessage")]
-        ephemeral_message: String,
-    },
-}
-
-impl InjectStep {
-    /// Creates a step that injects a native tool-call object.
-    pub fn tool_call(tool_call: serde_json::Map<String, serde_json::Value>) -> Self {
-        Self::ToolCall { tool_call }
-    }
-
-    /// Creates a step that injects a persistent user message.
-    pub fn user_message(message: impl Into<String>) -> Self {
-        Self::UserMessage {
-            user_message: message.into(),
-        }
-    }
-
-    /// Creates a step that injects a transient system message.
-    pub fn ephemeral_message(message: impl Into<String>) -> Self {
-        Self::EphemeralMessage {
-            ephemeral_message: message.into(),
-        }
+impl SessionStartInput {
+    /// Returns the model name unless it is absent, empty, or whitespace only.
+    ///
+    /// Before CLI 1.5.3 a session using a custom model could receive a
+    /// placeholder or empty `modelName`, so a blank value means unknown
+    /// rather than a model identifier.
+    pub fn known_model_name(&self) -> Option<&str> {
+        non_blank(self.model_name.as_deref())
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-/// Native response from a pre-invocation command hook.
-pub struct PreInvocationOutput {
-    /// Ordered steps to inject before the model is called. An empty list is
+#[non_exhaustive]
+/// Native response from a `SessionStart` command hook.
+///
+/// The reference documents only `injectSteps`, with the `PreInvocation`
+/// step schema, and no `terminationBehavior`, so a session-start hook cannot
+/// stop the session. Whether an [`InjectStep::error_message`] step has any
+/// effect here is unconfirmed.
+pub struct SessionStartOutput {
+    /// Ordered steps to inject at the start of the session. An empty list is
     /// omitted, so a no-op response is exactly `{}`.
+    ///
+    /// Injected `systemMessage` and `userMessage` steps stay in the
+    /// conversation history for later turns.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub inject_steps: Vec<InjectStep>,
 }
 
-impl PreInvocationOutput {
+impl SessionStartOutput {
     /// Creates a response that injects no steps (`{}`).
     pub fn no_op() -> Self {
         Self::default()
@@ -202,6 +215,413 @@ impl PreInvocationOutput {
     }
 }
 
+/// Native Antigravity `SessionStart` command contract.
+///
+/// Fires once when a new conversation session starts, before the first
+/// model invocation. Whether it also fires on resume, fork, compaction,
+/// subagent conversations, or an automatic resume after an app restart is
+/// undocumented, and builds that predate the event never send it; for those,
+/// a `PreInvocation` with `invocationNum` 0 remains the only start signal.
+pub enum SessionStart {}
+
+impl EventSpec for SessionStart {
+    type Input = SessionStartInput;
+    type CommandEnvironment = AntigravityCommandEnvironment;
+    type CommandOutput = SessionStartOutput;
+
+    const HARNESS: HarnessId = HarnessId::ANTIGRAVITY;
+    const SNAPSHOT: SnapshotId = SNAPSHOT;
+    const EVENT: EventId = EventId::builtin(Self::HARNESS, "SessionStart");
+    const CATEGORY: EventCategory = EventCategory::Session;
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-11-25-r1/SessionStart");
+
+    fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
+        deserialize_input(invocation, Self::EVENT)
+    }
+
+    fn emit(output: Self::CommandOutput) -> hookkit_core::Result<ProcessEmission> {
+        ProcessEmission::command_json(Self::CONTRACT, &output)
+    }
+
+    /// Reports an observed [`hookkit_core::SessionBoundaryKind::Startup`]
+    /// boundary keyed by the conversation identifier, since the event fires
+    /// once per new conversation.
+    fn context(input: &Self::Input) -> NativeContext {
+        NativeContext {
+            session_boundary: Some(
+                hookkit_core::SessionBoundaryContext::observed(
+                    hookkit_core::SessionBoundaryKind::Startup,
+                )
+                .with_occurrence_key(input.conversation_id.clone()),
+            ),
+            ..common_context(
+                &input.conversation_id,
+                &input.workspace_paths,
+                &input.transcript_path,
+                &input.artifact_directory_path,
+            )
+        }
+    }
+}
+
+/// Discriminator-free PreInvocation input. Unknown additions are retained.
+///
+/// `PostInvocation` shares this wire shape; see [`PostInvocationInput`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct PreInvocationInput {
+    /// Native conversation identifier (a UUID).
+    pub conversation_id: String,
+    /// Mounted workspace roots.
+    ///
+    /// The list may be empty, for example in a conversation launched without a
+    /// workspace folder or a standalone Antigravity App conversation, and a
+    /// multi-root IDE-extension session may send several roots. The field
+    /// itself is required.
+    pub workspace_paths: Vec<Utf8PathBuf>,
+    /// Path to the native `transcript.jsonl` conversation log.
+    ///
+    /// The reference calls it absolute, but every official example uses a
+    /// literal `~/` prefix. HookKit does not expand it.
+    pub transcript_path: Utf8PathBuf,
+    /// Directory holding the conversation's artifacts and screenshots.
+    ///
+    /// Like `transcript_path`, it may carry a literal `~/` prefix.
+    pub artifact_directory_path: Utf8PathBuf,
+    /// Name or identifier of the model handling the invocation, for example
+    /// `gemini-3.6-flash-medium`, exactly as sent.
+    ///
+    /// `None` when the payload omits it: builds released before the field
+    /// was documented may not send it. An explicit JSON `null` is also read
+    /// as `None`. Before CLI 1.5.3 a session using a custom model could
+    /// receive a placeholder or empty value; use
+    /// [`PreInvocationInput::known_model_name`] to treat a blank value as
+    /// unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    /// The most recent user prompt in the conversation, exactly as sent.
+    ///
+    /// `None` when the payload omits it: the field is documented, but CLI
+    /// builds before 1.4.7 and Antigravity App builds before v2.28.0 do not
+    /// send it, and no IDE or IDE-extension note mentions it. An explicit
+    /// JSON `null` is also read as `None`; an empty string is kept as sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_user_input: Option<String>,
+    /// Name of the event being handled, as sent by CLI 1.5.4 and later.
+    ///
+    /// Only the release notes mention it; the reference documents neither
+    /// the field nor its value set. HookKit keeps it verbatim and never uses
+    /// it to select or reject an event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_event_name: Option<String>,
+    /// The agent's working directory, as sent by CLI 1.5.4 and later.
+    ///
+    /// Only the release notes mention it. It can differ from the hook
+    /// process's working directory, which for a plugin hook is the plugin
+    /// root; the working directory of workspace and global hooks is
+    /// undocumented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<Utf8PathBuf>,
+    /// Zero-based sequence number of the current model invocation. The first
+    /// invocation is 0.
+    pub invocation_num: u64,
+    /// Number of steps currently present in the trajectory.
+    pub initial_num_steps: u64,
+    /// Unknown protocol fields retained for forward compatibility.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+impl PreInvocationInput {
+    /// Returns the model name unless it is absent, empty, or whitespace only.
+    ///
+    /// Before CLI 1.5.3 a session using a custom model could receive a
+    /// placeholder or empty `modelName`, so a blank value means unknown
+    /// rather than a model identifier.
+    pub fn known_model_name(&self) -> Option<&str> {
+        non_blank(self.model_name.as_deref())
+    }
+}
+
+/// Step to inject into the trajectory from a `SessionStart`,
+/// `PreInvocation`, or `PostInvocation` hook.
+///
+/// Each step serializes as an object with exactly one key. The reference
+/// documents four: `systemMessage`, `userMessage`, the deprecated
+/// `ephemeralMessage`, and `errorMessage`. Use [`InjectStep::system_message`]
+/// for an instruction to the agent. Injected `systemMessage` and
+/// `userMessage` steps stay in the conversation history for later turns, so
+/// a hook that runs on every invocation should inject a message only when
+/// its content changes.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum InjectStep {
+    /// Injects a native tool-call object.
+    ///
+    /// The reference no longer documents a `toolCall` step, and the
+    /// `docs-2026-11-25-r1` output schemas reject one. Whether the runtime
+    /// still accepts it is unknown.
+    #[deprecated(
+        note = "Antigravity no longer documents the `toolCall` inject step (antigravity/docs-2026-11-25-r1), and the output schemas reject it"
+    )]
+    ToolCall {
+        /// Tool call serialized under the native `toolCall` key.
+        #[serde(rename = "toolCall")]
+        tool_call: serde_json::Map<String, serde_json::Value>,
+    },
+    /// Injects a persistent message from the user.
+    UserMessage {
+        /// Message serialized under the native `userMessage` key.
+        #[serde(rename = "userMessage")]
+        user_message: String,
+    },
+    /// Injects a transient system message.
+    ///
+    /// The reference deprecates `ephemeralMessage` in favor of
+    /// [`InjectStep::SystemMessage`]. Builds that predate `systemMessage`
+    /// may accept only this kind.
+    #[deprecated(
+        note = "Antigravity deprecates the `ephemeralMessage` inject step in favor of `systemMessage`; use `InjectStep::system_message` unless the target build predates it"
+    )]
+    EphemeralMessage {
+        /// Message serialized under the native `ephemeralMessage` key.
+        #[serde(rename = "ephemeralMessage")]
+        ephemeral_message: String,
+    },
+    /// Injects an out-of-band system instruction for the agent.
+    SystemMessage {
+        /// Instruction serialized under the native `systemMessage` key.
+        #[serde(rename = "systemMessage")]
+        system_message: SystemMessageStep,
+    },
+    /// Displays an error message to the user without sending it to the
+    /// model.
+    ///
+    /// It marks the turn as errored, which makes a non-interactive `-p` run
+    /// exit non-zero, and does not stop execution on its own: pair it with a
+    /// `terminate` termination behavior to block (see
+    /// [`PreInvocationOutput::block`]). Introduced by CLI 1.4.11; whether it
+    /// has any effect in `SessionStart` or `PostInvocation` is unconfirmed.
+    ErrorMessage {
+        /// Error serialized under the native `errorMessage` key.
+        #[serde(rename = "errorMessage")]
+        error_message: ErrorMessageStep,
+    },
+}
+
+impl InjectStep {
+    /// Creates a step that injects a native tool-call object.
+    #[deprecated(
+        note = "Antigravity no longer documents the `toolCall` inject step (antigravity/docs-2026-11-25-r1), and the output schemas reject it"
+    )]
+    pub fn tool_call(tool_call: serde_json::Map<String, serde_json::Value>) -> Self {
+        #[allow(deprecated)]
+        Self::ToolCall { tool_call }
+    }
+
+    /// Creates a step that injects a persistent message from the user.
+    pub fn user_message(message: impl Into<String>) -> Self {
+        Self::UserMessage {
+            user_message: message.into(),
+        }
+    }
+
+    /// Creates a step that injects a transient system message.
+    ///
+    /// The reference deprecates `ephemeralMessage`: prefer
+    /// [`InjectStep::system_message`] unless the target build predates
+    /// `systemMessage`.
+    #[deprecated(
+        note = "Antigravity deprecates the `ephemeralMessage` inject step in favor of `systemMessage`; use `InjectStep::system_message` unless the target build predates it"
+    )]
+    pub fn ephemeral_message(message: impl Into<String>) -> Self {
+        #[allow(deprecated)]
+        Self::EphemeralMessage {
+            ephemeral_message: message.into(),
+        }
+    }
+
+    /// Creates a step that injects a system instruction for the agent
+    /// (`{"systemMessage":{"systemMessage":…}}`).
+    pub fn system_message(message: impl Into<String>) -> Self {
+        Self::SystemMessage {
+            system_message: SystemMessageStep::new(message),
+        }
+    }
+
+    /// Creates a system-instruction step that also carries `metadata`, for
+    /// example `{"source":"policy"}`. The reference does not document the
+    /// metadata's value types or effect.
+    pub fn system_message_with_metadata(
+        message: impl Into<String>,
+        metadata: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        Self::SystemMessage {
+            system_message: SystemMessageStep::new(message).with_metadata(metadata),
+        }
+    }
+
+    /// Creates a step that shows `message` to the user as an error without
+    /// sending it to the model (`{"errorMessage":{"userMessage":…}}`).
+    ///
+    /// It does not stop execution on its own; see
+    /// [`InjectStep::ErrorMessage`].
+    pub fn error_message(message: impl Into<String>) -> Self {
+        Self::ErrorMessage {
+            error_message: ErrorMessageStep::new(message),
+        }
+    }
+}
+
+/// Body of an [`InjectStep::SystemMessage`] step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct SystemMessageStep {
+    /// Instruction text, serialized under the nested `systemMessage` key.
+    pub system_message: String,
+    /// Optional metadata object. The reference gives
+    /// `{"source": "policy"}` as an example and documents nothing else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl SystemMessageStep {
+    /// Creates an instruction without metadata.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            system_message: message.into(),
+            metadata: None,
+        }
+    }
+
+    /// Sets the metadata object.
+    pub fn with_metadata(mut self, metadata: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
+
+/// Body of an [`InjectStep::ErrorMessage`] step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ErrorMessageStep {
+    /// Message shown to the user, serialized under the nested `userMessage`
+    /// key.
+    pub user_message: String,
+}
+
+impl ErrorMessageStep {
+    /// Creates an error message shown to the user.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            user_message: message.into(),
+        }
+    }
+}
+
+/// Loop control after a pre-invocation hook response.
+///
+/// Unlike [`TerminationBehavior`], it has no `force_continue`: the reference
+/// documents that value only for `PostInvocation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum PreInvocationTermination {
+    /// `""`: proceed to the model call, as if the field were omitted.
+    #[serde(rename = "")]
+    Default,
+    /// `terminate`: stop execution immediately, before the model is called.
+    ///
+    /// Pair it with an [`InjectStep::error_message`] step to show the user
+    /// why; see [`PreInvocationOutput::block`].
+    Terminate,
+}
+
+impl PreInvocationTermination {
+    /// Returns the exact native wire string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "",
+            Self::Terminate => "terminate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+/// Native response from a pre-invocation command hook.
+///
+/// Build it with the constructors; the struct is `#[non_exhaustive]` because
+/// the reference keeps adding response fields.
+pub struct PreInvocationOutput {
+    /// Ordered steps to inject before the model is called. An empty list is
+    /// omitted, so a no-op response is exactly `{}`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inject_steps: Vec<InjectStep>,
+    /// Optional pre-model control. `None` omits the field, which proceeds to
+    /// the model call like [`PreInvocationTermination::Default`].
+    ///
+    /// Documented from CLI 1.4.11; the App and IDE notes do not mention it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub termination_behavior: Option<PreInvocationTermination>,
+}
+
+impl PreInvocationOutput {
+    /// Creates a response that injects no steps and proceeds (`{}`).
+    pub fn no_op() -> Self {
+        Self::default()
+    }
+
+    /// Creates a response containing exactly one injected step.
+    pub fn inject(step: InjectStep) -> Self {
+        Self {
+            inject_steps: vec![step],
+            termination_behavior: None,
+        }
+    }
+
+    /// Creates a response that injects the given steps in order.
+    pub fn inject_all(steps: impl IntoIterator<Item = InjectStep>) -> Self {
+        Self {
+            inject_steps: steps.into_iter().collect(),
+            termination_behavior: None,
+        }
+    }
+
+    /// Creates a response that blocks the prompt: it shows `message` to the
+    /// user as an error, without sending it to the model, and stops
+    /// execution before the model is called.
+    ///
+    /// Emits exactly
+    /// `{"injectSteps":[{"errorMessage":{"userMessage":…}}],"terminationBehavior":"terminate"}`,
+    /// the reference's block example. In non-interactive `-p` mode the turn
+    /// is marked as errored and the agent exits non-zero. Both fields are
+    /// documented from CLI 1.4.11; a build that predates them may reject or
+    /// ignore the response, and a failing hook fails open, so the prompt can
+    /// still reach the model there.
+    pub fn block(message: impl Into<String>) -> Self {
+        Self::inject(InjectStep::error_message(message))
+            .with_termination_behavior(PreInvocationTermination::Terminate)
+    }
+
+    /// Appends one step after any already present.
+    pub fn with_step(mut self, step: InjectStep) -> Self {
+        self.inject_steps.push(step);
+        self
+    }
+
+    /// Sets the explicit pre-model control value.
+    pub fn with_termination_behavior(mut self, behavior: PreInvocationTermination) -> Self {
+        self.termination_behavior = Some(behavior);
+        self
+    }
+}
+
 /// Native Antigravity `PreInvocation` command contract.
 pub enum PreInvocation {}
 
@@ -215,7 +635,7 @@ impl EventSpec for PreInvocation {
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PreInvocation");
     const CATEGORY: EventCategory = EventCategory::Model;
     const CONTRACT: ContractId =
-        ContractId::builtin("antigravity/docs-2026-09-30-r1/PreInvocation");
+        ContractId::builtin("antigravity/docs-2026-11-25-r1/PreInvocation");
 
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
@@ -233,10 +653,15 @@ impl EventSpec for PreInvocation {
 /// Native post-invocation input, which shares the pre-invocation wire shape.
 ///
 /// The reference does not say whether `initial_num_steps` counts steps
-/// before or after the completed invocation.
+/// before or after the completed invocation. It says the event fires after
+/// each model invocation, while the plugin authoring guide describes it per
+/// response turn.
 pub type PostInvocationInput = PreInvocationInput;
 
 /// Loop control after a post-invocation hook response.
+///
+/// `PreInvocation` uses [`PreInvocationTermination`], which has no
+/// `force_continue`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -326,7 +751,7 @@ impl EventSpec for PostInvocation {
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PostInvocation");
     const CATEGORY: EventCategory = EventCategory::Model;
     const CONTRACT: ContractId =
-        ContractId::builtin("antigravity/docs-2026-09-30-r1/PostInvocation");
+        ContractId::builtin("antigravity/docs-2026-11-25-r1/PostInvocation");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
     }
@@ -359,11 +784,30 @@ pub struct ToolCall {
     /// re-serializes exactly as it was sent: without the key, as `null`, or
     /// as `{}`.
     pub args: serde_json::Map<String, serde_json::Value>,
+    /// Tool-call identifier exactly as sent. CLI 1.5.4 and later send it so
+    /// that a `PostToolUse` call can be matched to its `PreToolUse` call.
+    ///
+    /// Only the release notes mention it. They do not say whether it is a
+    /// string or a number, and that it is equal across the pair is
+    /// unobserved, so it is kept as raw JSON: `None` when the key is absent
+    /// and `Some(Value::Null)` for an explicit `null`. Use
+    /// [`ToolCall::id_str`] for a string identifier.
+    pub id: Option<serde_json::Value>,
     /// Unknown tool-call fields retained for forward compatibility.
     pub extra: BTreeMap<String, serde_json::Value>,
     /// How the payload sent `args`, so an empty object can re-serialize in
     /// the same form.
     args_form: ArgsForm,
+}
+
+impl ToolCall {
+    /// Returns the tool-call identifier when it is a non-blank JSON string.
+    ///
+    /// A numeric or other non-string identifier returns `None`; read
+    /// [`ToolCall::id`] for the raw value.
+    pub fn id_str(&self) -> Option<&str> {
+        non_blank(self.id.as_ref().and_then(serde_json::Value::as_str))
+    }
 }
 
 /// Wire form in which a [`ToolCall`] carried its `args`.
@@ -390,6 +834,13 @@ struct ToolCallWire {
         skip_serializing_if = "Option::is_none"
     )]
     args: Option<Option<serde_json::Map<String, serde_json::Value>>>,
+    /// `None` when the key is absent; an explicit `null` is `Some(Null)`.
+    #[serde(
+        default,
+        deserialize_with = "present_value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    id: Option<serde_json::Value>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -402,6 +853,14 @@ fn present_nullable_object<'de, D: Deserializer<'de>>(
     Option::deserialize(deserializer).map(Some)
 }
 
+/// Deserializes any present value, including `null`, as `Some`; a missing
+/// key takes the field's default (`None`) instead.
+fn present_value<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
 impl From<ToolCallWire> for ToolCall {
     fn from(wire: ToolCallWire) -> Self {
         let (args_form, args) = match wire.args {
@@ -412,6 +871,7 @@ impl From<ToolCallWire> for ToolCall {
         Self {
             name: wire.name,
             args,
+            id: wire.id,
             extra: wire.extra,
             args_form,
         }
@@ -429,6 +889,7 @@ impl From<ToolCall> for ToolCallWire {
         Self {
             name: call.name,
             args,
+            id: call.id,
             extra: call.extra,
         }
     }
@@ -450,10 +911,23 @@ pub struct PreToolUseInput {
     /// Directory holding the conversation's artifacts and screenshots. It may
     /// carry a literal `~/` prefix.
     pub artifact_directory_path: Utf8PathBuf,
-    /// Name or identifier of the model handling the invocation; `None` when
-    /// the payload omits it.
+    /// Name or identifier of the model, exactly as sent; see
+    /// [`PreInvocationInput::model_name`] and
+    /// [`PreToolUseInput::known_model_name`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// The most recent user prompt, exactly as sent; see
+    /// [`PreInvocationInput::last_user_input`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_user_input: Option<String>,
+    /// Event name sent by CLI 1.5.4 and later; see
+    /// [`PreInvocationInput::hook_event_name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_event_name: Option<String>,
+    /// The agent's working directory, sent by CLI 1.5.4 and later; see
+    /// [`PreInvocationInput::cwd`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<Utf8PathBuf>,
     /// Tool call about to execute.
     pub tool_call: ToolCall,
     /// Zero-based index of the current step in the whole conversation
@@ -464,35 +938,56 @@ pub struct PreToolUseInput {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+impl PreToolUseInput {
+    /// Returns the model name unless it is absent, empty, or whitespace only;
+    /// see [`PreInvocationInput::known_model_name`].
+    pub fn known_model_name(&self) -> Option<&str> {
+        non_blank(self.model_name.as_deref())
+    }
+}
+
 /// Authorization decision returned by a pre-tool hook.
 ///
-/// Antigravity requires a decision on every response and documents no
-/// pass-through or "no objection" value; an empty string is outside the
-/// documented vocabulary. [`ToolDecision::Ask`] is the value that defers to
-/// the user's normal permission policy.
+/// Antigravity requires a decision on every response; an empty string is
+/// outside the documented vocabulary. In the current reference
+/// [`ToolDecision::Allow`] is the pass-through and
+/// [`ToolDecision::AutoApprove`] the explicit approval, but the reference
+/// does not date that change; see [`PreToolUseOutput`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ToolDecision {
-    /// `allow`: automatically approve the tool call.
+    /// `allow`: let the call proceed, delegating to the next hook or the
+    /// default policy.
     ///
-    /// This is an auto-approval, not a pass-through. It bypasses the prompts
-    /// that the user's Ask presets and permission settings would otherwise
-    /// show.
+    /// This is a pass-through in the current reference: the user's
+    /// permission settings still decide whether the call prompts. The
+    /// redefinition is undated, and builds described by
+    /// `antigravity/docs-2026-09-30-r1` and earlier treated `allow` as an
+    /// automatic approval that bypassed those prompts.
     Allow,
+    /// `auto_approve`: approve the call where the default policy would
+    /// otherwise prompt, while honoring explicit user-configured rules.
+    ///
+    /// Its introduction is undated (CLI 1.5.7 already fixes it), and a build
+    /// that predates it may treat it as an unknown decision: CLI builds
+    /// before 1.0.16 failed even an empty decision with an "unknown pre-tool
+    /// hook decision" error. Before CLI 1.5.7 it could also bypass an
+    /// organization's admin-enforced review; Antigravity App v2.33.0 fixes
+    /// hooks bypassing enforced review without naming the value.
+    AutoApprove,
     /// `deny`: hard-block the tool call immediately.
     Deny,
     /// `ask`: prompt the user, but respect "Always Allow" settings and cached
-    /// grants. This is the closest documented equivalent of deferring to
-    /// normal policy.
+    /// grants.
     Ask,
     /// `force_ask`: always prompt the user, ignoring cached permissions.
     ForceAsk,
     /// `deny_unless_prior_grant`: deny unless a prior user grant already
     /// approved the resource.
     ///
-    /// The unified reference documents it for every surface, but the IDE
-    /// build described by the superseded IDE page (v2.5.5) may not accept it.
+    /// The unified reference documents it for every surface, but IDE v2.5.5
+    /// and earlier may not accept it.
     DenyUnlessPriorGrant,
 }
 
@@ -501,6 +996,7 @@ impl ToolDecision {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Allow => "allow",
+            Self::AutoApprove => "auto_approve",
             Self::Deny => "deny",
             Self::Ask => "ask",
             Self::ForceAsk => "force_ask",
@@ -511,31 +1007,59 @@ impl ToolDecision {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 /// Native response from an Antigravity pre-tool command hook.
 ///
-/// # No pass-through
+/// Build it with the constructors; the struct is `#[non_exhaustive]` because
+/// the reference keeps adding response fields.
 ///
-/// Antigravity requires `decision` on every response and documents no
-/// pass-through or "no objection" value. An empty or missing decision is
-/// outside the documented protocol: CLI 1.0.16 tolerates an empty string, but
-/// its effect is undocumented, so this type cannot express it.
+/// # Approval and pass-through
 ///
-/// [`PreToolUseOutput::allow`] is an auto-approval. It bypasses the prompts
-/// that the user's Ask presets and permission settings would otherwise show,
-/// so it is not a neutral answer. A hook with no objection that should leave
-/// the call to the user's normal policy returns [`PreToolUseOutput::ask`],
-/// which prompts only where no "Always Allow" setting already covers the
-/// call.
+/// Antigravity requires `decision` on every response. An empty or missing
+/// decision is outside the documented protocol: CLI 1.0.16 tolerates an
+/// empty string, but its effect is undocumented, so this type cannot express
+/// it.
+///
+/// The current reference makes [`PreToolUseOutput::allow`] a pass-through
+/// to the next hook or the default policy, and [`PreToolUseOutput::auto_approve`]
+/// the explicit approval. The redefinition of `allow` is undated: on a build
+/// that still has the earlier meaning, `allow` auto-approves the call and
+/// bypasses the prompts that the user's permission settings would show.
+/// A hook with no objection that must never approve a call on any build can
+/// return [`PreToolUseOutput::ask`], which prompts only where no "Always
+/// Allow" setting already covers the call.
 pub struct PreToolUseOutput {
     /// Authorization decision for the pending tool call.
     pub decision: ToolDecision,
-    /// Optional explanation shown to the agent or user. CLI 1.1.28 and later
-    /// show it as a `Reason:` line in tool-approval prompts.
+    /// Optional explanation shown to the agent or user. From CLI 1.1.28,
+    /// tool-approval prompts can include a `Reason:` line when a hook flagged
+    /// the action; whether that line carries this text is undocumented.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Permission resources in `action(target)` form, for example
-    /// `read_file(/path)` or `command(npm test)`, that override default tool
-    /// permissions.
+    /// Replacement arguments shallow-merged into `toolCall.args` before the
+    /// tool runs; `None` omits the field.
+    ///
+    /// Each top-level key replaces the original argument of that name (a
+    /// nested object is replaced whole), and keys not named keep their
+    /// original values, so a merge cannot remove an argument; the effect of
+    /// a `null` value is undocumented. When arguments change, Antigravity
+    /// prepends a notice naming the changed keys to the tool result, which
+    /// the model sees. Whether the merge applies with `deny`, `ask`, or
+    /// `force_ask`, and whether permission checks see the original or the
+    /// merged arguments, is undocumented, and no release note dates the
+    /// field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overwrite: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Permission resources in `action(target)` form that override default
+    /// tool permissions, for example `read_file(/path)` or
+    /// `command(npm test)`.
+    ///
+    /// The permission settings use the actions `read_file`, `write_file`,
+    /// `read_url`, `execute_url`, `download_url`, `command`, `unsandboxed`
+    /// (deprecated; honored only for business and enterprise accounts), and
+    /// `mcp(server/tool)`. The reference does not say which of them
+    /// `permissionOverrides` honors, on which surfaces, or how an override
+    /// combines with the decision.
     ///
     /// Emission removes duplicate entries and keeps the first occurrence of
     /// each, so a duplicate never turns a decision into a hook failure.
@@ -544,19 +1068,35 @@ pub struct PreToolUseOutput {
 }
 
 impl PreToolUseOutput {
-    /// Creates a response with `decision` and no reason or overrides.
+    /// Creates a response with `decision` and no reason, overwrite, or
+    /// overrides.
     pub fn new(decision: ToolDecision) -> Self {
         Self {
             decision,
             reason: None,
+            overwrite: None,
             permission_overrides: Vec::new(),
         }
     }
 
-    /// Creates an `allow` response, which auto-approves the call and bypasses
-    /// Ask presets. It is not a pass-through.
+    /// Creates an `allow` response.
+    ///
+    /// In the current reference this is a pass-through: the call proceeds
+    /// under the next hook or the default policy, which may still prompt.
+    /// Builds that predate the redefinition auto-approve the call instead;
+    /// see [`PreToolUseOutput`].
     pub fn allow() -> Self {
         Self::new(ToolDecision::Allow)
+    }
+
+    /// Creates an `auto_approve` response, which approves the call where the
+    /// default policy would prompt while honoring explicit user-configured
+    /// rules.
+    ///
+    /// A build that predates `auto_approve` may treat it as an unknown
+    /// decision; see [`ToolDecision::AutoApprove`].
+    pub fn auto_approve() -> Self {
+        Self::new(ToolDecision::AutoApprove)
     }
 
     /// Creates a `deny` response, which hard-blocks the call.
@@ -583,6 +1123,17 @@ impl PreToolUseOutput {
     /// Sets the explanation shown to the agent or user.
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = Some(reason.into());
+        self
+    }
+
+    /// Sets the replacement arguments to shallow-merge into `toolCall.args`,
+    /// replacing any set earlier.
+    ///
+    /// Pass only the keys to change: a key left out keeps its original
+    /// value, so this cannot remove an argument. See
+    /// [`PreToolUseOutput::overwrite`].
+    pub fn with_overwrite(mut self, args: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.overwrite = Some(args);
         self
     }
 
@@ -618,7 +1169,7 @@ impl EventSpec for PreToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PreToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-30-r1/PreToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-11-25-r1/PreToolUse");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
     }
@@ -629,12 +1180,17 @@ impl EventSpec for PreToolUse {
             .retain(|resource| seen.insert(resource.clone()));
         ProcessEmission::command_json(Self::CONTRACT, &output)
     }
+    /// Reports the common fields and, when the payload carries a string
+    /// `toolCall.id` (CLI 1.5.4 and later), that tool-call identifier.
     fn context(input: &Self::Input) -> NativeContext {
-        common_context(
-            &input.conversation_id,
-            &input.workspace_paths,
-            &input.transcript_path,
-            &input.artifact_directory_path,
+        tool_context(
+            common_context(
+                &input.conversation_id,
+                &input.workspace_paths,
+                &input.transcript_path,
+                &input.artifact_directory_path,
+            ),
+            Some(&input.tool_call),
         )
     }
 }
@@ -655,13 +1211,26 @@ pub struct PostToolUseInput {
     /// Directory holding the conversation's artifacts and screenshots. It may
     /// carry a literal `~/` prefix.
     pub artifact_directory_path: Utf8PathBuf,
-    /// Name or identifier of the model handling the invocation; `None` when
-    /// the payload omits it.
+    /// Name or identifier of the model, exactly as sent; see
+    /// [`PreInvocationInput::model_name`] and
+    /// [`PostToolUseInput::known_model_name`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// The most recent user prompt, exactly as sent; see
+    /// [`PreInvocationInput::last_user_input`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_user_input: Option<String>,
+    /// Event name sent by CLI 1.5.4 and later; see
+    /// [`PreInvocationInput::hook_event_name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_event_name: Option<String>,
+    /// The agent's working directory, sent by CLI 1.5.4 and later; see
+    /// [`PreInvocationInput::cwd`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<Utf8PathBuf>,
     /// Tool call that finished executing.
     ///
-    /// Current Antigravity 2.0 and CLI payloads are expected to carry it. It
+    /// Current Antigravity App and CLI payloads are expected to carry it. It
     /// is `None` when the payload omits it, as the IDE reference example and
     /// earlier generic references did. A present `toolCall` must still carry
     /// `name`; its `args` may be missing or `null`.
@@ -675,7 +1244,9 @@ pub struct PostToolUseInput {
     /// Antigravity sends an empty string, or omits the field, when the call
     /// succeeded, so `Some("")` means success. Use
     /// [`PostToolUseInput::error_message`] or [`PostToolUseInput::failed`]
-    /// rather than testing this field for `Some`.
+    /// rather than testing this field for `Some`. Whether the hook fires for
+    /// a call to an unknown tool, or a canceled or interrupted call, and what
+    /// `error` then holds, is undocumented.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// Unknown protocol fields retained for forward compatibility.
@@ -684,6 +1255,12 @@ pub struct PostToolUseInput {
 }
 
 impl PostToolUseInput {
+    /// Returns the model name unless it is absent, empty, or whitespace only;
+    /// see [`PreInvocationInput::known_model_name`].
+    pub fn known_model_name(&self) -> Option<&str> {
+        non_blank(self.model_name.as_deref())
+    }
+
     /// Returns the tool failure message.
     ///
     /// Returns `None` when the call succeeded: `error` is absent, empty, or
@@ -741,7 +1318,7 @@ impl EventSpec for PostToolUse {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "PostToolUse");
     const CATEGORY: EventCategory = EventCategory::Tool;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-30-r1/PostToolUse");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-11-25-r1/PostToolUse");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
     }
@@ -754,12 +1331,17 @@ impl EventSpec for PostToolUse {
             0,
         ))
     }
+    /// Reports the common fields and, when the payload carries a string
+    /// `toolCall.id` (CLI 1.5.4 and later), that tool-call identifier.
     fn context(input: &Self::Input) -> NativeContext {
-        common_context(
-            &input.conversation_id,
-            &input.workspace_paths,
-            &input.transcript_path,
-            &input.artifact_directory_path,
+        tool_context(
+            common_context(
+                &input.conversation_id,
+                &input.workspace_paths,
+                &input.transcript_path,
+                &input.artifact_directory_path,
+            ),
+            input.tool_call.as_ref(),
         )
     }
 }
@@ -852,10 +1434,22 @@ pub struct StopInput {
     /// Directory holding the conversation's artifacts and screenshots. It may
     /// carry a literal `~/` prefix.
     pub artifact_directory_path: Utf8PathBuf,
-    /// Name or identifier of the model handling the invocation; `None` when
-    /// the payload omits it.
+    /// Name or identifier of the model, exactly as sent; see
+    /// [`PreInvocationInput::model_name`] and [`StopInput::known_model_name`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// The most recent user prompt, exactly as sent; see
+    /// [`PreInvocationInput::last_user_input`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_user_input: Option<String>,
+    /// Event name sent by CLI 1.5.4 and later; see
+    /// [`PreInvocationInput::hook_event_name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_event_name: Option<String>,
+    /// The agent's working directory, sent by CLI 1.5.4 and later; see
+    /// [`PreInvocationInput::cwd`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<Utf8PathBuf>,
     /// Sequence number of the execution attempt.
     pub execution_num: u64,
     /// Harness-provided reason for the attempted termination (open
@@ -871,6 +1465,21 @@ pub struct StopInput {
     /// than testing this field for `Some`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// `continuation_active` exactly as sent: `true` while the agent is
+    /// already working on a continuation that an earlier `Stop` hook
+    /// requested.
+    ///
+    /// CLI 1.5.6 and later send it according to their release notes, which
+    /// spell it in snake_case although the reference says field names use
+    /// camelCase; the reference does not document it. A camelCase
+    /// `continuationActive` stays in [`StopInput::extra`]. Use
+    /// [`StopInput::continuation_active_flag`], which reads either spelling.
+    #[serde(
+        default,
+        rename = "continuation_active",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub continuation_active: Option<bool>,
     /// Unknown protocol fields retained for forward compatibility.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -882,6 +1491,27 @@ impl StopInput {
     /// Returns `None` when `error` is absent, empty, or whitespace only.
     pub fn error_message(&self) -> Option<&str> {
         non_blank(self.error.as_deref())
+    }
+
+    /// Returns the model name unless it is absent, empty, or whitespace only;
+    /// see [`PreInvocationInput::known_model_name`].
+    pub fn known_model_name(&self) -> Option<&str> {
+        non_blank(self.model_name.as_deref())
+    }
+
+    /// Reports whether the agent is already working on a continuation that
+    /// an earlier `Stop` hook requested.
+    ///
+    /// Reads `continuation_active`, or else a boolean `continuationActive`
+    /// from [`StopInput::extra`], since the wire spelling is unobserved.
+    /// `None` means unknown, not `false`: builds before CLI 1.5.6, and the
+    /// App and IDE, for which no note mentions the field, do not send it.
+    pub fn continuation_active_flag(&self) -> Option<bool> {
+        self.continuation_active.or_else(|| {
+            self.extra
+                .get("continuationActive")
+                .and_then(serde_json::Value::as_bool)
+        })
     }
 }
 
@@ -895,9 +1525,10 @@ pub enum StopDecision {
     /// `continue`: prevent the stop and re-enter the execution loop.
     ///
     /// This is not a hard gate. CLI 1.1.9 ends the turn normally after a
-    /// configurable number of consecutive continuations, and Antigravity 2.0
+    /// configurable number of consecutive continuations, and Antigravity App
     /// v2.6.0 finishes the turn after repeated blocks. The limit is
-    /// undocumented.
+    /// undocumented. CLI 1.5.6 and later report a continuation in progress
+    /// to the next `Stop` hook; see [`StopInput::continuation_active_flag`].
     Continue,
     /// `stop`: allow the stop. Antigravity assigns no meaning to the token;
     /// HookKit uses it because it is unambiguous and not `continue`.
@@ -1009,7 +1640,7 @@ impl EventSpec for Stop {
     const SNAPSHOT: SnapshotId = SNAPSHOT;
     const EVENT: EventId = EventId::builtin(Self::HARNESS, "Stop");
     const CATEGORY: EventCategory = EventCategory::Agent;
-    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-09-30-r1/Stop");
+    const CONTRACT: ContractId = ContractId::builtin("antigravity/docs-2026-11-25-r1/Stop");
     fn parse(invocation: &RawInvocation) -> hookkit_core::Result<Self::Input> {
         deserialize_input(invocation, Self::EVENT)
     }
@@ -1039,10 +1670,12 @@ impl EventSpec for Stop {
 
 /// Deserializes the typed input of `event`, the event the caller selected.
 ///
-/// Antigravity payloads carry no discriminator, so a payload that does not
-/// fit the selected event's shape (a missing or mistyped field) is reported
-/// as [`hookkit_core::HookkitError::InvalidInputForHint`], as the Claude Code
-/// and Codex parsers report a schema violation of a known event.
+/// Antigravity payloads carry no documented discriminator (CLI 1.5.4 and
+/// later may send `hookEventName`, which is not relied on), so a payload
+/// that does not fit the selected event's shape (a missing or mistyped
+/// field) is reported as [`hookkit_core::HookkitError::InvalidInputForHint`],
+/// as the Claude Code and Codex parsers report a schema violation of a known
+/// event.
 fn deserialize_input<T: serde::de::DeserializeOwned>(
     invocation: &RawInvocation,
     event: EventId,
@@ -1074,6 +1707,25 @@ fn common_context(
     }
 }
 
+/// Adds the tool call's string identifier to a tool event's context.
+///
+/// The identifier is the same value [`ToolCall::id_str`] returns, so the
+/// runtime context and the aligned accessors agree. A numeric, blank, or
+/// missing `id` leaves the context without one.
+fn tool_context(context: NativeContext, tool_call: Option<&ToolCall>) -> NativeContext {
+    NativeContext {
+        tool_call_id: tool_call
+            .and_then(ToolCall::id_str)
+            .and_then(|id| hookkit_core::ToolCallId::new(id).ok()),
+        ..context
+    }
+}
+
+/// Context for both invocation events. Invocation 0 still reports an
+/// `InvocationStart` boundary, because builds that predate `SessionStart`
+/// send no other start signal. Session state treats it only as a fallback:
+/// once a `SessionStart` epoch is recorded for the conversation, the
+/// invocation-zero boundary adds no epoch.
 fn invocation_context(input: &PreInvocationInput) -> NativeContext {
     let session_boundary = (input.invocation_num == 0).then(|| {
         hookkit_core::SessionBoundaryContext::observed(
@@ -1099,6 +1751,8 @@ fn invocation_context(input: &PreInvocationInput) -> NativeContext {
 #[non_exhaustive]
 /// Compile-time selector for an implemented Antigravity event.
 pub enum Event {
+    /// Selects [`SessionStart`].
+    SessionStart,
     /// Selects [`PreInvocation`].
     PreInvocation,
     /// Selects [`PostInvocation`].
@@ -1114,6 +1768,7 @@ pub enum Event {
 impl EventSelector for Event {
     fn event_id(&self) -> EventId {
         let name = match self {
+            Self::SessionStart => "SessionStart",
             Self::PreInvocation => "PreInvocation",
             Self::PostInvocation => "PostInvocation",
             Self::PreToolUse => "PreToolUse",
@@ -1128,6 +1783,8 @@ impl EventSelector for Event {
 #[non_exhaustive]
 /// Lossless sum type over all implemented Antigravity inputs.
 pub enum AnyInput {
+    /// A session-start input.
+    SessionStart(SessionStartInput),
     /// A pre-invocation input.
     PreInvocation(PreInvocationInput),
     /// A post-invocation input.
@@ -1144,6 +1801,8 @@ pub enum AnyInput {
 #[non_exhaustive]
 /// Sum type over all implemented Antigravity command outputs.
 pub enum AnyCommandOutput {
+    /// A session-start output.
+    SessionStart(SessionStartOutput),
     /// A pre-invocation output.
     PreInvocation(PreInvocationOutput),
     /// A post-invocation output.
@@ -1174,6 +1833,7 @@ impl HarnessSpec for Antigravity {
 
     fn decode(event: &EventId, raw: &RawInvocation) -> hookkit_core::Result<Self::AnyInput> {
         match event.name() {
+            "SessionStart" => SessionStart::parse(raw).map(AnyInput::SessionStart),
             "PreInvocation" => PreInvocation::parse(raw).map(AnyInput::PreInvocation),
             "PostInvocation" => PostInvocation::parse(raw).map(AnyInput::PostInvocation),
             "PreToolUse" => PreToolUse::parse(raw).map(AnyInput::PreToolUse),
@@ -1188,6 +1848,7 @@ impl HarnessSpec for Antigravity {
 
     fn input_event(input: &Self::AnyInput) -> EventId {
         match input {
+            AnyInput::SessionStart(_) => SessionStart::EVENT,
             AnyInput::PreInvocation(_) => PreInvocation::EVENT,
             AnyInput::PostInvocation(_) => PostInvocation::EVENT,
             AnyInput::PreToolUse(_) => PreToolUse::EVENT,
@@ -1198,6 +1859,7 @@ impl HarnessSpec for Antigravity {
 
     fn output_event(output: &Self::AnyCommandOutput) -> EventId {
         match output {
+            AnyCommandOutput::SessionStart(_) => SessionStart::EVENT,
             AnyCommandOutput::PreInvocation(_) => PreInvocation::EVENT,
             AnyCommandOutput::PostInvocation(_) => PostInvocation::EVENT,
             AnyCommandOutput::PreToolUse(_) => PreToolUse::EVENT,
@@ -1210,6 +1872,7 @@ impl HarnessSpec for Antigravity {
         output: Self::AnyCommandOutput,
     ) -> hookkit_core::Result<ProcessEmission> {
         match output {
+            AnyCommandOutput::SessionStart(output) => SessionStart::emit(output),
             AnyCommandOutput::PreInvocation(output) => PreInvocation::emit(output),
             AnyCommandOutput::PostInvocation(output) => PostInvocation::emit(output),
             AnyCommandOutput::PreToolUse(output) => PreToolUse::emit(output),
@@ -1220,6 +1883,7 @@ impl HarnessSpec for Antigravity {
 
     fn context(input: &Self::AnyInput) -> NativeContext {
         match input {
+            AnyInput::SessionStart(input) => SessionStart::context(input),
             AnyInput::PreInvocation(input) => PreInvocation::context(input),
             AnyInput::PostInvocation(input) => PostInvocation::context(input),
             AnyInput::PreToolUse(input) => PreToolUse::context(input),
@@ -1239,8 +1903,9 @@ mod tests {
 
     #[test]
     fn contract_identities_point_at_the_current_snapshot() {
-        assert_eq!(SNAPSHOT.as_str(), "docs-2026-09-30-r1");
+        assert_eq!(SNAPSHOT.as_str(), "docs-2026-11-25-r1");
         for contract in [
+            SessionStart::CONTRACT,
             PreInvocation::CONTRACT,
             PostInvocation::CONTRACT,
             PreToolUse::CONTRACT,
@@ -1250,7 +1915,7 @@ mod tests {
             assert!(
                 contract
                     .as_str()
-                    .starts_with("antigravity/docs-2026-09-30-r1/"),
+                    .starts_with("antigravity/docs-2026-11-25-r1/"),
                 "{contract:?}"
             );
         }
@@ -1329,11 +1994,11 @@ mod tests {
 
     #[test]
     fn inject_output_matches_exact_catalog_bytes() {
-        let output = PreInvocationOutput::inject(InjectStep::ephemeral_message("Remember to lint"));
+        let output = PreInvocationOutput::inject(InjectStep::system_message("Remember to lint"));
         let emission = PreInvocation::emit(output).unwrap();
         assert_eq!(
             emission.stdout(),
-            br#"{"injectSteps":[{"ephemeralMessage":"Remember to lint"}]}"#
+            br#"{"injectSteps":[{"systemMessage":{"systemMessage":"Remember to lint"}}]}"#
         );
         assert!(emission.stderr().is_empty());
         assert_eq!(emission.exit_code(), 0);
@@ -1352,6 +2017,7 @@ mod tests {
         let emission = PreToolUse::emit(PreToolUseOutput {
             decision: ToolDecision::Deny,
             reason: Some("blocked".into()),
+            overwrite: None,
             permission_overrides: vec![
                 "read_file(/x)".into(),
                 "command(ls)".into(),
@@ -1430,6 +2096,7 @@ mod tests {
     fn tool_decision_constructors_cover_every_documented_value() {
         for (output, wire) in [
             (PreToolUseOutput::allow(), "allow"),
+            (PreToolUseOutput::auto_approve(), "auto_approve"),
             (PreToolUseOutput::deny(), "deny"),
             (PreToolUseOutput::ask(), "ask"),
             (PreToolUseOutput::force_ask(), "force_ask"),
@@ -1529,6 +2196,13 @@ mod tests {
             (PreToolUse::parse(&raw).map(|_| ()), PreToolUse::EVENT),
             (PostToolUse::parse(&raw).map(|_| ()), PostToolUse::EVENT),
             (Stop::parse(&raw).map(|_| ()), Stop::EVENT),
+            (
+                SessionStart::parse(&invocation(
+                    r#"{"workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a"}"#,
+                ))
+                .map(|_| ()),
+                SessionStart::EVENT,
+            ),
         ] {
             assert!(
                 matches!(
@@ -1666,6 +2340,416 @@ mod tests {
         assert_eq!(
             TerminationBehavior::ForceContinue.as_str(),
             "force_continue"
+        );
+    }
+    const OFFICIAL_SESSION_START: &str = r#"{"conversationId":"ec33ebf9-0cba-4100-8142-c61503f6c587","workspacePaths":["/workspace/project"],"transcriptPath":"~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl","artifactDirectoryPath":"~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587","modelName":"gemini-3.6-flash-medium"}"#;
+
+    #[test]
+    fn session_start_decodes_the_official_example_losslessly_as_a_startup_boundary() {
+        let raw = invocation(OFFICIAL_SESSION_START);
+        let decoded = Antigravity::decode(&SessionStart::EVENT, &raw).unwrap();
+        let AnyInput::SessionStart(input) = &decoded else {
+            panic!("{decoded:?}")
+        };
+        assert_eq!(Antigravity::input_event(&decoded), SessionStart::EVENT);
+        assert_eq!(serde_json::to_value(input).unwrap(), *raw.json());
+        assert_eq!(input.known_model_name(), Some("gemini-3.6-flash-medium"));
+        assert!(input.extra.is_empty());
+
+        let context = Antigravity::context(&decoded);
+        let boundary = context.session_boundary.unwrap();
+        assert_eq!(boundary.kind, hookkit_core::SessionBoundaryKind::Startup);
+        assert_eq!(
+            boundary.occurrence_key.as_deref(),
+            Some("ec33ebf9-0cba-4100-8142-c61503f6c587")
+        );
+        assert_eq!(
+            context.conversation_id.unwrap().as_str(),
+            "ec33ebf9-0cba-4100-8142-c61503f6c587"
+        );
+        assert_eq!(context.workspace_roots, ["/workspace/project"]);
+        assert_eq!(SessionStart::CATEGORY, EventCategory::Session);
+        assert_eq!(Event::SessionStart.event_id(), SessionStart::EVENT);
+    }
+
+    #[test]
+    fn session_start_output_matches_exact_catalog_bytes() {
+        let emission = SessionStart::emit(SessionStartOutput::inject(InjectStep::system_message(
+            "Environment initialized for workspace /workspace/project",
+        )))
+        .unwrap();
+        assert_eq!(
+            emission.stdout(),
+            br#"{"injectSteps":[{"systemMessage":{"systemMessage":"Environment initialized for workspace /workspace/project"}}]}"#
+        );
+        assert_eq!(emission.exit_code(), 0);
+        assert_eq!(
+            SessionStart::emit(SessionStartOutput::no_op())
+                .unwrap()
+                .stdout(),
+            b"{}"
+        );
+        let encoded = Antigravity::encode_command_unchecked(AnyCommandOutput::SessionStart(
+            SessionStartOutput::inject_all([InjectStep::user_message("a")])
+                .with_step(InjectStep::user_message("b")),
+        ))
+        .unwrap();
+        assert_eq!(
+            encoded.stdout(),
+            br#"{"injectSteps":[{"userMessage":"a"},{"userMessage":"b"}]}"#
+        );
+        assert_eq!(
+            Antigravity::output_event(&AnyCommandOutput::SessionStart(SessionStartOutput::no_op())),
+            SessionStart::EVENT
+        );
+    }
+
+    #[test]
+    fn common_metadata_fields_are_typed_and_not_left_in_extra() {
+        let raw = invocation(
+            r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","invocationNum":0,"initialNumSteps":1,"lastUserInput":"Fix the failing unit test","hookEventName":"PreInvocation","cwd":"/repo/sub"}"#,
+        );
+        let input = PreInvocation::parse(&raw).unwrap();
+        assert_eq!(
+            input.last_user_input.as_deref(),
+            Some("Fix the failing unit test")
+        );
+        assert_eq!(input.hook_event_name.as_deref(), Some("PreInvocation"));
+        assert_eq!(
+            input.cwd.as_deref(),
+            Some(Utf8PathBuf::from("/repo/sub").as_path())
+        );
+        assert!(input.extra.is_empty(), "{:?}", input.extra);
+        assert_eq!(serde_json::to_value(&input).unwrap(), *raw.json());
+
+        // Every event types the same three fields.
+        let common = r#""conversationId":"c1","workspacePaths":[],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","lastUserInput":"","hookEventName":"X","cwd":"/w""#;
+        let tool = invocation(&format!(
+            r#"{{{common},"toolCall":{{"name":"run_command","args":{{}}}},"stepIdx":0}}"#
+        ));
+        let pre = PreToolUse::parse(&tool).unwrap();
+        let post = PostToolUse::parse(&tool).unwrap();
+        let stop = Stop::parse(&invocation(&format!(
+            r#"{{{common},"executionNum":0,"terminationReason":"model_stop","fullyIdle":true}}"#
+        )))
+        .unwrap();
+        let start = SessionStart::parse(&invocation(&format!("{{{common}}}"))).unwrap();
+        for (last, name, cwd, extra) in [
+            (
+                &pre.last_user_input,
+                &pre.hook_event_name,
+                &pre.cwd,
+                &pre.extra,
+            ),
+            (
+                &post.last_user_input,
+                &post.hook_event_name,
+                &post.cwd,
+                &post.extra,
+            ),
+            (
+                &stop.last_user_input,
+                &stop.hook_event_name,
+                &stop.cwd,
+                &stop.extra,
+            ),
+            (
+                &start.last_user_input,
+                &start.hook_event_name,
+                &start.cwd,
+                &start.extra,
+            ),
+        ] {
+            // An explicit empty prompt is preserved, not read as absent.
+            assert_eq!(last.as_deref(), Some(""));
+            assert_eq!(name.as_deref(), Some("X"));
+            assert_eq!(cwd.as_ref().map(|cwd| cwd.as_str()), Some("/w"));
+            assert!(extra.is_empty(), "{extra:?}");
+        }
+
+        // Absent fields are not serialized, and mistyped ones are rejected.
+        let minimal = invocation(
+            r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a"}"#,
+        );
+        let start = SessionStart::parse(&minimal).unwrap();
+        assert_eq!(start.last_user_input, None);
+        assert_eq!(start.hook_event_name, None);
+        assert_eq!(start.cwd, None);
+        assert_eq!(serde_json::to_value(&start).unwrap(), *minimal.json());
+        for field in [
+            r#""lastUserInput":42"#,
+            r#""hookEventName":3"#,
+            r#""cwd":["/repo"]"#,
+        ] {
+            let invalid = invocation(&format!(
+                r#"{{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a",{field}}}"#
+            ));
+            assert!(SessionStart::parse(&invalid).is_err(), "{field}");
+        }
+    }
+
+    #[test]
+    fn a_hook_event_name_that_differs_from_the_selected_event_is_kept_not_rejected() {
+        // The value set is undocumented, so the native parser never uses it.
+        let raw = invocation(
+            r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"run_command"},"stepIdx":0,"hookEventName":"PostToolUse"}"#,
+        );
+        let input = PreToolUse::parse(&raw).unwrap();
+        assert_eq!(input.hook_event_name.as_deref(), Some("PostToolUse"));
+    }
+
+    #[test]
+    fn blank_model_name_is_unknown_but_round_trips() {
+        let raw = invocation(
+            r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","invocationNum":0,"initialNumSteps":0,"modelName":""}"#,
+        );
+        let input = PreInvocation::parse(&raw).unwrap();
+        assert_eq!(input.model_name.as_deref(), Some(""));
+        assert_eq!(input.known_model_name(), None);
+        assert_eq!(serde_json::to_value(&input).unwrap(), *raw.json());
+
+        let stop = Stop::parse(&invocation(
+            r#"{"conversationId":"c1","workspacePaths":[],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","executionNum":0,"terminationReason":"model_stop","fullyIdle":true,"modelName":"  "}"#,
+        ))
+        .unwrap();
+        assert_eq!(stop.known_model_name(), None);
+        let tool = invocation(
+            r#"{"conversationId":"c1","workspacePaths":[],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"view_file"},"stepIdx":0,"modelName":"gemini"}"#,
+        );
+        assert_eq!(
+            PreToolUse::parse(&tool).unwrap().known_model_name(),
+            Some("gemini")
+        );
+        assert_eq!(
+            PostToolUse::parse(&tool).unwrap().known_model_name(),
+            Some("gemini")
+        );
+    }
+
+    #[test]
+    fn tool_call_id_is_typed_and_round_trips_exactly() {
+        let base = r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","toolCall":{"name":"run_command","args":{"CommandLine":"npm test"},"id":ID},"stepIdx":20}"#;
+        for (id, expected_str) in [
+            (r#""call_01""#, Some("call_01")),
+            ("7", None),
+            ("null", None),
+            (r#""""#, None),
+        ] {
+            let raw = invocation(&base.replace("ID", id));
+            let pre = PreToolUse::parse(&raw).unwrap();
+            assert_eq!(
+                pre.tool_call.id,
+                Some(serde_json::from_str::<serde_json::Value>(id).unwrap()),
+                "{id}"
+            );
+            assert_eq!(pre.tool_call.id_str(), expected_str, "{id}");
+            assert!(pre.tool_call.extra.is_empty(), "{id}");
+            assert_eq!(serde_json::to_value(&pre).unwrap(), *raw.json(), "{id}");
+            // The runtime context carries exactly the string identifier.
+            assert_eq!(
+                PreToolUse::context(&pre)
+                    .tool_call_id
+                    .as_ref()
+                    .map(hookkit_core::ToolCallId::as_str),
+                expected_str,
+                "{id}"
+            );
+            let post = PostToolUse::parse(&raw).unwrap();
+            assert_eq!(post.tool_call.as_ref().unwrap().id_str(), expected_str);
+            assert_eq!(serde_json::to_value(&post).unwrap(), *raw.json(), "{id}");
+            assert_eq!(
+                PostToolUse::context(&post)
+                    .tool_call_id
+                    .as_ref()
+                    .map(hookkit_core::ToolCallId::as_str),
+                expected_str,
+                "{id}"
+            );
+        }
+        // A whitespace-only identifier is blank, not an identifier.
+        let blank = PreToolUse::parse(&invocation(&base.replace("ID", r#""  ""#))).unwrap();
+        assert_eq!(blank.tool_call.id_str(), None);
+        assert!(PreToolUse::context(&blank).tool_call_id.is_none());
+
+        let absent = invocation(&base.replace(r#","id":ID"#, ""));
+        let pre = PreToolUse::parse(&absent).unwrap();
+        assert_eq!(pre.tool_call.id, None);
+        assert_eq!(serde_json::to_value(&pre).unwrap(), *absent.json());
+        assert!(PreToolUse::context(&pre).tool_call_id.is_none());
+        // A PostToolUse payload without `toolCall` has no identifier either.
+        let without_call = invocation(
+            r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","stepIdx":20}"#,
+        );
+        let post = PostToolUse::parse(&without_call).unwrap();
+        assert!(PostToolUse::context(&post).tool_call_id.is_none());
+    }
+
+    #[test]
+    fn stop_continuation_active_reads_both_spellings_without_losing_either() {
+        let base = r#"{"conversationId":"c1","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","executionNum":2,"terminationReason":"model_stop","fullyIdle":true"#;
+        let snake = invocation(&format!(r#"{base},"continuation_active":true}}"#));
+        let input = Stop::parse(&snake).unwrap();
+        assert_eq!(input.continuation_active, Some(true));
+        assert!(input.extra.is_empty());
+        assert_eq!(input.continuation_active_flag(), Some(true));
+        assert_eq!(serde_json::to_value(&input).unwrap(), *snake.json());
+
+        let inactive = Stop::parse(&invocation(&format!(
+            r#"{base},"continuation_active":false}}"#
+        )))
+        .unwrap();
+        assert_eq!(inactive.continuation_active_flag(), Some(false));
+
+        let camel = invocation(&format!(r#"{base},"continuationActive":true}}"#));
+        let input = Stop::parse(&camel).unwrap();
+        assert_eq!(input.continuation_active, None);
+        assert_eq!(input.extra["continuationActive"], true);
+        assert_eq!(input.continuation_active_flag(), Some(true));
+        assert_eq!(serde_json::to_value(&input).unwrap(), *camel.json());
+
+        let unknown = Stop::parse(&invocation(&format!("{base}}}"))).unwrap();
+        assert_eq!(unknown.continuation_active_flag(), None);
+        let non_boolean_camel = Stop::parse(&invocation(&format!(
+            r#"{base},"continuationActive":"yes"}}"#
+        )))
+        .unwrap();
+        assert_eq!(non_boolean_camel.continuation_active_flag(), None);
+        assert!(
+            Stop::parse(&invocation(&format!(
+                r#"{base},"continuation_active":"yes"}}"#
+            )))
+            .is_err()
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn inject_step_constructors_emit_the_documented_shapes() {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert("source".into(), "policy".into());
+        for (step, expected) in [
+            (
+                InjectStep::system_message("Remember to lint"),
+                serde_json::json!({"systemMessage": {"systemMessage": "Remember to lint"}}),
+            ),
+            (
+                InjectStep::system_message_with_metadata("Remember to lint", metadata.clone()),
+                serde_json::json!({"systemMessage": {"systemMessage": "Remember to lint", "metadata": {"source": "policy"}}}),
+            ),
+            (
+                InjectStep::error_message("Prompt blocked by policy."),
+                serde_json::json!({"errorMessage": {"userMessage": "Prompt blocked by policy."}}),
+            ),
+            (
+                InjectStep::user_message("hi"),
+                serde_json::json!({"userMessage": "hi"}),
+            ),
+            (
+                InjectStep::ephemeral_message("hi"),
+                serde_json::json!({"ephemeralMessage": "hi"}),
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&step).unwrap(), expected);
+        }
+        assert_eq!(
+            serde_json::to_string(&InjectStep::system_message_with_metadata(
+                "Remember to lint",
+                metadata
+            ))
+            .unwrap(),
+            r#"{"systemMessage":{"systemMessage":"Remember to lint","metadata":{"source":"policy"}}}"#
+        );
+        assert_eq!(
+            InjectStep::SystemMessage {
+                system_message: SystemMessageStep::new("x"),
+            },
+            InjectStep::system_message("x")
+        );
+        assert_eq!(
+            InjectStep::ErrorMessage {
+                error_message: ErrorMessageStep::new("x"),
+            },
+            InjectStep::error_message("x")
+        );
+    }
+
+    #[test]
+    fn pre_invocation_block_matches_the_official_example_bytes() {
+        let emission =
+            PreInvocation::emit(PreInvocationOutput::block("Prompt blocked by policy.")).unwrap();
+        assert_eq!(
+            emission.stdout(),
+            br#"{"injectSteps":[{"errorMessage":{"userMessage":"Prompt blocked by policy."}}],"terminationBehavior":"terminate"}"#
+        );
+        assert_eq!(emission.exit_code(), 0);
+        assert_eq!(
+            PreInvocation::emit(
+                PreInvocationOutput::no_op()
+                    .with_termination_behavior(PreInvocationTermination::Default)
+            )
+            .unwrap()
+            .stdout(),
+            br#"{"terminationBehavior":""}"#
+        );
+        // The pre-invocation vocabulary has no `force_continue`.
+        for behavior in [
+            PreInvocationTermination::Default,
+            PreInvocationTermination::Terminate,
+        ] {
+            let wire = match behavior {
+                PreInvocationTermination::Default => "",
+                PreInvocationTermination::Terminate => "terminate",
+            };
+            assert_eq!(behavior.as_str(), wire);
+            assert_eq!(serde_json::to_value(behavior).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn auto_approve_and_overwrite_emit_exact_catalog_bytes() {
+        assert_eq!(ToolDecision::AutoApprove.as_str(), "auto_approve");
+        assert_eq!(
+            PreToolUse::emit(PreToolUseOutput::auto_approve().with_reason("Lint-only command."))
+                .unwrap()
+                .stdout(),
+            br#"{"decision":"auto_approve","reason":"Lint-only command."}"#
+        );
+        let mut args = serde_json::Map::new();
+        args.insert("CommandLine".into(), "npm test -- --ci".into());
+        assert_eq!(
+            PreToolUse::emit(PreToolUseOutput::allow().with_overwrite(args.clone()))
+                .unwrap()
+                .stdout(),
+            br#"{"decision":"allow","overwrite":{"CommandLine":"npm test -- --ci"}}"#
+        );
+        // The reference's field order: decision, reason, overwrite,
+        // permissionOverrides.
+        assert_eq!(
+            PreToolUse::emit(
+                PreToolUseOutput::ask()
+                    .with_permission_override("command(npm test)")
+                    .with_overwrite(args)
+                    .with_reason("why")
+            )
+            .unwrap()
+            .stdout(),
+            br#"{"decision":"ask","reason":"why","overwrite":{"CommandLine":"npm test -- --ci"},"permissionOverrides":["command(npm test)"]}"#
+        );
+        assert!(PreToolUseOutput::allow().overwrite.is_none());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn the_withdrawn_tool_call_step_is_still_serializable() {
+        let step = InjectStep::tool_call(
+            serde_json::json!({"name": "run_command"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(
+            serde_json::to_value(step).unwrap(),
+            serde_json::json!({"toolCall": {"name": "run_command"}})
         );
     }
 }

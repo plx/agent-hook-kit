@@ -90,6 +90,15 @@ scopes, and project-relative pattern matching; it does not rewrite tool
 operands. A resolved target outside that project root does not match a
 project-relative rule.
 
+Without `--project-root`, the project root is the nearest directory from the
+hook cwd up to its enclosing Git checkout that has a `.claude/rules`
+directory, else that checkout, else the cwd itself. Since Codex 0.166.0 a
+Bash command run with `workdir` reports that directory as the hook cwd, so
+the cwd alone would miss the repository's rules. The search stops at the
+checkout, so `~/.claude/rules` never makes the home directory the project
+root. Pass `--project-root` when Codex may run commands outside the
+repository, for example in a scratch directory.
+
 `ClaimSet` fits the immediate first-writer-wins decision here better than an
 NDJSON entity journal: this hook does not consume event history or need a
 materialized loaded-rule projection.

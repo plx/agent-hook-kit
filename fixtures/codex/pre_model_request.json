@@ -1,0 +1,12 @@
+{
+  "session_id": "codex-sess-001",
+  "transcript_path": "/tmp/codex/transcript-001.jsonl",
+  "cwd": "/home/user/project",
+  "hook_event_name": "PreModelRequest",
+  "model": "gpt-test",
+  "thread_id": "codex-thread-001",
+  "turn_id": "codex-turn-001",
+  "request_id": "5f0c6c1e-1d1f-4c55-9a51-0d0d4f0b7a10",
+  "attempt_number": 1,
+  "kind": "sampling"
+}

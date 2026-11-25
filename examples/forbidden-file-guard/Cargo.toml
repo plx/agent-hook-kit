@@ -14,6 +14,7 @@ path = "src/main.rs"
 clap = { workspace = true }
 dirs = { workspace = true }
 globset = { workspace = true }
+hookkit-claude = { workspace = true }
 hookkit-common = { workspace = true }
 hookkit-core = { workspace = true }
 hookkit-runtime = { workspace = true }
@@ -22,6 +23,3 @@ hookkit-tool-access = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
-
-[dev-dependencies]
-hookkit-claude = { workspace = true }

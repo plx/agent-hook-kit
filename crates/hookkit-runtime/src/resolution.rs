@@ -660,15 +660,15 @@ mod tests {
 
     #[test]
     fn builtin_detector_covers_every_selected_event_with_a_native_parser() {
-        // 33 Claude Code, 12 Codex, and 5 Antigravity events.
+        // 34 Claude Code, 14 Codex, and 6 Antigravity events.
         let descriptors = builtin_descriptors();
-        assert_eq!(descriptors.len(), 50);
+        assert_eq!(descriptors.len(), 54);
         assert_eq!(
             descriptors
                 .iter()
                 .filter(|descriptor| descriptor.has_native_parser())
                 .count(),
-            50
+            54
         );
 
         let raw = RawInvocation::parse(
@@ -693,6 +693,20 @@ mod tests {
                 .validation_failures
                 .iter()
                 .any(|(event, _)| event == &EventId::builtin(HarnessId::CODEX, "SessionStart"))
+        );
+    }
+
+    #[test]
+    fn claude_pre_skill_shell_command_resolves_without_a_hint() {
+        let raw = RawInvocation::parse(
+            br#"{"session_id":"s1","transcript_path":"/t.jsonl","cwd":"/repo","hook_event_name":"PreSkillShellCommand","tool_name":"Bash","tool_input":{"command":"git status"},"tool_use_id":"skillsh_1","command_name":"release-notes","invoked_by":"user"}"#
+                .to_vec(),
+        )
+        .unwrap();
+        let resolved = resolve_builtin_event(HarnessId::CLAUDE_CODE, &raw, None).unwrap();
+        assert_eq!(
+            resolved.event,
+            EventId::builtin(HarnessId::CLAUDE_CODE, "PreSkillShellCommand")
         );
     }
 
@@ -828,12 +842,102 @@ mod tests {
             discriminated_event(&descriptors, &HarnessId::CLAUDE_CODE, &missing),
             None
         );
-        // Antigravity has no discriminator, so nothing names the event.
+        // Antigravity has no documented discriminator (CLI 1.5.4 and later
+        // may send `hookEventName`, which is not relied on), so nothing
+        // names the event.
         let antigravity = hookkit_antigravity::identification_descriptors();
         assert_eq!(
             discriminated_event(&antigravity, &HarnessId::ANTIGRAVITY, &raw),
             None
         );
+    }
+
+    #[test]
+    fn antigravity_session_start_overlaps_every_event_but_stop_still_resolves_by_shape() {
+        use hookkit_antigravity::{PostToolUse, PreToolUse, SessionStart, Stop};
+        let common = serde_json::json!({
+            "conversationId": "c1",
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": "/tmp/t.jsonl",
+            "artifactDirectoryPath": "/tmp/a",
+            "modelName": "gemini-3.6-flash-medium"
+        });
+        let with = |extra: serde_json::Value| {
+            let mut value = common.clone();
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            RawInvocation::parse(serde_json::to_vec(&value).unwrap()).unwrap()
+        };
+
+        // The official Stop example still resolves to Stop by sound shape,
+        // although SessionStart's parser accepts it too.
+        let stop = with(serde_json::json!({
+            "executionNum": 1,
+            "terminationReason": "model_stop",
+            "error": "",
+            "fullyIdle": true
+        }));
+        let resolved = resolve_builtin_event(HarnessId::ANTIGRAVITY, &stop, None).unwrap();
+        assert_eq!(resolved.event, Stop::EVENT);
+        assert_eq!(resolved.provenance, ResolutionProvenance::SoundShape);
+        let report = Detector::builtins().inspect(
+            &stop,
+            DetectionConstraints {
+                harness: Some(HarnessId::ANTIGRAVITY),
+                event: None,
+            },
+        );
+        let candidates: std::collections::BTreeSet<_> = report
+            .candidates
+            .iter()
+            .map(|candidate| candidate.event.clone())
+            .collect();
+        assert_eq!(
+            candidates,
+            std::collections::BTreeSet::from([Stop::EVENT, SessionStart::EVENT])
+        );
+        assert!(report.ambiguous);
+
+        // A common-fields-only payload fits SessionStart alone, but its
+        // shape is not sufficient evidence without a hint.
+        let start = with(serde_json::json!({}));
+        assert!(matches!(
+            resolve_builtin_event(HarnessId::ANTIGRAVITY, &start, None),
+            Err(HookkitError::AmbiguousEvent { candidates, .. })
+                if candidates == [SessionStart::EVENT]
+        ));
+        let resolved =
+            resolve_builtin_event(HarnessId::ANTIGRAVITY, &start, Some(SessionStart::EVENT))
+                .unwrap();
+        assert_eq!(resolved.event, SessionStart::EVENT);
+        assert_eq!(resolved.provenance, ResolutionProvenance::HintValidated);
+
+        // A release-note `hookEventName` is never a discriminator, so it
+        // neither selects nor contradicts the hinted event.
+        let tool = with(serde_json::json!({
+            "toolCall": {"name": "run_command", "args": {}},
+            "stepIdx": 0,
+            "hookEventName": "PostToolUse"
+        }));
+        let resolved =
+            resolve_builtin_event(HarnessId::ANTIGRAVITY, &tool, Some(PreToolUse::EVENT)).unwrap();
+        assert_eq!(resolved.event, PreToolUse::EVENT);
+        assert_eq!(resolved.provenance, ResolutionProvenance::HintValidated);
+
+        // Without a hint the same tool payload fits SessionStart as well as
+        // the tool-use pair, and its `hookEventName` selects none of them.
+        assert!(matches!(
+            resolve_builtin_event(HarnessId::ANTIGRAVITY, &tool, None),
+            Err(HookkitError::AmbiguousEvent { candidates, .. })
+                if candidates.iter().cloned().collect::<std::collections::BTreeSet<_>>()
+                    == std::collections::BTreeSet::from([
+                        SessionStart::EVENT,
+                        PreToolUse::EVENT,
+                        PostToolUse::EVENT,
+                    ])
+        ));
     }
 
     #[test]

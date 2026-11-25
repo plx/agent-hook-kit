@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-11-25-r1:session-start:command-output",
+  "type": "object",
+  "properties": {
+    "injectSteps": {
+      "type": "array",
+      "description": "Steps to inject into the conversation trajectory at the start of the session, with the PreInvocation injected-step schema.",
+      "items": { "$ref": "#/$defs/injectStep" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "injectStep": {
+      "type": "object",
+      "description": "One injected step carrying exactly one of the four documented kinds; the toolCall step of earlier references is no longer documented.",
+      "oneOf": [
+        { "required": ["systemMessage"] },
+        { "required": ["userMessage"] },
+        { "required": ["ephemeralMessage"] },
+        { "required": ["errorMessage"] }
+      ],
+      "properties": {
+        "systemMessage": {
+          "type": "object",
+          "description": "An out-of-band system instruction for the agent; it stays in the conversation history for later turns.",
+          "required": ["systemMessage"],
+          "properties": {
+            "systemMessage": { "type": "string", "description": "The instruction text." },
+            "metadata": { "type": "object", "description": "Optional metadata, for example {\"source\": \"policy\"}; value types are undocumented." }
+          },
+          "additionalProperties": false
+        },
+        "userMessage": { "type": "string", "description": "A message from the user; it stays in the conversation history for later turns." },
+        "ephemeralMessage": { "type": "string", "deprecated": true, "description": "Deprecated; use systemMessage instead." },
+        "errorMessage": {
+          "type": "object",
+          "description": "Displays an error message without sending it to the model. It marks the turn as errored, which makes a non-interactive -p run exit nonzero, and does not stop execution on its own unless paired with terminationBehavior terminate.",
+          "required": ["userMessage"],
+          "properties": {
+            "userMessage": { "type": "string", "description": "The error message shown to the user." }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

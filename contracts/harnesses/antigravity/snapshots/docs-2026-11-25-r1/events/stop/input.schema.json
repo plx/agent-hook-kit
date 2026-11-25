@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-hook-kit:contracts:antigravity:docs-2026-11-25-r1:stop:input",
+  "type": "object",
+  "required": ["conversationId", "workspacePaths", "transcriptPath", "artifactDirectoryPath", "executionNum", "terminationReason", "fullyIdle"],
+  "properties": {
+    "conversationId": { "type": "string", "description": "Unique UUID of the active agent conversation." },
+    "workspacePaths": { "type": "array", "items": { "type": "string" }, "description": "Absolute directory paths of the user's mounted workspaces; may be empty for a conversation without a workspace, or hold several roots in a multi-root IDE-extension session." },
+    "transcriptPath": { "type": "string", "description": "Path to the conversation's transcript.jsonl under <app_data_dir>/brain/<conversationId>/.system_generated/logs/." },
+    "artifactDirectoryPath": { "type": "string", "description": "Path to the directory containing the conversation's artifacts and screenshots." },
+    "modelName": { "type": "string", "description": "Name or identifier of the model handling the invocation; optional because earlier builds did not document or send it. Before CLI 1.5.3 a session using a custom model could receive a placeholder or empty value, so a blank value means unknown." },
+    "lastUserInput": { "type": "string", "description": "The most recent user prompt in the conversation; a documented common field (CLI 1.4.7, Antigravity App v2.28.0) that earlier builds omit." },
+    "hookEventName": { "type": "string", "description": "Name of the event being handled. Added by CLI 1.5.4 according to its release notes but absent from the reference; its value set is undocumented, so it is not an identification discriminator." },
+    "cwd": { "type": "string", "description": "The agent's working directory. Added by CLI 1.5.4 according to its release notes but absent from the reference; it can differ from the hook process's working directory, which for plugin hooks is the plugin root." },
+    "executionNum": { "type": "integer", "minimum": 0, "description": "Sequence number of the execution attempt." },
+    "terminationReason": { "type": "string", "description": "Why execution is stopping, for example model_stop, max_steps_exceeded, or error; open vocabulary." },
+    "error": { "type": "string", "description": "Error message when a system error caused termination; the official example sends an empty string otherwise." },
+    "fullyIdle": { "type": "boolean", "description": "true when the agent and all background commands and asynchronous tasks have finished; false while background tasks are still running." },
+    "continuation_active": { "type": "boolean", "description": "true while the agent is already working on a continuation an earlier Stop hook requested. Added by CLI 1.5.6 according to its release notes, which spell it in snake_case although the reference says field names use camelCase; absent from the reference, and absence means unknown, not false." }
+  },
+  "additionalProperties": true
+}

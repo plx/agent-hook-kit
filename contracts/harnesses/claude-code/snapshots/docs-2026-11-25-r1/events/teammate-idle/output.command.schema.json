@@ -1,0 +1,33 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:teammate-idle:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "description": "false sends the teammate idle, even if another matching hook blocks or this hook exits 2.",
+      "type": "boolean"
+    },
+    "decision": {
+      "const": "block"
+    },
+    "reason": {
+      "description": "Returned to the teammate as feedback when decision is block, and the teammate keeps working.",
+      "type": "string"
+    },
+    "stopReason": {
+      "description": "Appears in the teammate's transcript when continue false sends the teammate idle.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

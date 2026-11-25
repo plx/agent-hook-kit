@@ -1,18 +1,21 @@
 use clap::{Parser, ValueEnum};
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use hookkit_claude::ClaudeCommandEnvironment;
+use hookkit_claude::catalog::{CatalogInput, PreSkillShellCommand, PreSkillShellCommandOutput};
+use hookkit_claude::protocol::{AnyCommandOutput, AnyInput, ClaudeCode};
 use hookkit_common::{PreToolUseCommandEnvironment, PreToolUseInput, PreToolUseOutput};
 use hookkit_core::{
-    EventId, HarnessId, Utf8Path, Utf8PathBuf, expand_utf8_home, normalize_utf8_path,
-    resolve_utf8_path, utf8_path_to_slash,
+    EventId, EventSpec, HarnessId, HarnessSpec, HookkitError, Utf8Path, Utf8PathBuf,
+    expand_utf8_home, normalize_utf8_path, resolve_utf8_path, utf8_path_to_slash,
 };
 use hookkit_shell::{
     ANTIGRAVITY_RUN_COMMAND_PROFILE, BashAnalyzer, CLAUDE_BASH_PROFILE, CODEX_BASH_PROFILE,
     FileAccessAnalyzer, UnknownCommandFallback,
 };
 use hookkit_tool_access::{
-    AccessCandidate, AccessProvenance, AccessSource, AccessTarget, ExactPathPolicy, PathBase,
-    PathExpression, TargetResolutionOptions, ToolAccessAnalyzer, ToolAccessReport,
-    ToolCallObservation, observe_pre_tool, resolve_targets,
+    AccessCandidate, AccessProvenance, AccessSource, AccessTarget, ExactPathPolicy, JsonRef,
+    PathBase, PathExpression, TargetResolutionOptions, ToolAccessAnalyzer, ToolAccessReport,
+    ToolCallObservation, ToolCallRef, ToolPhase, observe_pre_tool, resolve_targets,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -23,10 +26,12 @@ use std::path::PathBuf;
 const PROJECT_CONFIG: &str = ".agent-hook-kit/forbidden-files.yaml";
 const TARGET_RESOLUTION_BUDGET: usize = 100_000;
 
-/// Claude Code tools that run shell commands the analyzer cannot parse:
-/// `PowerShell`, the primary shell on Windows wherever it is enabled, and
+/// Claude Code shell tools besides `Bash`: `PowerShell`, the primary shell
+/// on Windows wherever it is enabled, which the analyzer cannot parse, and
 /// `Monitor`, whose watch commands Claude Code reviews the same way as `Bash`
-/// commands.
+/// commands. `hookkit-shell` parses a Monitor command as a shell call (Claude
+/// Code v2.1.314 or later); a Monitor WebSocket watch runs no command but is
+/// still blocked under `deny_shell`, which keys on the tool name.
 const CLAUDE_UNPARSED_SHELL_TOOLS: &[&str] = &["PowerShell", "Monitor"];
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -131,30 +136,106 @@ fn main() -> std::process::ExitCode {
         }
         Err(error) => return usage_error(&error),
     };
-    let harness = cli.harness.id();
     // A guard must not let a call through because it failed to decide: every
     // parse, environment, handler, or emission failure becomes a native deny.
+    let options = hookkit_runtime::RunOptions::new().fail_closed();
+    if matches!(cli.harness, Harness::Claude) {
+        // Claude Code runs the same command for `PreToolUse` and
+        // `PreSkillShellCommand`; the payload's `hook_event_name` says which.
+        return hookkit_runtime::selected::run_harness_with_options::<ClaudeCode, _>(
+            None,
+            options,
+            move |input, environment, _context| {
+                claude_response(
+                    &cli.config_paths,
+                    input,
+                    environment,
+                    TARGET_RESOLUTION_BUDGET,
+                )
+            },
+        );
+    }
     hookkit_runtime::aligned::run_aligned_event_with_options::<
         hookkit_runtime::aligned::PreToolUse,
         _,
     >(
-        harness.clone(),
-        hookkit_runtime::RunOptions::new().fail_closed(),
+        cli.harness.id(),
+        options,
         move |input, environment, _context| {
-            let reason = deny_reason(
+            pre_tool_response(
                 &cli.config_paths,
                 &input,
                 environment,
                 TARGET_RESOLUTION_BUDGET,
-            );
-            match reason {
-                Some(reason) => PreToolUseOutput::deny(&harness, reason),
-                // No objection: leave the call to the harness's normal
-                // permission flow. An explicit allow would auto-approve it.
-                None => PreToolUseOutput::pass_through(&harness),
-            }
+            )
         },
     )
+}
+
+/// The native response to one pre-tool call: a deny with the reason, or a
+/// pass-through.
+fn pre_tool_response(
+    config_paths: &[PathBuf],
+    input: &PreToolUseInput,
+    environment: &PreToolUseCommandEnvironment,
+    max_entries: usize,
+) -> hookkit_core::Result<PreToolUseOutput> {
+    let harness = input.harness();
+    match deny_reason(config_paths, input, environment, max_entries) {
+        Some(reason) => PreToolUseOutput::deny(&harness, reason),
+        // No objection: leave the call to the harness's normal permission
+        // flow. An explicit allow would auto-approve it.
+        None => PreToolUseOutput::pass_through(&harness),
+    }
+}
+
+/// The Claude Code response to a `PreToolUse` call or to an injected command
+/// that a loading skill is about to run (`PreSkillShellCommand`, Claude Code
+/// v2.1.332 or later).
+///
+/// `PreToolUse` does not fire for injected commands, so the guard covers
+/// both events with one policy. An injected command can only be refused:
+/// `PreSkillShellCommandOutput` has no allow, and its no-op lets the command
+/// run unless another hook blocks it. Any other event is a handler error,
+/// which the fail-closed runner lowers for that event: it blocks an event
+/// whose exit 2 blocks and is a non-blocking error elsewhere.
+fn claude_response(
+    config_paths: &[PathBuf],
+    input: AnyInput,
+    environment: &ClaudeCommandEnvironment,
+    max_entries: usize,
+) -> hookkit_core::Result<AnyCommandOutput> {
+    match input {
+        AnyInput::Catalog(input)
+            if input.event_id() == hookkit_claude::catalog::PreToolUse::EVENT =>
+        {
+            let input = PreToolUseInput::Claude(input);
+            let environment = PreToolUseCommandEnvironment::Claude(environment.clone());
+            match pre_tool_response(config_paths, &input, &environment, max_entries)? {
+                PreToolUseOutput::Claude(output) => Ok(output.into()),
+                other => Err(HookkitError::handler(format!(
+                    "a Claude Code PreToolUse call produced a {} response",
+                    other.harness()
+                ))),
+            }
+        }
+        AnyInput::Catalog(input) if input.event_id() == PreSkillShellCommand::EVENT => {
+            let output = match injected_command_deny_reason(
+                config_paths,
+                &input,
+                environment,
+                max_entries,
+            ) {
+                Some(reason) => PreSkillShellCommandOutput::deny(reason),
+                None => PreSkillShellCommandOutput::no_op(),
+            };
+            Ok(output.into())
+        }
+        other => Err(HookkitError::handler(format!(
+            "forbidden-file-guard guards Claude Code PreToolUse and PreSkillShellCommand, not {}",
+            ClaudeCode::input_event(&other)
+        ))),
+    }
 }
 
 /// Blocks the call when the command line is invalid.
@@ -172,12 +253,18 @@ fn usage_error(error: &clap::Error) -> std::process::ExitCode {
         return std::process::ExitCode::from(2);
     };
     let harness = harness.id();
-    let event = EventId::builtin(harness.clone(), "PreToolUse");
+    // Claude Code runs the guard for `PreToolUse` and `PreSkillShellCommand`,
+    // and stdin has not been read to say which; exit 2 blocks either.
+    let event = (harness != HarnessId::CLAUDE_CODE)
+        .then(|| EventId::builtin(harness.clone(), "PreToolUse"));
+    let hook = event
+        .as_ref()
+        .map_or_else(|| harness.to_string(), ToString::to_string);
     hookkit_runtime::failure::failure_response(
         hookkit_runtime::FailurePolicy::FailClosed,
         &harness,
-        Some(&event),
-        &usage_diagnostic(Some(&event), error),
+        event.as_ref(),
+        &usage_diagnostic(Some(&hook), error),
     )
     .emit()
 }
@@ -205,12 +292,12 @@ fn requested_harness(arguments: impl IntoIterator<Item = OsString>) -> Option<Ha
 }
 
 /// One stderr line naming the program, the hook, and clap's message.
-fn usage_diagnostic(event: Option<&EventId>, error: &clap::Error) -> String {
+fn usage_diagnostic(hook: Option<&str>, error: &clap::Error) -> String {
     let message = error.to_string();
     let message = message.split_whitespace().collect::<Vec<_>>().join(" ");
-    match event {
-        Some(event) => {
-            format!("hookkit: forbidden-file-guard {event} failed: invalid arguments: {message}")
+    match hook {
+        Some(hook) => {
+            format!("hookkit: forbidden-file-guard {hook} failed: invalid arguments: {message}")
         }
         None => format!("hookkit: forbidden-file-guard failed: invalid arguments: {message}"),
     }
@@ -227,12 +314,41 @@ fn usage_diagnostic(event: Option<&EventId>, error: &clap::Error) -> String {
 /// a worktree the agent entered, whose root `CLAUDE_PROJECT_DIR` does not
 /// name, and the enclosing checkout (the nearest ancestor with a `.git`
 /// directory or file) keeps covering that worktree after a `cd src` inside it.
+///
+/// Codex tool events report no workspace root: since Codex 0.166.0 their
+/// `cwd` is the command's working directory, a Bash `workdir` that can be a
+/// repository subdirectory, so its enclosing checkout is added the same way.
 fn policy_roots(
     input: &PreToolUseInput,
     environment: &PreToolUseCommandEnvironment,
 ) -> Vec<Utf8PathBuf> {
-    let mut roots = input.project_roots(environment).into_owned();
-    for directory in input.workspace_roots().iter() {
+    let directories = match input {
+        PreToolUseInput::Codex(native) => vec![native.cwd.clone()],
+        _ => input.workspace_roots().into_owned(),
+    };
+    with_working_directories(input.project_roots(environment).into_owned(), &directories)
+}
+
+/// The policy roots of an injected command, as for a Claude Code tool call:
+/// `CLAUDE_PROJECT_DIR`, then the hook `cwd`, the session shell's current
+/// directory that the command runs in, then the checkout enclosing it.
+fn injected_command_roots(
+    input: &CatalogInput,
+    environment: &ClaudeCommandEnvironment,
+) -> Vec<Utf8PathBuf> {
+    with_working_directories(
+        vec![environment.project_dir.clone()],
+        std::slice::from_ref(&input.cwd),
+    )
+}
+
+/// `roots` followed by each working directory and the checkout enclosing it,
+/// each when it is not already a root.
+fn with_working_directories(
+    mut roots: Vec<Utf8PathBuf>,
+    directories: &[Utf8PathBuf],
+) -> Vec<Utf8PathBuf> {
+    for directory in directories {
         let checkout = enclosing_checkout(directory);
         for root in std::iter::once(directory.as_path()).chain(checkout) {
             if !roots.iter().any(|known| known == root) {
@@ -261,15 +377,38 @@ fn deny_reason(
     max_entries: usize,
 ) -> Option<String> {
     let roots = policy_roots(input, environment);
-    let policy = match load_policy(config_paths, &roots) {
-        Ok(policy) => policy,
-        Err(error) => {
-            return Some(format!(
-                "Forbidden-file policy could not be loaded: {error}"
-            ));
-        }
-    };
-    evaluate(&policy, input, &roots, max_entries)
+    with_policy(config_paths, &roots, |policy| {
+        evaluate(policy, input, &roots, max_entries)
+    })
+}
+
+/// [`deny_reason`] for an injected command (Claude Code
+/// `PreSkillShellCommand`).
+fn injected_command_deny_reason(
+    config_paths: &[PathBuf],
+    input: &CatalogInput,
+    environment: &ClaudeCommandEnvironment,
+    max_entries: usize,
+) -> Option<String> {
+    let roots = injected_command_roots(input, environment);
+    with_policy(config_paths, &roots, |policy| {
+        evaluate_injected_command(policy, input, &roots, max_entries)
+    })
+}
+
+/// Applies `evaluate` to the policy loaded for `roots`; a policy that fails
+/// to load is itself the deny reason.
+fn with_policy(
+    config_paths: &[PathBuf],
+    roots: &[Utf8PathBuf],
+    evaluate: impl FnOnce(&Policy) -> Option<String>,
+) -> Option<String> {
+    match load_policy(config_paths, roots) {
+        Ok(policy) => evaluate(&policy),
+        Err(error) => Some(format!(
+            "Forbidden-file policy could not be loaded: {error}"
+        )),
+    }
 }
 
 fn load_policy(config_paths: &[PathBuf], roots: &[Utf8PathBuf]) -> hookkit_core::Result<Policy> {
@@ -349,20 +488,72 @@ fn evaluate(
     roots: &[Utf8PathBuf],
     max_entries: usize,
 ) -> Option<String> {
-    let shell_call = is_native_shell(input);
-    if policy.posture.deny_shell && shell_call {
+    if policy.posture.deny_shell && is_native_shell(input) {
         return Some(blocked_shell_reason(
             input.tool_name().unwrap_or("<unknown>"),
         ));
     }
+    let report = access_analyzer().analyze_pre_tool(input);
+    evaluate_report(policy, &report, roots, max_entries)
+}
 
-    let analyzer = ToolAccessAnalyzer::new(
+/// [`evaluate`] for an injected command, a shell command that a loading
+/// skill is about to run (Claude Code `PreSkillShellCommand`).
+///
+/// Every injected command is a shell command, run by the `Bash` tool or the
+/// `PowerShell` tool that `tool_name` names, in the session shell's current
+/// directory that the hook `cwd` reports. It is analyzed exactly like a
+/// `PreToolUse` call of that tool: a `Bash` command through
+/// [`CLAUDE_BASH_PROFILE`], and a `PowerShell` command, which the analyzer
+/// cannot parse, through the structured-field fallback. The command is not a
+/// tool call, and its `tool_use_id` names no tool call in the transcript, so
+/// the analyzed call carries no tool-call id.
+fn evaluate_injected_command(
+    policy: &Policy,
+    input: &CatalogInput,
+    roots: &[Utf8PathBuf],
+    max_entries: usize,
+) -> Option<String> {
+    // The exact `PreSkillShellCommand` parser requires both fields.
+    let (Some(tool_name), Some(tool_input)) = (input.tool_name(), input.tool_input()) else {
+        return Some("Forbidden-file policy cannot read the injected command".to_owned());
+    };
+    if policy.posture.deny_shell {
+        return Some(blocked_shell_reason(tool_name));
+    }
+    let call = ToolCallRef::new(
+        input.event_id(),
+        ToolPhase::Pre,
+        tool_name,
+        JsonRef::Value(tool_input),
+        Some(&input.cwd),
+        vec![input.cwd.clone()],
+    );
+    let report = access_analyzer()
+        .with_shell_profile(CLAUDE_BASH_PROFILE)
+        .analyze_call(&call);
+    evaluate_report(policy, &report, roots, max_entries)
+}
+
+/// The analyzer the guard applies to every call, with the opt-in
+/// literal-operand fallback for unknown commands.
+fn access_analyzer() -> ToolAccessAnalyzer {
+    ToolAccessAnalyzer::new(
         BashAnalyzer::default(),
         FileAccessAnalyzer::default()
             .with_unknown_command_fallback(UnknownCommandFallback::LiteralPathOperands),
         hookkit_tool_access::StructuredFieldAnalyzer::default(),
-    );
-    let report = analyzer.analyze_pre_tool(input);
+    )
+}
+
+/// Match one call's access report against the policy, materialize its
+/// scoped targets, and apply the caller-selected uncertainty posture.
+fn evaluate_report(
+    policy: &Policy,
+    report: &ToolAccessReport,
+    roots: &[Utf8PathBuf],
+    max_entries: usize,
+) -> Option<String> {
     if let Some(reason) = report
         .candidates
         .iter()
@@ -370,13 +561,13 @@ fn evaluate(
     {
         return Some(reason);
     }
-    let session_relative = session_relative_operands(&report);
+    let session_relative = session_relative_operands(report);
     if let Some(expression) = session_relative
         .iter()
         .find(|expression| matches_floating_policy(policy, &expression.raw))
     {
         return Some(format!(
-            "Forbidden-file policy denies access to `{}`: the tool's working directory is not reported, so it may name a forbidden path",
+            "Forbidden-file policy denies access to `{}`: the command may run in a working directory the payload does not report, so it may name a forbidden path",
             expression.raw
         ));
     }
@@ -408,7 +599,7 @@ fn evaluate(
         && (!report.is_complete() || !resolution.is_complete() || !session_relative.is_empty())
     {
         return Some(format!(
-            "Forbidden-file policy denies unresolved access analysis ({} analysis gap(s), {} resolution gap(s), {} operand(s) relative to an unreported working directory)",
+            "Forbidden-file policy denies unresolved access analysis ({} analysis gap(s), {} resolution gap(s), {} operand(s) relative to a possibly unreported working directory)",
             report.gaps.len(),
             resolution.unresolved.len(),
             session_relative.len()
@@ -420,13 +611,16 @@ fn evaluate(
 /// Relative shell operands the analyzer could only resolve against the hook's
 /// session directory ([`PathBase::SessionCwd`]).
 ///
-/// The command may run elsewhere: a Codex shell call's `workdir` argument
-/// moves it, and the `Bash` hook payload omits it. `cat token.txt` run in
-/// `secrets/` then reads `secrets/token.txt` although the operand resolves to
-/// `<cwd>/token.txt`. `deny_unresolved` counts such operands as unresolved,
-/// and every posture matches them against root-relative patterns anchored
-/// anywhere (`**/secrets/**`), which catches a workdir above the forbidden
-/// path but not one inside it.
+/// The command may run elsewhere: since Codex 0.166.0 a local command's hook
+/// `cwd` is its resolved `workdir`, but a command in a remote execution
+/// environment reports the host directory instead, and the payload does not
+/// say which. A remote `cat token.txt` run in `secrets/` then reads
+/// `secrets/token.txt` although the operand resolves to `<cwd>/token.txt`.
+/// `deny_unresolved` counts such operands as unresolved, and every posture
+/// matches them against root-relative patterns anchored anywhere
+/// (`**/secrets/**`), which catches a remote workdir above the forbidden path
+/// but not one inside it. A local workdir inside it is the hook `cwd`, which
+/// the checkout's policy root covers.
 fn session_relative_operands(report: &ToolAccessReport) -> Vec<&PathExpression> {
     report
         .candidates
@@ -538,9 +732,8 @@ fn forbidden_path_reason(path: &Utf8Path) -> String {
 }
 
 /// Whether the call runs a shell command: an exact native shell profile
-/// (Claude Code `Bash`, Codex `Bash`, Antigravity `run_command`) or a Claude
-/// Code shell tool the analyzer cannot parse (see
-/// [`CLAUDE_UNPARSED_SHELL_TOOLS`]).
+/// (Claude Code `Bash`, Codex `Bash`, Antigravity `run_command`) or another
+/// Claude Code shell tool (see [`CLAUDE_UNPARSED_SHELL_TOOLS`]).
 fn is_native_shell(input: &PreToolUseInput) -> bool {
     let ToolCallObservation::Call(call) = observe_pre_tool(input) else {
         return false;
@@ -576,8 +769,6 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hookkit_core::{EventId, HarnessId};
-    use hookkit_tool_access::{JsonRef, ToolCallRef, ToolPhase};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
@@ -1123,7 +1314,8 @@ mod tests {
             let reason = evaluate_codex(&deny_all, &input).unwrap();
             assert!(reason.contains(&format!("shell tool `{tool}`")), "{reason}");
         }
-        // The analyzer parses neither, so deny_unresolved also denies them.
+        // The analyzer does not parse PowerShell, and in the Monitor command
+        // `Get-Content` is an unknown command, so deny_unresolved denies both.
         let strict = policy(&["**/.env"], AccessPolicy::DenyUnresolved);
         for tool in ["PowerShell", "Monitor"] {
             let input = claude_input_at_cwd(
@@ -1131,21 +1323,243 @@ mod tests {
                 tool,
                 serde_json::json!({"command": "Get-Content notes.txt"}),
             );
-            assert!(evaluate_codex(&strict, &input).is_some(), "{tool}");
+            let reason = evaluate_codex(&strict, &input).unwrap();
+            assert!(
+                reason.contains("unresolved access analysis"),
+                "{tool}: {reason}"
+            );
+        }
+        // Under inspect_known an unparsed PowerShell `Get-Content .env` goes
+        // through, but in a Monitor command the unknown command's literal
+        // operand is still checked; an operand the fallback cannot recover
+        // goes through there too.
+        let inspect = policy(&["**/.env"], AccessPolicy::InspectKnown);
+        let get_content = serde_json::json!({"command": "Get-Content .env"});
+        let powershell = claude_input_at_cwd("/repo", "PowerShell", get_content.clone());
+        assert!(evaluate_codex(&inspect, &powershell).is_none());
+        let monitor = claude_input_at_cwd("/repo", "Monitor", get_content);
+        let reason = evaluate_codex(&inspect, &monitor).unwrap();
+        assert!(reason.contains(".env"), "{reason}");
+        let variable = claude_input_at_cwd(
+            "/repo",
+            "Monitor",
+            serde_json::json!({"command": "Get-Content $p"}),
+        );
+        assert!(evaluate_codex(&inspect, &variable).is_none());
+    }
+
+    /// A Claude Code `PreSkillShellCommand` input for an injected command,
+    /// parsed by the exact parser.
+    fn injected_command_at_cwd(cwd: &str, tool_name: &str, command: &str) -> CatalogInput {
+        let value = serde_json::json!({
+            "session_id": "session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": cwd,
+            "permission_mode": "default",
+            "hook_event_name": "PreSkillShellCommand",
+            "tool_name": tool_name,
+            "tool_input": {"command": command},
+            "tool_use_id": "skillsh_1",
+            "command_name": "release-notes",
+            "invoked_by": "user"
+        });
+        let invocation =
+            hookkit_core::RawInvocation::parse(serde_json::to_vec(&value).unwrap()).unwrap();
+        PreSkillShellCommand::parse(&invocation).unwrap()
+    }
+
+    fn claude_environment(project_dir: &str, event: &'static str) -> ClaudeCommandEnvironment {
+        <ClaudeCommandEnvironment as hookkit_core::CommandEnvironmentSpec>::from_variables(
+            &EventId::builtin(HarnessId::CLAUDE_CODE, event),
+            &hookkit_core::EnvironmentVariables::from_pairs([
+                ("CLAUDECODE", "1"),
+                ("CLAUDE_CODE_CHILD_SESSION", "1"),
+                ("CLAUDE_CODE_SESSION_ID", "session"),
+                ("CLAUDE_PROJECT_DIR", project_dir),
+            ]),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn injected_commands_are_inspected_like_bash_tool_calls() {
+        // PreToolUse does not fire for injected commands, so the same
+        // command must get the same answer on both events.
+        let roots = [Utf8PathBuf::from("/repo")];
+        let cases = [
+            ("cat .env", true, true),
+            ("test -f .env && cat .env", true, true),
+            ("echo secret > config/.env", true, true),
+            ("cat secrets/token.txt", true, true),
+            ("mystery secrets/token.txt", true, true),
+            ("cat notes.txt", false, false),
+            ("git log -1 --format=%H", false, true),
+            ("cat \"$SECRET\"", false, true),
+        ];
+        for access_policy in [AccessPolicy::InspectKnown, AccessPolicy::DenyUnresolved] {
+            let guard = policy(&[".env", "**/.env", "secrets/**"], access_policy);
+            for (command, denied_known, denied_unresolved) in cases {
+                let injected = injected_command_at_cwd("/repo", "Bash", command);
+                let tool_call =
+                    claude_input_at_cwd("/repo", "Bash", serde_json::json!({"command": command}));
+                let reason =
+                    evaluate_injected_command(&guard, &injected, &roots, TARGET_RESOLUTION_BUDGET);
+                assert_eq!(
+                    reason,
+                    evaluate(&guard, &tool_call, &roots, TARGET_RESOLUTION_BUDGET),
+                    "{access_policy:?}: {command}"
+                );
+                let expected = match access_policy {
+                    AccessPolicy::DenyUnresolved => denied_unresolved,
+                    _ => denied_known,
+                };
+                assert_eq!(reason.is_some(), expected, "{access_policy:?}: {command}");
+            }
         }
     }
 
     #[test]
-    fn codex_shell_operands_relative_to_an_unreported_workdir_are_uncertain() {
-        // Codex runs `exec_command` in its `workdir` argument, which the Bash
-        // hook payload omits: `cat token.txt` may read `secrets/token.txt`.
+    fn injected_commands_honor_the_shell_postures() {
+        let roots = [Utf8PathBuf::from("/repo")];
+        // Every injected command is a shell command, including a PowerShell
+        // one, so deny_all_shell refuses each with the tool named.
+        let deny_all = policy(&["**/.env"], AccessPolicy::DenyAllShell);
+        for tool in ["Bash", "PowerShell"] {
+            let injected = injected_command_at_cwd("/repo", tool, "echo safe");
+            let reason =
+                evaluate_injected_command(&deny_all, &injected, &roots, TARGET_RESOLUTION_BUDGET)
+                    .unwrap();
+            assert!(reason.contains(&format!("shell tool `{tool}`")), "{reason}");
+        }
+        // The analyzer does not parse PowerShell: deny_unresolved refuses it
+        // as unresolved, and inspect_known lets it through, as for a
+        // PowerShell tool call.
+        for (access_policy, denied) in [
+            (AccessPolicy::DenyUnresolved, true),
+            (AccessPolicy::InspectKnown, false),
+        ] {
+            let guard = policy(&["**/.env"], access_policy);
+            let injected = injected_command_at_cwd("/repo", "PowerShell", "Get-Content notes.txt");
+            let tool_call = claude_input_at_cwd(
+                "/repo",
+                "PowerShell",
+                serde_json::json!({"command": "Get-Content notes.txt"}),
+            );
+            let reason =
+                evaluate_injected_command(&guard, &injected, &roots, TARGET_RESOLUTION_BUDGET);
+            assert_eq!(reason.is_some(), denied, "{access_policy:?}: {reason:?}");
+            assert_eq!(
+                reason,
+                evaluate(&guard, &tool_call, &roots, TARGET_RESOLUTION_BUDGET),
+                "{access_policy:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn injected_command_roots_match_the_tool_call_roots() {
+        let directory = test_dir("forbidden-injected-roots");
+        let project = Utf8PathBuf::from_path_buf(directory.clone()).unwrap();
+        let worktree = project.join(".claude/worktrees/feat");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(worktree.join("src")).unwrap();
+        std::fs::create_dir_all(worktree.join("secrets")).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            "gitdir: ../../../.git/worktrees/feat\n",
+        )
+        .unwrap();
+        std::fs::write(worktree.join("secrets/token.txt"), "token").unwrap();
+        let cwd = worktree.join("src");
+
+        let injected = injected_command_at_cwd(cwd.as_str(), "Bash", "cat ../secrets/token.txt");
+        let environment = claude_environment(project.as_str(), "PreSkillShellCommand");
+        let roots = injected_command_roots(&injected, &environment);
+        assert_eq!(roots, [project.clone(), cwd.clone(), worktree.clone()]);
+
+        let tool_call = claude_input_at_cwd(
+            cwd.as_str(),
+            "Bash",
+            serde_json::json!({"command": "cat ../secrets/token.txt"}),
+        );
+        let tool_environment = PreToolUseCommandEnvironment::Claude(claude_environment(
+            project.as_str(),
+            "PreToolUse",
+        ));
+        assert_eq!(roots, policy_roots(&tool_call, &tool_environment));
+
+        // `secrets/**` is relative to the worktree root the agent moved below.
+        let guard = policy(&["secrets/**"], AccessPolicy::InspectKnown);
+        assert!(
+            evaluate_injected_command(&guard, &injected, &roots, TARGET_RESOLUTION_BUDGET)
+                .is_some()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn claude_responses_follow_the_payload_event() {
+        let directory = test_dir("forbidden-claude-response");
+        std::fs::create_dir_all(&directory).unwrap();
+        let config = directory.join("policy.yaml");
+        std::fs::write(&config, "patterns: ['**/.env']\n").unwrap();
+        let environment = claude_environment("/repo", "PreSkillShellCommand");
+        let respond = |input: CatalogInput| {
+            let output = claude_response(
+                std::slice::from_ref(&config),
+                AnyInput::Catalog(input),
+                &environment,
+                TARGET_RESOLUTION_BUDGET,
+            )?;
+            let emission = <ClaudeCode as HarnessSpec>::encode_command_unchecked(output)?;
+            Ok::<_, HookkitError>(String::from_utf8(emission.stdout().to_vec()).unwrap())
+        };
+
+        let denied = respond(injected_command_at_cwd("/repo", "Bash", "cat .env")).unwrap();
+        let denied: serde_json::Value = serde_json::from_str(&denied).unwrap();
+        assert_eq!(
+            denied["hookSpecificOutput"]["hookEventName"],
+            "PreSkillShellCommand"
+        );
+        assert_eq!(denied["hookSpecificOutput"]["permissionDecision"], "deny");
+        // No objection is a no-op: an injected command cannot be approved.
+        assert_eq!(
+            respond(injected_command_at_cwd("/repo", "Bash", "cat notes.txt")).unwrap(),
+            "{}"
+        );
+
+        let PreToolUseInput::Claude(tool_call) = claude_input_at_cwd(
+            "/repo",
+            "Read",
+            serde_json::json!({"file_path": "/repo/.env"}),
+        ) else {
+            unreachable!()
+        };
+        let denied: serde_json::Value = serde_json::from_str(&respond(tool_call).unwrap()).unwrap();
+        assert_eq!(denied["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert_eq!(denied["hookSpecificOutput"]["permissionDecision"], "deny");
+
+        let mut stop = injected_command_at_cwd("/repo", "Bash", "cat .env");
+        stop.hook_event_name = "Stop".into();
+        let stop: CatalogInput =
+            serde_json::from_value(serde_json::to_value(stop).unwrap()).unwrap();
+        let error = respond(stop).unwrap_err().to_string();
+        assert!(error.contains("not claude-code/Stop"), "{error}");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn codex_shell_operands_relative_to_a_possibly_remote_workdir_are_uncertain() {
+        // A Codex command in a remote execution environment reports the host
+        // `cwd` rather than its `workdir`, and the payload does not say
+        // which applies: `cat token.txt` may read `secrets/token.txt`.
         let hidden = codex_input("Bash", serde_json::json!({"command": "cat token.txt"}));
         let inspect = policy(&["secrets/**"], AccessPolicy::InspectKnown);
         assert!(evaluate_codex(&inspect, &hidden).is_none());
         let strict = policy(&["secrets/**"], AccessPolicy::DenyUnresolved);
         let reason = evaluate_codex(&strict, &hidden).unwrap();
         assert!(
-            reason.contains("1 operand(s) relative to an unreported working directory"),
+            reason.contains("1 operand(s) relative to a possibly unreported working directory"),
             "{reason}"
         );
 
@@ -1155,7 +1569,7 @@ mod tests {
             let input = codex_input("Bash", serde_json::json!({"command": command}));
             let reason = evaluate_codex(&inspect, &input).unwrap_or_else(|| panic!("{command}"));
             assert!(
-                reason.contains("working directory is not reported"),
+                reason.contains("a working directory the payload does not report"),
                 "{reason}"
             );
         }
@@ -1172,6 +1586,57 @@ mod tests {
         assert!(evaluate_codex(&strict, &claude).is_none());
         let patch = codex_patch("*** Update File: app/secrets.txt\n@@\n-a\n+b\n");
         assert!(evaluate_codex(&strict, &patch).is_none());
+    }
+
+    #[test]
+    fn a_codex_workdir_keeps_its_checkout_as_a_policy_root() {
+        // Since Codex 0.166.0 a Bash command run with `workdir` reports that
+        // directory as `cwd`; root-anchored patterns must still cover the
+        // repository around it.
+        let directory = test_dir("forbidden-codex-workdir");
+        let project = Utf8PathBuf::from_path_buf(directory.clone()).unwrap();
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(project.join("nested")).unwrap();
+        std::fs::create_dir_all(project.join("secrets")).unwrap();
+        std::fs::write(project.join("secrets/token.txt"), "token").unwrap();
+
+        let input = codex_input_at_cwd(
+            project.join("nested").as_str(),
+            "Bash",
+            serde_json::json!({"command": "cat ../secrets/token.txt"}),
+        );
+        // The Codex arm reports its cwd whatever the environment arm, and
+        // this example has no direct Codex dependency to build one.
+        let environment = PreToolUseCommandEnvironment::Claude(
+            <hookkit_claude::ClaudeCommandEnvironment as hookkit_core::CommandEnvironmentSpec>::from_variables(
+                &EventId::builtin(HarnessId::CLAUDE_CODE, "PreToolUse"),
+                &hookkit_core::EnvironmentVariables::from_pairs([
+                    ("CLAUDECODE", "1"),
+                    ("CLAUDE_CODE_CHILD_SESSION", "1"),
+                    ("CLAUDE_CODE_SESSION_ID", "session"),
+                    ("CLAUDE_PROJECT_DIR", "/elsewhere"),
+                ]),
+            )
+            .unwrap(),
+        );
+        assert!(input.workspace_roots().is_empty());
+        let roots = policy_roots(&input, &environment);
+        assert_eq!(roots, [project.join("nested"), project.clone()]);
+        let guard = policy(&["secrets/**"], AccessPolicy::InspectKnown);
+        assert!(evaluate(&guard, &input, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+
+        // A local workdir inside the forbidden directory is the hook `cwd`
+        // too, so even `inspect_known` sees `cat token.txt` read
+        // `secrets/token.txt` through the enclosing checkout's root.
+        let inside = codex_input_at_cwd(
+            project.join("secrets").as_str(),
+            "Bash",
+            serde_json::json!({"command": "cat token.txt"}),
+        );
+        let roots = policy_roots(&inside, &environment);
+        assert_eq!(roots, [project.join("secrets"), project.clone()]);
+        assert!(evaluate(&guard, &inside, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

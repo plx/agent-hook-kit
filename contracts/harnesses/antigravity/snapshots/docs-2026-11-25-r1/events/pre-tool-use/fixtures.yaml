@@ -1,0 +1,221 @@
+format_version: 1
+input:
+  positive:
+    - id: minimal
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0 }
+    - id: representative
+      origin: official
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 } }, stepIdx: 19, conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, modelName: gemini-3.6-flash-medium }
+    - id: view-file
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: view_file, args: { AbsolutePath: /workspace/project/README.md } }, stepIdx: 4, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: list-permissions-null-args
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: list_permissions, args: null }, stepIdx: 7, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: list-permissions-without-args
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: list_permissions }, stepIdx: 7, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: cli-1-5-4-metadata
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-cli-changelog]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 }, id: call_01 }, stepIdx: 19, conversationId: ec33ebf9-0cba-4100-8142-c61503f6c587, workspacePaths: [/workspace/project], transcriptPath: ~/.gemini/antigravity-cli/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl, artifactDirectoryPath: ~/.gemini/antigravity-cli/brain/ec33ebf9-0cba-4100-8142-c61503f6c587, modelName: gemini-3.6-flash-medium, hookEventName: PreToolUse, cwd: /workspace/project }
+    - id: numeric-tool-call-id
+      origin: synthesized
+      sources: [antigravity-cli-changelog]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 }, id: 7 }, stepIdx: 19, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, hookEventName: PreToolUse, cwd: /workspace/project }
+    - id: with-last-user-input
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-cli-changelog]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm test, Cwd: /workspace/project, WaitMsBeforeAsync: 5000 } }, stepIdx: 19, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium, lastUserInput: Fix the failing unit test }
+    - id: last-user-input-empty
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-cli-changelog]
+      value: { toolCall: { name: view_file, args: { AbsolutePath: /workspace/project/README.md } }, stepIdx: 1, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, lastUserInput: "" }
+    - id: run-command-persistent
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: run_command, args: { CommandLine: npm run dev, Cwd: /workspace/project, WaitMsBeforeAsync: 0, RunPersistent: true, RequestedTerminalID: t1 } }, stepIdx: 12, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: view-file-skill
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { toolCall: { name: view_file, args: { AbsolutePath: /workspace/project/.agents/skills/lint/SKILL.md, IsSkillFile: true } }, stepIdx: 3, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: call-mcp-tool
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-mcp]
+      value: { toolCall: { name: call_mcp_tool, args: { ServerName: github, ToolName: create_issue, Arguments: { title: x } } }, stepIdx: 9, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: eager-mcp-tool
+      origin: synthesized
+      sources: [antigravity-hooks-reference, antigravity-mcp]
+      value: { toolCall: { name: mcp_github_create_issue, args: { title: x } }, stepIdx: 9, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: run-workflow
+      origin: synthesized
+      sources: [antigravity-cli-changelog]
+      value: { toolCall: { name: run_workflow, args: {} }, stepIdx: 14, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+    - id: update-steps
+      origin: synthesized
+      sources: [antigravity-cli-changelog]
+      value: { toolCall: { name: update_steps, args: {} }, stepIdx: 15, conversationId: c1, workspacePaths: [/workspace/project], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, modelName: gemini-3.6-flash-medium }
+  negative:
+    - id: missing-tool-call
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, stepIdx: 0 }
+      expected_pointer: ""
+      expected_keyword: required
+    - id: invalid-step-index
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: first }
+      expected_pointer: /stepIdx
+      expected_keyword: type
+    - id: invalid-model-name
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, modelName: 36 }
+      expected_pointer: /modelName
+      expected_keyword: type
+    - id: invalid-last-user-input
+      origin: synthesized
+      sources: [antigravity-hooks-reference]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, lastUserInput: 42 }
+      expected_pointer: /lastUserInput
+      expected_keyword: type
+    - id: invalid-hook-event-name
+      origin: synthesized
+      sources: [antigravity-cli-changelog]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, hookEventName: 3 }
+      expected_pointer: /hookEventName
+      expected_keyword: type
+    - id: invalid-cwd
+      origin: synthesized
+      sources: [antigravity-cli-changelog]
+      value: { conversationId: c1, workspacePaths: [/repo], transcriptPath: /tmp/t.jsonl, artifactDirectoryPath: /tmp/artifacts, toolCall: { name: run_command, args: {} }, stepIdx: 0, cwd: 7 }
+      expected_pointer: /cwd
+      expected_keyword: type
+output:
+  - id: allow-pass-through
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: { decision: allow }
+  - id: auto-approve
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-cli-changelog]
+    value: { decision: auto_approve, reason: Lint-only command. }
+  - id: deny
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference, antigravity-build-plugins]
+    value: { decision: deny, reason: Destructive command blocked by policy. }
+  - id: ask
+    schema: command-response
+    origin: official
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: { decision: ask, reason: Requires confirmation for test execution., permissionOverrides: [command(npm test)] }
+  - id: force-ask
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { decision: force_ask, reason: Always confirm deployments. }
+  - id: deny-unless-prior-grant
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference]
+    value: { decision: deny_unless_prior_grant, permissionOverrides: [read_file(/workspace/project/.env)] }
+  - id: overwrite-cwd
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown, antigravity-build-plugins]
+    value: { decision: allow, overwrite: { Cwd: /workspace/project/sub } }
+  - id: auto-approve-with-overwrite
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: { decision: auto_approve, overwrite: { CommandLine: "npm test -- --ci" } }
+  - id: ask-with-extended-overrides
+    schema: command-response
+    origin: synthesized
+    sources: [antigravity-hooks-reference, antigravity-permissions-reference]
+    value: { decision: ask, permissionOverrides: [download_url(example.com), unsandboxed(git push), "mcp(linter/*)"] }
+output_negative:
+  - id: empty-decision
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference, antigravity-cli-changelog]
+    value: { decision: "" }
+    expected_pointer: /decision
+    expected_keyword: enum
+  - id: duplicate-permission-override
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference]
+    value: { decision: ask, permissionOverrides: [command(npm test), command(npm test)] }
+    expected_pointer: /permissionOverrides
+    expected_keyword: uniqueItems
+  - id: unknown-decision
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference, antigravity-cli-changelog]
+    value: { decision: approve }
+    expected_pointer: /decision
+    expected_keyword: enum
+  - id: auto-approve-wrong-case
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference]
+    value: { decision: Auto_Approve }
+    expected_pointer: /decision
+    expected_keyword: enum
+  - id: overwrite-not-object
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: { decision: allow, overwrite: npm test }
+    expected_pointer: /overwrite
+    expected_keyword: type
+  - id: overwrite-array
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: { decision: allow, overwrite: [] }
+    expected_pointer: /overwrite
+    expected_keyword: type
+  - id: overwrite-without-decision
+    schema: command-response
+    origin: regression
+    sources: [antigravity-hooks-reference, antigravity-hooks-markdown]
+    value: { overwrite: { Cwd: /workspace/project/sub } }
+    expected_pointer: ""
+    expected_keyword: required
+process:
+  - id: ask
+    binding: command
+    outcome: decision
+    exit_code: 0
+    stdout_base64: eyJkZWNpc2lvbiI6ImFzayIsInJlYXNvbiI6IlJlcXVpcmVzIGNvbmZpcm1hdGlvbiBmb3IgdGVzdCBleGVjdXRpb24uIiwicGVybWlzc2lvbk92ZXJyaWRlcyI6WyJjb21tYW5kKG5wbSB0ZXN0KSJdfQ==
+    stdout_sha256: b8e2a8e4523c79f1e2132ce6533b87d0bb7a6205baeb7eaabcc34ce06afd14ee
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: auto-approve
+    binding: command
+    outcome: decision
+    exit_code: 0
+    stdout_base64: eyJkZWNpc2lvbiI6ImF1dG9fYXBwcm92ZSIsInJlYXNvbiI6IkxpbnQtb25seSBjb21tYW5kLiJ9
+    stdout_sha256: c60eb867fa21f9aceb2508c348774b8429a2b3f9f15298e7e613bc51dfc82076
+    stderr_base64: ""
+    stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: failure
+    binding: command
+    outcome: failure
+    exit_code: 1
+    stdout_base64: ""
+    stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    stderr_base64: aG9vayBmYWlsZWQK
+    stderr_sha256: 339e9a9a2a85233d852616e657d6b262da208ce3ef1e7c8c5fa32659916f0257

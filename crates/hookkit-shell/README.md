@@ -247,12 +247,32 @@ Native adapters recognize the contract-backed names and fields only:
 
 | Harness event | Exact tool | Command location | Cwd |
 | --- | --- | --- | --- |
-| Claude `PreToolUse`, `PermissionRequest`, `PermissionDenied`, `PostToolUse`, `PostToolUseFailure` | `Bash` | `/command` | hook `cwd` |
+| Claude `PreToolUse`, `PermissionRequest`, `PermissionDenied`, `PostToolUse`, `PostToolUseFailure` | `Bash`, and `Monitor` when it runs a command | `/command` | hook `cwd` |
+| Claude `PreSkillShellCommand` (pre phase) | `Bash` | `/command` | hook `cwd` |
 | Codex `PreToolUse` / `PostToolUse` | `Bash` | `/command` | `/workdir`, else hook `cwd` (unverified) |
 | Antigravity `PreToolUse` / `PostToolUse` | `run_command` | `/CommandLine` | `/Cwd`, else first workspace path |
 
 The Claude catalog adapter returns `ShellToolCallMatch::UnsupportedEvent` for
-other events rather than claiming they are not shell calls.
+other events rather than claiming they are not shell calls. A Claude Code
+`Monitor` call (v2.1.314 or later) watches a shell command it starts, in the
+user's shell like `Bash`, or a WebSocket; only the command form matches, and a
+`ws` watch reports `ShellToolCallMatch::NotShell`. A Bash matcher also fires
+for the shell commands Monitor starts, as a Bash-shaped `PreToolUse` with no
+matching `PostToolUse`.
+
+`PreSkillShellCommand` (Claude Code v2.1.332 or later) runs before an injected
+command, a shell command that a skill or a command such as `/security-review`
+runs while it loads. `PreToolUse` does not fire for injected commands, so a
+shell policy belongs on both events. The adapter returns the injected command
+as a pre-phase call, exactly as for a `Bash` `PreToolUse`, when `tool_name` is
+`Bash`; `PowerShell` reports `ShellToolCallMatch::NotShell`, as a `PowerShell`
+tool call does. Claude Code runs the command through the Bash tool in the
+session shell's current directory, which the hook `cwd` reports. The command
+is not a tool call: no post-tool event follows it, and its `tool_use_id` names
+no tool call in the transcript, so do not correlate it with tool events.
+`hookkit-tool-access` does not observe this event; a guard that uses it can
+analyze the injected command as a custom `ToolCallRef` with
+`CLAUDE_BASH_PROFILE` registered, as `examples/forbidden-file-guard` does.
 
 Antigravity's current `PostToolUse` input carries the originating `toolCall`, so
 the same exact adapter is available in both tool phases. Its post-tool input
@@ -263,8 +283,10 @@ relative value is joined onto an absolute fallback and exposed only through
 `ShellToolCallRef::effective_cwd`; an empty or `null` value falls back.
 `ShellToolCallRef::cwd_origin` records where the cwd came from. Codex's
 `exec_command` accepts a `workdir` argument that it joins onto the step's
-environment cwd, but its hook payload carries only `command`, so the hook
-`cwd` is only the default and the adapter reports
+environment cwd, and its hook payload carries only `command`. Since Codex
+0.166.0 the hook `cwd` of a local command is that resolved workdir, but a
+command in a remote execution environment still reports the host's step
+directory with no marker, so the adapter reports
 `ShellCwdOrigin::UnverifiedFallback`: relative paths resolved against it are
 best effort. `FileInferenceContext::for_call` does not carry the origin, so
 file-access candidates for such a call still report `PathBase::InvocationCwd`
@@ -279,7 +301,7 @@ pagers and shells are reported as indirect evaluation.
 Use `ShellToolProfile` to describe an exact custom tool name and JSON Pointer;
 the bundled adapters do not guess aliases such as `shell` or `exec_command`.
 With the matching harness features enabled, the exact reusable values are
-`CLAUDE_BASH_PROFILE`, `CODEX_BASH_PROFILE`, and
+`CLAUDE_BASH_PROFILE`, `CLAUDE_MONITOR_PROFILE`, `CODEX_BASH_PROFILE`, and
 `ANTIGRAVITY_RUN_COMMAND_PROFILE`.
 
 ## Analysis boundary

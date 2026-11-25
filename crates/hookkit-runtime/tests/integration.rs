@@ -110,7 +110,15 @@ fn run_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::proces
         .spawn()
         .and_then(|mut child| {
             use std::io::Write;
-            child.stdin.take().unwrap().write_all(fixture).unwrap();
+            if let Err(error) = child.stdin.take().unwrap().write_all(fixture) {
+                // Argument errors can exit before reading stdin. Still collect
+                // the response so callers verify its status, stdout, and stderr.
+                assert_eq!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe,
+                    "writing example stdin: {error}"
+                );
+            }
             child.wait_with_output()
         })
         .unwrap_or_else(|e| panic!("failed to run {}: {e}", binary_path.display()))
@@ -1236,18 +1244,34 @@ fn codex_bash_guard_rejects_non_pretool() {
 
 // --- antigravity-pre-invocation ---
 
+/// The fixture is a multi-root workspace's first invocation, so the example
+/// injects its reminder; a later invocation must not repeat it, because an
+/// injected `systemMessage` stays in the conversation.
 #[test]
 fn antigravity_pre_invocation_runs_contract_fixture() {
     let fixture = fixture_bytes("antigravity", "pre_invocation.json");
+    let mut input: serde_json::Value = serde_json::from_slice(&fixture).unwrap();
+    assert_eq!(input["invocationNum"], 0);
     let output = run_example("antigravity-pre-invocation", &fixture, &[]);
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
-        json["injectSteps"][0]["ephemeralMessage"]
+        json["injectSteps"][0]["systemMessage"]["systemMessage"]
             .as_str()
             .unwrap()
             .contains("workspace root")
+    );
+
+    input["invocationNum"] = serde_json::json!(3);
+    let later = serde_json::to_vec(&input).unwrap();
+    let output = run_example("antigravity-pre-invocation", &later, &[]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({}),
+        "a later invocation is a no-op"
     );
 }
 
@@ -1590,18 +1614,24 @@ fn file_activity_agent_hook_records_all_supported_posttool_paths() {
 fn session_modified_file_tracker_reports_usage_errors() {
     // A misconfigured command line must be visible, not a silent exit 1, and
     // must never use the harness-blocking exit 2.
-    let output = run_example(
-        "session-modified-file-tracker",
-        b"{}",
-        &["--harness=codex", "--no-such-flag"],
-    );
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--no-such-flag") && stderr.contains("file-activity-agent-hook"),
-        "{stderr}"
-    );
+    // A usage error exits before reading stdin, so writing the input can race
+    // the exit. The input larger than a pipe buffer makes that race certain:
+    // the run must still report the usage error, not a broken pipe.
+    let oversized = vec![b' '; 1 << 20];
+    for input in [&b"{}"[..], &oversized] {
+        let output = run_example(
+            "session-modified-file-tracker",
+            input,
+            &["--harness=codex", "--no-such-flag"],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--no-such-flag") && stderr.contains("file-activity-agent-hook"),
+            "{stderr}"
+        );
+    }
 }
 
 #[test]
@@ -1768,6 +1798,79 @@ fn bundled_start_observer_and_turn_runner_share_one_explicit_state_root() {
     );
     let summary = only_summary(&state_dir);
     assert!(Path::new(summary["run"]["stateDirectory"].as_str().unwrap()).starts_with(&state_dir));
+}
+
+#[test]
+fn antigravity_session_start_observer_records_a_startup_epoch() {
+    use hookkit_core::EventSpec as _;
+    use hookkit_session_state::{
+        SessionEpochKind, SessionIdentity, SessionState, StateRoot, TimestampProvenance,
+    };
+    let project = temp_project("antigravity-session-start");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    // The official SessionStart example, rooted in the temporary project.
+    let start = serde_json::json!({
+        "conversationId": "ec33ebf9-0cba-4100-8142-c61503f6c587",
+        "workspacePaths": [project.to_string_lossy()],
+        "transcriptPath": "~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl",
+        "artifactDirectoryPath": "~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587",
+        "modelName": "gemini-3.6-flash-medium"
+    });
+    let started = run_example(
+        "session-start-state-agent-hook",
+        &serde_json::to_vec(&start).unwrap(),
+        &["--antigravity", &format!("--state-dir={state_arg}")],
+    );
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    assert_eq!(started.stdout, b"{}");
+
+    let open = || {
+        SessionState::open(
+            hookkit_core::HarnessId::ANTIGRAVITY,
+            SessionIdentity::Conversation("ec33ebf9-0cba-4100-8142-c61503f6c587".into()),
+            StateRoot::new(&state_dir),
+        )
+        .unwrap()
+    };
+    let metadata = open().metadata().unwrap();
+    assert_eq!(metadata.current_session.kind, SessionEpochKind::Startup);
+    assert_eq!(
+        metadata.conversation.started_at.provenance,
+        TimestampProvenance::LifecycleHookObservation
+    );
+    let conversation_start = metadata.conversation.started_at.clone();
+    let startup_epoch = metadata.current_session.clone();
+
+    // The first PreInvocation still reports its fallback boundary, but the
+    // SessionStart epoch remains both the conversation's start and the
+    // current session epoch.
+    let mut invocation = start.clone();
+    invocation["invocationNum"] = 0.into();
+    invocation["initialNumSteps"] = 1.into();
+    let raw = hookkit_core::RawInvocation::parse(serde_json::to_vec(&invocation).unwrap()).unwrap();
+    let input = hookkit_antigravity::PreInvocation::parse(&raw).unwrap();
+    let context = hookkit_core::RuntimeContext::new(
+        hookkit_core::HarnessId::ANTIGRAVITY,
+        hookkit_antigravity::SNAPSHOT,
+        hookkit_antigravity::PreInvocation::EVENT,
+        hookkit_antigravity::PreInvocation::CONTRACT,
+        hookkit_core::ResolutionProvenance::TypedStatic,
+        &raw,
+        hookkit_antigravity::PreInvocation::context(&input),
+        &hookkit_core::DISABLED_DIAGNOSTICS,
+    )
+    .unwrap();
+    let metadata = SessionState::ensure(&context, StateRoot::new(&state_dir))
+        .unwrap()
+        .metadata()
+        .unwrap();
+    assert_eq!(metadata.conversation.started_at, conversation_start);
+    assert_eq!(metadata.current_session, startup_epoch);
 }
 
 // --- turn-completion-agent-hook consuming session state ---
@@ -3962,7 +4065,9 @@ run = new Listing { "ruff" }
         );
     }
 
-    // Antigravity has no channel for it, so the hook fails.
+    // Antigravity has no channel for it, so the hook fails. Antigravity logs
+    // and ignores the non-zero exit (fail-open; CLI 1.4.3 and later keep the
+    // tool's result), so the diagnostic never reaches the agent.
     let output = run_example(
         "post-tool-use-agent-hook",
         &post_tool_use_fixture("antigravity", &project, "src/dirty.py"),

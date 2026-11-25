@@ -740,6 +740,11 @@ impl FileActivityStore {
 }
 
 /// Observe one native post-tool event without claiming complete coverage.
+///
+/// A Claude Code `PostToolUse` does not prove the call succeeded: hooks from
+/// managed settings also run after some failed calls, with the error text as
+/// a string `tool_response`, and such an observation yields no `Direct`
+/// evidence.
 pub fn observe_post_tool(input: &PostToolUseInput, context: &RuntimeContext<'_>) -> ActivityReport {
     observe_tool_call(input, context)
 }
@@ -818,8 +823,10 @@ fn activity_report(
 
 /// The raw path of a candidate resolved against the hook's session directory
 /// because the tool's own working directory was not observable, as for a
-/// relative path in a Codex `Bash` command, which may have run in an
-/// unreported `workdir`.
+/// relative path in a Codex `Bash` command: since Codex 0.166.0 a local
+/// command's hook `cwd` is its resolved `workdir`, but a command in a remote
+/// execution environment reports the host directory, and the payload does not
+/// say which.
 fn session_relative_path(candidate: &AccessCandidate) -> Option<&str> {
     match &candidate.target {
         AccessTarget::Path { expression, .. }
@@ -2146,7 +2153,7 @@ mod tests {
 
     #[test]
     fn antigravity_post_tool_use_without_a_tool_call_records_a_gap() {
-        // The `ide-reference-example` fixture of antigravity/docs-2026-09-30-r1:
+        // The `ide-reference-example` fixture of antigravity/docs-2026-11-25-r1:
         // the documented IDE payload omits `toolCall`, so which files the tool
         // wrote is unknown and must not be reported as "nothing written".
         let input = PostToolUseInput::Antigravity(
@@ -2193,8 +2200,10 @@ mod tests {
 
     #[test]
     fn session_relative_writes_are_heuristic_with_a_gap() {
-        // Codex's `Bash` hook payload omits the `workdir` the command may have
-        // run in, so a relative write is only a guess at the file it changed.
+        // A Codex `Bash` command in a remote execution environment reports the
+        // host `cwd` rather than its `workdir`, and the payload does not say
+        // which applies, so a relative write is only a guess at the file it
+        // changed.
         let report = analyze_activity(&codex_post_tool(
             "Bash",
             serde_json::json!({"command": "echo x > out.txt; echo y > /repo/abs.txt"}),
@@ -2281,6 +2290,136 @@ mod tests {
             item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/src/x.py"))
                 && item.effect == FileActivityEffect::CreateOrModify
         }));
+    }
+
+    /// Observe a Claude Code catalog input as the shipped observer does,
+    /// through a runtime context for its event.
+    fn observe_claude_catalog(
+        event: &'static str,
+        mut value: serde_json::Value,
+        observe: fn(&hookkit_claude::catalog::CatalogInput, &RuntimeContext<'_>) -> ActivityReport,
+    ) -> ActivityReport {
+        value["hook_event_name"] = serde_json::json!(event);
+        let input: hookkit_claude::catalog::CatalogInput =
+            serde_json::from_value(value.clone()).unwrap();
+        let raw = hookkit_core::RawInvocation::parse(serde_json::to_vec(&value).unwrap()).unwrap();
+        let context = RuntimeContext::new(
+            HarnessId::CLAUDE_CODE,
+            hookkit_core::SnapshotId::builtin("test"),
+            hookkit_core::EventId::builtin(HarnessId::CLAUDE_CODE, event),
+            hookkit_core::ContractId::builtin("test"),
+            hookkit_core::ResolutionProvenance::TypedStatic,
+            &raw,
+            hookkit_core::NativeContext {
+                workspace_roots: vec![Utf8PathBuf::from("/repo")],
+                ..hookkit_core::NativeContext::default()
+            },
+            &hookkit_core::DISABLED_DIAGNOSTICS,
+        )
+        .unwrap();
+        observe(&input, &context)
+    }
+
+    /// A hook whose matcher includes `Monitor`, or that has no matcher,
+    /// receives a failed Monitor call's own input; its command's writes are
+    /// evidence, not a structured-tool gap.
+    #[test]
+    fn claude_monitor_post_tool_use_failure_records_the_command_s_writes() {
+        let report = observe_claude_catalog(
+            "PostToolUseFailure",
+            serde_json::json!({
+                "session_id": "session",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": "/repo",
+                "tool_name": "Monitor",
+                "tool_input": {
+                    "description": "start and watch",
+                    "timeout_ms": 1000,
+                    "command": "echo started > copy.log && tail app.log"
+                },
+                "tool_use_id": "toolu_1",
+                "error": "Exit code 1"
+            }),
+            observe_claude_post_tool_failure,
+        );
+        assert!(
+            report.evidence().any(|item| {
+                item.target == FileActivityTarget::exact(Utf8PathBuf::from("/repo/copy.log"))
+                    && item.effect == FileActivityEffect::CreateOrModify
+            }),
+            "{report:?}"
+        );
+        assert!(report.gaps().next().is_none(), "{report:?}");
+    }
+
+    /// The command a loading skill injects is not a tool call, so observing
+    /// it records one gap and no evidence.
+    #[test]
+    fn claude_pre_skill_shell_command_records_a_gap_and_no_evidence() {
+        let value = serde_json::json!({
+            "session_id": "session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/repo",
+            "hook_event_name": "PreSkillShellCommand",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo x > out.txt"},
+            "tool_use_id": "skillsh_1",
+            "skill_name": "lint",
+            "invoked_by": "user"
+        });
+        let report =
+            observe_claude_catalog("PreSkillShellCommand", value.clone(), observe_tool_call);
+        assert!(report.evidence().next().is_none(), "{report:?}");
+        assert_eq!(report.gaps().count(), 1, "{report:?}");
+        assert_eq!(report.events.len(), 1, "{report:?}");
+
+        let input: hookkit_claude::catalog::CatalogInput = serde_json::from_value(value).unwrap();
+        let report = activity_report(
+            ToolAccessAnalyzer::default().analyze_native(&input),
+            &observation_metadata(),
+        );
+        assert!(report.evidence().next().is_none(), "{report:?}");
+        assert_eq!(report.gaps().count(), 1, "{report:?}");
+    }
+
+    #[test]
+    fn claude_post_tool_use_with_an_error_string_is_not_a_completed_write() {
+        // Managed-settings PostToolUse hooks also run after failed calls and
+        // receive the error text as a string tool_response.
+        let observe = |tool_response: serde_json::Value| {
+            let input: hookkit_claude::protocol::PostToolUseInput =
+                serde_json::from_value(serde_json::json!({
+                    "session_id": "session",
+                    "transcript_path": "/tmp/transcript.jsonl",
+                    "cwd": "/repo",
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": "/repo/out.txt", "content": "x"},
+                    "tool_use_id": "toolu_1",
+                    "tool_response": tool_response
+                }))
+                .unwrap();
+            activity_report(
+                ToolAccessAnalyzer::default().analyze_native(&input),
+                &observation_metadata(),
+            )
+        };
+        let failed = observe(serde_json::json!("Error: EACCES: permission denied"));
+        let evidence: Vec<_> = failed.evidence().collect();
+        assert!(!evidence.is_empty(), "{failed:?}");
+        assert!(
+            evidence
+                .iter()
+                .all(|item| item.certainty != ActivityCertainty::Direct),
+            "{failed:?}"
+        );
+        let succeeded = observe(serde_json::json!({"type": "create", "filePath": "/repo/out.txt"}));
+        assert!(
+            succeeded
+                .evidence()
+                .any(|item| item.certainty == ActivityCertainty::Direct),
+            "{succeeded:?}"
+        );
     }
 
     #[test]

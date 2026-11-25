@@ -29,6 +29,8 @@ mod adapters;
 pub use adapters::ANTIGRAVITY_RUN_COMMAND_PROFILE;
 #[cfg(feature = "claude")]
 pub use adapters::CLAUDE_BASH_PROFILE;
+#[cfg(feature = "claude")]
+pub use adapters::CLAUDE_MONITOR_PROFILE;
 #[cfg(feature = "codex")]
 pub use adapters::CODEX_BASH_PROFILE;
 

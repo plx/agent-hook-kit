@@ -8,10 +8,10 @@ case "$mode" in
 esac
 
 root="$(git rev-parse --show-toplevel)"
-# Latest stable Codex release (tag rust-v0.159.2) pinned by the newest Codex
+# Latest stable Codex release (tag rust-v0.172.0) pinned by the newest Codex
 # contract snapshot. Older vendored revisions stay in place because frozen
 # snapshots were derived from them; this script only refreshes this revision.
-revision="ff6aec96948b70d94983af2641a6b67c94faeff5"
+revision="3d86e43b075adeba2193ec5c22ac92f55afd82e6"
 destination="$root/contracts/vendor/codex/$revision/generated"
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
@@ -20,6 +20,7 @@ trap 'rm -rf "$temporary"' EXIT
 files=(
   interrupt.command.input.schema.json
   interrupt.command.output.schema.json
+  model-request.command.input.schema.json
   permission-request.command.input.schema.json
   permission-request.command.output.schema.json
   post-compact.command.input.schema.json

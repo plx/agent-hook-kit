@@ -36,7 +36,22 @@ Typed single-harness hooks can analyze their native input in place with
 `ToolAccessAnalyzer::analyze_native`, which accepts any `ObservableToolCall`
 (aligned inputs, Codex and Antigravity pre/post inputs, and Claude catalog
 inputs for `PreToolUse`, `PermissionRequest`, `PostToolUse`, and
-`PostToolUseFailure`) without cloning it into an aligned wrapper.
+`PostToolUseFailure`) without cloning it into an aligned wrapper. On all four
+Claude events, `Bash` and a `Monitor` call that runs a `command` are analyzed
+as shell calls (a hook whose matcher includes `Monitor`, or that has none,
+receives the Monitor call's own input); a Monitor `ws` watch is not. Other
+Claude events, including `PreSkillShellCommand`, whose injected command is not
+a tool call, report a `MissingToolCall` gap. An observed call's
+`tool_call_id` is the harness's correlation identifier: Claude's and Codex's
+`tool_use_id`, and Antigravity's string `toolCall.id` (CLI 1.5.4 or later),
+the same value the aligned `tool_call_id()` accessors return.
+
+A Claude Code `PostToolUse` does not prove that the call succeeded: hooks from
+managed settings also run after some failed calls and then receive the error
+text as a string `tool_response`. For such a payload the analyzer reports
+`Conditional` instead of `Direct` candidates. A Bash-matched `PreToolUse` can
+also have no matching post-tool event, because Claude Code (v2.1.314 or later)
+runs it for the shell commands the `Monitor` tool starts.
 
 ## Built-in tool contracts
 
@@ -144,9 +159,11 @@ Relative paths carry the basis they were resolved against. `InvocationCwd`
 means the tool's own working directory, including a Codex `workdir` or an
 Antigravity `Cwd` argument (a relative one is joined onto the hook's
 directory). `SessionCwd` means only the hook's session directory was
-observable: Codex `Bash` payloads omit the `workdir` argument that can move the
-command elsewhere (`ShellCwdOrigin::UnverifiedFallback`), and Antigravity
-structured tools are resolved against the first workspace root. A shell path
+observable: Codex `Bash` payloads omit the `workdir` argument, and although a
+local command has reported its resolved workdir as `cwd` since Codex 0.166.0,
+a remote-environment command still reports the host's directory
+(`ShellCwdOrigin::UnverifiedFallback`). Antigravity structured tools are
+resolved against the first workspace root. A shell path
 beginning with `~` is kept as a `Home` candidate with its raw `~/...` text; it
 is resolved only when the analyzer is built with `with_home`, and its
 dependence on the shell's `$HOME` stays a gap either way. Without a working

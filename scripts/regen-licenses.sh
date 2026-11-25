@@ -19,7 +19,16 @@ fi
 
 if [[ "$installed_version" != "$CARGO_ABOUT_VERSION" ]]; then
     echo "regen-licenses: installing cargo-about ${CARGO_ABOUT_VERSION} (found '${installed_version:-none}')" >&2
-    cargo install --locked "cargo-about@${CARGO_ABOUT_VERSION}"
+    # Since 0.9.0 the binary requires the `cli` feature, which is not a
+    # default: without it `cargo install` succeeds but installs nothing.
+    cargo install --locked --features cli "cargo-about@${CARGO_ABOUT_VERSION}"
+    # `|| true`: under `pipefail` a missing `cargo about` would otherwise end
+    # the script here, before it can say why.
+    installed_version="$(cargo about --version 2>/dev/null | awk '{print $2}' || true)"
+    if [[ "$installed_version" != "$CARGO_ABOUT_VERSION" ]]; then
+        echo "regen-licenses: cargo-about ${CARGO_ABOUT_VERSION} is not on PATH after installing it (found '${installed_version:-none}')" >&2
+        exit 1
+    fi
 fi
 
 # Attribute dependencies linked into the distributed runner, not unpublished

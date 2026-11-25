@@ -429,7 +429,7 @@ where
             diagnostics,
             resolved,
             |input, environment, context| {
-                let environment = BuiltinCommandEnvironment::Antigravity(*environment);
+                let environment = BuiltinCommandEnvironment::Antigravity(environment.clone());
                 match handler(BuiltinInput::Antigravity(input), &environment, context)? {
                     BuiltinOutput::Antigravity(output) => Ok(output),
                     output => Err(builtin_harness_mismatch(context, &output)),
@@ -625,20 +625,22 @@ mod tests {
                 };
                 assert_eq!(input.tool_name, "shell");
                 assert_eq!(context.harness(), &HarnessId::CODEX);
-                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-ff6aec9-r2"));
+                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-3d86e43-r1"));
                 assert_eq!(
                     context.event(),
                     &EventId::builtin(HarnessId::CODEX, "PreToolUse")
                 );
                 assert_eq!(
                     context.contract(),
-                    ContractId::builtin("codex/commit-ff6aec9-r2/PreToolUse")
+                    ContractId::builtin("codex/commit-3d86e43-r1/PreToolUse")
                 );
                 assert_eq!(
                     context.provenance(),
                     ResolutionProvenance::DefinitiveDiscriminator
                 );
-                assert_eq!(context.workspace_roots(), [Utf8Path::new("/workspace")]);
+                // A Codex tool event's cwd is the command's directory, not a
+                // workspace root.
+                assert!(context.workspace_roots().is_empty());
                 assert_eq!(context.session_id().unwrap().as_str(), "session-123");
                 assert_eq!(context.turn_id().unwrap().as_str(), "turn-456");
                 assert_eq!(context.tool_call_id().unwrap().as_str(), "call-789");
@@ -939,10 +941,14 @@ mod tests {
             },
         )
         .unwrap_err();
+        // The invocation pair shares this shape, and SessionStart's
+        // common-fields-only shape accepts every payload.
         assert!(matches!(
             error,
             hookkit_core::HookkitError::AmbiguousEvent { harness, candidates }
-                if harness == HarnessId::ANTIGRAVITY && candidates.len() == 2
+                if harness == HarnessId::ANTIGRAVITY
+                    && candidates.len() == 3
+                    && candidates.contains(&<hookkit_antigravity::SessionStart as hookkit_core::EventSpec>::EVENT)
         ));
 
         let emission = execute_harness::<hookkit_antigravity::Antigravity, _>(

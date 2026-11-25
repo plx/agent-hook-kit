@@ -3,7 +3,8 @@
 //! A blocked Stop hands the turn back to the agent. When the agent then stops
 //! again without changing anything the runner reported, blocking a second
 //! time cannot make progress: Claude Code only bounds the loop with its
-//! continuation cap, Codex has no cap, and Antigravity re-enters its loop.
+//! continuation cap, Codex has no cap, and Antigravity re-enters its loop
+//! until a continuation cap whose size it does not document.
 //! The runner therefore fingerprints the conditions that make it block (the
 //! content of every file that still needs manual fixes, each operational
 //! problem, and strict coverage gaps) and remembers the fingerprint of the
@@ -11,15 +12,19 @@
 //!
 //! - on Claude Code and Codex only when `stop_hook_active` says this Stop is
 //!   itself the continuation of an earlier Stop hook, so a fresh turn still
-//!   gets one block for a problem that is still present;
-//! - on Antigravity, which reports no continuation signal, whenever the
-//!   previous attempt already reported the identical conditions.
+//!   gets one block for a problem that is still present; Antigravity CLI
+//!   1.5.6 and later send the same signal as `continuation_active` (see
+//!   `hookkit_antigravity::StopInput::continuation_active_flag`);
+//! - on Antigravity builds that send no continuation signal (earlier CLI
+//!   builds, and the App and IDE, for which no note mentions it), whenever
+//!   the previous attempt already reported the identical conditions.
 //!
 //! Conditions that keep changing (an agent that edits a file differently on
 //! every attempt without fixing it, or alternates between two broken states)
 //! never repeat the previous fingerprint. Claude Code overrides a Stop hook
-//! after eight consecutive continuations, but Codex and Antigravity have no
-//! such cap, so the runner applies the same one: after
+//! after eight consecutive continuations, but Codex has no such cap and
+//! Antigravity's (CLI 1.1.9, Antigravity App v2.6.0) is undocumented in size,
+//! so the runner applies the same one: after
 //! [`MAX_CONSECUTIVE_BLOCKS`] blocked attempts in one continuation chain the
 //! next is allowed to stop, with a note to the user.
 //!
@@ -53,9 +58,11 @@ pub(crate) const MAX_CONSECUTIVE_BLOCKS: u32 = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "stopHookActive")]
 pub(crate) enum ContinuationSignal {
-    /// The native input carries `stop_hook_active` (Claude Code, Codex).
+    /// The native input carries `stop_hook_active` (Claude Code, Codex) or
+    /// Antigravity's `continuation_active` (CLI 1.5.6 and later).
     StopHookActive(bool),
-    /// The harness reports no continuation signal (Antigravity).
+    /// The payload carries no continuation signal (Antigravity builds that
+    /// do not send `continuation_active`).
     Unavailable,
 }
 
@@ -64,6 +71,12 @@ impl ContinuationSignal {
         let field = match input {
             TurnCompletionInput::Claude(input) => input.field("stop_hook_active"),
             TurnCompletionInput::Codex(input) => input.field("stop_hook_active"),
+            // Absence means unknown on Antigravity, not `false`.
+            TurnCompletionInput::Antigravity(input) => {
+                return input
+                    .continuation_active_flag()
+                    .map_or(Self::Unavailable, Self::StopHookActive);
+            }
             _ => return Self::Unavailable,
         };
         Self::StopHookActive(field.and_then(serde_json::Value::as_bool).unwrap_or(false))
@@ -349,6 +362,47 @@ mod tests {
         );
         assert!(progress.blocked, "changed conditions block again");
         assert_eq!(progress.consecutive_blocks, 2);
+    }
+
+    #[test]
+    fn antigravity_continuation_active_is_the_loop_signal_when_present() {
+        let stop = |extra: &str| {
+            let raw = hookkit_core::RawInvocation::parse(
+                format!(
+                    r#"{{"conversationId":"c","workspacePaths":["/repo"],"transcriptPath":"/tmp/t.jsonl","artifactDirectoryPath":"/tmp/a","executionNum":2,"terminationReason":"model_stop","fullyIdle":true{extra}}}"#
+                )
+                .into_bytes(),
+            )
+            .unwrap();
+            TurnCompletionInput::Antigravity(
+                <hookkit_antigravity::Stop as hookkit_core::EventSpec>::parse(&raw).unwrap(),
+            )
+        };
+        assert_eq!(
+            ContinuationSignal::from_input(&stop(r#","continuation_active":true"#)),
+            ContinuationSignal::StopHookActive(true)
+        );
+        assert_eq!(
+            ContinuationSignal::from_input(&stop(r#","continuation_active":false"#)),
+            ContinuationSignal::StopHookActive(false)
+        );
+        assert_eq!(
+            ContinuationSignal::from_input(&stop(r#","continuationActive":true"#)),
+            ContinuationSignal::StopHookActive(true)
+        );
+        assert_eq!(
+            ContinuationSignal::from_input(&stop("")),
+            ContinuationSignal::Unavailable
+        );
+
+        // A repeated fingerprint during a continuation may stop, as with
+        // `stop_hook_active`.
+        let repeat = StopDecision::decide(
+            Some("f".into()),
+            Some(&blocked_record("f", 1)),
+            ContinuationSignal::from_input(&stop(r#","continuation_active":true"#)),
+        );
+        assert!(!repeat.blocked && repeat.suppressed_repeat);
     }
 
     #[test]

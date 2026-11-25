@@ -32,7 +32,10 @@ templates/hook-project/tests/run.sh \
 
 Besides the render/compile matrix, the default run renders the project a user
 gets by accepting every default (only the name and local HookKit path are
-given) and validates it like any other cell. It also checks two crate-mode
+given) and validates it like any other cell, along with a single-mode
+Antigravity file-activity project whose native hooks are left at their
+default (`SessionStart` for the exact lower bound, plus `PreInvocation`,
+`PostToolUse`, and `Stop`). It also checks two crate-mode
 instances coexisting in one Cargo workspace, a versioned Copier update that
 preserves edits under `src/hooks/`, and deferred-quality policy edits that
 survive both recopy and a versioned update while remaining evaluable. The
@@ -59,5 +62,5 @@ templates/hook-project/tests/run.sh --case pinned --pinned-revision <sha>
 ```
 
 The matrix derives native events and aligned-family intersections from the
-canonical catalogs while asserting the design's current 33/12/5 event counts
+canonical catalogs while asserting the design's current 34/14/6 event counts
 and universal-three plus Claude/Codex-eight family split.

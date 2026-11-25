@@ -228,6 +228,10 @@ pub struct SessionEpochMetadata {
 pub struct ProjectMetadata {
     /// Deduplicated union of every workspace root observed across all
     /// observations (sorted), not just the most recent observation.
+    ///
+    /// Codex tool events contribute none: since Codex 0.166.0 their `cwd`
+    /// is the command's working directory (a Bash `workdir`), so only Codex's
+    /// turn-scoped events name roots here.
     pub workspace_roots: Vec<Utf8PathBuf>,
     /// Most recently observed native transcript path, when any was supplied.
     pub transcript_path: Option<Utf8PathBuf>,
@@ -458,7 +462,15 @@ fn ensure_metadata_locked(
                             .first_observed_at
                             .close_to(observed_at, BOUNDARY_COALESCE_WINDOW)
                 }));
-            if !duplicate {
+            // An invocation-zero boundary only stands in for a missing start
+            // event (Antigravity builds that predate `SessionStart`). Once a
+            // native lifecycle epoch exists, it would only replace that more
+            // precise epoch as the current session.
+            let superseded = kind == SessionEpochKind::InvocationStart
+                && existing
+                    .iter()
+                    .any(|observation| observation.epoch.kind != SessionEpochKind::InvocationStart);
+            if !duplicate && !superseded {
                 let native_timestamp = boundary
                     .native_timestamp
                     .as_deref()

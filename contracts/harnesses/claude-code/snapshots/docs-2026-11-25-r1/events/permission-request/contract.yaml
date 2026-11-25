@@ -1,0 +1,593 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: plain-text
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: diagnostics
+        semantic_format: not-brace-delimited-or-fieldless-json-lines
+        trailing_newline: allowed
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        exact: 0
+      id: invalid-json
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: brace-delimited-except-fieldless-json-lines
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        exact: 2
+      id: exit-2
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 2
+      id: exit-2-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero-unstructured
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: user-message
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+  command-on-failure-block:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: plain-text
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: diagnostics
+        semantic_format: not-brace-delimited-or-fieldless-json-lines
+        trailing_newline: allowed
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: deny
+      exit:
+        exact: 0
+      id: invalid-json
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: agent-context
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: brace-delimited-except-fieldless-json-lines
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        exact: 2
+      id: exit-2
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        exact: 2
+      id: exit-2-structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: ignored
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: deny
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: failure-blocked
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: agent-context
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+  http:
+    kind: http
+    method: POST
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: json
+        presence: required
+        role: http-body
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: empty-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: non-json-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: not-a-json-object
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: schema-invalid-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: json-object-failing-output-schema
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: nonblocking-error
+      exit:
+        range:
+          max: 599
+          min: 300
+      id: non-success
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: body
+      content_kind: json
+      framing: one-http-message
+    request_content_type: application/json
+    response_content_type: application/json
+  http-on-failure-block:
+    kind: http
+    method: POST
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: event-specific-control
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: json
+        presence: required
+        role: http-body
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: empty-body
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: deny
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: non-json-body
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: not-a-json-object
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: deny
+      exit:
+        range:
+          max: 299
+          min: 200
+      id: schema-invalid-body
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: json-object-failing-output-schema
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: deny
+      exit:
+        range:
+          max: 599
+          min: 300
+      id: non-success
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: empty
+        presence: forbidden
+        role: none
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: body
+      content_kind: json
+      framing: one-http-message
+    request_content_type: application/json
+    response_content_type: application/json
+event:
+  category: tool
+  identification:
+    discriminator:
+      const: PermissionRequest
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: permission_request
+  wire_name: PermissionRequest
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+- http
+- mcp_tool
+- prompt
+harness: claude-code
+id: claude-code/docs-2026-11-25-r1/PermissionRequest
+schemas:
+  input:
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+  outputs:
+  - assurance:
+      confidence: low
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+snapshot: docs-2026-11-25-r1
+uncertainties:
+- 'Exit status 2 is not honored: without a decision object the permission flow proceeds unchanged and stderr is discarded; a decision object printed with any exit code still applies.'
+- agent handlers are skipped on PermissionRequest since Claude Code v2.1.280.
+- 'updatedInput and updatedPermissions apply only to allow; message and interrupt apply only to deny. A rewrite is re-evaluated against deny and ask rules. Since Claude Code 2.1.300, updatedInput is validated like Claude''s own input: unknown keys are dropped and input the tool rejects denies the call; since 2.1.323 a rewrite that fails the permission check is asked again or refused; since 2.1.326 a command a hook rewrites while approving stays in the sandbox if the original was checked as sandboxed, unless the rewrite adds dangerouslyDisableSandbox: true; and since 2.1.328 a rewrite to a sandbox-excluded command runs outside the sandbox (changelog only).'
+- 'Under onFailure: block a failure denies the request rather than taking the exit-2 row, and the deny carries the failure message, which the command-on-failure-block binding records as agent-context; where that message is surfaced is not documented.'
+- For a call that reaches a --permission-prompt-tool or an Agent SDK canUseTool callback, the hooks run alongside that host and whichever decides first applies. In a -p run outside dontAsk with neither host, the hooks also fire for calls that would otherwise be auto-denied. They never fire for a sandboxed command's network request or for EndConversation.
+- 'permission_suggestions is not the dialog''s option list: some dialogs ignore it, may withhold an option whose suggestion stays in the array, or offer options with no entry. setMode accepts manual as an alias for default, although the Agent SDK PermissionMode type omits it.'
+- 'updatedPermissions and permission_suggestions use the reference''s permission update entries, which the Agent SDK types as its PermissionUpdate union: addRules, replaceRules, and removeRules carry rules (toolName with an optional ruleContent), behavior (allow, deny, or ask), and destination; setMode carries mode and destination; addDirectories and removeDirectories carry directories and destination. destination is session, localSettings, projectSettings, or userSettings, plus cliArg, which only the Agent SDK types. An updatedPermissions entry that fails this shape fails schema validation for the whole output, so the allow is lost as a non-blocking error, or the request is denied under onFailure: block. The output schema keeps mode an open string and the entries open to extra keys, which neither source rejects; the input schema keeps type and destination open.'
+- setMode with bypassPermissions takes effect only if bypass mode was already available at launch (--dangerously-skip-permissions, --permission-mode bypassPermissions, --allow-dangerously-skip-permissions, or a bypassPermissions defaultMode in user, --settings, or managed settings), and is a no-op when disableBypassPermissionsMode disables the mode or the session starts in restricted mode; bypassPermissions is never persisted as defaultMode, whatever the destination. An allow rule for an MCP tool that sets ruleContent matches no call.
+- behavior allow cannot approve what a deny rule refuses, unless a mod overrides the rule. Since Claude Code 2.1.331 Skill(name:*) allow rules from updatedPermissions are saved outside local settings; in Cowork cloud sessions setMode in an allow is ignored (2.1.300) and auto-mode hooks cannot approve shell commands or subagents (2.1.299) (changelog only).
+- A PermissionRequest hook with a Bash matcher also runs on shell commands Claude starts with the Monitor tool (Claude Code v2.1.314 or later), but its allow and updatedInput have no effect on them; a matcher that includes Monitor receives the Monitor call's own input, where they apply.
+- 'On Windows without Git Bash, a shell-form PermissionRequest command hook that fails with onFailure unset blocks the call (Claude Code v2.1.299, extended in v2.1.309 and v2.1.310), so it takes the command-on-failure-block outcomes; exec form without onFailure: block, or an explicit onFailure: continue, restores the command outcomes.'
+- Claude Code blocks the call without a hook verdict when matching the hooks fails or the tool input cannot be serialized to JSON (Claude Code v2.1.288 or later).
+- How continue false interacts with a PermissionRequest decision is undocumented.
+- Whether a PermissionRequest is raised before an MCP-served skill loads, and its tool_name and tool_input, are undocumented; the mcp-skill-ask positive is synthesized from inspection of the Claude Code 2.1.332 CLI during the audit, not cited as a source, and cites only the changelog entry that adds skills from MCP servers and the Agent SDK's optional mcp_server.
+- mcp_server (Claude Code v2.1.274 or later) is sent for MCP tools. Inspection of the Claude Code 2.1.332 CLI during the audit, not cited as a source, suggests that since 2.1.332 it is also sent for the ask raised before a skill an MCP server provides loads, and that this ask carries internal tool_kind (mcp_skill) and mcp_skill fields; the Agent SDK types none of this (its 0.3.332 PermissionRequestHookInput adds only blank lines where internal fields are stripped), the changelog says only that skills from MCP servers were added, and the reference is silent, so the open schema accepts these fields without encoding them. The source vocabulary is open, the schema lists the documented values as examples, and an unrecognized source must be treated as an unrecognized configured source rather than sdk.
+- Exit status 2 is described only by the exact exit-2 outcomes; the 1-255 nonzero outcomes model the reference's other exit codes and apply to status 2 only where no exit-2 outcome exists.
+- 'A hook that runs in PowerShell (shell: powershell, or a shell-form hook on Windows without Git Bash) did not take the exit-2 outcomes before Claude Code v2.1.309, nor before v2.1.316 when its command begins with a type cast, param, using, or an attribute.'
+- An HTTP connection failure has no status and takes this event's failure effect (a non-blocking error on most events), and a timeout cancels the hook, so neither is an outcome here. Any non-2xx status is a failure, so non-success covers 300-599; whether Claude Code follows a redirect before it judges the status is undocumented.
+- 'The command and http outcomes describe onFailure unset or continue. With onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later; ignored for command hooks that set async or asyncRewake), a hook that cannot start, times out, exits with a code other than 0 or 2 even after printing schema-valid JSON that allows the action, or prints unparseable or schema-invalid JSON does what exit code 2 does on this event (on PermissionRequest it denies the request); the command-on-failure-block and http-on-failure-block bindings model that configuration.'
+- 'For an mcp_tool hook (not a modeled binding) with onFailure: block, a non-empty answer also counts as a failure unless it is {} or JSON that sets a hook output field other than reason, so a plain-text answer blocks. The reference names PreToolUse and UserPromptSubmit as examples of such events; Agent SDK 0.3.332 says the rule does not hold on PreCompact and WorktreeCreate, where plain text is the hook''s answer, or on events whose block stops nothing, and this event is neither.'
+- 'In the command-on-failure-block and http-on-failure-block bindings, a start failure, a connection failure, and a timeout, which no exit or status selector expresses, also take the failure-blocked effect: this event''s exit-2 effect, except on PermissionRequest, where a failure denies the request. The message reads failed; blocking because onFailure is "block" (timed out after a timeout) followed by the program''s output, and its stderr role is failure-blocked''s. Whether a schema-valid JSON object printed with an exit code other than 0 or 2 still applies its fields alongside the blocking failure is undocumented, so failure-blocked treats stdout as ignored.'
+- For a hook that isn't async, stdout counts as JSON output only when it is one JSON object with nothing around it but whitespace. Anything that does not start with { and end with } is plain text, including a JSON array or a quoted JSON string. Two or more lines that each parse as JSON, the first starting with { and the last ending with }, are plain text when no line is a JSON output object that sets a field, and a parse failure (invalid-json) when one is; the stdout semantic formats of the exit-0 plain-text outcome and of invalid-json name those two cases.
+- 'Each additionalContext, systemMessage, and initialUserMessage string, and plain stdout measured whole, is capped at 10,000 characters per hook (since Claude Code v2.1.89): longer output is saved to a file in the session directory and replaced by the file path and a preview of up to 2,000 characters, Claude is not asked to read the file, and the cap has no setting. The schemas set no maxLength because longer text is accepted and spilled.'
+- Since Claude Code v2.1.292, a <system-reminder> or </system-reminder> tag in a hook string reaches Claude with that tag's < replaced by &lt;.
+- Claude Code 2.1.332 shortens text over about 50,000 characters when a hook blocks or fails during a turn, or after /compact, with a very large log (changelog only); which text it cuts, and where, is not documented.
+- 'These bindings model synchronous command hooks. A command hook that sets async or asyncRewake is not modeled: decision fields such as decision, permissionDecision, and continue have no effect; after it exits, additionalContext and systemMessage reach Claude on the next turn and are not shown to the user; its JSON must be alone on stdout or on a line of its own (spanning several lines requires v2.1.295 or later), and a field with the wrong type is dropped on its own; Claude Code does not enforce timeout on async hooks but does on asyncRewake hooks; an asyncRewake exit 2 wakes Claude at once with stderr, or stdout when stderr is empty; and onFailure and terminalSequence do not apply.'
+- A hook that isn't async and leaves a background process holding its stdout or stderr takes up to 10 seconds to finish after its own process exits, and output printed after Claude Code stops reading is discarded. The reference states the resulting block (stdio went quiet; refusing to honor the suspect capture) only for a PreToolUse allow; whether it applies on this event is unknown.

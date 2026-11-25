@@ -46,6 +46,11 @@ fn {{ event.harness | replace('-', '_') }}_{{ event.stable_id }}_uses_exact_cont
     assert_eq!(emission.exit_code(), 0);
 {% if event.harness == "codex" and event.stable_id == "session_end" -%}
     assert!(emission.stdout().is_empty(), "Codex ignores SessionEnd output");
+{% elif event.harness == "codex" and event.stable_id in ["pre_model_request", "post_model_request"] -%}
+    assert!(emission.stdout().is_empty(), "Codex never reads model-request stdout");
+    assert!(emission.stderr().is_empty(), "Codex shows model-request stderr on every attempt");
+{% elif event.harness == "claude-code" and event.stable_id == "pre_compact" -%}
+    assert!(emission.stdout().is_empty(), "Claude Code adds PreCompact stdout to the compaction instructions");
 {% endif -%}
 {%- endif %}
 }

@@ -22,7 +22,7 @@ It never guesses the hook from input JSON.
 {% endfor -%}
 {% if "file_activity" in state_capabilities %}
 {{ binary_name }} \
-  --harness <selected-claude-or-codex> \
+  --harness <{% for selected_harness in harnesses %}{{ "claude" if selected_harness == "claude-code" else selected_harness }}{% if not loop.last %}|{% endif %}{% endfor %}> \
   --state-dir <state-directory> \
   session-start-state
 {% endif -%}
@@ -47,6 +47,15 @@ It never guesses the hook from input JSON.
 
 {% endif -%}
 {% endfor -%}
+{% if harness == "claude-code" and "pre_skill_shell_command" in native_hooks -%}
+`pre-skill-shell-command` needs Claude Code v2.1.332 or later. To block
+commands with it, register it in a settings file or a plugin rather than a
+skill's own frontmatter, with the matcher `Bash|PowerShell`, without `async`,
+and with `"onFailure": "block"`. In auto mode a command that needs approval
+does not run while the skill loads, and Claude may run it later as a tool
+call, which fires `PreToolUse` instead, so keep a shell policy on both events.
+
+{% endif -%}
 {% endif -%}
 {% if starter == "policy_guard" -%}
 {% if aligned_hooks | length == 1 -%}
@@ -59,6 +68,15 @@ aligned families, arguments it cannot parse exit with the non-blocking status
 1 instead, so a misregistered guard lets tool calls run; check each
 registration.
 {% endif %}
+{% if "claude-code" in harnesses -%}
+The guard cannot deny a call when it does not finish: when it cannot start,
+panics, or times out. On Claude Code, set `"onFailure": "block"` on its
+`PreToolUse` registration (Claude Code v2.1.295 or later) so that such a
+failure blocks the tool call too. Claude Code does not call `PreToolUse` for
+shell commands that a loading skill injects; those reach only
+`PreSkillShellCommand`, which this guard does not handle.
+
+{% endif -%}
 {% endif -%}
 Use only the harnesses recorded in `hookkit-template.manifest.yml`. Register
 the complete command line for the matching native hook event. The template
@@ -72,6 +90,28 @@ On Claude Code, register the
 records the writes of a tool call that failed afterwards (for example
 `sed -i … && pytest`), so the Stop runner still checks those files.
 {% endif -%}
+{% if harness_mode == "cross" and "file_activity" in state_capabilities %}
+Register `session-start-state` for each harness's native `SessionStart` event,
+so file activity is bounded by the exact start of the session.
+{%- if "antigravity" in harnesses %} Antigravity
+builds that predate `SessionStart` never send it; there the first observed
+`PostToolUse` sets a best-effort lower bound instead.
+{%- endif %}
+{% endif -%}
+{% if harness_mode == "single" and harness == "antigravity" and "file_activity" in state_capabilities %}
+{% if "session_start" in native_hooks -%}
+Register `session-start` for Antigravity's `SessionStart` event, so file
+activity is bounded by the exact start of the conversation, and keep
+`pre-invocation` registered: builds that predate `SessionStart` never send it,
+and there the first `PreInvocation` (invocation 0) sets an inferred lower
+bound instead.
+{%- else -%}
+This project does not handle Antigravity's `SessionStart` event, so file
+activity is bounded by the first `PreInvocation` (invocation 0), an inferred
+lower bound. Add the `session_start` hook to record the exact start of the
+conversation on builds that send it.
+{%- endif %}
+{% endif -%}
 {% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
 The runner requires `pkl` {{ compatibility.pkl_version }}. The generated package
 owns this policy:
@@ -82,9 +122,12 @@ Hook processes do not necessarily start in this repository. A relative
 `--config` path, including this default, is resolved against Claude Code's
 `CLAUDE_PROJECT_DIR` (the project root where the session started), because
 Claude Code runs hooks in the agent's current directory, which follows `cd`.
-Codex and Antigravity resolve it against the hook's working directory, so an
-absolute policy path remains the most robust live registration. The
-concrete tools and lowering policy are recorded in both the Pkl file and
+Codex and Antigravity resolve it against the event's first workspace root
+(Codex's `cwd`, Antigravity's first `workspacePaths` entry). Codex tool events
+carry none, because their `cwd` is the tool command's working directory, so
+there it resolves against the hook's working directory. An absolute policy
+path remains the most robust live registration. The concrete tools and
+lowering policy are recorded in both the Pkl file and
 `hookkit-template.manifest.yml`.
 {% endif -%}
 {% if state_capabilities %}
@@ -101,7 +144,8 @@ instead of being trusted. Use `--state-dir` to override the default, for
 example to keep state out of a shared temporary directory altogether. Every
 coordinated producer and consumer must receive the same override. A relative
 `--state-dir` is resolved against Claude Code's `CLAUDE_PROJECT_DIR`, or the
-event's working directory on Codex and Antigravity, by both the generated
+event's first workspace root on Codex and Antigravity (the hook's working
+directory for Codex tool events, which carry none), by both the generated
 state helpers and HookKit's runners, so it names one directory even after the
 agent runs `cd`. Persisted family/entity versions are visible in
 `src/scaffold/state.rs`.

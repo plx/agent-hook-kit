@@ -113,7 +113,7 @@ fn assert_targets(report: &ToolAccessReport, expected: &[(&str, AccessIntent, Ac
 #[test]
 fn codex_contract_apply_patch_fixture_reads_the_command_payload() {
     let value = contract_fixture(
-        "codex/snapshots/commit-ff6aec9-r2/events/pre-tool-use",
+        "codex/snapshots/commit-3d86e43-r1/events/pre-tool-use",
         "representative",
     );
     assert_eq!(value["tool_name"], "apply_patch");
@@ -806,7 +806,7 @@ fn structured_home_relative_paths_stay_unresolved() {
 #[test]
 fn claude_post_tool_use_failure_is_observable_from_the_contract_fixture() {
     let mut value = contract_fixture(
-        "claude-code/snapshots/docs-2026-09-30-r1/events/post-tool-use-failure",
+        "claude-code/snapshots/docs-2026-11-25-r1/events/post-tool-use-failure",
         "representative",
     );
     value["tool_input"]["command"] = serde_json::json!("sed -i 's/a/b/' src/x.py && pytest");
@@ -826,6 +826,338 @@ fn claude_post_tool_use_failure_is_observable_from_the_contract_fixture() {
             .may_modify()
             .any(|candidate| { path_of(candidate).1 == Some(Utf8Path::new("/repo/src/x.py")) })
     );
+}
+
+#[test]
+fn claude_managed_post_tool_use_string_responses_are_not_proof_of_a_write() {
+    // Managed-settings PostToolUse hooks also run after failed calls and then
+    // receive the error text as a string tool_response.
+    let mut value = contract_fixture(
+        "claude-code/snapshots/docs-2026-11-25-r1/events/post-tool-use",
+        "managed-failed-call",
+    );
+    assert!(value["tool_response"].is_string());
+    value["tool_input"]["command"] = serde_json::json!("echo x > out.txt");
+    let failed: hookkit_claude::protocol::PostToolUseInput =
+        serde_json::from_value(value.clone()).unwrap();
+    let report = ToolAccessAnalyzer::default().analyze_native(&failed);
+    let out = report
+        .may_modify()
+        .find(|candidate| path_of(candidate).1 == Some(Utf8Path::new("/repo/out.txt")))
+        .expect("the write is still a candidate");
+    assert_eq!(out.certainty, AccessCertainty::Conditional);
+
+    // An object response keeps direct evidence.
+    value["tool_response"] = serde_json::json!({"stdout": "", "stderr": ""});
+    let succeeded: hookkit_claude::protocol::PostToolUseInput =
+        serde_json::from_value(value).unwrap();
+    let report = ToolAccessAnalyzer::default().analyze_native(&succeeded);
+    let out = report
+        .may_modify()
+        .find(|candidate| path_of(candidate).1 == Some(Utf8Path::new("/repo/out.txt")))
+        .unwrap();
+    assert_eq!(out.certainty, AccessCertainty::Direct);
+}
+
+#[test]
+fn claude_monitor_commands_are_analyzed_as_shell_and_websocket_watches_are_not() {
+    use hookkit_shell::{ShellToolCallExt, ShellToolCallMatch};
+    let fixture = |id: &str| -> hookkit_claude::catalog::CatalogInput {
+        let value = contract_fixture(
+            "claude-code/snapshots/docs-2026-11-25-r1/events/pre-tool-use",
+            id,
+        );
+        serde_json::from_value(value).unwrap()
+    };
+    assert!(matches!(
+        fixture("monitor-call").shell_tool_call(),
+        ShellToolCallMatch::Matched(call) if call.command == "tail -f app.log"
+    ));
+    assert!(matches!(
+        fixture("monitor-ws").shell_tool_call(),
+        ShellToolCallMatch::NotShell
+    ));
+
+    let report = analyze(&claude_pre(
+        "Monitor",
+        serde_json::json!({
+            "description": "watch",
+            "timeout_ms": 1000,
+            "command": "tail -f app.log > copy.log"
+        }),
+    ));
+    assert!(
+        report
+            .may_modify()
+            .any(|candidate| path_of(candidate).1 == Some(Utf8Path::new("/repo/copy.log")))
+    );
+    let websocket = PreToolUseInput::Claude(fixture("monitor-ws"));
+    assert!(analyze(&websocket).may_modify().next().is_none());
+}
+
+/// A synthetic Claude Code catalog input for a tool event.
+fn claude_catalog(
+    event: &str,
+    tool_name: &str,
+    tool_input: serde_json::Value,
+) -> hookkit_claude::catalog::CatalogInput {
+    let mut value = serde_json::json!({
+        "session_id": "session",
+        "transcript_path": "/tmp/transcript.jsonl",
+        "cwd": "/repo",
+        "hook_event_name": event,
+        "permission_mode": "default",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_use_id": "toolu_1"
+    });
+    match event {
+        "PostToolUse" => value["tool_response"] = serde_json::json!({"stdout": "", "stderr": ""}),
+        "PostToolUseFailure" => value["error"] = serde_json::json!("Exit code 1"),
+        _ => {}
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+/// A hook whose matcher includes `Monitor`, or that has no matcher, receives
+/// the Monitor call's own input on every tool event, not only `PreToolUse`.
+/// The Monitor positives in the PermissionRequest and PostToolUse contracts
+/// (a matcher that includes Monitor gets the Monitor call's own input; a Bash
+/// matcher on PermissionRequest gets a Bash-shaped call) are shell calls for
+/// the same command as the PreToolUse fixture, analyzed as that command run
+/// through Bash would be.
+#[test]
+fn claude_monitor_contract_fixtures_are_shell_on_permission_and_post_tool_events() {
+    use hookkit_shell::{ShellToolCallExt, ShellToolCallMatch};
+    for (event, wire_name, id, tool) in [
+        (
+            "permission-request",
+            "PermissionRequest",
+            "monitor-call",
+            "Monitor",
+        ),
+        (
+            "permission-request",
+            "PermissionRequest",
+            "monitor-command-via-bash-matcher",
+            "Bash",
+        ),
+        ("post-tool-use", "PostToolUse", "monitor-call", "Monitor"),
+    ] {
+        let input: hookkit_claude::catalog::CatalogInput =
+            serde_json::from_value(contract_fixture(
+                &format!("claude-code/snapshots/docs-2026-11-25-r1/events/{event}"),
+                id,
+            ))
+            .unwrap();
+        assert!(
+            matches!(
+                input.shell_tool_call(),
+                ShellToolCallMatch::Matched(call)
+                    if call.tool_name == tool && call.command == "tail -f app.log"
+            ),
+            "{event}/{id}"
+        );
+        let report = ToolAccessAnalyzer::default().analyze_native(&input);
+        let bash = ToolAccessAnalyzer::default().analyze_native(&claude_catalog(
+            wire_name,
+            "Bash",
+            serde_json::json!({"command": "tail -f app.log"}),
+        ));
+        assert_eq!(report.candidates, bash.candidates, "{event}/{id}");
+        assert_eq!(
+            report.gaps.len(),
+            bash.gaps.len(),
+            "{event}/{id}: {report:#?}"
+        );
+        assert!(
+            report.gaps.iter().all(|gap| !matches!(
+                gap.reason,
+                ToolAccessGapReason::UnknownStructuredTool { .. }
+            )),
+            "{event}/{id}: {report:#?}"
+        );
+    }
+}
+
+#[test]
+fn claude_monitor_commands_are_shell_on_every_tool_event() {
+    use hookkit_shell::{ShellToolCallExt, ShellToolCallMatch};
+    let command = serde_json::json!({
+        "description": "watch",
+        "timeout_ms": 1000,
+        "command": "tail -f app.log > copy.log"
+    });
+    let websocket = serde_json::json!({
+        "description": "watch",
+        "timeout_ms": 1000,
+        "ws": {"url": "ws://localhost:9000"}
+    });
+    let is_unknown_structured = |report: &ToolAccessReport| {
+        report.gaps.iter().any(|gap| {
+            matches!(
+                gap.reason,
+                ToolAccessGapReason::UnknownStructuredTool { .. }
+            )
+        })
+    };
+    for event in [
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolUse",
+        "PostToolUseFailure",
+    ] {
+        let input = claude_catalog(event, "Monitor", command.clone());
+        assert!(
+            matches!(input.shell_tool_call(), ShellToolCallMatch::Matched(call) if call.tool_name == "Monitor"),
+            "{event}"
+        );
+        let report = ToolAccessAnalyzer::default().analyze_native(&input);
+        assert!(
+            report
+                .may_modify()
+                .any(|candidate| path_of(candidate).1 == Some(Utf8Path::new("/repo/copy.log"))),
+            "{event}: {report:#?}"
+        );
+        assert!(!is_unknown_structured(&report), "{event}: {report:#?}");
+        // The same command through Bash gives the same report.
+        assert_eq!(
+            report.candidates,
+            ToolAccessAnalyzer::default()
+                .analyze_native(&claude_catalog(event, "Bash", command.clone()))
+                .candidates,
+            "{event}"
+        );
+
+        let watch = claude_catalog(event, "Monitor", websocket.clone());
+        assert!(
+            matches!(watch.shell_tool_call(), ShellToolCallMatch::NotShell),
+            "{event}"
+        );
+        let report = ToolAccessAnalyzer::default().analyze_native(&watch);
+        assert!(report.candidates.is_empty(), "{event}: {report:#?}");
+    }
+
+    // A permission guard sees a secret read inside a Monitor command.
+    let report = ToolAccessAnalyzer::default().analyze_native(&claude_catalog(
+        "PermissionRequest",
+        "Monitor",
+        serde_json::json!({"description": "watch", "command": "cat .env"}),
+    ));
+    assert!(
+        report
+            .candidates
+            .iter()
+            .any(|candidate| candidate.intent == AccessIntent::Read
+                && path_of(candidate).1 == Some(Utf8Path::new("/repo/.env"))),
+        "{report:#?}"
+    );
+
+    // A PostToolUse payload is analyzed the same way whether it is decoded as
+    // the catalog input or the typed input.
+    let catalog = claude_catalog("PostToolUse", "Monitor", command);
+    let typed: hookkit_claude::protocol::PostToolUseInput =
+        serde_json::from_value(serde_json::to_value(&catalog).unwrap()).unwrap();
+    assert_eq!(
+        ToolAccessAnalyzer::default().analyze_native(&catalog),
+        ToolAccessAnalyzer::default().analyze_native(&typed)
+    );
+}
+
+/// The command a loading skill injects is not a tool call: `PreToolUse` does
+/// not fire for it and its `tool_use_id` names no transcript tool call, so
+/// tool access reports a `MissingToolCall` gap even though `hookkit-shell`
+/// matches the command.
+#[test]
+fn claude_pre_skill_shell_command_is_not_an_observable_tool_call() {
+    use hookkit_shell::{ShellToolCallExt, ShellToolCallMatch};
+    use hookkit_tool_access::ObservableToolCall as _;
+    let input: hookkit_claude::catalog::CatalogInput = serde_json::from_value(serde_json::json!({
+        "session_id": "session",
+        "transcript_path": "/tmp/transcript.jsonl",
+        "cwd": "/repo",
+        "hook_event_name": "PreSkillShellCommand",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo x > out.txt"},
+        "tool_use_id": "skillsh_1",
+        "skill_name": "lint",
+        "invoked_by": "user"
+    }))
+    .unwrap();
+    assert!(matches!(
+        input.observe_tool_call(),
+        ToolCallObservation::Gap(gap) if gap.reason == ToolAccessGapReason::MissingToolCall
+    ));
+    let report = ToolAccessAnalyzer::default().analyze_native(&input);
+    assert!(report.candidates.is_empty(), "{report:#?}");
+    assert_eq!(report.gaps.len(), 1, "{report:#?}");
+    assert_eq!(report.gaps[0].reason, ToolAccessGapReason::MissingToolCall);
+    // hookkit-shell matches the injected command; tool access deliberately
+    // does not treat it as a tool call.
+    assert!(matches!(
+        input.shell_tool_call(),
+        ShellToolCallMatch::Matched(call) if call.command == "echo x > out.txt"
+    ));
+}
+
+/// Antigravity CLI 1.5.4 and later send `toolCall.id`, so a PostToolUse can
+/// be matched to its PreToolUse; the observed tool call carries it, as the
+/// aligned accessors do.
+#[test]
+fn antigravity_tool_call_ids_are_observed_on_both_tool_events() {
+    use hookkit_tool_access::{ObservableToolCall as _, observe_post_tool, observe_pre_tool};
+    let payload = |event: &str, id: serde_json::Value| {
+        let mut value = serde_json::json!({
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "npm test", "Cwd": "/workspace/project", "WaitMsBeforeAsync": 5000},
+                "id": id
+            },
+            "stepIdx": 19,
+            "conversationId": "c1",
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": "/tmp/t.jsonl",
+            "artifactDirectoryPath": "/tmp/artifacts",
+            "hookEventName": event,
+            "cwd": "/workspace/project"
+        });
+        if event == "PostToolUse" {
+            value["error"] = serde_json::json!("");
+        }
+        value
+    };
+    let call_id = |observation: ToolCallObservation<'_>| match observation {
+        ToolCallObservation::Call(call) => call.tool_call_id.map(str::to_owned),
+        other => panic!("expected a tool call, got {other:?}"),
+    };
+
+    let pre: hookkit_antigravity::PreToolUseInput =
+        serde_json::from_value(payload("PreToolUse", serde_json::json!("call_01"))).unwrap();
+    let post: hookkit_antigravity::PostToolUseInput =
+        serde_json::from_value(payload("PostToolUse", serde_json::json!("call_01"))).unwrap();
+    assert_eq!(call_id(pre.observe_tool_call()).as_deref(), Some("call_01"));
+    assert_eq!(
+        call_id(post.observe_tool_call()).as_deref(),
+        Some("call_01")
+    );
+
+    let aligned_pre = PreToolUseInput::Antigravity(pre);
+    let aligned_post = PostToolUseInput::Antigravity(post);
+    assert_eq!(
+        call_id(observe_pre_tool(&aligned_pre)).as_deref(),
+        aligned_pre.tool_call_id()
+    );
+    assert_eq!(
+        call_id(observe_post_tool(&aligned_post)).as_deref(),
+        aligned_post.tool_call_id()
+    );
+    assert_eq!(aligned_post.tool_call_id(), Some("call_01"));
+
+    // A numeric identifier is not a correlation string.
+    let numeric: hookkit_antigravity::PreToolUseInput =
+        serde_json::from_value(payload("PreToolUse", serde_json::json!(7))).unwrap();
+    assert_eq!(call_id(numeric.observe_tool_call()), None);
 }
 
 #[test]
@@ -1021,7 +1353,7 @@ fn unsupported_shell_dialect_gaps_name_the_dialect() {
 #[test]
 fn antigravity_post_tool_use_without_a_tool_call_is_a_gap() {
     let value = contract_fixture(
-        "antigravity/snapshots/docs-2026-09-30-r1/events/post-tool-use",
+        "antigravity/snapshots/docs-2026-11-25-r1/events/post-tool-use",
         "ide-reference-example",
     );
     assert!(value.get("toolCall").is_none());

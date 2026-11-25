@@ -62,7 +62,8 @@ class Settings {
   /// start after the budget is spent is reported as an operational failure
   /// instead of running. Default: 540, below the 600-second default hook
   /// timeout of Claude Code and Codex. Set it below the hook timeout you
-  /// configure (Antigravity defaults to 30 seconds).
+  /// configure (Antigravity defaults to 30 seconds for hooks.json handlers,
+  /// and to 60 seconds for hooks converted by agy plugin import).
   runTimeoutSeconds: UInt?
 
   /// Optional stop-time file-activity fallback overrides. Omit to use the

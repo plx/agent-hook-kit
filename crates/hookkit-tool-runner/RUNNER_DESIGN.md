@@ -90,11 +90,20 @@ Discovery starts from the same working root in both runners: on Claude Code
 `CLAUDE_PROJECT_DIR`, or the linked Git worktree of the same repository that
 the session entered (Claude keeps `CLAUDE_PROJECT_DIR` at the main checkout
 while `cwd` follows the session into the worktree), never the `cwd` that
-follows `cd`; elsewhere the first workspace root. An Antigravity conversation
-without a workspace starts from the deepest directory containing the written
+follows `cd`; elsewhere the first workspace root. A Codex tool event names no
+workspace root (since Codex 0.166.0 its `cwd` is the command's working
+directory), so the post-tool runner starts from the hook's own working
+directory, the step directory, whenever that holds at least one written file:
+a command that also writes a log or temporary file elsewhere keeps the
+project's configuration and project root. A file outside the project root is
+not dropped; patterns match it by absolute path. When no written file lies
+under the hook's directory, and for an Antigravity conversation without a
+workspace, discovery starts from the deepest directory containing the written
 files. A relative `--config` or `--state-dir` is anchored at
-`CLAUDE_PROJECT_DIR` on Claude Code and the first workspace root elsewhere,
-and a bare file name (`--config hooks.pkl`) names a file in that directory.
+`CLAUDE_PROJECT_DIR` on Claude Code, at the first workspace root elsewhere,
+and, on a Codex tool event (which has none), at the hook's working directory,
+the step directory; a bare file name (`--config hooks.pkl`) names a file in
+that directory.
 
 Phases without `phaseOrder` run by mode (format, fix, verify, check-only) and
 then alphabetically by id; Pkl mapping order is not preserved through JSON.

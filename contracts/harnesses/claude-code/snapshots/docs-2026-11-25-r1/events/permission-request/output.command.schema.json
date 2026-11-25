@@ -1,0 +1,206 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:permission-request:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "type": "boolean"
+    },
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "additionalProperties": false,
+          "properties": {
+            "behavior": {
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "interrupt": {
+              "type": "boolean"
+            },
+            "message": {
+              "type": "string"
+            },
+            "updatedInput": {
+              "description": "For allow only: replaces the entire tool input, which is re-evaluated against deny and ask rules.",
+              "type": "object"
+            },
+            "updatedPermissions": {
+              "description": "For allow only: permission update entries to apply. An entry that fails this shape fails schema validation for the whole output.",
+              "items": {
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "addRules",
+                            "replaceRules",
+                            "removeRules"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "behavior": {
+                          "enum": [
+                            "allow",
+                            "deny",
+                            "ask"
+                          ]
+                        },
+                        "rules": {
+                          "items": {
+                            "properties": {
+                              "ruleContent": {
+                                "description": "The rule's specifier; omit it to match the whole tool. An allow rule for an MCP tool that sets it matches no call.",
+                                "type": "string"
+                              },
+                              "toolName": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "toolName"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "rules",
+                        "behavior"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "setMode"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "mode": {
+                          "description": "Open string: the examples are the documented modes, manual being an alias for default.",
+                          "examples": [
+                            "default",
+                            "auto",
+                            "acceptEdits",
+                            "dontAsk",
+                            "bypassPermissions",
+                            "plan",
+                            "manual"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "mode"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "addDirectories",
+                            "removeDirectories"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "directories": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "directories"
+                      ]
+                    }
+                  }
+                ],
+                "properties": {
+                  "destination": {
+                    "description": "Where the change is written; cliArg is typed by the Agent SDK but not documented by the reference.",
+                    "enum": [
+                      "session",
+                      "localSettings",
+                      "projectSettings",
+                      "userSettings",
+                      "cliArg"
+                    ]
+                  },
+                  "type": {
+                    "enum": [
+                      "addRules",
+                      "replaceRules",
+                      "removeRules",
+                      "setMode",
+                      "addDirectories",
+                      "removeDirectories"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "destination"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "behavior"
+          ],
+          "type": "object"
+        },
+        "hookEventName": {
+          "const": "PermissionRequest"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "stopReason": {
+      "description": "Shown to the user when continue is false; it stays in the conversation, so Claude sees it if the conversation continues.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

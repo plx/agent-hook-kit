@@ -1,0 +1,152 @@
+bindings:
+  command:
+    kind: process
+    outcomes:
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        exact: 0
+      id: structured
+      output_schema: command-response
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: json
+        presence: required
+        role: protocol-value
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: no-op
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: empty
+        presence: forbidden
+        role: none
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: no-op
+      exit:
+        exact: 0
+      id: plain-text
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: text
+        encoding: utf-8
+        presence: required
+        role: diagnostics
+        semantic_format: not-brace-delimited-or-fieldless-json-lines
+        trailing_newline: allowed
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        exact: 0
+      id: invalid-json
+      sources:
+      - claude-hooks-reference
+      - claude-code-changelog
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: required
+        role: ignored
+        semantic_format: brace-delimited-except-fieldless-json-lines
+    - assurance:
+        confidence: low
+        verification: source-reviewed
+      effect: ignored
+      exit:
+        range:
+          max: 255
+          min: 1
+      id: nonzero
+      sources:
+      - claude-hooks-reference
+      stderr:
+        content_kind: text
+        encoding: utf-8
+        presence: optional
+        role: diagnostics
+      stdout:
+        content_kind: opaque
+        presence: optional
+        role: ignored
+    request:
+      channel: stdin
+      content_kind: json
+      framing: single-document-at-eof
+event:
+  category: session
+  identification:
+    discriminator:
+      const: Setup
+      json_pointer: /hook_event_name
+    inferability: definitive
+  rust_key: setup
+  wire_name: Setup
+fixtures: fixtures.yaml
+format_version: 1
+handler_kinds:
+- command
+harness: claude-code
+id: claude-code/docs-2026-11-25-r1/Setup
+schemas:
+  input:
+    assurance:
+      confidence: low
+      verification: source-reviewed
+    file: input.schema.json
+    origin: derived
+    sources:
+    - claude-hooks-reference
+  outputs:
+  - assurance:
+      confidence: low
+      verification: source-reviewed
+    file: output.command.schema.json
+    id: command-response
+    origin: derived
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+snapshot: docs-2026-11-25-r1
+uncertainties:
+- Claude Code validates and then discards every Setup JSON output field on every exit code, including hookSpecificOutput.additionalContext, which the reference names among the discarded fields and the Agent SDK types as SetupHookSpecificOutput; the schema accepts it as a discarded field, so only a value of the wrong type is invalid output.
+- 'Only command handlers run on Setup: the reference''s handler-support list now says Setup supports only command hooks, and a configured mcp_tool Setup hook is skipped.'
+- terminalSequence is emitted only by an interactive session with its interface on screen; Setup fires only for --init-only or non-interactive -p runs, so every field is modeled as ignored.
+- Exit code and stderr are ignored; with -p and --output-format stream-json --verbose they appear only as hook_response events.
+- 'The outcomes describe onFailure unset or continue. onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later; ignored for async and asyncRewake command hooks) makes a failure do what exit code 2 does on this event, which is the same notice, log line, or no-op as a non-blocking error, and this event reads no JSON field on a nonzero exit, so no modeled outcome changes and no on-failure-block binding is cataloged. The reference does not say whether such a failure is reported differently.'
+- For a hook that isn't async, stdout counts as JSON output only when it is one JSON object with nothing around it but whitespace. Anything that does not start with { and end with } is plain text, including a JSON array or a quoted JSON string. Two or more lines that each parse as JSON, the first starting with { and the last ending with }, are plain text when no line is a JSON output object that sets a field, and a parse failure (invalid-json) when one is; the stdout semantic formats of the exit-0 plain-text outcome and of invalid-json name those two cases.
+- Claude Code discards every field of this event's JSON output, and the reference does not say whether exit-0 stdout that cannot be parsed or fails schema validation is still reported here as the generic exit-0 rule's non-blocking error. It is assumed to be a failure that, like a nonzero exit, takes this event's failure effect from the per-event row.
+- Claude Code 2.1.332 shortens text over about 50,000 characters when a hook blocks or fails during a turn, or after /compact, with a very large log (changelog only); which text it cuts, and where, is not documented.
+- 'These bindings model synchronous command hooks. A command hook that sets async or asyncRewake is not modeled: decision fields such as decision, permissionDecision, and continue have no effect; after it exits, additionalContext and systemMessage reach Claude on the next turn and are not shown to the user; its JSON must be alone on stdout or on a line of its own (spanning several lines requires v2.1.295 or later), and a field with the wrong type is dropped on its own; Claude Code does not enforce timeout on async hooks but does on asyncRewake hooks; an asyncRewake exit 2 wakes Claude at once with stderr, or stdout when stderr is empty; and onFailure and terminalSequence do not apply.'
+- A hook that isn't async and leaves a background process holding its stdout or stderr takes up to 10 seconds to finish after its own process exits, and output printed after Claude Code stops reading is discarded. The reference states the resulting block (stdio went quiet; refusing to honor the suspect capture) only for a PreToolUse allow; whether it applies on this event is unknown.

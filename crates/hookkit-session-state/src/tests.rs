@@ -1273,6 +1273,67 @@ fn fork_starts_the_forked_conversation() {
 }
 
 #[test]
+fn invocation_zero_is_only_a_fallback_for_a_missing_start_event() {
+    // Antigravity reports `Startup` from `SessionStart` and, for builds that
+    // predate it, `InvocationStart` from the first `PreInvocation`.
+    let invocation_zero = |session: &str| {
+        native_context(
+            session,
+            &["/repo"],
+            None,
+            Some(
+                hookkit_core::SessionBoundaryContext::observed(
+                    hookkit_core::SessionBoundaryKind::InvocationStart,
+                )
+                .with_occurrence_key(format!("{session}\0{}", 0)),
+            ),
+        )
+    };
+
+    let root = temporary_root("metadata-invocation-fallback");
+    let (state, started) = ensure_with(
+        &root,
+        native_context(
+            "conversation-with-start",
+            &["/repo"],
+            None,
+            Some(
+                hookkit_core::SessionBoundaryContext::observed(
+                    hookkit_core::SessionBoundaryKind::Startup,
+                )
+                .with_occurrence_key("conversation-with-start"),
+            ),
+        ),
+    )
+    .unwrap();
+    assert_eq!(started.current_session.kind, SessionEpochKind::Startup);
+    let (_, after) = ensure_with(&root, invocation_zero("conversation-with-start")).unwrap();
+    assert_eq!(after.current_session, started.current_session);
+    assert_eq!(
+        after.current_session.started_at.provenance,
+        TimestampProvenance::LifecycleHookObservation
+    );
+    assert_eq!(
+        after.conversation.started_at,
+        started.conversation.started_at
+    );
+    let starts = internal_directory(&state).join("starts");
+    assert_eq!(json_files(&starts).unwrap().len(), 1);
+
+    // Without a start event, invocation zero is still the current epoch.
+    let (_, fallback) = ensure_with(&root, invocation_zero("conversation-without-start")).unwrap();
+    assert_eq!(
+        fallback.current_session.kind,
+        SessionEpochKind::InvocationStart
+    );
+    assert_eq!(
+        fallback.current_session.started_at.provenance,
+        TimestampProvenance::InferredInvocationBoundary
+    );
+    let _ = std::fs::remove_dir_all(root.path());
+}
+
+#[test]
 fn start_boundaries_without_occurrence_keys_coalesce_within_the_window() {
     let root = temporary_root("metadata-coalesce");
     let startup = native_context(

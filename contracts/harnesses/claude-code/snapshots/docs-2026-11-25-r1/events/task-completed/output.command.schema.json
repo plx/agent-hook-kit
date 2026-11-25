@@ -1,0 +1,33 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:task-completed:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "description": "false sends the teammate idle with the task still in progress when a teammate finishing its turn triggered the event, even if another matching hook blocks or this hook exits 2; ignored when the TaskUpdate tool triggered it.",
+      "type": "boolean"
+    },
+    "decision": {
+      "const": "block"
+    },
+    "reason": {
+      "description": "Returned to Claude when decision is block, and the task stays open.",
+      "type": "string"
+    },
+    "stopReason": {
+      "description": "Appears in the teammate's transcript when continue false sends the teammate idle; never shown when the TaskUpdate tool triggered the event.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
