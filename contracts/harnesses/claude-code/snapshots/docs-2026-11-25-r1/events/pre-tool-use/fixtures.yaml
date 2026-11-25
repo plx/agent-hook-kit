@@ -1,0 +1,639 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-tool_name
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      effort:
+        level: high
+      hook_event_name: PreToolUse
+      permission_mode: default
+      prompt_id: prompt-1
+      scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: mcp-tool
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      mcp_server:
+        name: github
+        source: plugin
+      session_id: s1
+      tool_input:
+        query: is:open label:bug
+      tool_name: mcp__github__search_issues
+      tool_use_id: toolu_2
+      transcript_path: /tmp/t.jsonl
+  - id: unrecognized-mode-and-effort
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      effort:
+        level: ultra
+        source: setting
+      hook_event_name: PreToolUse
+      permission_mode: reviewOnly
+      session_id: s1
+      tool_input:
+        command: cargo test
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: monitor-call
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        command: tail -f app.log
+        description: watch app log
+        timeout_ms: 300000
+      tool_name: Monitor
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: monitor-ws
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        description: ws
+        timeout_ms: 60000
+        ws:
+          url: wss://example.test/feed
+      tool_name: Monitor
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: monitor-command-via-bash-matcher
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        command: tail -f app.log
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: code-mode-repl
+    origin: synthesized
+    sources:
+    - claude-code-mode
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        code: (await $`cat notes.txt`.text())
+      tool_name: REPL
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: code-mode-cd-prefix
+    origin: synthesized
+    sources:
+    - claude-code-mode
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        command: cd 'app' && git push
+      tool_name: Bash
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: powershell-tool
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        command: Get-ChildItem -Recurse
+      tool_name: PowerShell
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+  - id: webfetch-offset
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        offset: 20000
+        prompt: Summarize the API
+        url: https://example.test/docs
+      tool_name: WebFetch
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      additionalContext: Production environment.
+      hookEventName: PreToolUse
+      permissionDecision: ask
+      permissionDecisionReason: Review command.
+      updatedInput:
+        command: cargo test
+- id: exit-2-structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      hookEventName: PreToolUse
+      permissionDecision: allow
+- id: official-decision-control
+  origin: official
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      additionalContext: 'Current environment: production. Proceed with caution.'
+      hookEventName: PreToolUse
+      permissionDecision: allow
+      permissionDecisionReason: My reason here
+      updatedInput:
+        field_to_modify: new value
+- id: updated-input-without-decision
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  - claude-permissions
+  value:
+    hookSpecificOutput:
+      hookEventName: PreToolUse
+      updatedInput:
+        command: cargo test --offline
+- id: updated-input-unknown-key
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  - claude-code-changelog
+  value:
+    hookSpecificOutput:
+      hookEventName: PreToolUse
+      permissionDecision: allow
+      updatedInput:
+        bogus: true
+        command: ls
+- id: deny-and-stop
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    continue: false
+    hookSpecificOutput:
+      hookEventName: PreToolUse
+      permissionDecision: deny
+      permissionDecisionReason: Blocked.
+    stopReason: Policy stop.
+- id: deprecated-decision-block
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    reason: policy
+output_negative:
+- expected_keyword: type
+  expected_pointer: /hookSpecificOutput/updatedInput
+  id: updated-input-not-object
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      hookEventName: PreToolUse
+      permissionDecision: allow
+      updatedInput: cargo test
+- expected_keyword: enum
+  expected_pointer: /decision
+  id: deprecated-decision-deny
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: deny
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJQcm9kdWN0aW9uIGVudmlyb25tZW50LiIsImhvb2tFdmVudE5hbWUiOiJQcmVUb29sVXNlIiwicGVybWlzc2lvbkRlY2lzaW9uIjoiYXNrIiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiUmV2aWV3IGNvbW1hbmQuIiwidXBkYXRlZElucHV0Ijp7ImNvbW1hbmQiOiJjYXJnbyB0ZXN0In19fQ==
+  stdout_sha256: 204ada35a53b6d443cb8440e3d47750d82d1d8354e2712fa99923a8ad36c9001
+- binding: command
+  exit_code: 0
+  id: command-no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: command-plain-text
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vayBmaW5pc2hlZC4K
+  stdout_sha256: db54b54d6320eaf7a59146e70f1674ec377b7c199af059daffc92171d6e8b774
+- binding: command
+  exit_code: 0
+  id: command-plain-text-json-lines
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7Im5vdGUiOjJ9Cg==
+  stdout_sha256: 3a150299ab73b3e5974ab3aa4823ec51799349ab4a07fa27dfb0e33c57570479
+- binding: command
+  exit_code: 0
+  id: command-text-json-array
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: WyJhIiwiYiJd
+  stdout_sha256: 0473ef2dc0d324ab659d3580c1134e9d812035905c4781fdd6d529b0c6860e13
+- binding: command
+  exit_code: 0
+  id: command-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command
+  exit_code: 0
+  id: command-schema-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command
+  exit_code: 0
+  id: command-json-lines-with-field
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7InN5c3RlbU1lc3NhZ2UiOiJoaSJ9Cg==
+  stdout_sha256: c1209eeedb2c1093c830204d7e2fcc9c4565dd0941cb5d9fbd8fc477c08b3bed
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2-invalid-stdout
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command
+  exit_code: 2
+  id: command-exit-2-schema-invalid-json
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command
+  exit_code: 2
+  id: command-exit-2-structured
+  outcome: exit-2-structured
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVRvb2xVc2UiLCJwZXJtaXNzaW9uRGVjaXNpb24iOiJhbGxvdyJ9fQ==
+  stdout_sha256: 4224e0307febe271860e7c5f06d9ebaf4a5f8b24d529593aa6a414ebb8bd9f91
+- binding: command
+  exit_code: 1
+  id: command-nonzero-structured
+  outcome: nonzero-structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJQcm9kdWN0aW9uIGVudmlyb25tZW50LiIsImhvb2tFdmVudE5hbWUiOiJQcmVUb29sVXNlIiwicGVybWlzc2lvbkRlY2lzaW9uIjoiYXNrIiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiUmV2aWV3IGNvbW1hbmQuIiwidXBkYXRlZElucHV0Ijp7ImNvbW1hbmQiOiJjYXJnbyB0ZXN0In19fQ==
+  stdout_sha256: 204ada35a53b6d443cb8440e3d47750d82d1d8354e2712fa99923a8ad36c9001
+- binding: command
+  exit_code: 1
+  id: command-nonzero-unstructured
+  outcome: nonzero-unstructured
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJQcm9kdWN0aW9uIGVudmlyb25tZW50LiIsImhvb2tFdmVudE5hbWUiOiJQcmVUb29sVXNlIiwicGVybWlzc2lvbkRlY2lzaW9uIjoiYXNrIiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiUmV2aWV3IGNvbW1hbmQuIiwidXBkYXRlZElucHV0Ijp7ImNvbW1hbmQiOiJjYXJnbyB0ZXN0In19fQ==
+  stdout_sha256: 204ada35a53b6d443cb8440e3d47750d82d1d8354e2712fa99923a8ad36c9001
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-plain-text
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vayBmaW5pc2hlZC4K
+  stdout_sha256: db54b54d6320eaf7a59146e70f1674ec377b7c199af059daffc92171d6e8b774
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-schema-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command-on-failure-block
+  exit_code: 2
+  id: command-on-failure-block-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command-on-failure-block
+  exit_code: 1
+  id: command-on-failure-block-nonzero-structured
+  outcome: failure-blocked
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJQcm9kdWN0aW9uIGVudmlyb25tZW50LiIsImhvb2tFdmVudE5hbWUiOiJQcmVUb29sVXNlIiwicGVybWlzc2lvbkRlY2lzaW9uIjoiYXNrIiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiUmV2aWV3IGNvbW1hbmQuIiwidXBkYXRlZElucHV0Ijp7ImNvbW1hbmQiOiJjYXJnbyB0ZXN0In19fQ==
+  stdout_sha256: 204ada35a53b6d443cb8440e3d47750d82d1d8354e2712fa99923a8ad36c9001
+- binding: command-on-failure-block
+  exit_code: 1
+  id: command-on-failure-block-nonzero-unstructured
+  outcome: failure-blocked
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: command-updated-input-without-decision
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVRvb2xVc2UiLCJ1cGRhdGVkSW5wdXQiOnsiY29tbWFuZCI6ImNhcmdvIHRlc3QgLS1vZmZsaW5lIn19fQ==
+  stdout_sha256: 562c7ebfc47eb388265fc1fe29d6b47b65d0e227ffadb898bd771efa62b22468
+- binding: command
+  exit_code: 0
+  id: command-deprecated-decision-block
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoicG9saWN5In0=
+  stdout_sha256: d85afd5a9cca390065c1c52838e0a63f94c1c7259110c303ae73dfb324102fde
+- binding: command
+  exit_code: 0
+  id: command-deprecated-decision-approve
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImFwcHJvdmUifQ==
+  stdout_sha256: 2ddd116c830744f5435c7391895c584921c7e83c19313ba43a30582a5e94e4ea
+- binding: command
+  exit_code: 0
+  id: command-continue-false-without-deny
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6ZmFsc2UsInN0b3BSZWFzb24iOiJTdG9wIGFmdGVyIHRoaXMgY2FsbC4ifQ==
+  stdout_sha256: c2c00d29d9584b74ec1cf6829d25c5adc2dbb0aba5dc8954d4ab79b333912b42
+- binding: command
+  exit_code: 2
+  id: command-exit-2-continue-false
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJjb250aW51ZSI6ZmFsc2V9
+  stdout_sha256: 9cc56fb13701328f2dc935499bc5e3eb4e5570739a409413e30b55027af4a923
+- binding: command
+  exit_code: 2
+  id: command-exit-2-missing-file
+  outcome: exit-2
+  stderr_base64: L2Jpbi9zaDogL3JlcG8vLmNsYXVkZS9ob29rcy9jaGVjay5zaDogTm8gc3VjaCBmaWxlIG9yIGRpcmVjdG9yeQo=
+  stderr_sha256: 10cda0ef7afed10211503cda031707af76c20a780c519bc3e1db34e4e7b84a15
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 1
+  id: command-nonzero-allow-json
+  outcome: nonzero-structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVRvb2xVc2UiLCJwZXJtaXNzaW9uRGVjaXNpb24iOiJhbGxvdyJ9fQ==
+  stdout_sha256: 4224e0307febe271860e7c5f06d9ebaf4a5f8b24d529593aa6a414ebb8bd9f91
+- binding: command-on-failure-block
+  exit_code: 1
+  id: command-on-failure-block-nonzero-allow-json
+  outcome: failure-blocked
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVRvb2xVc2UiLCJwZXJtaXNzaW9uRGVjaXNpb24iOiJhbGxvdyJ9fQ==
+  stdout_sha256: 4224e0307febe271860e7c5f06d9ebaf4a5f8b24d529593aa6a414ebb8bd9f91
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-json-lines-with-field
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7InN5c3RlbU1lc3NhZ2UiOiJoaSJ9Cg==
+  stdout_sha256: c1209eeedb2c1093c830204d7e2fcc9c4565dd0941cb5d9fbd8fc477c08b3bed
+- binding: http
+  exit_code: 200
+  id: http-structured-empty-object
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e30=
+  stdout_sha256: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJQcm9kdWN0aW9uIGVudmlyb25tZW50LiIsImhvb2tFdmVudE5hbWUiOiJQcmVUb29sVXNlIiwicGVybWlzc2lvbkRlY2lzaW9uIjoiYXNrIiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiUmV2aWV3IGNvbW1hbmQuIiwidXBkYXRlZElucHV0Ijp7ImNvbW1hbmQiOiJjYXJnbyB0ZXN0In19fQ==
+  stdout_sha256: 204ada35a53b6d443cb8440e3d47750d82d1d8354e2712fa99923a8ad36c9001
+- binding: http
+  exit_code: 204
+  id: http-empty
+  outcome: empty-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-non-json
+  outcome: non-json-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: cGxhaW4gdGV4dCBib2R5
+  stdout_sha256: 9fc5d90c995fdacb82e2cb454025e169a5b94d0cd31051d23e82d51338311da8
+- binding: http
+  exit_code: 200
+  id: http-schema-invalid
+  outcome: schema-invalid-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http-on-failure-block
+  exit_code: 200
+  id: http-on-failure-block-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiYWRkaXRpb25hbENvbnRleHQiOiJQcm9kdWN0aW9uIGVudmlyb25tZW50LiIsImhvb2tFdmVudE5hbWUiOiJQcmVUb29sVXNlIiwicGVybWlzc2lvbkRlY2lzaW9uIjoiYXNrIiwicGVybWlzc2lvbkRlY2lzaW9uUmVhc29uIjoiUmV2aWV3IGNvbW1hbmQuIiwidXBkYXRlZElucHV0Ijp7ImNvbW1hbmQiOiJjYXJnbyB0ZXN0In19fQ==
+  stdout_sha256: 204ada35a53b6d443cb8440e3d47750d82d1d8354e2712fa99923a8ad36c9001
+- binding: http-on-failure-block
+  exit_code: 204
+  id: http-on-failure-block-empty
+  outcome: empty-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http-on-failure-block
+  exit_code: 200
+  id: http-on-failure-block-non-json
+  outcome: non-json-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: cGxhaW4gdGV4dCBib2R5
+  stdout_sha256: 9fc5d90c995fdacb82e2cb454025e169a5b94d0cd31051d23e82d51338311da8
+- binding: http-on-failure-block
+  exit_code: 200
+  id: http-on-failure-block-schema-invalid
+  outcome: schema-invalid-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: http-on-failure-block
+  exit_code: 500
+  id: http-on-failure-block-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

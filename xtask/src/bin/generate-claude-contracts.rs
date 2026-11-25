@@ -29,7 +29,7 @@ const COMMAND_ONLY: &[&str] = &["command"];
 const HTTP_FAILURE_CONTRACT: &str = "An HTTP hook applies this event's failure contract from the per-event exit-code table: a non-2xx status, or a 2xx body that is neither empty nor a JSON object, has the effect of a failed command hook rather than the generic non-blocking error.";
 const EXIT_PRECEDENCE: &str = "Exit status 2 is described only by the exact exit-2 outcomes; the 1-255 nonzero outcomes model the reference's other exit codes and apply to status 2 only where no exit-2 outcome exists.";
 const TEXT_JSON_RULE: &str = "Stdout whose trimmed text starts with { and ends with } is parsed as JSON (Claude Code v2.1.248 or later); a parse or schema-validation failure is a non-blocking error and the text is not added as context. Anything else is plain text, including a JSON array or a quoted JSON string. Output of two or more lines that each parse as JSON, the first starting with { and the last ending with }, remains plain text when no line is a JSON output object that sets a field, and is a parse failure when one is.";
-const JSON_LINES_RULE: &str = "For a hook that isn't async, stdout counts as JSON output only when it is one JSON object with nothing around it but whitespace. Anything that does not start with { and end with } is plain text, including a JSON array or a quoted JSON string. Two or more lines that each parse as JSON, the first starting with { and the last ending with }, are plain text when no line is a JSON output object that sets a field, and a parse failure (invalid-json) when one is; the plain-text and invalid-json semantic formats name those two cases.";
+const JSON_LINES_RULE: &str = "For a hook that isn't async, stdout counts as JSON output only when it is one JSON object with nothing around it but whitespace. Anything that does not start with { and end with } is plain text, including a JSON array or a quoted JSON string. Two or more lines that each parse as JSON, the first starting with { and the last ending with }, are plain text when no line is a JSON output object that sets a field, and a parse failure (invalid-json) when one is; the stdout semantic formats of the exit-0 plain-text outcome and of invalid-json name those two cases.";
 const MCP_SERVER_NOTE: &str = "mcp_server (Claude Code v2.1.274 or later) is present only for MCP tools; its source vocabulary is open, the schema lists the documented values as examples, and an unrecognized source must be treated as an unrecognized configured source rather than sdk.";
 const PERMISSION_MCP_SERVER_NOTE: &str = "mcp_server (Claude Code v2.1.274 or later) is sent for MCP tools and, since Claude Code 2.1.332, for the ask raised before a skill an MCP server provides loads; that ask also carries internal tool_kind (mcp_skill) and mcp_skill fields that the Agent SDK strips and the reference does not document, so the open schema accepts them without encoding them. The source vocabulary is open, the schema lists the documented values as examples, and an unrecognized source must be treated as an unrecognized configured source rather than sdk.";
 const ON_FAILURE_BLOCKS: &str = "The command and http outcomes describe onFailure unset or continue. With onFailure: block (Claude Code v2.1.295 or later; mcp_tool hooks v2.1.328 or later; ignored for command hooks that set async or asyncRewake), a hook that cannot start, times out, exits with a code other than 0 or 2 even after printing schema-valid JSON that allows the action, or prints unparseable or schema-invalid JSON does what exit code 2 does on this event (on PermissionRequest it denies the request); the command-on-failure-block and http-on-failure-block bindings model that configuration.";
@@ -47,10 +47,14 @@ const AGENT_ID_TASK: &str = "agent_id and agent_type identify the subagent or in
 const TEAM_NAME_NOTE: &str = "team_name is deprecated upstream (a session-derived name that will be removed in a future release).";
 const EXIT_2_NOTICE_JSON: &str = "Exit status 2 cannot block this event. A schema-valid JSON object printed with exit 2 is read as on exit 0, because Claude Code reads JSON on every exit code; the reference does not say whether the exit-2 notice is still shown then, so the exit-2-structured outcome keeps stderr as a user message.";
 const STOP_CONTEXT: &str = "hookSpecificOutput.additionalContext is non-error feedback that keeps Claude working: like decision block it continues the conversation, subject to the stop_hook_active input and the 8-consecutive-continuation cap (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP), but the transcript labels it hook feedback rather than a hook error.";
-const STOP_EXIT_2_EXCEPTIONS: &str = "Two exit-2 rows are narrower than exit-2: exit 2 with nothing on stdout and stderr saying a file is missing, such as No such file or directory, is a non-blocking error (exit-2-missing-file, probably Claude Code 2.1.327 or later; how the text is matched is unspecified, and any stdout disables the rule), and a JSON object with continue false printed with exit 2 ends the turn instead of continuing it (exit-2-continue-false, listed before exit-2-structured; what happens to stderr then is undocumented).";
+const STOP_EXIT_2_EXCEPTIONS: &str = "Two exit-2 rows are narrower than exit-2: exit 2 with nothing on stdout and stderr saying a file is missing, such as No such file or directory, is a non-blocking error (exit-2-missing-file, listed before exit-2; any stdout other than whitespace disables the rule), and a JSON object with continue false printed with exit 2 ends the turn instead of continuing it (exit-2-continue-false, listed before exit-2-structured; what happens to stderr then is undocumented).";
+const MISSING_FILE_MATCH: &str = "The reference gives no version for the missing-file exit-2 rule and does not say how stderr is matched. Inspection of the Claude Code 2.1.285 and 2.1.332 CLI builds during the audit, not cited as a source, suggests that the rule predates the 2.1.285 snapshot (the 2.1.327 changelog entry about a Stop hook that failed to run changed only how it is shown), that it applies when stdout is empty after trimming whitespace and stderr matches no such file or can't open case-insensitively, and that it is skipped, so exit 2 still blocks, when the hook's stdio was cut before end of stream; exit-2-missing-file therefore allows whitespace-only stdout, and its stderr semantic format names that match.";
+const SUBAGENT_MATCHER_NOTE: &str = "agent_type, which the matcher filters on, is the frontmatter name for a custom subagent and the plugin-scoped identifier such as my-plugin:reviewer for a plugin's subagent; the colon puts such a matcher on the regular-expression path, so it must be anchored (^my-plugin:reviewer$) to match exactly. For the built-in web-fetch subagent, Claude Code runs these hooks from managed settings only.";
 const BACKGROUND_TASKS_NOTE: &str = "background_tasks[].type is a friendly label such as shell, subagent, monitor, workflow, teammate, cloud session, or MCP task; since Claude Code 2.1.329 a Monitor's script is labeled monitor rather than shell, and command is present for shell tasks and monitor tasks that run a command. Agent SDK 0.3.332 still documents command as shell-only, so the SDK and the reference disagree.";
 const ELICITATION_DECISION: &str = "Top-level decision block also declines, overriding an action in the same output, and a decline from one hook overrides another hook's accept or cancel. Neither the user nor the server sees why: Claude Code shows neither stderr nor reason. Claude Code ignored decision on this event from v2.1.105 until v2.1.284.";
-const ELICITATION_NONZERO: &str = "Claude Code applies hookSpecificOutput only when the hook exits 0 and ignores it on any other exit code, so schema-valid JSON printed with a nonzero exit is nonzero-json-ignored and the dialog proceeds. Whether a hook error notice is shown then, and whether a top-level decision block still declines on exit 1 or 3-255, are undocumented.";
+const ELICITATION_NONZERO: &str = "Claude Code applies hookSpecificOutput only when the hook exits 0 and ignores it on any other exit code, so schema-valid JSON printed with a nonzero exit is nonzero-json-ignored and the dialog proceeds. Whether a hook error notice is shown then, and whether a top-level decision block still declines on exit 1 or 3-255, are undocumented; inspection of the Claude Code 2.1.285 and 2.1.332 CLI builds during the audit, not cited as a source, suggests that decision block declines on any exit code, so command-nonzero-decision-block may decline rather than proceed.";
+const ELICITATION_RESULT_SKIPPED: &str = "When an Elicitation hook answers a request, Claude Code sends that answer to the server without running ElicitationResult hooks.";
+const COMPACTION_AUTO: &str = "trigger auto covers compaction at the auto-compact window and idle compaction, which compacts a large conversation left idle before its prompt cache expires (terminal since Claude Code 2.1.299; VS Code and Claude Desktop's Code tab since 2.1.314, changelog only).";
 const BLOCK_REASON: &str = "The reference requires reason when decision is block, so the output schema requires it; it does not require the reason to be non-empty.";
 
 #[derive(Clone, Copy)]
@@ -296,7 +300,10 @@ impl Seed {
 
     /// `onFailure: "block"` turns a failure into the exit-2 effect.
     fn on_failure_block(mut self) -> Self {
-        let exit2 = self.exit2.as_ref().expect("a gating event has an exit-2 row");
+        let exit2 = self
+            .exit2
+            .as_ref()
+            .expect("a gating event has an exit-2 row");
         self.on_failure = OnFailure::Blocks {
             effect: exit2.effect,
             stderr_role: exit2.stderr_role,
@@ -698,8 +705,7 @@ fn optional_string(name: &'static str, example: &'static str) -> Field {
 fn seeds() -> Vec<Seed> {
     use Profile::{
         Context, Display, Elicitation, ModelSwitch, NoControl, PermissionRequest as Permission,
-        PostTool, PreSkillShell, PreTool, Prompt, Retry, SessionStart as Session, Stop,
-        WatchPaths,
+        PostTool, PreSkillShell, PreTool, Prompt, Retry, SessionStart as Session, Stop, WatchPaths,
     };
     let ignored = Nonzero::Split {
         effect: "ignored",
@@ -917,7 +923,7 @@ fn seeds() -> Vec<Seed> {
             .uncertainty("For a typed skill or custom command, prompt is the line as typed (for example /deploy staging), not the expanded skill content, and the hook runs before expansion (Claude Code v2.1.299 or later); a block stops the command and the shell commands the skill injects. That a block therefore also prevents UserPromptExpansion and PreSkillShellCommand for that command is inferred, not documented. A skill's own frontmatter UserPromptSubmit hook first runs on the next prompt (Claude Code 2.1.299, changelog only).")
             .uncertainty("Esc or an interrupt while hooks check a prompt stops the check and returns typed text to the input; a hook that blocks at the same moment keeps the prompt blocked (Claude Code v2.1.296 or later).")
             .uncertainty("A command, HTTP, or MCP tool hook that reaches its timeout (30 seconds by default) is canceled, its output including additionalContext is discarded with a transcript notice, and the prompt proceeds unless the hook sets onFailure: block. An Agent SDK callback hook that reaches its timeout blocks the prompt.")
-            .uncertainty("For a plugin's UserPromptSubmit hook, exit 2 with empty stdout and stderr saying a file is missing (such as No such file or directory) is a non-blocking error rather than a block. The contract has no hook-provenance dimension, so exit-2 still models settings hooks and command-exit-2-missing-file stays exit-2; how the missing-file text is matched is unspecified.")
+            .uncertainty("For a plugin's UserPromptSubmit hook, exit 2 with empty stdout and stderr saying a file is missing (such as No such file or directory) is a non-blocking error rather than a block. The contract has no hook-provenance dimension, so exit-2 still models settings hooks and command-exit-2-missing-file stays exit-2. How the missing-file text is matched is unspecified; inspection of the Claude Code 2.1.285 and 2.1.332 CLI builds during the audit, not cited as a source, suggests a case-insensitive no such file or can't open match on stderr with stdout empty after trimming whitespace, already present at 2.1.285.")
             .uncertainty("prompt carries pasted text expanded in place; when Claude Code marks pasted text, it sits between pasted_content id marker lines.")
             .uncertainty(TEXT_JSON_RULE),
         Seed::new("UserPromptExpansion", "user_prompt_expansion", "prompt", Prompt)
@@ -1179,7 +1185,7 @@ fn seeds() -> Vec<Seed> {
             .uncertainty(MCP_SERVER_NOTE)
             .uncertainty("permission_mode and effort.level are open strings: the reference lists their current values, which the schema keeps as examples, but the Agent SDK types both as string, and effort may gain members.")
             .uncertainty("updatedInput replaces the entire tool input, and Claude Code evaluates permission rules and a Bash command's auto-background eligibility against the returned input: allow auto-approves it, ask shows it to the user, and defer ignores it. With no permissionDecision the rewrite still applies to the normal permission flow, but in auto mode Claude Code can deny the changed call (a hook changed this call's input after auto mode reviewed it); if Claude then repeats the changed input exactly, the hook runs again and any updatedInput it returns is dropped. Settings and plugin command hooks may rewrite Bash, PowerShell, Monitor, Edit, Write, and NotebookEdit calls without that denial in the sessions that show it. In plan mode updatedInput is still applied. That the rewrite applies without a decision outside auto mode is inferred from these statements.")
-            .uncertainty("Since Claude Code 2.1.300, updatedInput is validated like Claude's own input: unknown keys are dropped and a rejected input denies the call (changelog only); whether Claude learns why is undocumented. Since 2.1.326, rewrites from several hooks are kept in more cases, and an approved rewrite stays sandboxed unless it sets dangerouslyDisableSandbox: true (changelog only).")
+            .uncertainty("Since Claude Code 2.1.300, updatedInput is validated like Claude's own input: unknown keys are dropped and a rejected input denies the call (changelog only); whether Claude learns why is undocumented. Since 2.1.326, rewrites are kept in more cases when several hooks answer, and a command a hook rewrites while approving stays in the sandbox if the original was checked as sandboxed, unless the rewrite adds dangerouslyDisableSandbox: true (changelog only).")
             .uncertainty("allow does not skip approval for actions no mode auto-approves; reads from network paths such as UNC paths and /net automounts (Claude Code v2.1.292 or later); tools an Agent SDK app marks always_ask, unless the permission mode approves the call; MCP tools marked anthropic/requiresUserInteraction, with or without updatedInput; connector tools an organization set to ask; in plan mode, any call other than ExitPlanMode that isn't read-only (fixed in v2.1.299); shell writes to files the file tools refuse (v2.1.287); and MCP calls in Cowork cloud auto mode, where allow counts as no answer (v2.1.314). Deny and ask rules are still evaluated whatever the hook returns. If the tool's own permission check errors after an allow, the call is decided as if no hook answered (v2.1.323).")
             .uncertainty("When several PreToolUse hooks return different decisions, precedence is deny over defer over ask over allow; since Claude Code v2.1.321 a defer that cannot be honored no longer discards another hook's ask. An ask prompt is labeled [settings], [plugin:<name>], or [skill] by the hook's source. In some setups without managed settings, a mod's tool.check approval can approve a call a PreToolUse hook blocked.")
             .uncertainty("permissionDecisionReason is shown to Claude for deny, to the user for ask, and written only to the debug log for allow and defer; in a -p run with no permission host that denies an ask, Claude reads the ask reason in the tool result.")
@@ -1621,6 +1627,7 @@ fn seeds() -> Vec<Seed> {
             .output_source(SDK)
             .uncertainty("notification_type is modeled as an open string: the Agent SDK types it as string, and the reference keeps adding values, most recently auth_storage_failure (Claude Code v2.1.288 or later; fires in place of auth_success when the new credentials cannot be saved) and plugin_notification (a mod's $.ui.notify, whose title defaults to the mod's name; undated, probably 2.1.295). The schema lists the documented values as examples.")
             .uncertainty("systemMessage and continue are discarded; terminalSequence is still emitted on every exit code.")
+            .uncertainty("permission_prompt, idle_prompt, elicitation_dialog, and elicitation_url_dialog share their timing with desktop notifications, so in terminal sessions they fire only when the user appears to be away: permission_prompt and the elicitation types after about six seconds without typing, and idle_prompt about 60 seconds after Claude finishes responding, only if the user hasn't typed since and no background agent is still running (Claude Code 2.1.288 fixed it firing while background agents ran), and never while Claude Code waits for a claude.ai usage limit to reset.")
             .uncertainty("The Agent SDK output union types hookSpecificOutput.additionalContext for Notification, which the reference does not document; it is omitted."),
         Seed::new("SubagentStart", "subagent_start", "subagent", Context)
             .fields(vec![
@@ -1629,7 +1636,9 @@ fn seeds() -> Vec<Seed> {
             ])
             .structured(context("SubagentStart"))
             .exit2_notice()
+            .positive("plugin-agent", json!({"agent_type":"my-plugin:reviewer"}))
             .uncertainty("SubagentStart fires on spawn, on subagent resume, and for each message an in-process teammate handles; repeated context is injected only when the subagent context no longer holds the earlier copy.")
+            .uncertainty(SUBAGENT_MATCHER_NOTE)
             .uncertainty("Exit status 2 renders stderr as a hook error notice in the subagent's own transcript; Claude does not see it.")
             .uncertainty(EXIT_2_NOTICE_JSON),
         Seed::new("SubagentStop", "subagent_stop", "subagent", Stop)
@@ -1659,6 +1668,7 @@ fn seeds() -> Vec<Seed> {
             .permission_mode("default")
             .effort()
             .positive("internal-agent", json!({"agent_type":""}))
+            .positive("plugin-agent", json!({"agent_type":"my-plugin:reviewer"}))
             .positive_from("background-monitor", background_monitor(), &[SOURCE])
             .positive_from("background-mcp-task", background_mcp_task(), &[SOURCE])
             .on_failure_ignored()
@@ -1673,8 +1683,11 @@ fn seeds() -> Vec<Seed> {
             .input_source(SDK)
             .uncertainty(STOP_EXIT_2_EXCEPTIONS)
             .uncertainty(BACKGROUND_TASKS_NOTE)
+            .uncertainty("background_tasks and session_crons are scoped to the parent session, not the subagent.")
             .uncertainty("Since Claude Code 2.1.331 SubagentStop waits for the subagent's last reply to reach its transcript (changelog only).")
-            .uncertainty("Internal agents such as prompt suggestions and /btw side questions also fire SubagentStop with agent_type set to the session's agent name or an empty string; the reference does not say whether agent_id and agent_transcript_path are always present for them, so both remain required.")
+            .uncertainty("Before Claude Code 2.1.311, SubagentStop hooks could run about twice a minute for each running subagent instead of once when it finished (changelog only); the changelog does not say which releases had the bug.")
+            .uncertainty(SUBAGENT_MATCHER_NOTE)
+            .uncertainty("Internal agents such as prompt suggestions and /btw side questions also fire SubagentStop with agent_type set to the session's agent name or an empty string; the reference does not say whether agent_id and agent_transcript_path are always present for them, so both remain required. A matcher that names agent types does not match an empty agent_type, while an omitted matcher, \"\", \"*\", or a regular expression that matches the empty string does.")
             .uncertainty("last_assistant_message is optional: since Claude Code v2.1.271 a subagent using SubagentHandback delivers its report through that tool and the field holds only closing text, if any, and the Agent SDK types the field optional.")
             .uncertainty("SubagentStop uses the Stop decision control: decision block with a reason, or exit-2 stderr, keeps the subagent running and becomes its next instruction.")
             .uncertainty(STOP_CONTEXT)
@@ -1712,12 +1725,34 @@ fn seeds() -> Vec<Seed> {
                 json!({"systemMessage":"Tests are still failing."}),
             )
             .handlers(ALL_FIVE)
+            .top_level_block()
+            .reason_description("Returned to Claude when decision is block, and the task stays open.")
             .permission_mode("default")
             .positive("teammate-agent", json!({"agent_id":"agent-1","agent_type":"reviewer"}))
             .on_failure_ignored()
             .exit2_missing_file()
-            .uncertainty("continue false stops the teammate only when a teammate finishing its turn triggered the event; it is ignored when the TaskUpdate tool triggered it, while exit 2 still blocks the completion. The reference says continue false takes precedence over exit 2 on events such as Stop and SubagentStop without naming TaskCompleted, so whether it overrides exit 2 here is not modeled.")
-            .uncertainty("Exit 2 with nothing on stdout and stderr saying a file is missing, such as No such file or directory, is a non-blocking error rather than a block (exit-2-missing-file, probably Claude Code 2.1.327 or later); how Claude Code matches the text is unspecified, and any stdout disables the rule.")
+            .output(
+                "block",
+                json!({"decision":"block","reason":"Tests not passing. Fix failing tests before completing."}),
+                &[SOURCE],
+            )
+            .process(
+                "command-block",
+                "structured",
+                0,
+                br#"{"decision":"block","reason":"Tests not passing."}"#,
+                b"",
+            )
+            .process(
+                "command-exit-2-block",
+                "exit-2-structured",
+                2,
+                br#"{"decision":"block","reason":"Tests not passing."}"#,
+                b"blocked by hook",
+            )
+            .uncertainty("A top-level decision block keeps the task open and returns reason to Claude, like exit 2. The 2.1.285 snapshot did not model it, but Claude Code's generic JSON handling already applied it at 2.1.285 (CLI inspection during the audit, not cited as a source), so this is a snapshot-time omission rather than new behavior. The reference shows reason with decision block but does not mark it required, so the schema does not require it.")
+            .uncertainty("continue false stops the teammate only when a teammate finishing its turn triggered the event, and then wins even if another matching TaskCompleted hook blocks; it is ignored when the TaskUpdate tool triggered it, while exit 2 or decision block still blocks the completion. The reference says continue false takes precedence over exit 2 on events such as Stop and SubagentStop without naming TaskCompleted, so whether it overrides exit 2 here is not modeled.")
+            .uncertainty("Exit 2 with nothing on stdout and stderr saying a file is missing, such as No such file or directory, is a non-blocking error rather than a block (exit-2-missing-file, listed before exit-2); any stdout other than whitespace disables the rule.")
             .uncertainty(AGENT_ID_TASK)
             .uncertainty(TEAM_NAME_NOTE),
         Seed::new("Stop", "stop", "turn", Stop)
@@ -1782,7 +1817,7 @@ fn seeds() -> Vec<Seed> {
             .input_source(SDK)
             .uncertainty(STOP_EXIT_2_EXCEPTIONS)
             .uncertainty(BACKGROUND_TASKS_NOTE)
-            .uncertainty("Since Claude Code 2.1.331 Stop hooks in Claude Desktop no longer miss the last reply in the transcript (changelog only).")
+            .uncertainty("Since Claude Code 2.1.331 Stop hooks in Claude Desktop no longer miss the last reply in the transcript (changelog only); the reference still says the transcript file isn't guaranteed to include the final message at Stop time on all versions and recommends last_assistant_message.")
             .uncertainty("The reference lists last_assistant_message among Stop inputs, but the Agent SDK has typed it optional since 0.3.223, so the schema keeps it optional.")
             .uncertainty("background_tasks and session_crons are present when the task registry is reachable.")
             .uncertainty(STOP_CONTEXT)
@@ -1836,14 +1871,37 @@ fn seeds() -> Vec<Seed> {
                 json!({"systemMessage":"Teammate kept working."}),
             )
             .handlers(ALL_FIVE)
+            .top_level_block()
+            .reason_description("Returned to the teammate as feedback when decision is block, and the teammate keeps working.")
             .permission_mode("default")
             .positive("teammate-agent", json!({"agent_id":"agent-1","agent_type":"reviewer"}))
             .on_failure_ignored()
+            .output(
+                "block",
+                json!({"decision":"block","reason":"Review the remaining files first."}),
+                &[SOURCE],
+            )
+            .process(
+                "command-block",
+                "structured",
+                0,
+                br#"{"decision":"block","reason":"Review the remaining files first."}"#,
+                b"",
+            )
+            .process(
+                "command-exit-2-block",
+                "exit-2-structured",
+                2,
+                br#"{"decision":"block","reason":"Review the remaining files first."}"#,
+                b"blocked by hook",
+            )
             .input_source(SDK)
             .uncertainty("team_name is deprecated upstream and will be removed in a future release, but the reference and Agent SDK still describe it as always sent, so it remains required.")
             .uncertainty(AGENT_ID_TASK)
             .uncertainty("Since Claude Code 2.1.290 TeammateIdle no longer fires from a teammate's subagents or forks (changelog only).")
-            .uncertainty("The reference says continue false takes precedence over exit 2 on events such as Stop and SubagentStop without naming TeammateIdle, so whether it overrides exit 2 here is not modeled."),
+            .uncertainty("A top-level decision block keeps the teammate working and returns reason to it as feedback, like exit 2. The 2.1.285 snapshot did not model it, but Claude Code's generic JSON handling already applied it at 2.1.285 (CLI inspection during the audit, not cited as a source), so this is a snapshot-time omission rather than new behavior. The reference shows reason with decision block but does not mark it required, so the schema does not require it.")
+            .uncertainty("continue false sends the teammate idle even if another matching TeammateIdle hook blocks. The reference says continue false takes precedence over exit 2 on events such as Stop and SubagentStop without naming TeammateIdle, so whether it overrides exit 2 here is not modeled.")
+            .uncertainty("The reference lists the missing-file exit-2 rule (exit 2 with nothing on stdout and stderr saying a file is missing is a non-blocking error) only for Stop, SubagentStop, TaskCompleted, and a plugin's UserPromptSubmit. Inspection of the Claude Code 2.1.285 and 2.1.332 CLI builds during the audit, not cited as a source, suggests the same rule also applies to TeammateIdle, so exit-2 here may be a non-blocking error for such output; no outcome models it."),
         Seed::new("ConfigChange", "config_change", "configuration", NoControl)
             .fields(vec![
                 required(
@@ -1865,11 +1923,13 @@ fn seeds() -> Vec<Seed> {
             .on_failure_block()
             .uncertainty("A blocked change surfaces no message to the user or to Claude, whether it is blocked by reason or by exit-2 stderr; Claude Code writes only a debug-log line.")
             .uncertainty("policy_settings changes cannot be blocked; blocking decisions for them are ignored.")
+            .uncertainty("Some changes take effect without running the hooks: rules and settings saved with Yes, and don't ask again, /permissions, or /model, in the session that saved them (another open session that loads the file runs its hooks); server-managed settings arriving or refreshing, macOS managed preferences, and Windows registry policy; and, on WSL with wslInheritsWindowsSettings, a changed Windows-side managed settings file. Before Claude Code 2.1.290, sandboxed Bash commands on Linux could run ConfigChange hooks mid-command when .claude/settings.json or .claude/settings.local.json did not exist (changelog only).")
             .uncertainty("systemMessage and continue are discarded."),
         Seed::new("CwdChanged", "cwd_changed", "workspace", WatchPaths)
             .fields(vec![string("old_cwd", "/repo"), string("new_cwd", "/repo/crate")])
             .structured(json!({"systemMessage":"Working directory changed.","hookSpecificOutput":{"hookEventName":"CwdChanged","watchPaths":["/repo/crate/.env"]}}))
             .exit2_notice()
+            .uncertainty("The reference now scopes CwdChanged to a shell command in the main conversation that changes the working directory, which implies, without stating it, that a subagent's shell command does not fire it.")
             .uncertainty("continue is discarded; systemMessage is shown as a brief terminal notification in interactive sessions and does not reach the SDK message stream.")
             .uncertainty("Exit status 2 shows stderr to the user only.")
             .uncertainty(EXIT_2_NOTICE_JSON),
@@ -1889,6 +1949,7 @@ fn seeds() -> Vec<Seed> {
             })
             .uncertainty("continue is discarded; systemMessage is delivered to Claude as context for slash_command additions and written only to the debug log for register_repo_root.")
             .uncertainty("Claude Code does not wait for the hook: the add completes immediately and the hook runs in the background with the 600-second default timeout.")
+            .uncertainty("DirectoryAdded fires after Claude Code refreshes sandbox and permission state, so sandboxed tools already see the new directory, and the hook command itself runs unsandboxed. It does not fire for a directory passed with the --add-dir startup flag (SessionStart covers those), for one added on the /permissions Workspace tab, or for one that already is or lies inside a working directory. Since Claude Code 2.1.326, --add-dir and /add-dir show the trust prompt for a folder not yet trusted in local terminal sessions (changelog only); whether the event fires when trust is declined is undocumented.")
             .uncertainty("Failure stderr goes to the debug log; for slash_command a count of failed hooks appears in the transcript."),
         Seed::new("FileChanged", "file_changed", "workspace", WatchPaths)
             .fields(vec![
@@ -1910,17 +1971,20 @@ fn seeds() -> Vec<Seed> {
                 success: "removed",
                 failure: "fail-if-directory-remains",
             })
-            .uncertainty("Claude Code reads only the exit code: exit 0 counts as removed, and a nonzero exit fails the removal when worktree_path still exists afterward, leaving the worktree on disk with no git fallback.")
+            .uncertainty("Claude Code reads only the exit code: exit 0 counts as removed, and a nonzero exit fails the removal when worktree_path still exists afterward, leaving the worktree on disk with no git fallback. A hook that deleted the directory before exiting nonzero counts as removed, and after exit 0 Claude Code does not fall back to git if the directory remains.")
             .uncertainty("The decision-control summary says WorktreeRemove JSON output is discarded, so stdout is modeled as ignored; the exit-code section now states as a rule for every event that discards hook output that side-effect fields such as terminalSequence still fire on any exit code, which conflicts with that summary for this event.")
-            .uncertainty("A failed removal writes the hook command and stderr to the debug log; agent view quotes the start of stderr when a background-session delete is refused.")
+            .uncertainty("A failed removal is reported where it was requested: for a background-session delete, the session stays and agent view reports how the hook ended (such as exited 1), quotes the start of stderr, and says whether deleting again removes the directory anyway; for claude remote-control cleanup, its terminal shows worktree removal failed, kept: <path>. The reference no longer says the stderr goes to the debug log.")
             .uncertainty("An HTTP hook applies the same failure contract: a non-2xx status, or a 2xx body that is neither empty nor a JSON object, fails the removal when the directory remains. The reference does not say whether a 2xx JSON object that fails the universal output schema also counts as a failure.")
-            .uncertainty("Without any WorktreeRemove hook, Claude Code falls back to git worktree remove --force on the WorktreeCreate path.")
+            .uncertainty("WorktreeRemove fires only for a worktree a WorktreeCreate hook created: when the user exits an interactive worktree session and chooses removal; when an unnamed interactive worktree session exits and git finds no changed or untracked files, without a prompt (since Claude Code 2.1.301 quitting no longer removes one that may hold unpushed commits without asking, changelog only); when a background session in the worktree is deleted; when Claude removes it with ExitWorktree, which refuses a hook-created worktree unless Claude passes discard_changes: true; and, without a prompt, when a claude remote-control worktree-mode session ends without crashing, or remote control is stopped, and git finds no changed or untracked files and no new commits. It does not fire when a subagent or workflow agent finishes; their hook-created worktrees are kept.")
+            .uncertainty("Claude Code looks for changed or untracked files with git, so a worktree that is not a git checkout looks clean and can be removed without a prompt even when it holds uncommitted work. Claude Code never deletes a branch belonging to a hook-created worktree.")
+            .uncertainty("For a background-session delete, Claude Code verifies the stored worktree path before running the hook, refusing a path that is a symlink or passes through one below the repository root, and runs the hook for a worktree that still contains files only after the user confirms the delete in agent view; claude rm keeps such a session and worktree instead.")
+            .uncertainty("Without any WorktreeRemove hook, Claude Code removes the WorktreeCreate path as git worktree remove --force would when the user exits a worktree session or Claude calls ExitWorktree, so a worktree git does not recognize stays on disk; claude remote-control cleanup keeps the worktree and reports worktree removal failed, kept: <path>; a background-session delete follows agent view's rules.")
             .uncertainty("A plugin's WorktreeCreate and WorktreeRemove hooks run with --worktree only since Claude Code v2.1.300 and still not with --worktree and --tmux, because the worktree is created before plugins load."),
         Seed::new("PreCompact", "pre_compact", "compaction", NoControl)
             .fields(vec![
                 required(
                     "trigger",
-                    json!({"enum":["manual","auto"]}),
+                    json!({"enum":["manual","auto"],"description":"manual for /compact; auto for compaction at the auto-compact window and for idle compaction."}),
                     json!("auto"),
                 ),
                 required(
@@ -1975,6 +2039,8 @@ fn seeds() -> Vec<Seed> {
             .input_source(SDK)
             .uncertainty("custom_instructions is null for auto compaction and for a manual /compact without instructions; the Agent SDK typed it string or null already at 0.3.223.")
             .uncertainty("Exit-2 stderr is shown to the user for a manual /compact; the reference does not say where it goes for auto compaction or where a JSON reason is surfaced.")
+            .uncertainty(COMPACTION_AUTO)
+            .uncertainty("Blocking automatic compaction that was triggered proactively, before the context limit (which includes idle compaction), skips it and the conversation continues uncompacted; blocking compaction triggered to recover from a context-limit error the API already returned surfaces that error and fails the current request.")
             .uncertainty("systemMessage and continue are discarded.")
             .uncertainty("When a PreCompact hook exits 0 and doesn't block, Claude Code uses its plain-text stdout as instructions for the compaction summary; the 2.1.285 snapshot modeled it as a logged no-op. How hook instructions combine with the user's /compact text in custom_instructions is undocumented.")
             .uncertainty("Claude Code cuts PreCompact stdout over 10,000 characters per hook at the cap and appends a marker (Claude Code v2.1.314 or later) instead of saving it to a file, so command-text-over-cap remains compaction-instructions.")
@@ -1982,7 +2048,11 @@ fn seeds() -> Vec<Seed> {
             .uncertainty("Since Claude Code 2.1.323, PreCompact and PostCompact carry agent_id and agent_type when a subagent compacts (changelog only)."),
         Seed::new("PostCompact", "post_compact", "compaction", NoControl)
             .fields(vec![
-                required("trigger", json!({"enum":["manual","auto"]}), json!("auto")),
+                required(
+                    "trigger",
+                    json!({"enum":["manual","auto"],"description":"manual after /compact; auto after compaction at the auto-compact window and after idle compaction."}),
+                    json!("auto"),
+                ),
                 string("compact_summary", "Summary"),
             ])
             .json(Json::SideEffects)
@@ -2009,6 +2079,7 @@ fn seeds() -> Vec<Seed> {
             )
             .uncertainty("systemMessage and continue are discarded; terminalSequence is documented to keep working on events that discard those fields.")
             .uncertainty("Exit status 2 shows stderr to the user only. Claude Code ignores the JSON of an event that discards hook output on any exit code apart from side-effect fields such as terminalSequence, which still fire; the reference states this by example (StopFailure), so nonzero exits are split into nonzero-structured (terminal-sequence-only) and nonzero-unstructured. Whether the stderr notice is still shown when the JSON is schema-valid is undocumented.")
+            .uncertainty(COMPACTION_AUTO)
             .uncertainty("Since Claude Code 2.1.323, PreCompact and PostCompact carry agent_id and agent_type when a subagent compacts (changelog only)."),
         Seed::new("PreModelSwitch", "pre_model_switch", "model", ModelSwitch)
             .fields(model_switch_fields(&["command", "picker", "sdk"]))
@@ -2058,6 +2129,7 @@ fn seeds() -> Vec<Seed> {
             .input_source(SDK)
             .output_source(SDK)
             .uncertainty("PreModelSwitch requires Claude Code v2.1.251 or later and runs only for switches a user or client requested, not for automatic fallback or restore on resume.")
+            .uncertainty("The requests that run it are /model <name> and the /model picker, the Option+P or Alt+P picker, the Model setting in /config, turning on fast mode when that changes the session's model, and a set_model request or a model change in an apply_flag_settings request from an Agent SDK host or Remote Control. source is command for /model <name>, /config, and fast mode, picker for a model picker, and sdk for set_model and apply_flag_settings. A deny's permissionDecisionReason is returned as the error of a set_model request.")
             .uncertainty("A hook canceled at its timeout blocks the switch.")
             .uncertainty("ask is treated as a refusal everywhere except interactive /model; precedence across hooks is deny over ask over allow.")
             .uncertainty("systemMessage is shown to the user regardless of the decision; permissionDecisionReason is shown for deny and ask and ignored for allow. The reference does not say where a top-level reason is shown when decision is block.")
@@ -2079,6 +2151,7 @@ fn seeds() -> Vec<Seed> {
             .input_source(SDK)
             .output_source(SDK)
             .uncertainty("PostModelSwitch requires Claude Code v2.1.251 or later and cannot block; requested_model is null when source is auto and is the restored setting when source is resume.")
+            .uncertainty("PostModelSwitch runs after a requested switch, an automatic model fallback, a setting such as opusplan entering or leaving plan mode, and the model restore on resume; the reference does not say which source an opusplan transition reports. It does not run when a model from a fallback model chain serves one turn, because the session's model is unchanged.")
             .uncertainty("Plain-text stdout or additionalContext is delivered with the next request; output from a hook still running five seconds after the next prompt rolls over to the following request, and only the last switch's output is delivered.")
             .uncertainty("Exit status 2 renders stderr as a hook error notice for the user; Claude does not see it.")
             .uncertainty(EXIT_2_NOTICE_JSON)
@@ -2114,7 +2187,8 @@ fn seeds() -> Vec<Seed> {
             .uncertainty("bypass_permissions_disabled was removed in Claude Code v2.1.234 and is no longer sent; it stays in the enum because older releases may still send it.")
             .uncertainty("Claude Code discards SessionEnd JSON output fields such as systemMessage; terminalSequence is documented to keep working on events that discard those fields.")
             .uncertainty("Exit status 2 shows stderr to the user only. Claude Code ignores the JSON of an event that discards hook output on any exit code apart from side-effect fields such as terminalSequence, which still fire; the reference states this by example (StopFailure), so nonzero exits are split into nonzero-structured (terminal-sequence-only) and nonzero-unstructured. Whether the stderr notice is still shown when the JSON is schema-valid is undocumented.")
-            .uncertainty("terminalSequence is emitted only while an interactive interface is open, which may no longer hold when the session ends."),
+            .uncertainty("terminalSequence is emitted only while an interactive interface is open, which may no longer hold when the session ends.")
+            .uncertainty("SessionEnd hooks share a 1.5-second budget when the user exits, runs /clear, or switches sessions with interactive /resume. A per-hook timeout raises the budget to the highest such timeout in the settings files, up to 60 seconds, but timeouts on plugin-provided hooks do not raise it, and a hook without its own timeout keeps the default; CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS overrides the budget and becomes the timeout of each hook without its own. Before Claude Code 2.1.300, SessionEnd hooks sometimes did not run when the user exited while a background command was still running (changelog only)."),
         Seed::new("Elicitation", "elicitation", "mcp", Elicitation)
             .fields(vec![
                 string("mcp_server_name", "forms"),
@@ -2164,7 +2238,8 @@ fn seeds() -> Vec<Seed> {
             .uncertainty(ELICITATION_DECISION)
             .uncertainty("Exit status 2 declines the elicitation and no dialog appears; stderr is shown nowhere and an exit-2 hookSpecificOutput is ignored.")
             .uncertainty(ELICITATION_NONZERO)
-            .uncertainty("systemMessage and continue are discarded, whichever action the hook returns. For a URL-mode request, an accept skips the dialog, so the URL never opens."),
+            .uncertainty("systemMessage and continue are discarded, whichever action the hook returns. For a URL-mode request, an accept skips the dialog, so the URL never opens.")
+            .uncertainty(ELICITATION_RESULT_SKIPPED),
         Seed::new("ElicitationResult", "elicitation_result", "mcp", Elicitation)
             .fields(vec![
                 string("mcp_server_name", "forms"),
@@ -2200,11 +2275,37 @@ fn seeds() -> Vec<Seed> {
                 json!({"hookSpecificOutput":{"hookEventName":"ElicitationResult","action":"cancel"}}),
                 &[SOURCE],
             )
+            .official_output(
+                "official-change-values",
+                r#"{
+  "hookSpecificOutput": {
+    "hookEventName": "ElicitationResult",
+    "action": "accept",
+    "content": {
+      "username": "alice@example.com"
+    }
+  }
+}"#,
+            )
+            .output(
+                "content-without-action",
+                json!({"hookSpecificOutput":{"hookEventName":"ElicitationResult","content":{"name":"Ada"}}}),
+                &[SOURCE],
+            )
+            .positive("user-declined", json!({"action":"decline","mode":"form"}))
+            .positive("user-cancelled", json!({"action":"cancel"}))
             .process(
                 "command-decision-block",
                 "structured",
                 0,
                 br#"{"decision":"block","reason":"Declined by policy."}"#,
+                b"",
+            )
+            .process(
+                "command-content-without-action",
+                "structured",
+                0,
+                br#"{"hookSpecificOutput":{"hookEventName":"ElicitationResult","content":{"name":"Ada"}}}"#,
                 b"",
             )
             .process(
@@ -2218,7 +2319,10 @@ fn seeds() -> Vec<Seed> {
             .uncertainty(ELICITATION_DECISION)
             .uncertainty("Exit status 2 changes the effective action to decline; stderr is shown nowhere and an exit-2 hookSpecificOutput is ignored.")
             .uncertainty(ELICITATION_NONZERO)
-            .uncertainty("action cancel sends cancel to the server; the reference says to return decline to withhold the values the user submitted, which implies, without stating it, that cancel may still forward them.")
+            .uncertainty(ELICITATION_RESULT_SKIPPED)
+            .uncertainty("ElicitationResult hooks also run when the user declines or cancels, and the hook's action replaces the user's, so a hook that returns accept without checking that the input action is accept turns a declined request into an accepted one.")
+            .uncertainty("content in an accept replaces the user's whole content object, so a hook that changes one value must return the others too. Claude Code ignores a hookSpecificOutput that has no action, so content-without-action is schema-valid but changes nothing.")
+            .uncertainty("action cancel sends cancel to the server; the reference says to return decline to withhold the values the user submitted, which implies, without stating it, that cancel may still forward them. Whether an accept without content forwards the user's values or none is undocumented.")
             .uncertainty("systemMessage and continue are discarded."),
     ]
 }
@@ -2601,7 +2705,12 @@ fn contract(seed: &Seed) -> Value {
         uncertainties.push(EXIT_PRECEDENCE);
         uncertainties.push(POWERSHELL_EXIT_2);
     }
-    if http && !matches!(seed.json, Json::Absent { .. }) && seed.failure_effect() != "nonblocking-error"
+    if seed.exit2_missing_file {
+        uncertainties.push(MISSING_FILE_MATCH);
+    }
+    if http
+        && !matches!(seed.json, Json::Absent { .. })
+        && seed.failure_effect() != "nonblocking-error"
     {
         uncertainties.push(HTTP_FAILURE_CONTRACT);
     }
@@ -2761,14 +2870,17 @@ fn command_outcomes(seed: &Seed) -> Vec<Value> {
     }
     if let Some(exit2) = &seed.exit2 {
         if seed.exit2_missing_file {
-            // Listed before exit-2, which it narrows.
+            // Listed before exit-2, which it narrows. Stdout counts as empty
+            // after trimming whitespace.
+            let mut stdout = channel("optional", "ignored", "opaque");
+            stdout["semantic_format"] = json!("empty-or-whitespace-only");
             let mut stderr = channel("required", "user-message", "text");
-            stderr["semantic_format"] = json!("missing-file-diagnostic");
+            stderr["semantic_format"] = json!("contains-no-such-file-or-cant-open");
             outcomes.push(outcome(
                 "exit-2-missing-file",
                 "nonblocking-error",
                 two.clone(),
-                channel("forbidden", "none", "empty"),
+                stdout,
                 stderr,
             ));
         }
@@ -3345,6 +3457,15 @@ fn process_cases(seed: &Seed) -> Vec<Value> {
                     b"",
                     b"python3: can't open file '/repo/x.py': [Errno 2] No such file or directory",
                 ));
+                // Whitespace-only stdout still counts as nothing on stdout.
+                process.push(case(
+                    "command-exit-2-missing-file-blank-stdout",
+                    "command",
+                    "exit-2-missing-file",
+                    2,
+                    b"\n",
+                    b"/bin/sh: /repo/.claude/hooks/check.sh: No such file or directory\n",
+                ));
                 // Non-empty stdout disables the missing-file rule.
                 process.push(case(
                     "command-exit-2-missing-file-with-stdout",
@@ -3601,4 +3722,113 @@ fn write_json(path: &Path, value: &Value) {
 }
 fn write_yaml(path: &Path, value: &Value) {
     fs::write(path, serde_yaml_ng::to_string(value).unwrap()).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn wires(filter: impl Fn(&Seed) -> bool) -> BTreeSet<&'static str> {
+        seeds()
+            .iter()
+            .filter(|seed| filter(seed))
+            .map(|seed| seed.wire)
+            .collect()
+    }
+
+    /// `onFailure: "block"` gets sibling bindings exactly on the events where
+    /// it changes an outcome, and never on the events that ignore it.
+    #[test]
+    fn on_failure_block_bindings_cover_exactly_the_gating_events() {
+        let gating = wires(|seed| matches!(seed.on_failure, OnFailure::Blocks { .. }));
+        assert_eq!(
+            gating,
+            BTreeSet::from([
+                "ConfigChange",
+                "Elicitation",
+                "ElicitationResult",
+                "PermissionRequest",
+                "PostToolBatch",
+                "PostToolUse",
+                "PostToolUseFailure",
+                "PreCompact",
+                "PreModelSwitch",
+                "PreSkillShellCommand",
+                "PreToolUse",
+                "TaskCreated",
+                "UserPromptExpansion",
+                "UserPromptSubmit",
+            ])
+        );
+        let ignored = wires(|seed| seed.on_failure == OnFailure::Ignored);
+        assert_eq!(
+            ignored,
+            BTreeSet::from(["Stop", "SubagentStop", "TaskCompleted", "TeammateIdle"])
+        );
+        // The 16 notice events (WorktreeCreate is hand-authored).
+        assert_eq!(
+            wires(|seed| seed.on_failure == OnFailure::NoChange).len(),
+            15
+        );
+        for seed in seeds() {
+            let value = contract(&seed);
+            let bindings = value["bindings"].as_object().expect("bindings");
+            let blocks = matches!(seed.on_failure, OnFailure::Blocks { .. });
+            assert_eq!(
+                bindings.contains_key("command-on-failure-block"),
+                blocks,
+                "{}",
+                seed.wire
+            );
+            assert_eq!(
+                bindings.contains_key("http-on-failure-block"),
+                blocks && seed.handlers.contains(&"http"),
+                "{}",
+                seed.wire
+            );
+        }
+    }
+
+    /// The missing-file exit-2 outcome is cataloged only on the events the
+    /// reference names; TeammateIdle, which only CLI inspection adds, and a
+    /// plugin's UserPromptSubmit, which needs hook provenance, carry an
+    /// uncertainty instead.
+    #[test]
+    fn missing_file_outcome_covers_the_documented_events() {
+        assert_eq!(
+            wires(|seed| seed.exit2_missing_file),
+            BTreeSet::from(["Stop", "SubagentStop", "TaskCompleted"])
+        );
+    }
+
+    /// TaskCompleted and TeammateIdle accept the documented top-level
+    /// `decision: "block"` without requiring `reason`.
+    #[test]
+    fn task_completed_and_teammate_idle_accept_top_level_block() {
+        for seed in seeds() {
+            if matches!(seed.wire, "TaskCompleted" | "TeammateIdle") {
+                assert!(seed.top_level_block, "{}", seed.wire);
+                assert!(!seed.block_reason_required, "{}", seed.wire);
+            }
+        }
+    }
+
+    /// Under `onFailure: "block"`, PermissionRequest denies instead of taking
+    /// its ignored exit-2 row, and every other gating event takes its exit-2
+    /// effect.
+    #[test]
+    fn failure_blocked_takes_the_exit_2_effect_except_on_permission_request() {
+        for seed in seeds() {
+            let OnFailure::Blocks { effect, .. } = seed.on_failure else {
+                continue;
+            };
+            let exit2 = seed.exit2.as_ref().expect("exit-2 row");
+            if seed.wire == "PermissionRequest" {
+                assert_eq!((exit2.effect, effect), ("ignored", "deny"));
+            } else {
+                assert_eq!(effect, exit2.effect, "{}", seed.wire);
+            }
+        }
+    }
 }

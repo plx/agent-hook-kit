@@ -1,0 +1,64 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:pre-skill-shell-command:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "type": "boolean"
+    },
+    "decision": {
+      "description": "Typed by the Agent SDK only as the generic approve or block and not documented for this event: block keeps the command from running and approve has no effect.",
+      "enum": [
+        "approve",
+        "block"
+      ]
+    },
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "hookEventName": {
+          "const": "PreSkillShellCommand"
+        },
+        "permissionDecision": {
+          "description": "allow adds nothing: the command runs unless a hook refuses it. deny, ask, and defer all keep it from running.",
+          "enum": [
+            "allow",
+            "deny",
+            "ask",
+            "defer"
+          ]
+        },
+        "permissionDecisionReason": {
+          "type": "string"
+        },
+        "updatedInput": {
+          "description": "Never applied. Any value keeps the command from running.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "reason": {
+      "description": "Deprecated together with decision.",
+      "type": "string"
+    },
+    "stopReason": {
+      "description": "Shown to the user when continue is false; it stays in the conversation, so Claude sees it if the conversation continues.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

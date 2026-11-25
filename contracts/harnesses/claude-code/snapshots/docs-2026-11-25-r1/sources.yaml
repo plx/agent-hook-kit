@@ -4,32 +4,58 @@ sources:
     kind: official-documentation
     authority: primary
     url: https://code.claude.com/docs/en/hooks.md
-    retrieved: 2026-09-30
-    content_sha256: 5129d58370ed4d7910c6e86537e0592b2902ea5bf0a8682721c5484f5d46f566
+    retrieved: 2026-11-25
+    content_sha256: 194272edd023a34be015d351c402c3ca166d84ebfd9b50215b204f09553e3099
     reproducibility: content-hash-only
     limitations:
-      - The mutable Markdown page has no checked-in capture; the hash covers the decoded 248570-byte body that `curl --compressed` returned, identically, on two retrievals on 2026-09-30.
-      - Compared with the docs-2026-09-29-r1 evidence (sha256 c20e140ef4c61a570800ec9a9edf23bd9aabba8303dc632851e34d80a3242c8c), this revision changes only the UserPromptSubmit block wording and adds the "What a blocked prompt leaves behind" section, which extends suppressOriginalPrompt to exit-2 blocks that print JSON.
+      - The mutable Markdown page has no checked-in capture; the hash covers the decoded 293618-byte body that `curl --compressed` returned, identically, on every retrieval on 2026-11-25.
+      - Supersedes the docs-2026-09-30-r1 evidence (sha256 5129d58370ed4d7910c6e86537e0592b2902ea5bf0a8682721c5484f5d46f566, 248570 bytes), which was hashed but never captured. The difference was reviewed against what that snapshot encodes and the 2026-09-30 audit; planning/audits/2026-11-25-claude-code-hooks.md records it, including onFailure, the Windows-without-Git-Bash default, the missing-file exit-2 rule, continue false over exit 2, the JSON-lines rule, PreCompact compaction instructions, and the Elicitation nonzero-exit rule.
+      - The page documents the same 33 events as docs-2026-09-30-r1 and cites versions up to v2.1.328; it never mentions PreSkillShellCommand, so it lags the Claude Code 2.1.332 release this snapshot pins.
+      - Recorded as limitations rather than drift because no post-pin changelog entry dates them, the `if` handler field is evaluated only on PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, and PermissionDenied, and a handler with `if` never runs on other events (inspection of the 2.1.332 CLI during the audit suggests PreSkillShellCommand also honors it); FileChanged and StopFailure matchers use a narrower exact-match alphabet of letters, digits, `_`, and `|`.
+      - Prompt and agent handlers are cataloged only in handler_kinds. The page says at most 12 prompt or agent hooks of one event run at once, while the 2.1.312 changelog describes 24 per session plus 12 overdue and a 1-second minimum timeout.
   - id: claude-code-changelog
     kind: official-release-notes
     authority: primary
-    url: https://raw.githubusercontent.com/anthropics/claude-code/2282079d6ac8824ec4b72a432a03e0c636e0512f/CHANGELOG.md
-    retrieved: 2026-09-30
-    revision: 2282079d6ac8824ec4b72a432a03e0c636e0512f
-    content_sha256: 0937ba0c7c5e7c5272c65aa0b24e0a5e6cc57e8e0e263f5a0559b5800cf2f217
+    url: https://raw.githubusercontent.com/anthropics/claude-code/d66368052c9303ce022c017a5b59d62ebd57d1e7/CHANGELOG.md
+    retrieved: 2026-11-25
+    revision: d66368052c9303ce022c017a5b59d62ebd57d1e7
+    content_sha256: 4192cfdae7e1401a199984dcc4910cdb8491550eadb2150a541d55d4464aa5ad
     reproducibility: pinned-revision
     limitations:
-      - Prose release notes through Claude Code 2.1.285; cited only where the hooks reference is silent, such as the 2.1.284 Elicitation and ElicitationResult decision fix.
-      - The file was byte-identical at main commit 732e167ee9d71296b4b63d6f529ac1334513826a on 2026-09-30, so no hook change follows 2.1.285.
+      - Prose release notes through Claude Code 2.1.332, the changelog head and the npm latest tag on 2026-11-25 (npm stable was 2.1.326); cited where the hooks reference is silent, such as PreSkillShellCommand (2.1.332), validated updatedInput (2.1.300), and the Code Mode and onFailure version boundaries.
+      - Supersedes the docs-2026-09-30-r1 pin at 2282079d6ac8824ec4b72a432a03e0c636e0512f (sha256 0937ba0c7c5e7c5272c65aa0b24e0a5e6cc57e8e0e263f5a0559b5800cf2f217, through 2.1.285); the 2.1.286-2.1.332 entries were reviewed for hook changes.
+      - Behavior newer than npm stable 2.1.326, including PreSkillShellCommand, mcp_tool onFailure, and Code Mode's removal of UserPromptSubmit firing, names its version in an uncertainty so a consumer on stable can tell what does not apply.
   - id: claude-agent-sdk-types
     kind: official-package-types
     authority: secondary
-    url: https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.285.tgz
-    retrieved: 2026-09-30
-    revision: 0.3.285
-    content_sha256: 5c68fdbf22cbe796d533dfb59e939aecdee7d3ce37d4853003b9d4b33863f40f
+    url: https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.332.tgz
+    retrieved: 2026-11-25
+    revision: 0.3.332
+    content_sha256: 622bbf059f41467d249f3d5b49ebbb5b79d8e655f0a148f1b26e1a9860865aa0
     reproducibility: pinned-revision
     limitations:
-      - The hash covers the published tarball; package/sdk.d.ts inside it hashes to 3bc04bbd9858b00a2589b899317c66852ff875e841eb90c2a741ef9047e235bf. 0.3.285 was still the npm latest tag on 2026-09-30.
-      - The TypeScript hook input and output types corroborate optionality and value sets but are not the command-hook reference; they omit scratchpad_dir, still type hookSpecificOutput for Setup and Notification, and type UserPromptSubmit source and session_title inputs that the reference does not document.
+      - The hash covers the published tarball; package/sdk.d.ts inside it hashes to 5041abd88b30c03567f960ca0214b4622adf86147474785f4cc3f7cd8cfa1c0d. 0.3.332 was the npm latest tag on 2026-11-25. It supersedes the 0.3.285 tarball (sha256 5c68fdbf22cbe796d533dfb59e939aecdee7d3ce37d4853003b9d4b33863f40f, sdk.d.ts 3bc04bbd9858b00a2589b899317c66852ff875e841eb90c2a741ef9047e235bf); between them no existing event's input or hookSpecificOutput type changed.
+      - The PreSkillShellCommand input and hookSpecificOutput types (absent from 0.3.285, 0.3.326, and 0.3.331) are the only typed description of that event; the input omits the common scratchpad_dir field, as BaseHookInput does for every event.
+      - The TypeScript hook input and output types corroborate optionality and value sets but are not the command-hook reference; they omit scratchpad_dir, still type hookSpecificOutput for Setup and Notification, and type a UserPromptSubmit source input that the reference does not document. UserPromptSubmit session_title, which earlier snapshots treated as SDK-only, is now documented by the reference.
+      - The handler types say onFailure defaults to continue with no platform exception, which the reference contradicts for shell-form PreToolUse and PermissionRequest command hooks on Windows without Git Bash and for PreToolUse timeouts in Code Mode; they also say mcp_tool onFailure is ignored on Setup and SessionStart, which the reference omits.
       - Historical claims about SDK 0.3.223 refer to https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.223.tgz (sha256 767b1c43b70ed4f2379eeb645e439e0d516c45be885e2e613c1590a59e5032b3).
+  - id: claude-code-mode
+    kind: official-documentation
+    authority: primary
+    url: https://code.claude.com/docs/en/code-mode.md
+    retrieved: 2026-11-25
+    content_sha256: 3ee4d085c4cdacede22e9d314b74ba78c0a8dc520dbca0682863c73ece4c4881
+    reproducibility: content-hash-only
+    limitations:
+      - The mutable Markdown page has no checked-in capture; the hash covers the decoded 32787-byte body that `curl --compressed` returned on 2026-11-25.
+      - Cited for the REPL tool that runs Code Mode code, its PostToolUse tool_response shape, the cd '<dir>' && command prefix, and the v2.1.329 PreToolUse failure table; it cites versions up to v2.1.331 and describes an experimental feature.
+  - id: claude-permissions
+    kind: official-documentation
+    authority: primary
+    url: https://code.claude.com/docs/en/permissions.md
+    retrieved: 2026-11-25
+    content_sha256: 687a80f8ae55138a03648fbd54fa1c109291656a512a8ed28c1c3f2825460615
+    reproducibility: content-hash-only
+    limitations:
+      - The mutable Markdown page has no checked-in capture; the hash covers the decoded 94797-byte body that `curl --compressed` returned on 2026-11-25.
+      - Cited for the exceptions to a PreToolUse allow, the plan-mode rule that updatedInput still applies, and the precedence among rules, hooks, and mods.

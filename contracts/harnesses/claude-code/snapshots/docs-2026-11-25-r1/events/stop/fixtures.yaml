@@ -1,0 +1,352 @@
+format_version: 1
+input:
+  negative:
+  - expected_keyword: const
+    expected_pointer: /hook_event_name
+    id: wrong-discriminator
+    origin: regression
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: WrongEvent
+      session_id: s1
+      stop_hook_active: false
+      transcript_path: /tmp/t.jsonl
+  - expected_keyword: required
+    expected_pointer: ''
+    id: missing-stop_hook_active
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Stop
+      session_id: s1
+      transcript_path: /tmp/t.jsonl
+  positive:
+  - id: minimal
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: Stop
+      session_id: s1
+      stop_hook_active: false
+      transcript_path: /tmp/t.jsonl
+  - id: representative
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      background_tasks:
+      - command: cargo test
+        description: Run tests
+        id: task-1
+        status: running
+        type: shell
+      cwd: /repo
+      effort:
+        level: high
+      hook_event_name: Stop
+      last_assistant_message: All work complete
+      permission_mode: default
+      prompt_id: prompt-1
+      scratchpad_dir: /tmp/claude-501/-repo/s1/scratchpad
+      session_crons:
+      - id: cron-1
+        prompt: Check the build
+        recurring: true
+        schedule: 0 9 * * 1-5
+      session_id: s1
+      stop_hook_active: false
+      transcript_path: /tmp/t.jsonl
+  - id: background-monitor
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      background_tasks:
+      - command: tail -f build.log
+        description: Watch build log
+        id: t2
+        status: running
+        type: monitor
+      cwd: /repo
+      hook_event_name: Stop
+      session_id: s1
+      stop_hook_active: false
+      transcript_path: /tmp/t.jsonl
+  - id: background-mcp-task
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      background_tasks:
+      - description: Index repository
+        id: t3
+        server: search
+        status: running
+        tool: index_repo
+        type: MCP task
+      cwd: /repo
+      hook_event_name: Stop
+      session_id: s1
+      stop_hook_active: false
+      transcript_path: /tmp/t.jsonl
+  - id: official-example
+    origin: official
+    sources:
+    - claude-hooks-reference
+    value:
+      background_tasks:
+      - command: tail -f /var/log/syslog
+        description: tail logs
+        id: task-001
+        status: running
+        type: shell
+      cwd: /Users/...
+      hook_event_name: Stop
+      last_assistant_message: I've completed the refactoring. Here's a summary...
+      permission_mode: default
+      session_crons:
+      - id: cron-001
+        prompt: check the build
+        recurring: true
+        schedule: 0 9 * * 1-5
+      session_id: abc123
+      stop_hook_active: true
+      transcript_path: ~/.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl
+output:
+- id: structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    hookSpecificOutput:
+      additionalContext: Focus on failures.
+      hookEventName: Stop
+    reason: Run tests again.
+- id: exit-2-structured
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+    reason: Run tests again.
+output_negative:
+- expected_keyword: required
+  expected_pointer: ''
+  id: block-without-reason
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    decision: block
+process:
+- binding: command
+  exit_code: 0
+  id: command-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiRm9jdXMgb24gZmFpbHVyZXMuIiwiaG9va0V2ZW50TmFtZSI6IlN0b3AifSwicmVhc29uIjoiUnVuIHRlc3RzIGFnYWluLiJ9
+  stdout_sha256: 922f31b54f5ff063ad236166f0ae125821b4a17d145f94fed668e9909d15b4b9
+- binding: command
+  exit_code: 0
+  id: command-no-op
+  outcome: no-op
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: command-plain-text
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: SG9vayBmaW5pc2hlZC4K
+  stdout_sha256: db54b54d6320eaf7a59146e70f1674ec377b7c199af059daffc92171d6e8b774
+- binding: command
+  exit_code: 0
+  id: command-plain-text-json-lines
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7Im5vdGUiOjJ9Cg==
+  stdout_sha256: 3a150299ab73b3e5974ab3aa4823ec51799349ab4a07fa27dfb0e33c57570479
+- binding: command
+  exit_code: 0
+  id: command-text-json-array
+  outcome: plain-text
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: WyJhIiwiYiJd
+  stdout_sha256: 0473ef2dc0d324ab659d3580c1134e9d812035905c4781fdd6d529b0c6860e13
+- binding: command
+  exit_code: 0
+  id: command-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command
+  exit_code: 0
+  id: command-schema-invalid-json
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command
+  exit_code: 0
+  id: command-json-lines-with-field
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJub3RlIjoxfQp7InN5c3RlbU1lc3NhZ2UiOiJoaSJ9Cg==
+  stdout_sha256: c1209eeedb2c1093c830204d7e2fcc9c4565dd0941cb5d9fbd8fc477c08b3bed
+- binding: command
+  exit_code: 2
+  id: command-exit-2
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2-invalid-stdout
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: e25vdCBqc29ufQ==
+  stdout_sha256: 1e9ac65c2af99c8ba7b85b7edf62723b5834b6651821b5483f6d15f7790711ae
+- binding: command
+  exit_code: 2
+  id: command-exit-2-schema-invalid-json
+  outcome: exit-2
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: command
+  exit_code: 2
+  id: command-exit-2-structured
+  outcome: exit-2-structured
+  stderr_base64: YmxvY2tlZCBieSBob29r
+  stderr_sha256: f75b0e471533d59dc822403905f42733d5301d8e469721673640ca699e2b62c3
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiUnVuIHRlc3RzIGFnYWluLiJ9
+  stdout_sha256: fa7a4d8f510d9aa6120c73a25df3d8f8746dec67a54c425ddefb00e0e66e01fb
+- binding: command
+  exit_code: 2
+  id: command-exit-2-missing-file
+  outcome: exit-2-missing-file
+  stderr_base64: L2Jpbi9zaDogL3JlcG8vLmNsYXVkZS9ob29rcy9jaGVjay5zaDogTm8gc3VjaCBmaWxlIG9yIGRpcmVjdG9yeQo=
+  stderr_sha256: 10cda0ef7afed10211503cda031707af76c20a780c519bc3e1db34e4e7b84a15
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2-missing-file-python
+  outcome: exit-2-missing-file
+  stderr_base64: cHl0aG9uMzogY2FuJ3Qgb3BlbiBmaWxlICcvcmVwby94LnB5JzogW0Vycm5vIDJdIE5vIHN1Y2ggZmlsZSBvciBkaXJlY3Rvcnk=
+  stderr_sha256: 5d0fe369f9273da27f9e6c60ebdb7a43d7b9a82b7bc51d019691bba88ac12366
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2-missing-file-blank-stdout
+  outcome: exit-2-missing-file
+  stderr_base64: L2Jpbi9zaDogL3JlcG8vLmNsYXVkZS9ob29rcy9jaGVjay5zaDogTm8gc3VjaCBmaWxlIG9yIGRpcmVjdG9yeQo=
+  stderr_sha256: 10cda0ef7afed10211503cda031707af76c20a780c519bc3e1db34e4e7b84a15
+  stdout_base64: Cg==
+  stdout_sha256: 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b
+- binding: command
+  exit_code: 2
+  id: command-exit-2-missing-file-with-stdout
+  outcome: exit-2-structured
+  stderr_base64: L2Jpbi9zaDogL3JlcG8vLmNsYXVkZS9ob29rcy9jaGVjay5zaDogTm8gc3VjaCBmaWxlIG9yIGRpcmVjdG9yeQo=
+  stderr_sha256: 10cda0ef7afed10211503cda031707af76c20a780c519bc3e1db34e4e7b84a15
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwicmVhc29uIjoiUnVuIHRlc3RzIGFnYWluLiJ9
+  stdout_sha256: fa7a4d8f510d9aa6120c73a25df3d8f8746dec67a54c425ddefb00e0e66e01fb
+- binding: command
+  exit_code: 2
+  id: command-exit-2-other-stderr
+  outcome: exit-2
+  stderr_base64: dGVzdHMgZmFpbGVk
+  stderr_sha256: 6eab2e09e250e56ce18aef361f88b805db668cb660a930cd490310f015c11329
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 2
+  id: command-exit-2-continue-false
+  outcome: exit-2-continue-false
+  stderr_base64: a2VlcCBnb2luZw==
+  stderr_sha256: 6e7ecf10083ec035057bdce834a72bbe2bffae8df9383ed10eb06c78dd70944b
+  stdout_base64: eyJjb250aW51ZSI6ZmFsc2UsInN0b3BSZWFzb24iOiJEb25lLiJ9
+  stdout_sha256: 64ce5dcc2c7494b7d5eaa0017e88e7c237cc9f3ac94cbdb9208a096a6b3d08f3
+- binding: command
+  exit_code: 1
+  id: command-nonzero-structured
+  outcome: nonzero-structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiRm9jdXMgb24gZmFpbHVyZXMuIiwiaG9va0V2ZW50TmFtZSI6IlN0b3AifSwicmVhc29uIjoiUnVuIHRlc3RzIGFnYWluLiJ9
+  stdout_sha256: 922f31b54f5ff063ad236166f0ae125821b4a17d145f94fed668e9909d15b4b9
+- binding: command
+  exit_code: 1
+  id: command-nonzero-unstructured
+  outcome: nonzero-unstructured
+  stderr_base64: aG9vayBmYWlsZWQ=
+  stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-structured
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJkZWNpc2lvbiI6ImJsb2NrIiwiaG9va1NwZWNpZmljT3V0cHV0Ijp7ImFkZGl0aW9uYWxDb250ZXh0IjoiRm9jdXMgb24gZmFpbHVyZXMuIiwiaG9va0V2ZW50TmFtZSI6IlN0b3AifSwicmVhc29uIjoiUnVuIHRlc3RzIGFnYWluLiJ9
+  stdout_sha256: 922f31b54f5ff063ad236166f0ae125821b4a17d145f94fed668e9909d15b4b9
+- binding: http
+  exit_code: 204
+  id: http-empty
+  outcome: empty-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: http
+  exit_code: 200
+  id: http-non-json
+  outcome: non-json-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: cGxhaW4gdGV4dCBib2R5
+  stdout_sha256: 9fc5d90c995fdacb82e2cb454025e169a5b94d0cd31051d23e82d51338311da8
+- binding: http
+  exit_code: 200
+  id: http-schema-invalid
+  outcome: schema-invalid-body
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJjb250aW51ZSI6InllcyJ9
+  stdout_sha256: b999cd92b7bf208451bfd5da3282588ea4c7f597e5017f4fce6f7f267d40578c
+- binding: http
+  exit_code: 500
+  id: http-error
+  outcome: non-success
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: ''
+  stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

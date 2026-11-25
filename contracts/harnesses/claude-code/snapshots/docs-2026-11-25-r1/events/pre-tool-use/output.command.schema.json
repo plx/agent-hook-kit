@@ -1,0 +1,67 @@
+{
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:pre-tool-use:command-output",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "description": "false stops Claude after the hook runs, even when the tool call fails or completes while Claude is still streaming, but does not block this tool call: to block it, also return permissionDecision deny. It does not apply when the permission check refuses the call.",
+      "type": "boolean"
+    },
+    "decision": {
+      "description": "Deprecated for PreToolUse: approve maps to permissionDecision allow and block to deny. Use hookSpecificOutput.permissionDecision instead.",
+      "enum": [
+        "approve",
+        "block"
+      ]
+    },
+    "hookSpecificOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "PreToolUse"
+        },
+        "permissionDecision": {
+          "enum": [
+            "allow",
+            "deny",
+            "ask",
+            "defer"
+          ]
+        },
+        "permissionDecisionReason": {
+          "type": "string"
+        },
+        "updatedInput": {
+          "description": "Replaces the entire tool input; permission rules are evaluated against it.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "reason": {
+      "description": "Deprecated together with decision.",
+      "type": "string"
+    },
+    "stopReason": {
+      "description": "Shown to the user when continue is false; it stays in the conversation, so Claude sees it if the conversation continues.",
+      "type": "string"
+    },
+    "suppressOutput": {
+      "description": "Accepted but has no effect.",
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "type": "string"
+    },
+    "terminalSequence": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

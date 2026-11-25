@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-09-30-r1:worktree-create:input",
+  "$id": "urn:agent-hook-kit:contracts:claude-code:docs-2026-11-25-r1:worktree-create:input",
   "type": "object",
   "required": [
     "session_id",
