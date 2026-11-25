@@ -35,8 +35,9 @@ then gets its plugin variables (see [Codex](#codex)). Those inherited values
 are not harness identity or lifecycle state, so the library does not place them
 in the typed contract. In particular:
 
-- `NoCommandEnvironment` and `AntigravityCommandEnvironment` mean “no modeled
-  harness-provided state,” not “the child process has an empty environment.”
+- `NoCommandEnvironment`, and an `AntigravityCommandEnvironment` without
+  `plugin`, mean “no modeled harness-provided state,” not “the child process
+  has an empty environment.”
 - Environment values never select a harness or event. Selection remains an
   explicit type, `HarnessId`, or validated event discriminator.
 - Because any modeled variable can also arrive as inherited ambient state,
@@ -152,10 +153,19 @@ compared case-insensitively, from both sources:
 
 ### Antigravity
 
-`AntigravityCommandEnvironment` covers `PreToolUse`, `PostToolUse`,
-`PreInvocation`, `PostInvocation`, and `Stop`. The official hook reference
-defines no hook-process environment variable; invocation state remains in
-stdin JSON. Variables named in the Antigravity CLI changelog, such as
+`AntigravityCommandEnvironment` covers `SessionStart`, `PreToolUse`,
+`PostToolUse`, `PreInvocation`, `PostInvocation`, and `Stop`. The official
+hook reference defines no hook-process environment variable; invocation state
+remains in stdin JSON. According to the CLI release notes, CLI 1.5.3 and later
+set `PLUGIN_ROOT` and `PLUGIN_DATA` for hook commands that come from a plugin,
+on every event; `AntigravityCommandEnvironment::plugin` holds them when both
+are present and non-empty. This is low-confidence: the plugin authoring guide
+documents the two variables only for plugin MCP servers and steers hooks to
+relative paths (plugin hooks run with the plugin root as their working
+directory), App and IDE behavior is undocumented, and Antigravity sets no
+`CLAUDE_*` aliases, so a pair inherited from an outer Codex or Claude Code
+plugin hook is indistinguishable. Ordinary workspace and global hooks receive
+neither variable. Variables named in the Antigravity CLI changelog, such as
 `GEMINI_API_KEY` or `AGY_CLI_HIDE_LOGO`, configure the CLI itself and are not
 hook state.
 

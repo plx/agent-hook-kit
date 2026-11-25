@@ -1244,7 +1244,7 @@ fn antigravity_pre_invocation_runs_contract_fixture() {
     assert!(output.stderr.is_empty());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
-        json["injectSteps"][0]["ephemeralMessage"]
+        json["injectSteps"][0]["systemMessage"]["systemMessage"]
             .as_str()
             .unwrap()
             .contains("workspace root")
@@ -1768,6 +1768,76 @@ fn bundled_start_observer_and_turn_runner_share_one_explicit_state_root() {
     );
     let summary = only_summary(&state_dir);
     assert!(Path::new(summary["run"]["stateDirectory"].as_str().unwrap()).starts_with(&state_dir));
+}
+
+#[test]
+fn antigravity_session_start_observer_records_a_startup_epoch() {
+    use hookkit_core::EventSpec as _;
+    use hookkit_session_state::{
+        SessionEpochKind, SessionIdentity, SessionState, StateRoot, TimestampProvenance,
+    };
+    let project = temp_project("antigravity-session-start");
+    let state_dir = project.join("state");
+    let state_arg = state_dir.to_string_lossy().into_owned();
+    // The official SessionStart example, rooted in the temporary project.
+    let start = serde_json::json!({
+        "conversationId": "ec33ebf9-0cba-4100-8142-c61503f6c587",
+        "workspacePaths": [project.to_string_lossy()],
+        "transcriptPath": "~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587/.system_generated/logs/transcript.jsonl",
+        "artifactDirectoryPath": "~/.gemini/antigravity/brain/ec33ebf9-0cba-4100-8142-c61503f6c587",
+        "modelName": "gemini-3.6-flash-medium"
+    });
+    let started = run_example(
+        "session-start-state-agent-hook",
+        &serde_json::to_vec(&start).unwrap(),
+        &["--antigravity", &format!("--state-dir={state_arg}")],
+    );
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    assert_eq!(started.stdout, b"{}");
+
+    let open = || {
+        SessionState::open(
+            hookkit_core::HarnessId::ANTIGRAVITY,
+            SessionIdentity::Conversation("ec33ebf9-0cba-4100-8142-c61503f6c587".into()),
+            StateRoot::new(&state_dir),
+        )
+        .unwrap()
+    };
+    let metadata = open().metadata().unwrap();
+    assert_eq!(metadata.current_session.kind, SessionEpochKind::Startup);
+    assert_eq!(
+        metadata.conversation.started_at.provenance,
+        TimestampProvenance::LifecycleHookObservation
+    );
+    let conversation_start = metadata.conversation.started_at.clone();
+
+    // The first PreInvocation still reports its fallback boundary, but the
+    // SessionStart epoch remains the conversation's start.
+    let mut invocation = start.clone();
+    invocation["invocationNum"] = 0.into();
+    invocation["initialNumSteps"] = 1.into();
+    let raw = hookkit_core::RawInvocation::parse(serde_json::to_vec(&invocation).unwrap()).unwrap();
+    let input = hookkit_antigravity::PreInvocation::parse(&raw).unwrap();
+    let context = hookkit_core::RuntimeContext::new(
+        hookkit_core::HarnessId::ANTIGRAVITY,
+        hookkit_antigravity::SNAPSHOT,
+        hookkit_antigravity::PreInvocation::EVENT,
+        hookkit_antigravity::PreInvocation::CONTRACT,
+        hookkit_core::ResolutionProvenance::TypedStatic,
+        &raw,
+        hookkit_antigravity::PreInvocation::context(&input),
+        &hookkit_core::DISABLED_DIAGNOSTICS,
+    )
+    .unwrap();
+    let metadata = SessionState::ensure(&context, StateRoot::new(&state_dir))
+        .unwrap()
+        .metadata()
+        .unwrap();
+    assert_eq!(metadata.conversation.started_at, conversation_start);
 }
 
 // --- turn-completion-agent-hook consuming session state ---
@@ -3962,7 +4032,9 @@ run = new Listing { "ruff" }
         );
     }
 
-    // Antigravity has no channel for it, so the hook fails.
+    // Antigravity has no channel for it, so the hook fails. Antigravity logs
+    // and ignores the non-zero exit (fail-open; CLI 1.4.3 and later keep the
+    // tool's result), so the diagnostic never reaches the agent.
     let output = run_example(
         "post-tool-use-agent-hook",
         &post_tool_use_fixture("antigravity", &project, "src/dirty.py"),

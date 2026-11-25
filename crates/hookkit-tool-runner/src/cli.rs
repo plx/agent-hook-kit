@@ -131,6 +131,7 @@ enum SessionStartHarnessArg {
     #[value(alias = "claude-code")]
     Claude,
     Codex,
+    Antigravity,
 }
 
 #[derive(Debug, Args)]
@@ -175,7 +176,10 @@ struct SessionStartHarnessSelection {
     /// Read a native Codex SessionStart event.
     #[arg(long)]
     codex: bool,
-    /// Select the harness by name. Antigravity has no SessionStart event.
+    /// Read a native Antigravity SessionStart event.
+    #[arg(long)]
+    antigravity: bool,
+    /// Select the harness by name.
     #[arg(long, value_enum, value_name = "HARNESS")]
     harness: Option<SessionStartHarnessArg>,
 }
@@ -186,6 +190,8 @@ impl SessionStartHarnessSelection {
             HarnessId::CLAUDE_CODE
         } else if self.codex {
             HarnessId::CODEX
+        } else if self.antigravity {
+            HarnessId::ANTIGRAVITY
         } else {
             match self
                 .harness
@@ -193,6 +199,7 @@ impl SessionStartHarnessSelection {
             {
                 SessionStartHarnessArg::Claude => HarnessId::CLAUDE_CODE,
                 SessionStartHarnessArg::Codex => HarnessId::CODEX,
+                SessionStartHarnessArg::Antigravity => HarnessId::ANTIGRAVITY,
             }
         }
     }
@@ -395,21 +402,33 @@ mod tests {
     }
 
     #[test]
-    fn session_start_rejects_antigravity_at_parse_time() {
-        for arguments in [
-            vec![SESSION_START_BINARY_NAME, "--harness=antigravity"],
-            vec![SESSION_START_BINARY_NAME, "--antigravity"],
+    fn session_start_accepts_every_harness_with_a_native_session_start() {
+        // Antigravity documents SessionStart from docs-2026-11-25-r1.
+        for (arguments, harness) in [
+            (
+                vec![SESSION_START_BINARY_NAME, "--harness=antigravity"],
+                HarnessId::ANTIGRAVITY,
+            ),
+            (
+                vec![SESSION_START_BINARY_NAME, "--antigravity"],
+                HarnessId::ANTIGRAVITY,
+            ),
+            (
+                vec![SESSION_START_BINARY_NAME, "--harness=codex"],
+                HarnessId::CODEX,
+            ),
+            (
+                vec![SESSION_START_BINARY_NAME, "--claude"],
+                HarnessId::CLAUDE_CODE,
+            ),
         ] {
-            let error = parse_session_start_args_from(arguments.clone()).unwrap_err();
-            assert!(!error.is_informational(), "{arguments:?}");
-            assert!(
-                error.to_string().contains("antigravity"),
-                "{arguments:?}: {error}"
-            );
+            let parsed = parse_session_start_args_from(arguments.clone()).unwrap();
+            assert_eq!(parsed.harness, harness, "{arguments:?}");
         }
-        let parsed =
-            parse_session_start_args_from([SESSION_START_BINARY_NAME, "--harness=codex"]).unwrap();
-        assert_eq!(parsed.harness, HarnessId::CODEX);
+        let conflict =
+            parse_session_start_args_from([SESSION_START_BINARY_NAME, "--antigravity", "--codex"])
+                .unwrap_err();
+        assert!(!conflict.is_informational());
     }
 
     #[test]

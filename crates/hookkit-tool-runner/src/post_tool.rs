@@ -1335,7 +1335,9 @@ mod tests {
             PostToolUseOutput::Claude(_)
         ));
         // Antigravity has no channel for the failure: the hook fails, and the
-        // error text keeps what earlier tools reported.
+        // error text keeps what earlier tools reported. Antigravity logs and
+        // ignores the non-zero exit (fail-open; CLI 1.4.3 and later keep the
+        // tool's result), so the diagnostic never reaches the agent.
         let failure = lower_domain_outcome(&HarnessId::ANTIGRAVITY, operational_failure(), None)
             .unwrap_err()
             .to_string();

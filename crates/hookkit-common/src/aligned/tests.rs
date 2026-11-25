@@ -105,6 +105,8 @@ fn pass_through_defers_to_each_harness_normal_permission_flow() {
     assert!(codex.stdout().is_empty());
 
     // Antigravity requires a decision; "ask" respects Always-Allow grants.
+    // The reference's pass-through `allow` is undated and auto-approved on
+    // earlier builds, so it is never used here.
     let antigravity =
         emit_pre_tool(PreToolUseOutput::pass_through(&HarnessId::ANTIGRAVITY).unwrap());
     assert_eq!(stdout_json(&antigravity), json!({"decision": "ask"}));
@@ -125,8 +127,13 @@ fn allow_is_an_explicit_approval_that_codex_cannot_express() {
         stdout_json(&claude),
         json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}})
     );
+    // `allow` is a pass-through in the current Antigravity reference, so the
+    // explicit approval is `auto_approve`.
     let antigravity = emit_pre_tool(PreToolUseOutput::allow(&HarnessId::ANTIGRAVITY).unwrap());
-    assert_eq!(stdout_json(&antigravity), json!({"decision": "allow"}));
+    assert_eq!(
+        stdout_json(&antigravity),
+        json!({"decision": "auto_approve"})
+    );
     let codex = emit_pre_tool(PreToolUseOutput::allow(&HarnessId::CODEX).unwrap());
     assert!(
         codex.stdout().is_empty(),
@@ -531,6 +538,65 @@ fn turn_completion_exposes_each_harness_loop_and_termination_signals() {
     assert_eq!(antigravity.termination_reason(), Some("max_steps_exceeded"));
     assert_eq!(antigravity.fully_idle(), Some(false));
     assert_eq!(antigravity.cwd(), None);
+}
+
+#[test]
+fn antigravity_release_note_fields_feed_the_aligned_accessors_when_present() {
+    // CLI 1.5.4 adds `cwd` and `toolCall.id`; CLI 1.5.6 adds
+    // `continuation_active`. The official examples carry none of them.
+    let tool = json!({
+        "conversationId": "c",
+        "workspacePaths": ["/repo"],
+        "transcriptPath": "/tmp/t.jsonl",
+        "artifactDirectoryPath": "/tmp/a",
+        "hookEventName": "PreToolUse",
+        "cwd": "/repo/sub",
+        "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}, "id": "call_01"},
+        "stepIdx": 3
+    });
+    let pre = PreToolUseInput::Antigravity(parse::<hookkit_antigravity::PreToolUse>(tool.clone()));
+    assert_eq!(pre.cwd(), Some(Utf8Path::new("/repo/sub")));
+    assert_eq!(pre.tool_call_id(), Some("call_01"));
+    let post =
+        PostToolUseInput::Antigravity(parse::<hookkit_antigravity::PostToolUse>(tool.clone()));
+    assert_eq!(post.cwd(), Some(Utf8Path::new("/repo/sub")));
+    assert_eq!(post.tool_call_id(), Some("call_01"));
+
+    // A numeric identifier has no string form.
+    let mut numeric = tool;
+    numeric["toolCall"]["id"] = json!(7);
+    let pre = PreToolUseInput::Antigravity(parse::<hookkit_antigravity::PreToolUse>(numeric));
+    assert_eq!(pre.tool_call_id(), None);
+
+    let stop = |extra: serde_json::Value| {
+        let mut value = json!({
+            "conversationId": "c",
+            "workspacePaths": ["/repo"],
+            "transcriptPath": "/tmp/t.jsonl",
+            "artifactDirectoryPath": "/tmp/a",
+            "executionNum": 2,
+            "terminationReason": "model_stop",
+            "fullyIdle": true,
+            "cwd": "/repo"
+        });
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        TurnCompletionInput::Antigravity(parse::<hookkit_antigravity::Stop>(value))
+    };
+    let active = stop(json!({"continuation_active": true}));
+    assert_eq!(active.stop_hook_active(), Some(true));
+    assert_eq!(active.cwd(), Some(Utf8Path::new("/repo")));
+    assert_eq!(
+        stop(json!({"continuation_active": false})).stop_hook_active(),
+        Some(false)
+    );
+    assert_eq!(
+        stop(json!({"continuationActive": true})).stop_hook_active(),
+        Some(true)
+    );
+    assert_eq!(stop(json!({})).stop_hook_active(), None);
 }
 
 #[test]

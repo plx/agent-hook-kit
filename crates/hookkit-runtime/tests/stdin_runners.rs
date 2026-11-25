@@ -389,8 +389,9 @@ fn fail_closed_lowers_for_the_event_the_payload_names() {
 
 #[test]
 fn failures_after_resolution_are_lowered_for_the_resolved_event() {
-    // Antigravity has no discriminator: the runner resolves Stop by shape,
-    // and a handler failure there must not become an unknown-event deny.
+    // Antigravity has no documented discriminator: the runner resolves Stop
+    // by shape, despite its overlap with SessionStart, and a handler failure
+    // there must not become an unknown-event deny.
     let stop = serde_json::json!({
         "conversationId": "stdin-conversation",
         "workspacePaths": ["/tmp"],

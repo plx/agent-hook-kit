@@ -31,11 +31,14 @@ pub struct AntigravityPluginEnvironment {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 /// Native process environment available to an Antigravity command hook.
 ///
 /// Construction validates that the selected event belongs to the Antigravity
 /// harness. Every other ambient variable is ignored, because the documented
-/// protocol supplies all invocation state in JSON.
+/// protocol supplies all invocation state in JSON. The struct is
+/// `#[non_exhaustive]` so it can model further variables additively; build
+/// it with [`AntigravityCommandEnvironment::from_map`] or `Default`.
 pub struct AntigravityCommandEnvironment {
     /// Plugin paths when both `PLUGIN_ROOT` and `PLUGIN_DATA` are set to
     /// non-empty values; otherwise `None`, as for an ordinary hook.

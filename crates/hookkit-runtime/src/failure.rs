@@ -91,8 +91,9 @@ pub enum FailurePolicy {
     ///
     /// Claude Code and Codex exit 2 with the diagnostic on stderr, except
     /// that Claude Code `PermissionRequest`, which ignores exit 2, receives a
-    /// JSON `deny` decision. Antigravity documents no exit-code semantics, so
-    /// it receives a JSON `deny` decision on stdout at exit 0. Events that
+    /// JSON `deny` decision. Antigravity logs and ignores a non-zero exit
+    /// (fail-open), so a `PreToolUse` receives a JSON `deny` decision and a
+    /// `PreInvocation` a JSON prompt block on stdout at exit 0. Events that
     /// gate nothing (observers, and turn-completion events where blocking
     /// would force the agent to keep working) keep the
     /// [`FailurePolicy::NonBlocking`] response. See [`failure_response`].
@@ -234,6 +235,9 @@ enum FailClosedLowering {
     ClaudePermissionDeny,
     /// Antigravity JSON `{"decision":"deny"}` at exit 0.
     AntigravityDeny,
+    /// Antigravity `PreInvocation` JSON prompt block at exit 0: an
+    /// `errorMessage` step plus `"terminationBehavior":"terminate"`.
+    AntigravityBlockPrompt,
     /// The event gates nothing; report without blocking.
     NotGating,
 }
@@ -306,6 +310,7 @@ fn fail_closed_lowering(harness: &HarnessId, event: Option<&EventId>) -> FailClo
         },
         BuiltinHarness::Antigravity => match event {
             None | Some("PreToolUse") => FailClosedLowering::AntigravityDeny,
+            Some("PreInvocation") => FailClosedLowering::AntigravityBlockPrompt,
             Some(_) => FailClosedLowering::NotGating,
         },
         _ => FailClosedLowering::NotGating,
@@ -341,6 +346,7 @@ fn nonzero_exit_blocks(harness: &HarnessId, event: Option<&EventId>) -> bool {
 /// | Claude Code | `PermissionRequest` (ignores exit 2) | exit 0, `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":…}}}` |
 /// | Codex | `PreToolUse`, `PermissionRequest`, `UserPromptSubmit` | exit 2, diagnostic on stderr |
 /// | Antigravity | `PreToolUse` | exit 0, `{"decision":"deny","reason":…}` |
+/// | Antigravity | `PreInvocation` | exit 0, `{"injectSteps":[{"errorMessage":{"userMessage":…}}],"terminationBehavior":"terminate"}` |
 /// | Claude Code, Codex | unknown (the payload could not be identified) | exit 2, diagnostic on stderr |
 /// | Antigravity | unknown | exit 0, `{"decision":"deny","reason":…}` |
 /// | any | every other event, or a harness that is not built in | exit 1, as for `NonBlocking` |
@@ -356,7 +362,16 @@ fn nonzero_exit_blocks(harness: &HarnessId, event: Option<&EventId>) -> bool {
 /// `stop_hook_active` (Claude Code also caps consecutive continuations). An
 /// unknown Antigravity event gets a `deny` decision: it denies a `PreToolUse`
 /// and, because only `"continue"` prevents a stop, it lets a `Stop` end
-/// normally.
+/// normally. It is not valid output for `SessionStart`, `PreInvocation`, or
+/// `PostInvocation`, whose handling of invalid output is undocumented; a
+/// payload that fits only `SessionStart`'s common-fields shape is ambiguous
+/// rather than unknown, so a hint-less common-fields payload is reported as
+/// an ambiguous event.
+///
+/// Antigravity logs and ignores a non-zero exit (fail-open, documented for
+/// plugin command hooks), so on `NonBlocking` the diagnostic never reaches
+/// the agent; CLI 1.4.3 and later also keep the tool's result when a
+/// `PostToolUse` hook fails.
 ///
 /// Claude Code `PreCompact` is a gate: blocking an automatic compaction that
 /// Claude Code triggered to recover from a context-limit error makes that
@@ -404,6 +419,13 @@ pub fn failure_response(
         ),
         FailClosedLowering::AntigravityDeny => json_response(
             serde_json::json!({"decision": "deny", "reason": reason}),
+            stderr,
+        ),
+        FailClosedLowering::AntigravityBlockPrompt => json_response(
+            serde_json::json!({
+                "injectSteps": [{"errorMessage": {"userMessage": reason}}],
+                "terminationBehavior": "terminate",
+            }),
             stderr,
         ),
     }
@@ -628,6 +650,43 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_pre_invocation_fails_closed_with_the_documented_prompt_block() {
+        let gate = event(HarnessId::ANTIGRAVITY, "PreInvocation");
+        let response = failure_response(
+            FailurePolicy::FailClosed,
+            &HarnessId::ANTIGRAVITY,
+            Some(&gate),
+            "boom",
+        );
+        assert_eq!(response.exit_code(), 0);
+        assert!(response.fails_closed());
+        assert_eq!(
+            response.stdout(),
+            br#"{"injectSteps":[{"errorMessage":{"userMessage":"boom"}}],"terminationBehavior":"terminate"}"#
+        );
+        assert_eq!(response.stderr(), b"boom\n");
+        // It is exactly what the native block constructor emits.
+        assert_eq!(
+            response.stdout(),
+            <hookkit_antigravity::PreInvocation as hookkit_core::EventSpec>::emit(
+                hookkit_antigravity::PreInvocationOutput::block("boom")
+            )
+            .unwrap()
+            .stdout()
+        );
+
+        let non_blocking = failure_response(
+            FailurePolicy::NonBlocking,
+            &HarnessId::ANTIGRAVITY,
+            Some(&gate),
+            "boom",
+        );
+        assert_eq!(non_blocking.exit_code(), 1);
+        assert!(non_blocking.stdout().is_empty());
+        assert!(!non_blocking.fails_closed());
+    }
+
+    #[test]
     fn non_gating_events_keep_the_non_blocking_response_when_failing_closed() {
         for (harness, name) in [
             (HarnessId::CLAUDE_CODE, "PostToolUse"),
@@ -637,6 +696,8 @@ mod tests {
             (HarnessId::CODEX, "PostToolUse"),
             (HarnessId::ANTIGRAVITY, "Stop"),
             (HarnessId::ANTIGRAVITY, "PostToolUse"),
+            (HarnessId::ANTIGRAVITY, "SessionStart"),
+            (HarnessId::ANTIGRAVITY, "PostInvocation"),
         ] {
             let observer = event(harness.clone(), name);
             let response =

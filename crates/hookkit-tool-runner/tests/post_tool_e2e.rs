@@ -517,7 +517,7 @@ fn invalid_arguments_fail_with_a_named_diagnostic_and_exit_one() {
         ),
         (
             env!("CARGO_BIN_EXE_session-start-state-agent-hook"),
-            vec!["--harness=antigravity"],
+            vec!["--harness=gemini"],
             "session-start-state-agent-hook",
         ),
         (

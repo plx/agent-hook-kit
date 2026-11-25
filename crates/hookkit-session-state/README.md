@@ -105,10 +105,12 @@ milliseconds. Every `CapturedTimestamp` carries a `TimestampProvenance`:
 
 - `native_event_timestamp`: reserved for a native lifecycle event that supplies
   an exact timestamp;
-- `lifecycle_hook_observation`: Claude and Codex expose a start cause but no
-  timestamp, so HookKit records when the start hook ran;
-- `inferred_invocation_boundary`: Antigravity has no `SessionStart`; invocation
-  zero is the best typed boundary available;
+- `lifecycle_hook_observation`: Claude Code, Codex, and Antigravity
+  `SessionStart` expose a start cause but no timestamp, so HookKit records when
+  the start hook ran;
+- `inferred_invocation_boundary`: Antigravity builds that predate
+  `SessionStart` send no start event; invocation zero is then the best typed
+  boundary available;
 - `first_hook_observation`: no start event was seen, so this is a truthful lower
   precision fallback.
 
@@ -135,8 +137,10 @@ changes the merged view, so a long session does not accumulate one file per
 hook. Earlier builds wrote one timestamped file per invocation; the next
 `ensure` folds those into the per-context files.
 
-Repeated lifecycle hooks with a native occurrence key deduplicate exactly.
-Claude and Codex do not expose such a key, so observations of the same cause
+Repeated lifecycle hooks with a native occurrence key deduplicate exactly
+(Antigravity `SessionStart` is keyed by its conversation, and invocation zero
+by conversation and invocation number). Claude and Codex do not expose such a
+key, so observations of the same cause
 within a 30-second window are coalesced to accommodate multiple independently
 installed start hooks.
 
@@ -146,12 +150,14 @@ native `SessionStart` event:
 ```text
 session-start-state-agent-hook --claude [--state-dir PATH]
 session-start-state-agent-hook --codex [--state-dir PATH]
+session-start-state-agent-hook --antigravity [--state-dir PATH]
 ```
 
 Without that binding, the first later stateful hook still creates metadata, but
-its start value is explicitly marked `first_hook_observation`. Antigravity has
-no start hook to bind; an invocation hook calling `ensure` can capture its
-inferred invocation-zero boundary.
+its start value is explicitly marked `first_hook_observation`. Antigravity
+documents `SessionStart` from the `docs-2026-11-25-r1` contract; on builds that
+predate it, an invocation hook calling `ensure` can still capture the inferred
+invocation-zero boundary.
 
 A linter may use the typed start as a fallback scan boundary when direct file
 tracking is incomplete. It should allow a small filesystem timestamp tolerance

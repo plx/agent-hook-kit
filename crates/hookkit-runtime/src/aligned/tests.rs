@@ -526,7 +526,8 @@ fn aligned_pre_tool_allow_is_explicit_approval_where_the_harness_supports_it() {
             }})),
             // Codex cannot express an explicit approval.
             "codex" => None,
-            "antigravity" => Some(json!({"decision": "allow"})),
+            // `allow` is a pass-through in the current Antigravity reference.
+            "antigravity" => Some(json!({"decision": "auto_approve"})),
             _ => unreachable!(),
         };
         assert_eq!(stdout(&emission), expected, "{expected_harness}");

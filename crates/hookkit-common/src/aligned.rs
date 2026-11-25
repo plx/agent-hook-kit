@@ -16,9 +16,9 @@
 //! | Helper | Claude Code | Codex | Antigravity |
 //! | :- | :- | :- | :- |
 //! | [`PreToolUseOutput::pass_through`] | empty output: the normal permission flow decides | empty stdout: the normal approval flow decides | `{"decision":"ask"}`: prompts unless an "Always Allow" grant covers the call |
-//! | [`PreToolUseOutput::allow`] | `permissionDecision: "allow"`: auto-approves and skips the permission prompt | no equivalent; lowers to empty stdout, so the normal approval flow decides | `{"decision":"allow"}`: auto-approves and bypasses Ask presets |
+//! | [`PreToolUseOutput::allow`] | `permissionDecision: "allow"`: auto-approves and skips the permission prompt | no equivalent; lowers to empty stdout, so the normal approval flow decides | `{"decision":"auto_approve"}`: approves where the default policy would prompt, honoring explicit user rules |
 //! | [`PreToolUseOutput::deny`] | `permissionDecision: "deny"`; the reason is shown to Claude | `permissionDecision: "deny"` | `{"decision":"deny"}` with the reason |
-//! | [`PreToolUseOutput::rewrite`] | `updatedInput` with the caller's [`RewriteApproval`] | `allow` plus `updatedInput`: replaces the input; approval policy still runs | unsupported |
+//! | [`PreToolUseOutput::rewrite`] | `updatedInput` with the caller's [`RewriteApproval`] | `allow` plus `updatedInput`: replaces the input; approval policy still runs | unsupported: `overwrite` only merges keys |
 //!
 //! A guard that only objects to some calls must answer every other call with
 //! [`PreToolUseOutput::pass_through`]. Answering with
@@ -258,13 +258,16 @@ impl PreToolUseInput {
     /// Returns the native working directory when that event carries one.
     ///
     /// On Claude Code this is the agent's current directory, which follows
-    /// `cd`; relative tool operands resolve against it. Antigravity supplies
-    /// workspace roots rather than a working directory.
+    /// `cd`; relative tool operands resolve against it. Antigravity
+    /// documents workspace roots rather than a working directory: its arm
+    /// returns the agent's working directory only when the payload carries
+    /// the `cwd` that CLI 1.5.4 and later send according to their release
+    /// notes, and `None` otherwise.
     pub fn cwd(&self) -> Option<&Utf8Path> {
         match self {
             Self::Claude(input) => Some(&input.cwd),
             Self::Codex(input) => Some(&input.cwd),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.cwd.as_deref(),
         }
     }
 
@@ -288,14 +291,17 @@ impl PreToolUseInput {
 
     /// Returns the native tool-call identifier (`tool_use_id`).
     ///
-    /// Antigravity sends no tool-call identifier, so its arm returns `None`.
+    /// Antigravity's arm returns `toolCall.id`, which CLI 1.5.4 and later
+    /// send according to their release notes, when it is a non-blank string;
+    /// it returns `None` when the payload omits it or sends a non-string
+    /// value. See [`hookkit_antigravity::ToolCall::id_str`].
     pub fn tool_call_id(&self) -> Option<&str> {
         match self {
             Self::Claude(input) => input
                 .field("tool_use_id")
                 .and_then(serde_json::Value::as_str),
             Self::Codex(input) => Some(&input.tool_use_id),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.tool_call.id_str(),
         }
     }
 }
@@ -350,12 +356,15 @@ impl PreToolUseOutput {
     /// - Claude Code: empty output (`{}`), so its permission flow decides.
     /// - Codex: empty stdout, so its approval flow decides.
     /// - Antigravity: `{"decision":"ask"}`. Antigravity requires a decision on
-    ///   every response and documents no pass-through value, so `ask` is the
-    ///   closest neutral answer: it respects "Always Allow" settings and cached
-    ///   grants, and prompts only where none covers the call. It can still
-    ///   prompt for a call that Antigravity's default policy would have run
-    ///   without asking. That is the deliberate least-privilege trade-off;
-    ///   [`Self::allow`] would instead auto-approve every call.
+    ///   every response. The current reference documents `allow` as the
+    ///   pass-through to the next hook or default policy, but it does not
+    ///   date that redefinition, and builds that still have the earlier
+    ///   meaning auto-approve every call answered `allow`. `ask` is the
+    ///   neutral answer on every build: it respects "Always Allow" settings
+    ///   and cached grants, and prompts only where none covers the call. It
+    ///   can still prompt for a call that Antigravity's default policy would
+    ///   have run without asking. That is the deliberate least-privilege
+    ///   trade-off, to revisit once the change to `allow` is dated.
     ///
     /// Use this, not [`Self::allow`], for every call a guard does not object
     /// to.
@@ -381,8 +390,14 @@ impl PreToolUseOutput {
     /// - Claude Code: `permissionDecision: "allow"` skips the permission
     ///   prompt. Only deny and ask rules, and the actions no permission mode
     ///   auto-approves, are still enforced.
-    /// - Antigravity: `{"decision":"allow"}` auto-approves the call and
-    ///   bypasses the prompts that Ask presets would show.
+    /// - Antigravity: `{"decision":"auto_approve"}` approves the call where
+    ///   the default policy would prompt, while honoring explicit
+    ///   user-configured rules (and, from CLI 1.5.7 and App v2.33.0, an
+    ///   organization's admin-enforced review). `allow` is no longer used:
+    ///   the current reference makes it a pass-through. A build that predates
+    ///   `auto_approve` may treat it as an unknown decision; Antigravity fails
+    ///   open on a hook error, so the call then proceeds under the default
+    ///   policy, which may prompt, rather than being approved.
     /// - Codex: cannot express an explicit approval. It rejects
     ///   `permissionDecision: "allow"` without `updatedInput`, so this helper
     ///   lowers to empty stdout and Codex's normal approval flow still runs.
@@ -398,7 +413,7 @@ impl PreToolUseOutput {
                 hookkit_codex::protocol::PreToolUseOutput::no_op(),
             )),
             BuiltinHarness::Antigravity => Ok(Self::Antigravity(
-                hookkit_antigravity::PreToolUseOutput::allow(),
+                hookkit_antigravity::PreToolUseOutput::auto_approve(),
             )),
             _ => Err(unsupported(harness, "PreToolUse")),
         }
@@ -407,9 +422,10 @@ impl PreToolUseOutput {
     /// Reports whether [`Self::allow`] is an explicit auto-approval on
     /// `harness`.
     ///
-    /// Returns `true` for Claude Code and Antigravity. Returns `false` for
-    /// Codex, where [`Self::allow`] lowers to "no decision" and Codex's normal
-    /// approval flow still runs, and for harnesses with no aligned adapter.
+    /// Returns `true` for Claude Code and Antigravity, whose `auto_approve`
+    /// is a documented approval. Returns `false` for Codex, where
+    /// [`Self::allow`] lowers to "no decision" and Codex's normal approval
+    /// flow still runs, and for harnesses with no aligned adapter.
     pub fn explicit_allow_supported(harness: &HarnessId) -> bool {
         matches!(
             BuiltinHarness::from_id(harness),
@@ -456,8 +472,10 @@ impl PreToolUseOutput {
     ///   Codex treats as an input replacement only: its sandbox and approval
     ///   policy still apply to the rewritten call. `approval` is ignored.
     ///
-    /// Input replacement is not part of the three-harness floor: Antigravity's
-    /// pre-tool output cannot replace tool input, so it fails with
+    /// Input replacement is not part of the three-harness floor. Antigravity's
+    /// `overwrite` only shallow-merges keys into the original arguments, so
+    /// it cannot remove a key and cannot express a complete replacement from
+    /// the new input alone; Antigravity fails with
     /// [`HookkitError::UnsupportedHarness`].
     pub fn rewrite(
         harness: &HarnessId,
@@ -481,7 +499,7 @@ impl PreToolUseOutput {
             )),
             BuiltinHarness::Antigravity => Err(HookkitError::UnsupportedHarness {
                 harness: harness.clone(),
-                message: "Antigravity pre-tool output cannot replace tool input".into(),
+                message: "Antigravity pre-tool output can only merge keys into tool input, not replace it".into(),
             }),
             _ => Err(unsupported(harness, "PreToolUse")),
         }
@@ -580,13 +598,15 @@ impl PostToolUseInput {
     /// Returns the native working directory when that event carries one.
     ///
     /// On Claude Code this is the agent's current directory, which follows
-    /// `cd`. Antigravity supplies workspace roots rather than a working
-    /// directory.
+    /// `cd`. Antigravity documents workspace roots rather than a working
+    /// directory: its arm returns the agent's working directory only when
+    /// the payload carries the `cwd` that CLI 1.5.4 and later send according
+    /// to their release notes, and `None` otherwise.
     pub fn cwd(&self) -> Option<&Utf8Path> {
         match self {
             Self::Claude(input) => Some(&input.cwd),
             Self::Codex(input) => Some(&input.cwd),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.cwd.as_deref(),
         }
     }
 
@@ -618,12 +638,15 @@ impl PostToolUseInput {
 
     /// Returns the native tool-call identifier (`tool_use_id`).
     ///
-    /// Antigravity sends no tool-call identifier, so its arm returns `None`.
+    /// Antigravity's arm returns `toolCall.id`, which CLI 1.5.4 and later
+    /// send according to their release notes, when it is a non-blank string;
+    /// it returns `None` when the payload omits `toolCall` or its `id`, or
+    /// sends a non-string value.
     pub fn tool_call_id(&self) -> Option<&str> {
         match self {
             Self::Claude(input) => Some(&input.tool_use_id),
             Self::Codex(input) => Some(&input.tool_use_id),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.tool_call.as_ref().and_then(|call| call.id_str()),
         }
     }
 }
@@ -696,9 +719,10 @@ three_harness_environment!(
 ///   while background work is still running (`fullyIdle: false`).
 ///
 /// A hook that asks the agent to continue should consult
-/// [`Self::stop_hook_active`] on Claude Code and Codex, and
-/// [`Self::termination_reason`] and [`Self::fully_idle`] on Antigravity,
-/// before re-entering a loop the harness is trying to end.
+/// [`Self::stop_hook_active`] (on Antigravity it is known only from CLI
+/// 1.5.6), and on Antigravity also [`Self::termination_reason`] and
+/// [`Self::fully_idle`], before re-entering a loop the harness is trying to
+/// end.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TurnCompletionInput {
@@ -759,26 +783,33 @@ impl TurnCompletionInput {
     }
 
     /// Returns the native working directory when that event carries one.
+    ///
+    /// Antigravity's arm returns the `cwd` that CLI 1.5.4 and later send
+    /// according to their release notes, and `None` otherwise.
     pub fn cwd(&self) -> Option<&Utf8Path> {
         match self {
             Self::Claude(input) => Some(&input.cwd),
             Self::Codex(input) => Some(&input.cwd),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.cwd.as_deref(),
         }
     }
 
-    /// Returns Claude Code's and Codex's `stop_hook_active` loop guard: `true`
-    /// when the agent is already continuing because a stop hook blocked an
-    /// earlier stop.
+    /// Returns the loop guard: `true` when the agent is already continuing
+    /// because a stop hook blocked an earlier stop.
     ///
-    /// Antigravity sends no loop guard, so its arm returns `None`.
+    /// Claude Code and Codex send `stop_hook_active`. Antigravity CLI 1.5.6
+    /// and later send `continuation_active` according to their release
+    /// notes; the Antigravity arm reads it (or a camelCase
+    /// `continuationActive`) through
+    /// [`hookkit_antigravity::StopInput::continuation_active_flag`] and
+    /// returns `None`, meaning unknown, when the payload carries neither.
     pub fn stop_hook_active(&self) -> Option<bool> {
         match self {
             Self::Claude(input) => input
                 .field("stop_hook_active")
                 .and_then(serde_json::Value::as_bool),
             Self::Codex(input) => input.stop_hook_active(),
-            Self::Antigravity(_) => None,
+            Self::Antigravity(input) => input.continuation_active_flag(),
         }
     }
 

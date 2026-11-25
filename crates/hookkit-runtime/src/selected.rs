@@ -939,10 +939,14 @@ mod tests {
             },
         )
         .unwrap_err();
+        // The invocation pair shares this shape, and SessionStart's
+        // common-fields-only shape accepts every payload.
         assert!(matches!(
             error,
             hookkit_core::HookkitError::AmbiguousEvent { harness, candidates }
-                if harness == HarnessId::ANTIGRAVITY && candidates.len() == 2
+                if harness == HarnessId::ANTIGRAVITY
+                    && candidates.len() == 3
+                    && candidates.contains(&<hookkit_antigravity::SessionStart as hookkit_core::EventSpec>::EVENT)
         ));
 
         let emission = execute_harness::<hookkit_antigravity::Antigravity, _>(
