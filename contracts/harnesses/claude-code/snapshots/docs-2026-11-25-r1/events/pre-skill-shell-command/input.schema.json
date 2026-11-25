@@ -51,7 +51,7 @@
       "const": "PreSkillShellCommand"
     },
     "invoked_by": {
-      "description": "user when the user typed the skill's name or an Agent SDK app sent it; claude when Claude or a session-scoped scheduled task invoked the skill; other for anything else, such as a subagent that preloads the skill. Open string: an unrecognized value must be treated as other.",
+      "description": "user when the user typed the skill's name or an Agent SDK app sent it; claude when Claude or a session-scoped scheduled task invoked the skill; other for anything else, such as a subagent that preloads the skill. Modeled as an open string; HookKit treats an unrecognized value as other.",
       "examples": [
         "user",
         "claude",

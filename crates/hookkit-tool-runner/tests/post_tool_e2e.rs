@@ -707,6 +707,68 @@ fn codex_explicit_config_keeps_the_hook_directory_as_project_root() {
     }
 }
 
+/// One Codex command that writes a project file and also a log elsewhere
+/// (`... > /tmp/log`, `| tee /tmp/log`) must still run the project's tools:
+/// the hook's own directory holds one of the written files, so discovery
+/// starts there, both for the discovered configuration and for `--config`
+/// with a project-relative glob, instead of from the deepest directory
+/// holding every written file, which lies above the project.
+#[test]
+fn codex_commands_writing_outside_the_hook_directory_keep_the_project_configuration() {
+    require_pkl!();
+    let project = TempProject::new("codex-mixed-writes");
+    let elsewhere = TempProject::new("codex-mixed-writes-log");
+    configure_txt_tool(project.path(), &project.path().join("bin/ghost"), "");
+    let discovered = project.path().join(".agent-hook-kit/post-tool-use.pkl");
+    let explicit = project.path().join("hooks.pkl");
+    std::fs::write(
+        &explicit,
+        std::fs::read_to_string(&discovered)
+            .unwrap()
+            .replace(r#""**/*.txt""#, r#""src/**/*.txt""#),
+    )
+    .unwrap();
+    let file = project.path().join("src/a.txt");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let log = elsewhere.path().join("log.txt");
+    let command_line = format!(
+        "printf x > {}; printf y > {}",
+        file.display(),
+        log.display()
+    );
+
+    for config in [None, Some(explicit.as_path())] {
+        std::fs::write(&file, "x\n").unwrap();
+        std::fs::write(&log, "y\n").unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_post-tool-use-agent-hook"));
+        command.arg("--codex");
+        if let Some(config) = config {
+            command.arg("--config").arg(config);
+        }
+        command
+            .current_dir(project.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = run_with_input(
+            command,
+            &codex_bash_post_tool(project.path(), &command_line),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{config:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout: Value = serde_json::from_slice(&output.stdout).unwrap_or_default();
+        let message = stdout["systemMessage"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("Ghost") && message.contains("install ghost"),
+            "{config:?}: the project's configuration must run despite the outside write: {stdout}"
+        );
+    }
+}
+
 /// A relative `--state-dir` must not follow a Codex Bash `workdir`: it
 /// resolves against the hook's own directory, which Codex sets to the step
 /// directory that a Codex `Stop` also reports, so the turn-completion runner

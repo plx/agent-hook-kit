@@ -559,6 +559,92 @@ mod tests {
         ));
     }
 
+    /// A hook whose matcher includes `Monitor`, or that has no matcher,
+    /// receives the Monitor call's own input on every tool event, so the
+    /// catalog adapter on each event and the typed `PostToolUse` adapter
+    /// match a Monitor command, and none matches a WebSocket watch.
+    #[cfg(feature = "claude")]
+    #[test]
+    fn claude_monitor_commands_match_on_every_tool_event_and_the_typed_post_tool_use() {
+        let command = serde_json::json!({
+            "description": "watch app log",
+            "timeout_ms": 300000,
+            "command": "tail -f app.log"
+        });
+        let websocket = serde_json::json!({
+            "description": "ws",
+            "timeout_ms": 60000,
+            "ws": {"url": "wss://example.test/feed"}
+        });
+        let catalog = |event: &str, tool_input: &serde_json::Value| {
+            let mut value = serde_json::json!({
+                "session_id": "session",
+                "transcript_path": "/tmp/transcript.jsonl",
+                "cwd": "/repo",
+                "hook_event_name": event,
+                "tool_name": "Monitor",
+                "tool_input": tool_input,
+                "tool_use_id": "toolu_1"
+            });
+            match event {
+                "PostToolUse" => value["tool_response"] = serde_json::json!({"stdout": ""}),
+                "PostToolUseFailure" => value["error"] = serde_json::json!("Exit code 1"),
+                _ => {}
+            }
+            serde_json::from_value::<hookkit_claude::catalog::CatalogInput>(value).unwrap()
+        };
+        for (event, phase, has_response) in [
+            ("PermissionRequest", ToolPhase::Pre, false),
+            ("PermissionDenied", ToolPhase::Pre, false),
+            ("PostToolUse", ToolPhase::Post, true),
+            ("PostToolUseFailure", ToolPhase::Post, false),
+        ] {
+            let input = catalog(event, &command);
+            let ShellToolCallMatch::Matched(call) = input.shell_tool_call() else {
+                panic!("expected a shell call for {event}");
+            };
+            assert_eq!(call.tool_name, "Monitor", "{event}");
+            assert_eq!(call.command, "tail -f app.log", "{event}");
+            assert_eq!(call.phase, phase, "{event}");
+            assert_eq!(call.response.is_some(), has_response, "{event}");
+            assert!(
+                matches!(
+                    catalog(event, &websocket).shell_tool_call(),
+                    ShellToolCallMatch::NotShell
+                ),
+                "{event}"
+            );
+        }
+
+        let typed = |tool_input: &serde_json::Value| {
+            serde_json::from_value::<hookkit_claude::protocol::PostToolUseInput>(
+                serde_json::json!({
+                    "session_id": "session",
+                    "transcript_path": "/tmp/transcript.jsonl",
+                    "cwd": "/repo",
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": "Monitor",
+                    "tool_input": tool_input,
+                    "tool_use_id": "toolu_1",
+                    "tool_response": {"stdout": ""}
+                }),
+            )
+            .unwrap()
+        };
+        let input = typed(&command);
+        let ShellToolCallMatch::Matched(call) = input.shell_tool_call() else {
+            panic!("expected a shell call for the typed PostToolUse");
+        };
+        assert_eq!(call.tool_name, "Monitor");
+        assert_eq!(call.command, "tail -f app.log");
+        assert_eq!(call.phase, ToolPhase::Post);
+        assert!(call.response.is_some());
+        assert!(matches!(
+            typed(&websocket).shell_tool_call(),
+            ShellToolCallMatch::NotShell
+        ));
+    }
+
     #[cfg(feature = "claude")]
     #[test]
     fn claude_powershell_calls_do_not_match_the_bash_profile() {

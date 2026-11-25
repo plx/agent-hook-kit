@@ -342,11 +342,12 @@ pub enum PreToolUseOutput {
 /// Permission decision Claude Code receives with a rewritten tool input.
 ///
 /// Claude Code documents no `updatedInput` form that leaves the permission
-/// flow unchanged: `allow` auto-approves the rewritten call and `ask` always
-/// prompts the user, while `defer` ignores `updatedInput`. The caller must
-/// therefore choose. Codex has no such choice: a Codex rewrite only replaces
-/// the input, and Codex's normal approval policy still runs, so this value
-/// does not affect the Codex arm.
+/// flow unchanged: `allow` auto-approves the rewritten call and `ask` sends
+/// it to the permission prompt (with the auto-mode exceptions described on
+/// [`RewriteApproval::Ask`]), while `defer` ignores `updatedInput`. The
+/// caller must therefore choose. Codex has no such choice: a Codex rewrite
+/// only replaces the input, and Codex's normal approval policy still runs, so
+/// this value does not affect the Codex arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RewriteApproval {
@@ -361,8 +362,16 @@ pub enum RewriteApproval {
     /// rewritten call. The reason is shown to the user, not to Claude.
     ///
     /// This is the least-privilege choice. It prompts even where Claude
-    /// Code's normal policy would have run the call silently, including in
-    /// auto mode.
+    /// Code's normal policy would have run the call silently. In auto mode it
+    /// normally sends the call to the permission prompt without the
+    /// classifier deciding it, with two exceptions
+    /// (claude-code/docs-2026-11-25-r1): the classifier can deny a call that
+    /// Claude Code's own checks also flag (a write to a protected path, a
+    /// command asking to run outside the sandbox) before any prompt appears,
+    /// and a `SubagentHandback` call, which delivers a subagent's report,
+    /// shows no prompt and runs even if the classifier objects. `ask` does
+    /// not gate `SubagentHandback`; only a `deny`
+    /// ([`PreToolUseOutput::deny`]) stops it.
     Ask(String),
 }
 
@@ -1625,18 +1634,23 @@ impl UserPromptSubmitOutput {
     /// Blocks prompt submission with a reason using each harness's exit-2
     /// path.
     ///
-    /// The audiences differ. Claude Code stops the prompt before it reaches
-    /// Claude and shows the reason to the user only; it is not added to
-    /// Claude's context, and the block message still ends with the prompt
-    /// text (claude-code/docs-2026-11-25-r1). The Claude arm exits 2 with the
+    /// On both harnesses the reason stays out of the model's context. Claude
+    /// Code stops the prompt before it reaches Claude and shows the reason to
+    /// the user only; the block message still ends with the prompt text
+    /// (claude-code/docs-2026-11-25-r1). The Claude arm exits 2 with the
     /// reason on stderr and also prints `{"decision":"block","reason":…}` on
     /// stdout: Claude Code treats a plugin hook's exit 2 with empty stdout as
     /// a non-blocking error, and lets the prompt through, when stderr says a
     /// file is missing (`no such file`, `can't open`), and the JSON keeps
-    /// stdout non-empty. Codex rejects the prompt and reports the reason as
-    /// the blocking reason. A reason that is empty after trimming is rejected
-    /// for every harness: Codex ignores a blank exit-2 reason and submits the
-    /// prompt.
+    /// stdout non-empty. Codex drops the prompt without recording it and
+    /// discards the reason in its core (codex/commit-3d86e43-r1): the reason
+    /// appears only as the hook run's feedback entry, which the interactive
+    /// UI shows and `codex exec` does not print, never to the agent. Codex
+    /// ignores the stdout of a handler that exits 2, but still records for
+    /// the model any `additionalContext` from the other matching handlers, or
+    /// from one that blocks with JSON `decision: block` instead of exiting 2.
+    /// A reason that is empty after trimming is rejected for every harness:
+    /// Codex ignores a blank exit-2 reason and submits the prompt.
     pub fn block(harness: &HarnessId, reason: impl Into<String>) -> hookkit_core::Result<Self> {
         let reason = require_reason(
             reason.into(),

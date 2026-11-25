@@ -349,7 +349,8 @@ fn unconfirmed_claude_post_tool(call: &ToolCallRef<'_>) -> bool {
 /// `run_command.Cwd` or a Codex `workdir`, absolute or joined onto the hook
 /// directory) is the invocation directory. A fallback the profile marks as
 /// unverified ([`ShellCwdOrigin::UnverifiedFallback`], as for Codex `Bash`,
-/// whose payload omits the `workdir` that can move the command) yields
+/// whose `cwd` is the host directory rather than the `workdir` for a command
+/// in a remote execution environment) yields
 /// [`PathBase::SessionCwd`]. Any other fallback takes the call's
 /// [`ToolCallRef::cwd_base`].
 fn shell_relative_base(

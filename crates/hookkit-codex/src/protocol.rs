@@ -92,6 +92,7 @@ pub struct PreToolUseInput {
     /// thread.
     pub session_id: String,
     /// Transcript path; the key is required but its value may be JSON `null`.
+    /// On a subagent thread it is the subagent's own transcript.
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
     /// Working directory of the tool's command (see the type documentation).
     pub cwd: hookkit_core::Utf8PathBuf,
@@ -206,10 +207,10 @@ impl PreToolUseOutput {
     /// Copy them from the original `tool_input` or leave them out; Codex
     /// restores an omitted selector. A changed selector fails the tool call
     /// with the model-visible error `PreToolUse hook cannot change the tool
-    /// environment (<field>)`. Ordinary MCP tool calls have no selector
-    /// check. A rewritten `apply_patch` must still parse. In code mode the
-    /// rewritten call runs and resolves the nested tool promise with its
-    /// result.
+    /// environment (<field>)` (without the field for `apply_patch`).
+    /// Ordinary MCP tool calls have no selector check. A rewritten
+    /// `apply_patch` must still parse. In code mode the rewritten call runs
+    /// and resolves the nested tool promise with its result.
     pub fn rewrite(updated_input: serde_json::Map<String, serde_json::Value>) -> Self {
         Self::decision(PreToolUseDecision::Rewrite(updated_input))
     }
@@ -390,6 +391,7 @@ pub struct PostToolUseInput {
     /// thread.
     pub session_id: String,
     /// Transcript path; the key is required but its value may be JSON `null`.
+    /// On a subagent thread it is the subagent's own transcript.
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
     /// Working directory of the tool's command (see the type documentation).
     pub cwd: hookkit_core::Utf8PathBuf,

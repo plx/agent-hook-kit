@@ -42,6 +42,10 @@
   The hooks reference documents it for exactly those four events, but no
   sentence promises that it is set and its own examples guard it with
   `[ -n "$CLAUDE_ENV_FILE" ]`, so it is optional.)
+- Fixed `scripts/regen-licenses.sh` on a machine without cargo-about 0.9.0:
+  it now installs the pinned version with the `cli` feature, without which
+  `cargo install` installs no binary, and stops if that version is still not
+  on `PATH` instead of generating with another one.
 
 ### 2026-11-25 harness refresh
 
@@ -68,15 +72,23 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
     it denies. The catalog records it as the `command-on-failure-block` and
     `http-on-failure-block` bindings on the 14 gating events and describes
     it in the other events' uncertainties (`Stop`, `SubagentStop`,
-    `TaskCompleted`, and `TeammateIdle` ignore it).
+    `TaskCompleted`, and `TeammateIdle` ignore it). For an `mcp_tool` hook,
+    a plain-text answer also counts as a failure on the 11 events whose
+    block stops something, but not on `PreCompact`, where plain text is the
+    compaction instructions, or on `PostToolUse` and `PostToolUseFailure`,
+    where a block stops nothing.
     On Windows without Git Bash a failing shell-form `PreToolUse`,
     `PermissionRequest`, or `PreSkillShellCommand` command hook blocks with
     the field unset.
   - Exit-2 exceptions: exit 2 with blank stdout and a stderr that says a file
     is missing or cannot be opened is a non-blocking error on `Stop`,
     `SubagentStop`, `TaskCompleted`, and a plugin's `UserPromptSubmit`;
-    `continue: false` takes precedence over exit 2 on `Stop` and
-    `SubagentStop`; `Elicitation` and `ElicitationResult` ignore
+    `continue: false` takes precedence over exit 2 on `Stop`, `SubagentStop`,
+    and `TeammateIdle` (a new `exit-2-continue-false` outcome), while on
+    `TaskCompleted` the task stays open either way and the teammate goes idle
+    only when its turn end triggered the event; when JSON printed with exit 2
+    makes a blocking decision, its reason replaces stderr as the block
+    message; `Elicitation` and `ElicitationResult` ignore
     `hookSpecificOutput` on every non-zero exit, while a top-level
     `decision: "block"` at exit 1 or 3-255 declines.
   - Corrections: `PreCompact` plain-text stdout is the compaction
@@ -85,13 +97,35 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
     set no field are plain text on the 27 events without text context; the
     output-discarding events gain an `invalid-json` outcome, and `PostCompact`
     and `SessionEnd` split their non-zero outcome by whether stdout is
-    structured.
+    structured. `Setup` accepts a string `hookSpecificOutput.additionalContext`
+    and discards it (it was rejected), and `PermissionDenied` ignores invalid
+    JSON (it was a non-blocking error), as it ignores a schema-invalid HTTP
+    body. Every HTTP binding except the worktree events' gains a
+    `schema-invalid-body` outcome. On the 14 events that discard `continue`,
+    `continue` and `stopReason` are described as discarded rather than shown.
+  - Permission updates: `PermissionRequest` `updatedPermissions` entries are
+    typed (`type` selects `rules` and `behavior`, `mode`, or `directories`,
+    and every entry needs a `destination`), and `permission_suggestions`
+    items are typed open-world; one malformed entry fails the whole output.
+  - `PreToolUse`: `defer` is honored only in a `-p` run where Claude made a
+    single tool call; in auto mode the classifier can deny a flagged call
+    before an `ask` prompt, and an `ask` does not gate `SubagentHandback`,
+    which runs without a prompt; `AskUserQuestion` and `ExitPlanMode` need
+    `allow` with `updatedInput`; and on Windows a file tool's `file_path`
+    arrives with backslash separators, so a guard that matches forward
+    slashes fails open. A new `command-defer` process case covers `defer`.
   - Inputs: `UserPromptSubmit` `session_title` is documented (a string),
     `Notification` adds `auth_storage_failure` and `plugin_notification`,
     and `agent_id`/`agent_type` are sent in more cases. A `Bash` matcher also
-    fires for the shell commands the `Monitor` tool starts (2.1.314), and
-    hooks from managed settings also run on `PostToolUse` after some failed
+    fires for the shell commands the `Monitor` tool starts (2.1.314), which
+    new `PreToolUse`, `PermissionRequest`, and `PostToolUse` positives
+    cover, and hooks from managed settings also run on `PostToolUse` after some failed
     calls, with the error text as a string `tool_response`.
+    `InstructionsLoaded` records that `globs` is sent only for
+    `path_glob_match` loads, `trigger_file_path` for lazy loads, and
+    `parent_file_path` for `include` loads, and its representative input is
+    now a `path_glob_match` load.
+  - The MCP documentation (`claude-mcp`, `mcp.md`) is a new pinned source.
 - **Codex `commit-3d86e43-r1`** (openai/codex `rust-v0.172.0`; schemas vendored
   under `contracts/vendor/codex/3d86e43…/generated`, where the only change
   from `ff6aec9` is the new model-request input schema):
@@ -111,12 +145,25 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
     may not change the tool's target selector (0.165.0, MCP `environment_id`
     0.170.0), and direct Guardian review dispatches `PreToolUse` alone for
     calls that never run (0.167.0, 0.168.0).
+  - Since 0.167.0 a `Bash` command, in any execution environment, that a
+    managed `requirements.toml` `prompt-user` rule matches is a human
+    checkpoint: a `PermissionRequest` `allow` cannot approve it (a person
+    decides, or Codex rejects the command when no capable client is
+    connected), stdin does not mark it, and a deny still applies. Codex
+    rejects such a command before `PermissionRequest` runs when the approval
+    policy forbids rule prompts or the session requires automatic review.
   - A plugin hook's approval is bound to the plugin bundle's contents
     (0.164.0): a changed, symlinked, or unreadable bundle fails every run
     before launch.
   - Corrections: `permission_mode` is only ever `default` or
     `bypassPermissions`, and `Interrupt` `mcp_tool` handlers share the
-    1-3 s timeout clamp.
+    1-3 s timeout clamp. A `UserPromptSubmit` block (exit 2,
+    `decision: block`, or `continue: false`) drops the prompt, and its
+    reason never reaches the model: Codex shows it only as the hook run's
+    feedback entry, so the exit-2 stderr role is `user-message` (it was
+    `agent-context`). `SubagentStop`'s `transcript_path` is the immediate
+    parent thread's transcript (null when Codex cannot look it up), while
+    every other event on a subagent thread sends the subagent's own.
 - **Antigravity `docs-2026-11-25-r1`** (Antigravity App, formerly
   Antigravity 2.0, through v2.35.1; CLI through 1.5.16):
   - New `SessionStart` event: it fires once when a new conversation session
@@ -135,7 +182,15 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
     add `hookEventName`, `cwd`, and `toolCall.id` (CLI 1.5.4) and the `Stop`
     field `continuation_active` (CLI 1.5.6).
   - The plugin authoring guide documents fail-open (a non-zero exit is
-    logged and ignored), so every event gains a `failure` outcome.
+    logged and ignored), so every event gains a `failure` outcome. On
+    Windows, command hooks containing double quotes (on the App, quoted
+    paths) failed to run until CLI 1.5.8 and App v2.33.0, and a failed hook
+    does not block, so a `PreToolUse` or `PreInvocation` guard went
+    unenforced there.
+  - An invalid matcher never matches on the CLI, and only
+    `agy plugin validate` (CLI 1.4.3, plugin hooks only) warns about it.
+    Whether the `Reason:` line that CLI 1.1.28 added to approval prompts
+    shows a hook's `reason` is undocumented.
 
 #### Command environments in the 2026-11-25 refresh
 
@@ -173,7 +228,10 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
   `TokenUsage`, `protocol::Event::{PreModelRequest, PostModelRequest}`,
   `CatalogInput::{thread_id, kind, request_id, attempt_number, status,
   error, response_id, token_usage, workspace_roots}`, and
-  `protocol::AnyInput::{cwd, command_cwd}`.
+  `protocol::AnyInput::{cwd, command_cwd}`. `PostModelRequest` parsing
+  requires `token_usage` to be an object or `null` (serde would map an array
+  onto its members by position), and `CatalogInput::token_usage()` returns
+  `None` for any other value.
 - **hookkit-antigravity:** `SessionStart`, `SessionStartInput`, and
   `SessionStartOutput` (with `Event`, `AnyInput`, and `AnyCommandOutput`
   arms); `last_user_input`, `hook_event_name`, `cwd`, and
@@ -196,7 +254,9 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
   `NativeContext.tool_call_id` and the aligned `tool_call_id()` carry a
   non-blank string `toolCall.id`, and the aligned `cwd()` and
   `stop_hook_active()` return `cwd` and `continuation_active` when sent; all
-  were always `None`.
+  were always `None`. `hookkit-tool-access`'s `ToolCallRef::tool_call_id`
+  for Antigravity `PreToolUse` and `PostToolUse` carries the same
+  identifier; it was always `None` too.
 - **hookkit-runtime:** hint-less Antigravity resolution also considers
   `SessionStart`, whose common-fields shape every payload fits: a payload
   with only the common fields is now `AmbiguousEvent` instead of
@@ -207,24 +267,60 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
   longer replaces an Antigravity `SessionStart` epoch as the current
   session. Codex tool events no longer add their command directory to the
   session's workspace roots.
-- **hookkit-shell / hookkit-tool-access / hookkit-file-activity:** the
-  Claude Code adapters match `Monitor` calls that run a command (a `ws`
-  watch is still `NotShell`). A Claude Code `PostToolUse` whose
-  `tool_response` is a string reports `Conditional` instead of `Direct`
-  candidates, so its file activity is no longer direct evidence.
-  `PreSkillShellCommand` is not a tool call and records a `MissingToolCall`
-  gap.
+- **hookkit-shell:** the Claude Code adapters match `Monitor` calls that
+  run a command (a `ws` watch is still `NotShell`). On
+  `PreSkillShellCommand`, `CatalogInput::shell_tool_call` matches the
+  injected command as a `ToolPhase::Pre` call when `tool_name` is `Bash`,
+  with the hook `cwd` as its working directory; `PowerShell` and any other
+  `tool_name` report `NotShell`. It returned `UnsupportedEvent` before.
+- **hookkit-tool-access / hookkit-file-activity:** a Claude Code catalog
+  input treats a `Monitor` call that runs a command as a shell call on
+  `PreToolUse`, `PermissionRequest`, `PostToolUse`, and
+  `PostToolUseFailure`, as the typed `PostToolUse` input does, so
+  `file-activity-agent-hook` records a failed Monitor command's writes
+  instead of an `UnknownStructuredTool` gap. A Claude Code `PostToolUse`
+  whose `tool_response` is a string reports `Conditional` instead of
+  `Direct` candidates, so its file activity is no longer direct evidence.
+  `PreSkillShellCommand` is not a tool call: `observe_tool_call` records a
+  `MissingToolCall` gap even though `hookkit-shell` matches its command.
 - **hookkit-tool-runner:** on a Codex tool event, which has no workspace
   root, a relative `--config` or `--state-dir` resolves against the hook's
   working directory, and post-tool configuration discovery starts there
-  when it holds every written file, else from their deepest common
-  directory. The Stop runner treats Antigravity `continuation_active` as its
-  continuation signal when it is present.
-- **Examples:** `antigravity-pre-invocation` injects a `systemMessage` step.
-  Without `--project-root`, `codex-claude-rules` uses the nearest directory
-  with `.claude/rules` up to the enclosing checkout, else that checkout.
+  when it holds at least one written file, else from the deepest directory
+  containing them, so a command that also writes a log or temporary file
+  elsewhere keeps the project's configuration. The Stop runner treats
+  Antigravity `continuation_active` as its continuation signal when it is
+  present.
+- **Examples:** `antigravity-pre-invocation` injects a `systemMessage` step
+  once, on the first invocation (`invocationNum` 0) of a multi-root
+  workspace, because injected steps stay in the conversation;
+  `fixtures/antigravity/pre_invocation.json` is now invocation 0. Without
+  `--project-root`, `codex-claude-rules` uses the nearest directory with
+  `.claude/rules` up to the enclosing checkout, else that checkout.
   `forbidden-file-guard` also treats the checkout enclosing a Codex `cwd`
   as a policy root, and analyzes `Monitor` commands through `hookkit-shell`.
+  On Claude Code it also guards `PreSkillShellCommand`: it denies a
+  forbidden injected command with `PreSkillShellCommandOutput::deny` and
+  otherwise prints `{}` through `PreSkillShellCommandOutput::no_op`. It now
+  runs through the selected-harness Claude Code runner and dispatches on
+  `hook_event_name`, so register it on both events; its Claude Code
+  usage-error diagnostic names `claude-code` rather than
+  `claude-code/PreToolUse`.
+- **Copier template:** new scaffolds and fixtures for `PreSkillShellCommand`,
+  `PreModelRequest`, `PostModelRequest`, and Antigravity `SessionStart`. The
+  cross-harness `session-start-state` command now accepts Antigravity, and a
+  single-mode Antigravity file-activity project selects `session_start` by
+  default (`pre_invocation` stays required, as the fallback on builds that
+  predate `SessionStart`). In the generated manifest, Antigravity's
+  `native_session_boundary` is `exact-or-inferred` (it was `inferred`), and
+  its `file_activity_lower_bound` (it was `inferred-first-observation`) is
+  `exact-session-start-or-inferred-first-observation` in cross mode,
+  `exact-session-start-or-inferred-invocation-start` in single mode with
+  `session_start`, and `inferred-invocation-start` without it. The
+  generated README adds guidance on registering `PreSkillShellCommand`, on
+  `"onFailure": "block"` for a Claude Code policy guard, and on registering
+  each harness's `SessionStart` for file activity, and the generated Claude
+  Code `instructions_loaded` fixture is a `path_glob_match` load.
 - **Contracts and conformance:** `FROZEN_LEDGER` records the three snapshots
   and the supplement. Every existing support target moved to the new
   snapshots at the same level, and `SessionStart` (Antigravity),
@@ -232,7 +328,7 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
   `command-runtime-beta` targets. `command-on-failure-block` defaults to
   `catalog-only`, with a `binding-implemented` gap on each of its 14 events,
   and `http-on-failure-block` to `unsupported`. The implementation registry
-  now covers 54 events and 193 process cases, and the conformance allowlist
+  now covers 54 events and 195 process cases, and the conformance allowlist
   accepts the open `PreModelRequest` `kind` and `PostModelRequest` `status`
   negatives.
 
@@ -244,10 +340,21 @@ Audits: `planning/audits/2026-11-25-claude-code-hooks.md`,
   - `PreCompactOutput::no_op()` prints nothing; it printed `{}`, which
     Claude Code adds to the compaction instructions. A structured builder
     still turns it into a JSON object.
+  - Emitting a `PreCompactOutput` JSON response at exit 0 without a
+    top-level `decision: "block"` fails, because Claude Code would add the
+    JSON to the compaction instructions: for example
+    `no_op().with_terminal_sequence(..)`, or a deprecated discarded builder
+    without a block. Pair such a field with `with_block(..)` or
+    `into_blocking_error(..)`.
   - `StopOutput::into_blocking_error` and
     `SubagentStopOutput::into_blocking_error` return an error for a response
     that sets `continue: false`, which would end the turn instead of
-    continuing it.
+    continuing it, and `TeammateIdleOutput::into_blocking_error` does the
+    same, because there `continue: false` sends the teammate idle.
+  - `PermissionRequestOutput::with_updated_permissions` rejects an entry
+    that does not match the documented shape: a non-object, an unknown
+    `type`, a missing or unknown `destination`, missing `rules` and
+    `behavior`, `mode`, or `directories`, or a value of the wrong type.
   - `UserPromptSubmit` input with a non-string `session_title` is rejected.
 - **hookkit-codex:** `NativeContext.workspace_roots`, and so
   `RuntimeContext::workspace_roots`, is empty for `PreToolUse`,

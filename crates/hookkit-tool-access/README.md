@@ -36,9 +36,15 @@ Typed single-harness hooks can analyze their native input in place with
 `ToolAccessAnalyzer::analyze_native`, which accepts any `ObservableToolCall`
 (aligned inputs, Codex and Antigravity pre/post inputs, and Claude catalog
 inputs for `PreToolUse`, `PermissionRequest`, `PostToolUse`, and
-`PostToolUseFailure`) without cloning it into an aligned wrapper. Other Claude
-events, including `PreSkillShellCommand`, whose injected command is not a tool
-call, report a `MissingToolCall` gap.
+`PostToolUseFailure`) without cloning it into an aligned wrapper. On all four
+Claude events, `Bash` and a `Monitor` call that runs a `command` are analyzed
+as shell calls (a hook whose matcher includes `Monitor`, or that has none,
+receives the Monitor call's own input); a Monitor `ws` watch is not. Other
+Claude events, including `PreSkillShellCommand`, whose injected command is not
+a tool call, report a `MissingToolCall` gap. An observed call's
+`tool_call_id` is the harness's correlation identifier: Claude's and Codex's
+`tool_use_id`, and Antigravity's string `toolCall.id` (CLI 1.5.4 or later),
+the same value the aligned `tool_call_id()` accessors return.
 
 A Claude Code `PostToolUse` does not prove that the call succeeded: hooks from
 managed settings also run after some failed calls and then receive the error

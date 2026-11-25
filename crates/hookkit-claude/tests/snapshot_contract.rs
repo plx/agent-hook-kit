@@ -731,6 +731,26 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
                 })])
                 .unwrap(),
         ),
+        ("permission-request", "add-rules-and-directories") => catalog::<PermissionRequest>(
+            PermissionRequestOutput::allow()
+                .with_updated_permissions(vec![
+                    json!({
+                        "type": "addRules",
+                        "rules": [
+                            {"toolName": "Bash", "ruleContent": "npm test"},
+                            {"toolName": "mcp__github__get_issue"},
+                        ],
+                        "behavior": "allow",
+                        "destination": "localSettings",
+                    }),
+                    json!({
+                        "type": "addDirectories",
+                        "directories": ["/repo/related"],
+                        "destination": "session",
+                    }),
+                ])
+                .unwrap(),
+        ),
         ("permission-request", "exit-2-structured") => {
             catalog::<PermissionRequest>(PermissionRequestOutput::deny("Blocked by policy."))
         }
@@ -927,6 +947,7 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
         ("pre-tool-use", "exit-2-missing-file") => {
             catalog::<PreToolUse>(PreToolUseOutput::blocking_error(MISSING_FILE))
         }
+        ("pre-tool-use", "defer") => catalog::<PreToolUse>(PreToolUseOutput::defer()),
         ("pre-skill-shell-command", "structured") => catalog::<PreSkillShellCommand>(
             PreSkillShellCommandOutput::deny("curl is not allowed in skills."),
         ),
@@ -1085,6 +1106,17 @@ fn fixture_output(event_dir: &str, id: &str) -> Option<ProcessEmission> {
                 catalog::<TaskCompleted>(output.into_blocking_error("blocked by hook").unwrap())
             }
         }
+        // The task stays open whatever triggered the event, so the exit-2
+        // form of continue: false is not rejected here.
+        ("task-completed", "exit-2-continue-false") => catalog::<TaskCompleted>(
+            TaskCompletedOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .with_stop_reason("Done.")
+                .unwrap()
+                .into_blocking_error("keep going")
+                .unwrap(),
+        ),
         ("task-completed", "nonzero-unstructured") => {
             catalog::<TaskCompleted>(TaskCompletedOutput::nonblocking_error("hook failed"))
         }
@@ -1294,6 +1326,9 @@ fn unreproduced_output_reason(event_dir: &str, id: &str) -> Option<&'static str>
         ("elicitation-result", "content-without-action") => {
             "Claude Code ignores hookSpecificOutput without an action; no_op() has the same effect"
         }
+        ("setup", "discarded-hook-specific-output") => {
+            "Claude Code validates and then discards Setup additionalContext; no_op() has the same effect"
+        }
         ("pre-tool-use", "deprecated-decision-block") => {
             "the deprecated top-level decision, which HookKit never emits; deny(reason) is the current form"
         }
@@ -1354,6 +1389,12 @@ fn undeclared_reason(event_dir: &str, id: &str) -> Option<&'static str> {
         ) => "whitespace-only stdout with exit 2, which typed constructors never emit",
         ("stop" | "subagent-stop", "command-exit-2-continue-false") => {
             "into_blocking_error rejects continue: false here, because it ends the turn instead of continuing it"
+        }
+        ("teammate-idle", "command-exit-2-continue-false") => {
+            "into_blocking_error rejects continue: false here, because it sends the teammate idle instead of keeping it working"
+        }
+        ("permission-request", "command-malformed-permission-update") => {
+            "an updatedPermissions entry without a destination, which with_updated_permissions rejects"
         }
         ("elicitation-result", "command-content-without-action") => {
             "Claude Code ignores hookSpecificOutput without an action; no constructor emits one"
@@ -1554,12 +1595,33 @@ fn documented_output_negatives_are_unrepresentable() {
                 ("pre-model-switch", "defer-rejected" | "additional-context-rejected") => {}
                 // SetupOutput has no hook-specific builder; the deprecated
                 // `with_context` emits `{}`.
-                ("setup", "hook-specific-output-rejected") => {
+                ("setup", "additional-context-not-string") => {
                     let value = emitted_json(
                         event_dir,
                         &catalog::<Setup>(SetupOutput::with_context("Dependencies installed.")),
                     );
                     assert_eq!(value, Some(json!({})));
+                }
+                // `with_updated_permissions` rejects an entry that does not
+                // match the documented entry shape.
+                (
+                    "permission-request",
+                    "updated-permission-unknown-type"
+                    | "updated-permission-without-destination"
+                    | "updated-permission-not-object"
+                    | "updated-permission-rule-behavior",
+                ) => {
+                    let entries =
+                        fixture["value"]["hookSpecificOutput"]["decision"]["updatedPermissions"]
+                            .as_array()
+                            .unwrap()
+                            .clone();
+                    assert!(
+                        PermissionRequestOutput::allow()
+                            .with_updated_permissions(entries)
+                            .is_err(),
+                        "{event_dir}/{id}"
+                    );
                 }
                 // A command WorktreeCreate hook prints a path, never JSON.
                 ("worktree-create", "missing-worktree-path") => {}
@@ -1936,9 +1998,13 @@ fn every_typed_output_constructor_satisfies_the_output_schema() {
             catalog::<PreCompact>(PreCompactOutput::no_op()),
             catalog::<PreCompact>(PreCompactOutput::compaction_instructions("Keep it.").unwrap()),
             catalog::<PreCompact>(PreCompactOutput::no_op().with_block("no").unwrap()),
+            // A terminal sequence must come with a block; see
+            // `pre_compact_json_at_exit_0_must_block`.
             catalog::<PreCompact>(
                 PreCompactOutput::no_op()
                     .with_terminal_sequence("\u{7}")
+                    .unwrap()
+                    .with_block("no")
                     .unwrap(),
             ),
             catalog::<PreCompact>(
@@ -2580,7 +2646,8 @@ fn capped_and_escaped_strings_are_emitted_unchanged() {
 
 /// The input fixtures added for docs-2026-11-25-r1 that exercise shapes the
 /// typed inputs keep as raw JSON: Monitor, Code Mode, and PowerShell calls on
-/// PreToolUse, and an MCP-skill PermissionRequest, each re-serialize exactly.
+/// PreToolUse, Monitor calls on PermissionRequest and PostToolUse, and an
+/// MCP-skill PermissionRequest, each re-serialize exactly.
 #[test]
 fn new_tool_shapes_round_trip_through_the_raw_tool_input() {
     for (event_dir, id, tool) in [
@@ -2591,6 +2658,12 @@ fn new_tool_shapes_round_trip_through_the_raw_tool_input() {
         ("pre-tool-use", "code-mode-cd-prefix", "Bash"),
         ("pre-tool-use", "powershell-tool", "PowerShell"),
         ("permission-request", "mcp-skill-ask", "Skill"),
+        ("permission-request", "monitor-call", "Monitor"),
+        (
+            "permission-request",
+            "monitor-command-via-bash-matcher",
+            "Bash",
+        ),
     ] {
         let value = positive(event_dir, id);
         let event = EventId::builtin(HarnessId::CLAUDE_CODE, wire_name(event_dir));
@@ -2605,8 +2678,158 @@ fn new_tool_shapes_round_trip_through_the_raw_tool_input() {
             "{event_dir}/{id}"
         );
     }
+    let value = positive("post-tool-use", "monitor-call");
+    let input = PostToolUse::parse(&invocation(&value)).unwrap();
+    assert_eq!(input.tool_name, "Monitor");
+    assert_eq!(input.tool_input, value["tool_input"]);
+    assert_eq!(input.tool_response, value["tool_response"]);
+    assert_eq!(serde_json::to_value(&input).unwrap(), value);
     let raw = invocation(&positive("permission-request", "mcp-skill-ask"));
     let input = PermissionRequest::parse(&raw).unwrap();
     assert_eq!(input.mcp_server().unwrap().name, "docs");
     assert_eq!(input.field("tool_kind"), Some(&json!("mcp_skill")));
+}
+
+/// Claude Code uses the stdout of a PreCompact hook that exits 0 without
+/// blocking as compaction instructions, JSON included, so a typed JSON
+/// response at exit 0 must block; the empty `no_op`, plain instructions, a
+/// block, and exit 2 still emit.
+#[test]
+fn pre_compact_json_at_exit_0_must_block() {
+    #[allow(deprecated)]
+    let discarded = PreCompactOutput::no_op().with_continue(true).unwrap();
+    for (label, output) in [
+        (
+            "terminal sequence",
+            PreCompactOutput::no_op()
+                .with_terminal_sequence("\u{7}")
+                .unwrap(),
+        ),
+        ("deprecated discarded field", discarded),
+    ] {
+        let error = PreCompact::emit(output).expect_err(label).to_string();
+        assert!(error.contains("must block"), "{label}: {error}");
+    }
+
+    for output in [
+        PreCompactOutput::no_op(),
+        PreCompactOutput::compaction_instructions("Keep the test names.").unwrap(),
+        PreCompactOutput::block("Save state first.")
+            .with_terminal_sequence("\u{7}")
+            .unwrap(),
+        PreCompactOutput::no_op()
+            .with_terminal_sequence("\u{7}")
+            .unwrap()
+            .into_blocking_error("blocked")
+            .unwrap(),
+    ] {
+        let emission = catalog::<PreCompact>(output);
+        if emission.exit_code() == 0 {
+            if let Some(value) = emitted_json("pre-compact", &emission) {
+                assert_eq!(value["decision"], "block", "{value}");
+            }
+        }
+    }
+}
+
+/// `with_updated_permissions` accepts every documented entry shape,
+/// including the input's suggestions echoed back, and its output always
+/// satisfies the typed entry schema; it rejects what the schema rejects.
+#[test]
+fn permission_updates_follow_the_documented_entry_shape() {
+    let official = positive("permission-request", "official-example");
+    let suggestions = official["permission_suggestions"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!suggestions.is_empty());
+    let valid = [
+        json!({"type": "setMode", "mode": "bypassPermissions", "destination": "cliArg"}),
+        json!({"type": "setMode", "mode": "futureMode", "destination": "session", "extra": 1}),
+        json!({"type": "removeRules", "rules": [{"toolName": "Bash"}], "behavior": "deny", "destination": "userSettings"}),
+        json!({"type": "replaceRules", "rules": [], "behavior": "ask", "destination": "projectSettings"}),
+        json!({"type": "removeDirectories", "directories": ["/tmp/a"], "destination": "localSettings"}),
+    ];
+    for entries in [suggestions, valid.to_vec()] {
+        let emission = catalog::<PermissionRequest>(
+            PermissionRequestOutput::allow()
+                .with_updated_permissions(entries)
+                .unwrap(),
+        );
+        emitted_json("permission-request", &emission).expect("JSON");
+    }
+    for invalid in [
+        json!("addRules"),
+        json!({"type": "setMode", "mode": "plan"}),
+        json!({"type": "setMode", "destination": "session"}),
+        json!({"type": "setMode", "mode": 1, "destination": "session"}),
+        json!({"type": "addRule", "destination": "session"}),
+        json!({"type": "addRules", "behavior": "allow", "destination": "session"}),
+        json!({"type": "addRules", "rules": [{"ruleContent": "x"}], "behavior": "allow", "destination": "session"}),
+        json!({"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": 1}], "behavior": "allow", "destination": "session"}),
+        json!({"type": "addRules", "rules": [], "behavior": "approve", "destination": "session"}),
+        json!({"type": "addDirectories", "directories": "/tmp", "destination": "session"}),
+        json!({"type": "addDirectories", "directories": [1], "destination": "session"}),
+        json!({"type": "addDirectories", "directories": [], "destination": "global"}),
+    ] {
+        assert!(
+            PermissionRequestOutput::allow()
+                .with_updated_permissions(vec![invalid.clone()])
+                .is_err(),
+            "{invalid}"
+        );
+        let value = json!({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow", "updatedPermissions": [invalid]}}});
+        assert!(
+            !output_validator("permission-request")
+                .unwrap()
+                .is_valid(&value),
+            "{value}"
+        );
+    }
+}
+
+/// `continue: false` printed with exit 2 sends a teammate idle, so the
+/// TeammateIdle exit-2 form rejects it, while on TaskCompleted, where the
+/// task stays open either way, it is the documented exit-2-structured case.
+#[test]
+fn teammate_continue_false_and_exit_2() {
+    let error = TeammateIdleOutput::no_op()
+        .with_continue(false)
+        .unwrap()
+        .with_stop_reason("Done.")
+        .unwrap()
+        .into_blocking_error("keep going")
+        .expect_err("continue: false sends the teammate idle")
+        .to_string();
+    assert!(error.contains("teammate idle"), "{error}");
+    assert!(
+        TeammateIdleOutput::block("again")
+            .with_continue(false)
+            .unwrap()
+            .into_blocking_error("")
+            .is_err()
+    );
+    // At exit 0 it is the documented way to let the teammate go idle.
+    let emission = catalog::<TeammateIdle>(
+        TeammateIdleOutput::no_op()
+            .with_continue(false)
+            .unwrap()
+            .with_stop_reason("Done.")
+            .unwrap(),
+    );
+    assert_eq!(emission.exit_code(), 0);
+
+    let contract = read_contract("teammate-idle");
+    assert_eq!(
+        outcome_effect(&contract["bindings"]["command"], "exit-2-continue-false"),
+        "stop"
+    );
+    let fixtures = fixtures("task-completed");
+    let case = fixture_list(&fixtures, "/process")
+        .iter()
+        .find(|case| fixture_id(case) == "command-exit-2-continue-false")
+        .unwrap();
+    assert_eq!(case["outcome"], "exit-2-structured");
+    let emission = fixture_output("task-completed", "command-exit-2-continue-false").unwrap();
+    assert!(same_bytes(&emission, case));
 }

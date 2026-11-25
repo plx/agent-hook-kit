@@ -74,7 +74,7 @@ bindings:
         content_kind: text
         encoding: utf-8
         presence: required
-        role: agent-context
+        role: user-message
       stdout:
         content_kind: opaque
         presence: optional
@@ -145,6 +145,7 @@ uncertainties:
 - 'Codex trims plain-text stdout before using it as context, and treats stdout whose first non-whitespace character is `{` or `[` as JSON: such text fails the run when it is not a valid output object, and a valid object such as `{}` is consumed as structured output without context.'
 - Exit 2 selects the exit-2 outcome only when stderr is non-empty after trimming; exit 2 with empty or whitespace-only stderr is a failed run (failure outcome) and has no blocking effect.
 - '`decision: block` requires a `reason` that is non-empty after trimming unless `continue: false` takes precedence; otherwise Codex fails the synchronous run without blocking. The output schema adds this runtime rule, which the generated schema does not express.'
+- 'A blocked prompt (exit 2 with non-blank stderr, `decision: block`, or `continue: false`) is dropped without being recorded in model history, and Codex core discards the block or stop reason, so the model never sees it: the reason appears only as a feedback entry (a stop entry for `stopReason`) in the hook run''s completion notification, which the TUI shows and `codex exec` does not print. The exit-2 stderr is therefore user-facing, unlike on the other Codex blocking events. `additionalContext` that the matching handlers return is still recorded for the model, except from a handler whose `decision: block` has a blank reason.'
 - Codex ignores any configured `matcher` for this event.
 - Model-visible `additionalContext` above the handler's `additionalContextLimit` (default about 2,500 tokens; 0 disables spilling) is saved to `<temp_dir>/hook_outputs/<thread_id>/<uuid>.txt` and replaced by a head-and-tail preview with that path, or by a plain truncation when the file cannot be written. The directory is keyed by the hook registry's thread id, not the `<session_id>` the hooks reference names, so subagent output spills separately.
 - The official generated schemas include parsed compatibility fields; runtime support restrictions from the hooks reference and pinned source remain controlling.
@@ -158,3 +159,4 @@ uncertainties:
 - Since Codex 0.164.0 a non-builtin plugin hook with a saved approval re-hashes its whole plugin bundle before every run (synchronous, background, or `mcp_tool`) unless `--dangerously-bypass-hook-trust` is set, and the scan counts against the hook timeout. A changed declaration or bundle content, a symlink or special entry (including a symlinked plugin root), a file that changes during the scan, or a scan timeout records a failed run with an error entry and no exit code, without launching the hook, and the operation continues (fail-open). The hooks reference says changed hooks are skipped until trusted, but at runtime they fail on every match.
 - The pinned source derives `permission_mode` only from the approval policy and sends only `default` or `bypassPermissions` (approval policy `never`); `acceptEdits`, `plan`, and `dontAsk` never occur, although the hooks reference and the generated schema list them, so the schema keeps the five-value superset and the value cannot reveal plan mode.
 - '`session_id` is the root session identity that every descendant thread shares (the hooks reference says the parent session id), so on a subagent thread it names the root session, not the subagent; `agent_id` identifies a thread-spawned subagent.'
+- On a subagent thread `transcript_path` is that subagent's own rollout, not the root session's transcript (the hooks reference says the session transcript); only SubagentStop sends the parent thread's transcript there.

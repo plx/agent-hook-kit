@@ -79,7 +79,9 @@ input:
   - id: mcp-skill
     origin: synthesized
     sources:
+    - claude-hooks-reference
     - claude-code-changelog
+    - claude-mcp
     value:
       command_args: report.pdf
       command_name: docs:pdf

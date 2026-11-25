@@ -224,9 +224,14 @@ Reference evidence:
 - `:979-986`, the failure list: "**Can't start**"; "**Exit code other than
   0 or 2**: counts for a command hook even if it printed JSON that allows
   the action, such as `permissionDecision: "allow"`. To return a JSON
-  decision, exit 0"; "**HTTP error**"; "**MCP failure**" (on gating events
-  "a non-empty answer also counts unless it's `{}` or JSON that sets a hook
-  output field other than `reason`"); "**Timeout**"; "**Invalid output**:
+  decision, exit 0"; "**HTTP error**"; "**MCP failure**" ("With `"block"`
+  set on an event such as `PreToolUse` or `UserPromptSubmit`, a non-empty
+  answer also counts unless it's `{}` or JSON that sets a hook output field
+  other than `reason`"; correction: not on every gating event, since Agent
+  SDK 0.3.332 `sdk.d.ts:8113` adds "That does not hold on PreCompact and
+  WorktreeCreate, where plain text is the hook's answer, or on events whose
+  block stops nothing", such as `PostToolUse` and `PostToolUseFailure`);
+  "**Timeout**"; "**Invalid output**:
   the JSON output can't be parsed or fails schema validation. For an HTTP
   hook, a 2xx body that is neither empty nor a JSON object also counts.
   Plain-text stdout from a command hook isn't a failure".
@@ -1724,8 +1729,10 @@ execution at launch, `--continue`/`--resume`, and `/clear`, with the first
 response waiting and in-session `/resume` waiting (`cc-hooks.md:1299-1305`;
 background resume dates from `:5429` [2.1.268]); output dropped after
 `/clear` or a conversation switch; late-installing plugins'
-`initialUserMessage` and `sessionTitle` ignored (`:1372`; `:3202`
-[2.1.296]); `fork` covering the `/fork` background copy, `/branch`, and
+`initialUserMessage` and `sessionTitle` ignored (`:1372`, no version; the
+2.1.296 changelog entry at `:3202` is a different fix, a late-loading
+plugin's output reaching the new conversation after `/clear` in headless
+sessions, so it dates nothing here); `fork` covering the `/fork` background copy, `/branch`, and
 move-to-background (`:1297`); generated titles absent from
 `session_title` (`:1318`). Documentation of pre-pin behavior except the
 `agent_id` item. Proposed change: uncertainties. Native: the

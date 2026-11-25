@@ -55,9 +55,10 @@
 //!   blocking decision, whose reason Claude Code then shows; otherwise an
 //!   empty message is rejected when the response is built. A JSON response
 //!   whose exit code is neither 0 nor 2 counts as a failure under
-//!   `"onFailure": "block"`, so typed constructors never emit one. On `Stop`
-//!   and `SubagentStop`, where `continue: false` takes precedence over exit 2,
-//!   `into_blocking_error` rejects a response that sets it.
+//!   `"onFailure": "block"`, so typed constructors never emit one. On `Stop`,
+//!   `SubagentStop`, and `TeammateIdle`, where `continue: false` takes
+//!   precedence over exit 2 and ends the agent's work, `into_blocking_error`
+//!   rejects a response that sets it.
 //! - Every builder describes a synchronous command hook. A hook registered
 //!   with `async` or `asyncRewake` cannot block or control Claude: decision
 //!   fields, `continue`, and `terminalSequence` have no effect, and
@@ -70,7 +71,13 @@
 //!   escapes `<system-reminder>` tags. Builders emit text unchanged.
 //! - `no_op` prints `{}`, the structured response with no fields, except on
 //!   `PreCompact`, where Claude Code would add that text to the compaction
-//!   instructions, so it prints nothing.
+//!   instructions, so it prints nothing. For the same reason a `PreCompact`
+//!   JSON response printed at exit 0 must block: emitting one without a
+//!   top-level `decision: "block"`, such as
+//!   `no_op().with_terminal_sequence(..)`, fails.
+//! - `PermissionRequestOutput::with_updated_permissions` rejects an entry
+//!   that does not match the documented permission update shape, because
+//!   Claude Code fails the whole output over it.
 //! - `text_context` writes plain text verbatim, except that text Claude Code
 //!   would parse as JSON (trimmed text starting with `{` and ending with
 //!   `}`) is sent as structured `additionalContext` so it is never dropped.

@@ -4,6 +4,7 @@
   "additionalProperties": false,
   "properties": {
     "continue": {
+      "description": "false sends the teammate idle, even if another matching hook blocks or this hook exits 2.",
       "type": "boolean"
     },
     "decision": {
@@ -14,7 +15,7 @@
       "type": "string"
     },
     "stopReason": {
-      "description": "Shown to the user when continue is false; it stays in the conversation, so Claude sees it if the conversation continues.",
+      "description": "Appears in the teammate's transcript when continue false sends the teammate idle.",
       "type": "string"
     },
     "suppressOutput": {

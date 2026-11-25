@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn antigravity_session_start_overlaps_every_event_but_stop_still_resolves_by_shape() {
-        use hookkit_antigravity::{PreToolUse, SessionStart, Stop};
+        use hookkit_antigravity::{PostToolUse, PreToolUse, SessionStart, Stop};
         let common = serde_json::json!({
             "conversationId": "c1",
             "workspacePaths": ["/workspace/project"],
@@ -925,6 +925,19 @@ mod tests {
             resolve_builtin_event(HarnessId::ANTIGRAVITY, &tool, Some(PreToolUse::EVENT)).unwrap();
         assert_eq!(resolved.event, PreToolUse::EVENT);
         assert_eq!(resolved.provenance, ResolutionProvenance::HintValidated);
+
+        // Without a hint the same tool payload fits SessionStart as well as
+        // the tool-use pair, and its `hookEventName` selects none of them.
+        assert!(matches!(
+            resolve_builtin_event(HarnessId::ANTIGRAVITY, &tool, None),
+            Err(HookkitError::AmbiguousEvent { candidates, .. })
+                if candidates.iter().cloned().collect::<std::collections::BTreeSet<_>>()
+                    == std::collections::BTreeSet::from([
+                        SessionStart::EVENT,
+                        PreToolUse::EVENT,
+                        PostToolUse::EVENT,
+                    ])
+        ));
     }
 
     #[test]

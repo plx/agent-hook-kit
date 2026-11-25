@@ -24,7 +24,7 @@ enum Snapshot {
     R1,
     /// Corrects uncertainty text that misstated the pinned source (frozen).
     R2,
-    /// `rust-v0.172.0` (draft): adds the observation-only model-request
+    /// `rust-v0.172.0` (frozen): adds the observation-only model-request
     /// events and the tool-event `cwd`, environment-scoped hook, and plugin
     /// trust drift, and corrects texts that the earlier revisions misstated.
     Commit3d86e43R1,
@@ -84,6 +84,10 @@ const PERMISSION_MODE_VALUES: &str = "The pinned source derives `permission_mode
 const ROOT_SESSION: &str = "`session_id` is the root session identity that every descendant thread shares (the hooks reference says the parent session id), so on a subagent thread it names the root session, not the subagent; `agent_id` identifies a thread-spawned subagent.";
 const SPILL_CONTEXT: &str = "Model-visible `additionalContext` above the handler's `additionalContextLimit` (default about 2,500 tokens; 0 disables spilling) is saved to `<temp_dir>/hook_outputs/<thread_id>/<uuid>.txt` and replaced by a head-and-tail preview with that path, or by a plain truncation when the file cannot be written. The directory is keyed by the hook registry's thread id, not the `<session_id>` the hooks reference names, so subagent output spills separately.";
 const SPILL_CONTINUATION: &str = "A block reason that becomes a continuation prompt spills like `additionalContext` (saved to `<temp_dir>/hook_outputs/<thread_id>/<uuid>.txt` behind a head-and-tail preview) above the default limit of about 2,500 tokens; `additionalContextLimit` does not apply to this event, and Codex warns and ignores it.";
+const PERMISSION_CHECKPOINT: &str = "Since Codex 0.167.0 a command (`tool_name` `Bash`, in any execution environment) matched by a managed `requirements.toml` prefix rule with `decision = \"prompt-user\"` is a human checkpoint: a `decision.behavior: allow` for it has no effect, and Codex skips Guardian review and saved approvals and asks a person (in app-server, a `humanCommand` approval prompt sent only to clients that declared support for it), rejecting the command when no capable client is connected. A structured deny and exit 2 with non-blank stderr still deny. When the approval policy forbids rule prompts (`never`, or a granular policy without rules approval) or the session requires automatic review, Codex rejects the command before PermissionRequest is dispatched. Stdin carries no marker of the checkpoint, and the hooks reference still says that an allow skips the approval prompt.";
+const BLOCKED_PROMPT: &str = "A blocked prompt (exit 2 with non-blank stderr, `decision: block`, or `continue: false`) is dropped without being recorded in model history, and Codex core discards the block or stop reason, so the model never sees it: the reason appears only as a feedback entry (a stop entry for `stopReason`) in the hook run's completion notification, which the TUI shows and `codex exec` does not print. The exit-2 stderr is therefore user-facing, unlike on the other Codex blocking events. `additionalContext` that the matching handlers return is still recorded for the model, except from a handler whose `decision: block` has a blank reason.";
+const SUBAGENT_THREAD_TRANSCRIPT: &str = "On a subagent thread `transcript_path` is that subagent's own rollout, not the root session's transcript (the hooks reference says the session transcript); only SubagentStop sends the parent thread's transcript there.";
+const SUBAGENT_STOP_TRANSCRIPT: &str = "`transcript_path` is the rollout path of the immediate parent thread, which Codex looks up in its thread store: for a nested subagent that is the spawning subagent's transcript, not the root session's, although `session_id` names the root. It is null when the lookup fails (Codex only logs a warning) or the parent has no rollout. The subagent's own transcript is `agent_transcript_path`, which every other event on the subagent thread, SubagentStart included, sends as `transcript_path`.";
 const TOOL_ENVIRONMENTS: &str = "A tool call bound to execution environments runs only those environments' environment-scoped hooks, while an environment-agnostic call (one that may use every environment, or an MCP call without an owning environment) runs the tool hooks of every attached environment.";
 
 // Observation-only model-request events (`commit-3d86e43-r1` and later).
@@ -99,13 +103,33 @@ const OBSERVER_FIELDS: &str = "The payload carries no `permission_mode`. `cwd` i
 const OBSERVER_MEMORY: &str = "Memory-consolidation turns run only managed-source and executor-scoped model-request handlers; user, project, session-flag, plugin, and environment-scoped hooks do not run there.";
 const OBSERVER_OPEN_SCHEMA: &str = "Unlike every other Codex input schema, the generated schema declares no `additionalProperties: false`, because the input struct flattens its event enum without `deny_unknown_fields`; the serialized key set is nonetheless closed. This contract derives one event's schema from the shared file's matching `oneOf` branch and keeps the vendored openness and the `attempt_number` minimum of 0.";
 
+/// What a synchronous exit 2 with non-blank stderr does, when Codex gives
+/// exit 2 an effect.
+#[derive(Clone, Copy)]
+struct Exit2 {
+    effect: &'static str,
+    /// Who reads the trimmed stderr: `agent-context` where it reaches the
+    /// model (as a denial, a replaced tool result, or a continuation prompt),
+    /// `user-message` where only the hook run's feedback entry shows it.
+    stderr_role: &'static str,
+}
+
+/// An exit 2 whose stderr reaches the model.
+fn agent_block(effect: &'static str) -> Option<Exit2> {
+    Some(Exit2 {
+        effect,
+        stderr_role: "agent-context",
+    })
+}
+
 struct Seed {
     file_key: &'static str,
     wire_name: &'static str,
     rust_key: &'static str,
     category: &'static str,
-    /// Effect of a synchronous exit 2 with non-blank stderr, when Codex gives exit 2 one.
-    block_effect: Option<&'static str>,
+    /// Effect and stderr audience of a synchronous exit 2 with non-blank
+    /// stderr, when Codex gives exit 2 one.
+    block_effect: Option<Exit2>,
     /// Plain-text exit-0 stdout becomes model context.
     text_context: bool,
     /// Representative structured stdout; `None` when Codex ignores exit-0 output.
@@ -228,7 +252,7 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
             wire_name: "PermissionRequest",
             rust_key: "permission_request",
             category: "tool",
-            block_effect: Some("deny"),
+            block_effect: agent_block("deny"),
             text_context: false,
             structured: Some(
                 json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Blocked by policy."}}}),
@@ -246,6 +270,7 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
                     "A structured deny whose message is missing, empty, or whitespace-only is still a denial; Codex substitutes `PermissionRequest hook denied approval`.",
                     "The hooks reference calls `updatedInput`, `updatedPermissions`, and `interrupt` reserved fields that fail closed, but the pinned source treats them like `continue: false`, `stopReason`, and `suppressOutput`: any of them (`interrupt` only when `true`) fails the run and discards that handler's whole decision, allow or deny alike. Unless another matching hook decides, Codex falls back to the normal approval flow (Guardian review or the user prompt), so such an allow is not auto-approved and such a deny, for example a Claude Code style deny with `interrupt: true`, is not enforced.",
                     "Since Codex 0.165.0 a `decision.behavior: allow` from an environment-scoped managed hook (command or `mcp_tool`) has no effect: the run completes without a decision, and the request falls through to other hooks, Guardian review, or the user. A structured deny and exit 2 with non-blank stderr still deny. Stdin carries no marker of the scope, and an environment-scoped PreToolUse can still allow and rewrite.",
+                    PERMISSION_CHECKPOINT,
                 ]
             } else if r2 {
                 vec![
@@ -267,7 +292,7 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
             wire_name: "PostToolUse",
             rust_key: "post_tool_use",
             category: "tool",
-            block_effect: Some("replace-result"),
+            block_effect: agent_block("replace-result"),
             text_context: false,
             structured: Some(
                 json!({"decision":"block","reason":"Review the output.","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Generated files changed."}}),
@@ -358,7 +383,16 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
             wire_name: "UserPromptSubmit",
             rust_key: "user_prompt_submit",
             category: "prompt",
-            block_effect: Some("deny"),
+            // Codex core drops the block reason, so it never reaches the model
+            // (rust-v0.172.0 and later correct the audience).
+            block_effect: Some(Exit2 {
+                effect: "deny",
+                stderr_role: if v172 {
+                    "user-message"
+                } else {
+                    "agent-context"
+                },
+            }),
             text_context: true,
             structured: Some(
                 json!({"decision":"block","reason":"Ask for confirmation.","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"Clarify the reproduction."}}),
@@ -373,6 +407,7 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
                     TEXT_CONTEXT,
                     BLOCKING_EXIT_2,
                     BLOCK_REASON,
+                    BLOCKED_PROMPT,
                     MATCHER_IGNORED,
                     SPILL_CONTEXT,
                 ]
@@ -385,7 +420,7 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
             wire_name: "SubagentStop",
             rust_key: "subagent_stop",
             category: "subagent",
-            block_effect: Some("continue"),
+            block_effect: agent_block("continue"),
             text_context: false,
             structured: Some(json!({"decision":"block","reason":"Run another focused pass."})),
             failure_stderr_visible: false,
@@ -410,7 +445,7 @@ fn seeds(snapshot: Snapshot) -> Vec<Seed> {
             wire_name: "Stop",
             rust_key: "stop",
             category: "turn",
-            block_effect: Some("continue"),
+            block_effect: agent_block("continue"),
             text_context: false,
             structured: Some(json!({"decision":"block","reason":"Run the failing tests again."})),
             failure_stderr_visible: false,
@@ -755,13 +790,13 @@ fn contract(snapshot: Snapshot, seed: &Seed, input_schema: &Value) -> Value {
             "assurance":{"confidence":"high","verification":"source-reviewed"}
         }));
     }
-    if let Some(effect) = seed.block_effect {
+    if let Some(block) = seed.block_effect {
         outcomes.push(json!({
             "id":"exit-2",
-            "effect":effect,
+            "effect":block.effect,
             "exit":{"exact":2},
             "stdout":ignored_stdout(),
-            "stderr":{"presence":"required","role":"agent-context","content_kind":"text","encoding":"utf-8"},
+            "stderr":{"presence":"required","role":block.stderr_role,"content_kind":"text","encoding":"utf-8"},
             "sources":["codex-hooks-reference","codex-hooks-source"],
             "assurance":{"confidence":"high","verification":"source-reviewed"}
         }));
@@ -836,6 +871,11 @@ fn contract(snapshot: Snapshot, seed: &Seed, input_schema: &Value) -> Value {
         }
         if fires_on_subagent_threads(seed) {
             uncertainties.push(ROOT_SESSION);
+            uncertainties.push(if seed.wire_name == "SubagentStop" {
+                SUBAGENT_STOP_TRANSCRIPT
+            } else {
+                SUBAGENT_THREAD_TRANSCRIPT
+            });
         }
     } else {
         uncertainties.push(PROCESS_LIFECYCLE);
@@ -1105,8 +1145,8 @@ fn fixtures(snapshot: Snapshot, seed: &Seed, input_schema: &Value) -> Value {
 
 /// Positive inputs of `commit-3d86e43-r1` and later that pin input semantics
 /// the schema cannot express: compaction dispatch, a tool event's local
-/// execution cwd (Codex >= 0.166.0), and environment-scoped rewriting
-/// (Codex >= 0.165.0).
+/// execution cwd (Codex >= 0.166.0), environment-scoped rewriting
+/// (Codex >= 0.165.0), and the parent transcript of `SubagentStop`.
 fn cwd_and_scope_positives(seed: &Seed, minimal: &Value, representative: &Value) -> Vec<Value> {
     let mut positive = Vec::new();
     match seed.wire_name {
@@ -1164,6 +1204,16 @@ fn cwd_and_scope_positives(seed: &Seed, minimal: &Value, representative: &Value)
                 "origin":"synthesized",
                 "sources":["codex-generated-schemas","codex-hooks-source"],
                 "value":scoped
+            }));
+            // The parent thread's transcript, next to the subagent's own.
+            let mut parent = representative.clone();
+            parent["transcript_path"] = json!("/tmp/parent-transcript.jsonl");
+            parent["agent_transcript_path"] = json!("/tmp/agent-transcript.jsonl");
+            positive.push(json!({
+                "id":"parent-transcript",
+                "origin":"synthesized",
+                "sources":["codex-generated-schemas","codex-hooks-source","codex-core-source"],
+                "value":parent
             }));
         }
         _ => {}
@@ -1229,18 +1279,32 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
         incomplete["status"] = json!("failed");
         incomplete["error"] = json!("Incomplete response returned, reason: max_output_tokens");
         incomplete["response_id"] = json!("resp_456");
-        // Codex always serializes `cache_write_input_tokens`; omitting it pins
-        // that the generated schema leaves it optional (default 0).
+        // Codex serializes every `TokenUsage` member; a non-zero cache-write
+        // count tells a sent value from the schema default.
+        let mut incomplete_usage = token_usage.clone();
+        incomplete_usage["cache_write_input_tokens"] = json!(32);
+        incomplete["token_usage"] = incomplete_usage;
+        positive.push(positive_fixture(
+            "failed-incomplete",
+            json!(["codex-generated-schemas", "codex-hooks-source"]),
+            incomplete,
+        ));
+        // Schema tolerance, not a payload Codex sends: Codex always
+        // serializes `cache_write_input_tokens`, but the generated schema
+        // leaves it optional (default 0).
+        let mut tolerated = minimal.clone();
+        tolerated["status"] = json!("completed");
+        tolerated["response_id"] = json!("resp_901");
         let mut usage_without_cache_writes = token_usage.clone();
         usage_without_cache_writes
             .as_object_mut()
             .expect("token usage")
             .remove("cache_write_input_tokens");
-        incomplete["token_usage"] = usage_without_cache_writes;
+        tolerated["token_usage"] = usage_without_cache_writes;
         positive.push(positive_fixture(
-            "failed-incomplete",
-            json!(["codex-generated-schemas", "codex-hooks-source"]),
-            incomplete,
+            "token-usage-without-cache-writes",
+            json!(["codex-generated-schemas"]),
+            tolerated,
         ));
         let mut transport = minimal.clone();
         transport["status"] = json!("failed");
@@ -1346,6 +1410,14 @@ fn model_request_fixtures(seed: &Seed, input_schema: &Value) -> Value {
                 "token_usage-missing-total",
                 "synthesized",
                 with("token_usage", missing_total),
+                "/token_usage",
+                "anyOf",
+            ),
+            // Serde would map an array onto the usage members by position.
+            negative_fixture(
+                "token_usage-array",
+                "regression",
+                with("token_usage", json!([1200, 800, 0, 150, 64, 1350])),
                 "/token_usage",
                 "anyOf",
             ),
@@ -1697,5 +1769,178 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn input_schema(snapshot: Snapshot, seed: &Seed) -> Value {
+        match seed.shared_input {
+            Some(shared) => split_event_branch(
+                vendored(snapshot, &format!("{shared}.command.input.schema.json")),
+                seed.wire_name,
+            ),
+            None => vendored(
+                snapshot,
+                &format!("{}.command.input.schema.json", seed.file_key),
+            ),
+        }
+    }
+
+    fn uncertainty_texts(contract: &Value) -> Vec<&str> {
+        contract["uncertainties"]
+            .as_array()
+            .expect("uncertainties")
+            .iter()
+            .map(|text| text.as_str().expect("uncertainty text"))
+            .collect()
+    }
+
+    #[test]
+    fn user_prompt_submit_exit_2_stderr_is_user_facing_from_rust_v0_172() {
+        for snapshot in SNAPSHOTS {
+            let v172 = snapshot >= Snapshot::Commit3d86e43R1;
+            for seed in seeds(snapshot) {
+                let Some(block) = seed.block_effect else {
+                    continue;
+                };
+                let contract = contract(snapshot, &seed, &input_schema(snapshot, &seed));
+                let exit_2 = contract["bindings"]["command"]["outcomes"]
+                    .as_array()
+                    .expect("outcomes")
+                    .iter()
+                    .find(|outcome| outcome["id"] == "exit-2")
+                    .expect("exit-2 outcome")
+                    .clone();
+                // Codex core drops a UserPromptSubmit block reason; every other
+                // blocking exit 2 reaches the model. The frozen revisions keep
+                // their published role.
+                let expected = if v172 && seed.wire_name == "UserPromptSubmit" {
+                    "user-message"
+                } else {
+                    "agent-context"
+                };
+                assert_eq!(block.stderr_role, expected, "{}", seed.wire_name);
+                assert_eq!(
+                    exit_2["stderr"]["role"],
+                    json!(expected),
+                    "{} {}",
+                    snapshot.id(),
+                    seed.wire_name
+                );
+                let texts = uncertainty_texts(&contract);
+                assert_eq!(
+                    texts.contains(&BLOCKED_PROMPT),
+                    v172 && seed.wire_name == "UserPromptSubmit",
+                    "{} {}",
+                    snapshot.id(),
+                    seed.wire_name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn permission_request_records_the_managed_human_checkpoint_from_rust_v0_172() {
+        for snapshot in SNAPSHOTS {
+            for seed in seeds(snapshot) {
+                let contract = contract(snapshot, &seed, &input_schema(snapshot, &seed));
+                assert_eq!(
+                    uncertainty_texts(&contract).contains(&PERMISSION_CHECKPOINT),
+                    snapshot >= Snapshot::Commit3d86e43R1 && seed.wire_name == "PermissionRequest",
+                    "{} {}",
+                    snapshot.id(),
+                    seed.wire_name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn subagent_thread_transcript_paths_are_recorded_from_rust_v0_172() {
+        for snapshot in SNAPSHOTS {
+            let v172 = snapshot >= Snapshot::Commit3d86e43R1;
+            for seed in seeds(snapshot) {
+                let input = input_schema(snapshot, &seed);
+                let contract = contract(snapshot, &seed, &input);
+                let texts = uncertainty_texts(&contract);
+                let on_subagent = v172 && fires_on_subagent_threads(&seed);
+                let stop = seed.wire_name == "SubagentStop";
+                assert_eq!(
+                    texts.contains(&SUBAGENT_STOP_TRANSCRIPT),
+                    on_subagent && stop,
+                    "{} {}",
+                    snapshot.id(),
+                    seed.wire_name
+                );
+                assert_eq!(
+                    texts.contains(&SUBAGENT_THREAD_TRANSCRIPT),
+                    on_subagent && !stop,
+                    "{} {}",
+                    snapshot.id(),
+                    seed.wire_name
+                );
+                if v172 && stop {
+                    let fixtures = fixtures(snapshot, &seed, &input);
+                    let parent = fixtures["input"]["positive"]
+                        .as_array()
+                        .expect("positives")
+                        .iter()
+                        .find(|fixture| fixture["id"] == "parent-transcript")
+                        .expect("parent-transcript positive");
+                    assert_ne!(
+                        parent["value"]["transcript_path"],
+                        parent["value"]["agent_transcript_path"]
+                    );
+                    assert!(parent["value"]["agent_transcript_path"].is_string());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn post_model_request_usage_fixtures_follow_the_serialized_payload() {
+        let snapshot = Snapshot::Commit3d86e43R1;
+        let seed = seeds(snapshot)
+            .into_iter()
+            .find(|seed| seed.wire_name == "PostModelRequest")
+            .expect("PostModelRequest seed");
+        let fixtures = model_request_fixtures(&seed, &input_schema(snapshot, &seed));
+        let find = |kind: &str, id: &str| {
+            fixtures["input"][kind]
+                .as_array()
+                .expect("fixtures")
+                .iter()
+                .find(|fixture| fixture["id"] == id)
+                .unwrap_or_else(|| panic!("{kind} {id}"))
+                .clone()
+        };
+        // Codex serializes every TokenUsage member, so source-backed payloads
+        // carry cache_write_input_tokens.
+        for id in ["representative", "failed-incomplete"] {
+            let fixture = find("positive", id);
+            assert!(
+                fixture["value"]["token_usage"]
+                    .get("cache_write_input_tokens")
+                    .is_some(),
+                "{id}"
+            );
+        }
+        assert_eq!(
+            find("positive", "failed-incomplete")["value"]["token_usage"]["cache_write_input_tokens"],
+            json!(32)
+        );
+        // The schema's optional member is exercised only by a tolerance
+        // fixture that does not claim the hooks source.
+        let tolerated = find("positive", "token-usage-without-cache-writes");
+        assert!(
+            tolerated["value"]["token_usage"]
+                .get("cache_write_input_tokens")
+                .is_none()
+        );
+        assert_eq!(tolerated["sources"], json!(["codex-generated-schemas"]));
+        let array = find("negative", "token_usage-array");
+        assert!(array["value"]["token_usage"].is_array());
+        assert_eq!(
+            (&array["expected_pointer"], &array["expected_keyword"]),
+            (&json!("/token_usage"), &json!("anyOf"))
+        );
     }
 }

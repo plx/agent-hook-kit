@@ -808,12 +808,14 @@ impl CatalogOutput {
         })
     }
 
-    /// [`Self::into_blocking`] for `Stop` and `SubagentStop`, where
-    /// `continue: false` takes precedence over exit 2 and ends the turn, so
-    /// a response that sets it is rejected.
-    pub(crate) fn into_blocking_keeping_turn(
+    /// [`Self::into_blocking`] for `Stop`, `SubagentStop`, and
+    /// `TeammateIdle`, where `continue: false` takes precedence over exit 2
+    /// and ends the agent's work instead of keeping it going, so a response
+    /// that sets it is rejected with `precedence` as the error.
+    pub(crate) fn into_blocking_keeping_work(
         self,
         stderr: impl Into<String>,
+        precedence: &'static str,
     ) -> hookkit_core::Result<Self> {
         let stops = self
             .object()
@@ -822,7 +824,7 @@ impl CatalogOutput {
             == Some(false);
         if stops {
             return Err(hookkit_core::HookkitError::InvalidProcessEmission(
-                "continue: false takes precedence over exit 2 here and ends the turn; return it at exit 0 instead",
+                precedence,
             ));
         }
         self.into_blocking(stderr)
@@ -835,6 +837,14 @@ impl CatalogOutput {
     pub(crate) fn emit(self) -> hookkit_core::Result<ProcessEmission> {
         let contract = self.contract;
         match self.outcome {
+            Outcome::Json(value)
+                if self.event == <PreCompact as EventSpec>::EVENT
+                    && value.get("decision").and_then(Value::as_str) != Some("block") =>
+            {
+                Err(hookkit_core::HookkitError::InvalidProcessEmission(
+                    "a PreCompact response printed at exit 0 must block: Claude Code uses the stdout of a PreCompact hook that exits 0 without blocking, JSON included, as compaction instructions; add with_block(..), exit 2 with into_blocking_error(..), or use no_op() or compaction_instructions(..)",
+                ))
+            }
             Outcome::Json(value) => ProcessEmission::command_json(contract, &value),
             Outcome::Text(value) => Ok(ProcessEmission::command_text(contract, value)),
             Outcome::Empty | Outcome::EmptyObject => Ok(ProcessEmission::command_empty(contract)),
@@ -982,11 +992,13 @@ macro_rules! universal_builders {
     (@active continue_teammate) => {
         /// Sets Claude's universal top-level `continue` control. `false`
         /// sends the teammate idle, and wins over another matching hook's
-        /// `block`. On `TaskCompleted` it applies only when a teammate
-        /// finishing its turn triggered the event and is ignored when the
-        /// TaskUpdate tool did. Whether it also overrides exit 2 here is
-        /// undocumented. The `stopReason` appears in the teammate's
-        /// transcript.
+        /// `block` and over exit 2. On `TeammateIdle`, where exit 2 asks the
+        /// teammate to keep working, `into_blocking_error` therefore rejects
+        /// a response that sets it. On `TaskCompleted` it applies only when
+        /// a teammate finishing its turn triggered the event, and the task
+        /// stays open while the teammate goes idle; it is ignored when the
+        /// TaskUpdate tool triggered the event. The `stopReason` appears in
+        /// the teammate's transcript.
         pub fn with_continue(self, continue_session: bool) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("continue", continue_session.into())
@@ -1026,6 +1038,24 @@ macro_rules! universal_builders {
         pub fn with_system_message(self, message: impl Into<String>) -> hookkit_core::Result<Self> {
             self.0
                 .with_top_level("systemMessage", message.into().into())
+                .map(Self)
+        }
+    };
+    (@active terminal_sequence_when_blocking) => {
+        /// Requests emission of an allowlisted terminal notification
+        /// sequence (OSC 0/1/2/9/99/777 or BEL). Claude Code writes it only in
+        /// an interactive session with its interface on screen.
+        ///
+        /// Claude Code uses the stdout of a hook that exits 0 without
+        /// blocking as compaction instructions, so emitting this response
+        /// fails unless it also blocks, with [`Self::with_block`] or
+        /// [`Self::into_blocking_error`].
+        pub fn with_terminal_sequence(
+            self,
+            sequence: impl Into<String>,
+        ) -> hookkit_core::Result<Self> {
+            self.0
+                .with_top_level("terminalSequence", sequence.into().into())
                 .map(Self)
         }
     };
@@ -1299,7 +1329,44 @@ macro_rules! into_blocking_error {
                 self,
                 message: impl Into<String>,
             ) -> hookkit_core::Result<Self> {
-                self.0.into_blocking_keeping_turn(message).map(Self)
+                self.0
+                    .into_blocking_keeping_work(
+                        message,
+                        "continue: false takes precedence over exit 2 here and ends the turn; return it at exit 0 instead",
+                    )
+                    .map(Self)
+            }
+        }
+    };
+    ($output:ident, continue_sends_teammate_idle) => {
+        impl $output {
+            /// Emits this structured response on stdout while exiting 2 with
+            /// `message` on stderr, so the teammate keeps working.
+            ///
+            /// Claude Code reads the JSON fields and uses a JSON `block`
+            /// `reason` as the message when the JSON makes one. If the JSON
+            /// fails validation the exit 2 stands and `message` is the reason.
+            ///
+            /// A response that sets `continue: false` is rejected: on this
+            /// event `continue: false` takes precedence over exit 2 and sends
+            /// the teammate idle, the opposite of what exit 2 asks for. Return
+            /// it at exit 0 instead.
+            ///
+            /// `message` may be empty when the JSON makes a `block` decision;
+            /// the process then exits 2 with empty stderr, which the snapshot
+            /// allows. Without such a decision an empty `message` is rejected
+            /// here, so the handler can still choose another response. No
+            /// field can be added afterwards.
+            pub fn into_blocking_error(
+                self,
+                message: impl Into<String>,
+            ) -> hookkit_core::Result<Self> {
+                self.0
+                    .into_blocking_keeping_work(
+                        message,
+                        "continue: false takes precedence over exit 2 here and sends the teammate idle; return it at exit 0 instead",
+                    )
+                    .map(Self)
             }
         }
     };
@@ -1725,7 +1792,7 @@ discarded_builders!(ConfigChange, ConfigChangeOutput: continue_session, stop_rea
 output_type!(
     PreCompactOutput,
     "PreCompact",
-    "When the hook exits 0 and does not block, Claude Code uses its plain-text stdout as instructions for the compaction summary (see [`Self::compaction_instructions`]). Inspection of the Claude Code 2.1.285 and 2.1.332 builds, which the hooks reference does not confirm, suggests that the raw stdout of any such run is appended, JSON included: [`Self::no_op`] therefore prints nothing, and a structured response such as `block(..).with_terminal_sequence(..)` that does not block would add its JSON text to the instructions.",
+    "When the hook exits 0 and does not block, Claude Code uses its stdout as instructions for the compaction summary (see [`Self::compaction_instructions`]). Inspection of the Claude Code 2.1.285 and 2.1.332 builds suggests that this holds for JSON too, so a structured response that does not block, such as `no_op().with_terminal_sequence(..)`, would add its JSON text to the instructions and echo it to the user. [`Self::no_op`] therefore prints nothing, and emitting a JSON response at exit 0 without a top-level `decision: \"block\"` fails: pair a terminal sequence, or any deprecated discarded field, with [`Self::with_block`] or [`Self::into_blocking_error`], or leave it out.",
 );
 event_spec!(
     PreCompact,
@@ -1750,7 +1817,7 @@ nonblocking_error!(
     PreCompactOutput,
     "With `\"onFailure\": \"block\"` (Claude Code v2.1.295 or later) a failure of the hook, this exit included, does what exit 2 does here instead: it blocks compaction."
 );
-universal_builders!(PreCompactOutput: terminal_sequence);
+universal_builders!(PreCompactOutput: terminal_sequence_when_blocking);
 discarded_builders!(PreCompact, PreCompactOutput: continue_session, stop_reason, system_message, suppress_output);
 
 impl PreCompactOutput {
@@ -1759,7 +1826,8 @@ impl PreCompactOutput {
     /// Unlike the other events' `no_op`, this prints no `{}`, because Claude
     /// Code would add the text `{}` to the compaction instructions. A
     /// structured builder such as [`Self::with_block`] still turns it into a
-    /// JSON object.
+    /// JSON object, which must then block (or exit 2 through
+    /// [`Self::into_blocking_error`]) to be emitted.
     pub fn no_op() -> Self {
         Self(CatalogOutput::empty_until_structured::<PreCompact>())
     }
@@ -1970,7 +2038,7 @@ no_op!(TaskCompleted, TaskCompletedOutput);
 block_builders!(
     TaskCompleted,
     TaskCompletedOutput,
-    "Keeps the task open and returns `reason` to Claude, like exit 2. Another matching hook's `continue: false` overrides the block when a teammate finishing its turn triggered the event; when the TaskUpdate tool triggered it, `continue: false` is ignored and the block holds."
+    "Keeps the task open and returns `reason` to Claude, like exit 2. A `continue: false` from this or another matching hook, even one that exits 2, sends the teammate idle with the task still open when a teammate finishing its turn triggered the event; when the TaskUpdate tool triggered it, `continue: false` is ignored and the block holds."
 );
 blocking_error!(
     TaskCompleted,
@@ -2001,14 +2069,14 @@ no_op!(TeammateIdle, TeammateIdleOutput);
 block_builders!(
     TeammateIdle,
     TeammateIdleOutput,
-    "Keeps the teammate working and returns `reason` to it as feedback, like exit 2. Another matching hook's `continue: false` overrides the block and sends the teammate idle."
+    "Keeps the teammate working and returns `reason` to it as feedback, like exit 2. Another matching hook's `continue: false` overrides the block, and exit 2, and sends the teammate idle."
 );
 blocking_error!(
     TeammateIdle,
     TeammateIdleOutput,
     "Prevents the teammate from going idle; stderr is shown to the teammate. Since stdout stays empty, Claude Code treats exit 2 whose stderr says a file is missing (a case-insensitive `no such file` or `can't open`, such as a quoted `No such file or directory`) as a non-blocking error instead (the hooks reference lists the rule for `Stop`, `SubagentStop`, and `TaskCompleted`; inspection of the Claude Code CLI suggests it applies here too); to block on such text, print a JSON `block` decision with `into_blocking_error`, which keeps stdout non-empty."
 );
-into_blocking_error!(TeammateIdleOutput);
+into_blocking_error!(TeammateIdleOutput, continue_sends_teammate_idle);
 nonblocking_error!(
     TeammateIdle,
     TeammateIdleOutput,
@@ -2339,11 +2407,41 @@ impl PermissionRequestOutput {
     }
 
     /// Applies permission update entries on an `allow` decision.
+    ///
+    /// Each entry is a JSON object whose `type` selects its fields, as the
+    /// hooks reference's entry table and the Agent SDK's `PermissionUpdate`
+    /// union define them:
+    ///
+    /// - `addRules`, `replaceRules`, `removeRules`: `rules`, an array of
+    ///   `{"toolName": .., "ruleContent"?: ..}` objects, `behavior` (`allow`,
+    ///   `deny`, or `ask`), and `destination`;
+    /// - `setMode`: `mode` (such as `default`, `acceptEdits`, or `manual`,
+    ///   an alias for `default`) and `destination`;
+    /// - `addDirectories`, `removeDirectories`: `directories`, an array of
+    ///   path strings, and `destination`.
+    ///
+    /// `destination` is `session`, `localSettings`, `projectSettings`,
+    /// `userSettings`, or `cliArg`. Claude Code fails the whole output's
+    /// schema validation over one malformed entry, which loses the allow (or
+    /// denies the request under `"onFailure": "block"`), so such an entry is
+    /// rejected here instead. Extra keys and an unlisted `mode` are kept.
+    /// Echoing an entry of the input's `permission_suggestions` is the
+    /// documented way to build one.
+    ///
+    /// Caveats: `setMode` with `bypassPermissions` takes effect only if bypass
+    /// mode was available when the session launched, is a no-op when
+    /// `disableBypassPermissionsMode` disables the mode or the session
+    /// starts in restricted mode, and is never persisted as `defaultMode`;
+    /// an `allow` rule for an MCP tool that sets `ruleContent` matches no
+    /// call.
     pub fn with_updated_permissions(self, permissions: Vec<Value>) -> hookkit_core::Result<Self> {
         self.require_behavior(
             PermissionRequestBehavior::Allow,
             "updatedPermissions applies only to an allow decision",
         )?;
+        for entry in &permissions {
+            check_permission_update(entry)?;
+        }
         self.with_decision_field("updatedPermissions", permissions.into())
     }
 
@@ -2357,6 +2455,72 @@ impl PermissionRequestOutput {
     }
 }
 
+/// Checks one `updatedPermissions` entry against the snapshot's entry shape.
+fn check_permission_update(entry: &Value) -> hookkit_core::Result<()> {
+    fn invalid(message: &'static str) -> hookkit_core::HookkitError {
+        hookkit_core::HookkitError::InvalidProcessEmission(message)
+    }
+    let entry = entry
+        .as_object()
+        .ok_or_else(|| invalid("a permission update entry must be a JSON object"))?;
+    let string = |name: &str| entry.get(name).and_then(Value::as_str);
+    match string("destination") {
+        Some("session" | "localSettings" | "projectSettings" | "userSettings" | "cliArg") => {}
+        _ => {
+            return Err(invalid(
+                "a permission update entry needs a destination of session, localSettings, projectSettings, userSettings, or cliArg",
+            ));
+        }
+    }
+    let strings = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().all(Value::is_string))
+    };
+    match string("type") {
+        Some("addRules" | "replaceRules" | "removeRules") => {
+            if !matches!(string("behavior"), Some("allow" | "deny" | "ask")) {
+                return Err(invalid(
+                    "a rules permission update needs a behavior of allow, deny, or ask",
+                ));
+            }
+            let rules_ok = entry
+                .get("rules")
+                .and_then(Value::as_array)
+                .is_some_and(|rules| {
+                    // `get` finds nothing in a rule that is not an object.
+                    rules.iter().all(|rule| {
+                        rule.get("toolName").is_some_and(Value::is_string)
+                            && rule.get("ruleContent").is_none_or(Value::is_string)
+                    })
+                });
+            if !rules_ok {
+                return Err(invalid(
+                    "a rules permission update needs rules: an array of {toolName, ruleContent?} objects with string values",
+                ));
+            }
+        }
+        Some("setMode") => {
+            if string("mode").is_none() {
+                return Err(invalid("a setMode permission update needs a string mode"));
+            }
+        }
+        Some("addDirectories" | "removeDirectories") => {
+            if !strings(entry.get("directories")) {
+                return Err(invalid(
+                    "a directories permission update needs directories: an array of path strings",
+                ));
+            }
+        }
+        _ => {
+            return Err(invalid(
+                "a permission update entry needs a type of addRules, replaceRules, removeRules, setMode, addDirectories, or removeDirectories",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Permission decision returned by a Claude pre-tool hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -2367,9 +2531,12 @@ pub enum PreToolPermissionDecision {
     Allow,
     /// Deny the pending tool call.
     Deny,
-    /// Ask the user for permission.
+    /// Ask the user for permission; see [`PreToolUseOutput::ask`] for the
+    /// auto-mode exceptions.
     Ask,
-    /// Pause a non-interactive tool call so an integration can resume it later.
+    /// Pause a non-interactive tool call so an integration can resume it
+    /// later; honored only in a `-p` run where Claude made a single tool
+    /// call, as [`PreToolUseOutput::defer`] describes.
     Defer,
 }
 
@@ -2483,9 +2650,16 @@ impl PreToolUseOutput {
     }
 
     /// Asks the user to confirm the call; `reason` is shown to the user but
-    /// not to Claude. In auto mode this still forces a permission prompt. In
-    /// a `-p` run with no permission host, which denies the ask, Claude reads
-    /// the reason in the tool result.
+    /// not to Claude. In a `-p` run with no permission host, which denies the
+    /// ask, Claude reads the reason in the tool result.
+    ///
+    /// In auto mode this normally sends the call to the permission prompt,
+    /// with two exceptions: the classifier can deny a call that Claude Code's
+    /// own checks also flag (a write to a protected path, a command that asks
+    /// to run outside the sandbox) before any prompt appears, and a
+    /// `SubagentHandback` call, which delivers a subagent's report, runs with
+    /// no prompt even if the classifier objects. `ask` therefore does not
+    /// gate `SubagentHandback`; use [`Self::deny`] to stop one.
     pub fn ask(reason: impl Into<String>) -> Self {
         Self::with_decision(PreToolPermissionDecision::Ask, Some(reason.into()))
     }
@@ -2493,6 +2667,13 @@ impl PreToolUseOutput {
     /// Pauses a non-interactive tool call so an integration can resume it
     /// later. Claude Code ignores `updatedInput` and `additionalContext` with
     /// this decision, so the corresponding builders reject it.
+    ///
+    /// Claude Code honors `defer` only in a `-p` run, and only when Claude
+    /// made a single tool call in the turn. Otherwise it logs a warning and
+    /// ignores the decision: in an interactive session the hook result is
+    /// dropped, and when Claude makes several tool calls at once the call
+    /// goes through the normal permission flow and may run. Do not rely on
+    /// `defer` to keep a call from running; use [`Self::deny`] for that.
     ///
     /// On `claude -p --resume` the deferred call fires `PreToolUse` again, so
     /// the hook decides it afresh; a repeated `defer` with a resume prompt
@@ -2928,6 +3109,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
     const PRE_TOOL_USE: &[&str] = &[
         "command-structured",
         "command-updated-input-without-decision",
+        "command-defer",
         "command-continue-false-without-deny",
         "command-exit-2",
         "command-exit-2-missing-file",
@@ -2961,6 +3143,7 @@ pub fn events() -> Vec<hookkit_core::NativeEventDescriptor> {
         "command-exit-2-other-stderr",
         "command-exit-2-structured",
         "command-exit-2-block",
+        "command-exit-2-continue-false",
         "command-exit-2-missing-file-with-stdout",
         "command-nonzero-unstructured",
     ];
@@ -4012,7 +4195,8 @@ mod tests {
     #[test]
     fn continue_false_cannot_exit_2_where_it_ends_the_turn() {
         // On Stop and SubagentStop `continue: false` beats exit 2 and ends the
-        // turn, the opposite of a block.
+        // turn, the opposite of a block; on TeammateIdle it sends the
+        // teammate idle instead of keeping it working.
         assert!(
             StopOutput::no_op()
                 .with_continue(false)
@@ -4020,6 +4204,23 @@ mod tests {
                 .into_blocking_error("x")
                 .is_err()
         );
+        assert!(
+            TeammateIdleOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .into_blocking_error("x")
+                .is_err()
+        );
+        // On TaskCompleted the task stays open either way.
+        let emission = TaskCompleted::emit(
+            TaskCompletedOutput::no_op()
+                .with_continue(false)
+                .unwrap()
+                .into_blocking_error("x")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(emission.exit_code(), 2);
         assert!(
             SubagentStopOutput::block("again")
                 .with_continue(false)

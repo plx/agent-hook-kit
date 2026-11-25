@@ -198,6 +198,20 @@ input:
       tool_name: WebFetch
       tool_use_id: toolu_1
       transcript_path: /tmp/t.jsonl
+  - id: windows-write-backslash-path
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: C:\project
+      hook_event_name: PreToolUse
+      session_id: s1
+      tool_input:
+        content: '...'
+        file_path: C:\project\src\index.ts
+      tool_name: Write
+      tool_use_id: toolu_1
+      transcript_path: C:\Users\dev\.claude\projects\C--project\abc123.jsonl
 output:
 - id: structured
   origin: synthesized
@@ -278,6 +292,15 @@ output:
   value:
     decision: block
     reason: policy
+- id: defer
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      hookEventName: PreToolUse
+      permissionDecision: defer
 output_negative:
 - expected_keyword: type
   expected_pointer: /hookSpecificOutput/updatedInput
@@ -509,6 +532,14 @@ process:
   stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   stdout_base64: eyJkZWNpc2lvbiI6ImFwcHJvdmUifQ==
   stdout_sha256: 2ddd116c830744f5435c7391895c584921c7e83c19313ba43a30582a5e94e4ea
+- binding: command
+  exit_code: 0
+  id: command-defer
+  outcome: structured
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlByZVRvb2xVc2UiLCJwZXJtaXNzaW9uRGVjaXNpb24iOiJkZWZlciJ9fQ==
+  stdout_sha256: 92e73dab267806575dbd06beb99a33a91f30b817ac21f560e94bc9c0b86befea
 - binding: command
   exit_code: 0
   id: command-continue-false-without-deny

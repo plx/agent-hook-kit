@@ -493,11 +493,12 @@ lib.rs:536-539 may list the full vocabulary.
 - Matcher (`ag-hooks.md:131-136`): a regular expression over the tool
   name; `""` or `"*"` matches all; `"run_command"` matches "exactly";
   alternation and prefixes work. An anchored full match and a special
-  case for `*` are inferred, not stated. CLI 1.4.3
-  (`ag-cli-changelog.md:465`) warns about matchers "that aren't valid
-  regular expressions and so never match"; App v2.6.0
-  (`ag-changelog.md:1440`) instead rejects never-runnable configurations
-  at load. CLI 1.5.5 maps Claude Code `Bash` to `run_command` on import.
+  case for `*` are inferred, not stated. CLI 1.4.3's `agy plugin
+  validate` (`ag-cli-changelog.md:465`), run on a plugin's hooks, warns
+  about matchers "that aren't valid regular expressions and so never
+  match"; no release note documents a warning when the CLI loads hooks.
+  App v2.6.0 (`ag-changelog.md:1440`) instead rejects never-runnable
+  configurations at load. CLI 1.5.5 maps Claude Code `Bash` to `run_command` on import.
 
 Classification: **documentation-only**. `toolCall.name` and `args` stay
 open (lib.rs:345-367). Extend the open-catalog uncertainty with

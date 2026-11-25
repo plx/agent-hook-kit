@@ -98,8 +98,14 @@ fidelity:
       tool_result: {{ (selected_harness != "antigravity") | tojson }}
     post_tool_output_messages: {{ ("none" if selected_harness == "antigravity" else "separate-user-and-agent") | tojson }}
     turn_completion_output_messages: {{ ("single-reason" if selected_harness == "antigravity" else "separate-user-and-agent") | tojson }}
-{% if "file_activity" in state_capabilities %}
-    file_activity_lower_bound: {{ ("exact-session-start-or-inferred-first-observation" if selected_harness == "antigravity" else "exact-session-start") | tojson }}
+{% if "file_activity" in state_capabilities and selected_harness != "antigravity" %}
+    file_activity_lower_bound: "exact-session-start"
+{% elif "file_activity" in state_capabilities and harness_mode == "cross" %}
+    file_activity_lower_bound: "exact-session-start-or-inferred-first-observation"
+{% elif "file_activity" in state_capabilities and "session_start" in native_hooks %}
+    file_activity_lower_bound: "exact-session-start-or-inferred-invocation-start"
+{% elif "file_activity" in state_capabilities %}
+    file_activity_lower_bound: "inferred-invocation-start"
 {% else %}
     file_activity_lower_bound: null
 {% endif -%}

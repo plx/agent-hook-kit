@@ -1206,15 +1206,23 @@ fn post_model_request_fixtures_type_every_status_and_usage_shape() {
         Some("Incomplete response returned, reason: max_output_tokens")
     );
     assert_eq!(incomplete.response_id(), Some("resp_456"));
-    // The fixture omits cache_write_input_tokens, which reads as 0.
+    // Codex serializes every usage member, so the sent cache-write count is
+    // read, not defaulted.
+    let mut expected: TokenUsage = usage;
+    expected.cache_write_input_tokens = 32;
+    assert_eq!(incomplete.token_usage(), Some(expected));
+
+    // Only the schema-tolerance fixture omits cache_write_input_tokens, which
+    // reads as 0.
+    let tolerated = catalog_positive("PostModelRequest", "token-usage-without-cache-writes");
     assert!(
-        positive("PostModelRequest", "failed-incomplete")["token_usage"]
+        positive("PostModelRequest", "token-usage-without-cache-writes")["token_usage"]
             .get("cache_write_input_tokens")
             .is_none()
     );
     let mut expected: TokenUsage = usage;
     expected.cache_write_input_tokens = 0;
-    assert_eq!(incomplete.token_usage(), Some(expected));
+    assert_eq!(tolerated.token_usage(), Some(expected));
 
     let transport = catalog_positive("PostModelRequest", "failed-transport");
     assert_eq!(transport.status(), Some(ModelRequestStatus::Failed));
@@ -1302,6 +1310,23 @@ fn subagent_and_scope_fixtures_keep_their_native_identities() {
         [hookkit_core::Utf8PathBuf::from(r"C:\work\repo")]
     );
     assert_eq!(context.session_id.unwrap().as_str(), "session-1");
+
+    // SubagentStop's transcript_path is the parent thread's transcript; the
+    // subagent's own is agent_transcript_path.
+    let value = positive("SubagentStop", "parent-transcript");
+    let stop = catalog_positive("SubagentStop", "parent-transcript");
+    assert_eq!(
+        stop.transcript_path.as_ref().map(|path| path.as_str()),
+        value["transcript_path"].as_str()
+    );
+    assert_eq!(
+        stop.agent_transcript_path().map(|path| path.as_str()),
+        value["agent_transcript_path"].as_str()
+    );
+    assert_ne!(
+        stop.transcript_path.as_deref(),
+        stop.agent_transcript_path()
+    );
 
     let compact = catalog_positive("SessionStart", "compact-source");
     assert_eq!(

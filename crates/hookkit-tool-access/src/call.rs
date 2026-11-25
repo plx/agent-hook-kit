@@ -1,9 +1,7 @@
 use crate::{AccessSource, PathBase, ToolAccessGap, ToolAccessGapReason};
 use hookkit_common::{PostToolUseInput, PreToolUseInput};
 use hookkit_core::{EventId, HarnessId, Utf8Path, Utf8PathBuf};
-use hookkit_shell::{
-    CLAUDE_BASH_PROFILE, CODEX_BASH_PROFILE, ShellToolCallExt, ShellToolCallMatch, ToolPhase,
-};
+use hookkit_shell::{CODEX_BASH_PROFILE, ShellToolCallExt, ShellToolCallMatch, ToolPhase};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 
@@ -81,6 +79,12 @@ pub struct ToolCallRef<'a> {
     /// Native post-tool response, when observable.
     pub response: Option<JsonRef<'a>>,
     /// Harness tool-call correlation identifier, when supplied.
+    ///
+    /// On Antigravity this is the non-blank string `toolCall.id` that CLI
+    /// 1.5.4 and later send, the same value as
+    /// [`hookkit_antigravity::ToolCall::id_str`], the aligned
+    /// `tool_call_id()` accessors, and the runtime context; older builds send
+    /// none, and a non-string identifier is `None`.
     pub tool_call_id: Option<&'a str>,
     pub(crate) shell_call: ShellToolCallMatch<'a>,
 }
@@ -178,14 +182,21 @@ impl ObservableToolCall for PostToolUseInput {
 /// Claude Code tool events share the generic catalog input shape.
 ///
 /// `PreToolUse` and `PermissionRequest` are observed before execution;
-/// `PostToolUse` and `PostToolUseFailure` after it. Claude reports failed
-/// calls, such as a Bash command that exits non-zero after writing files,
-/// through `PostToolUseFailure`, but hooks from managed settings also see
-/// some failed calls on `PostToolUse`, with the error text as a string
-/// `tool_response`; [`crate::ToolAccessAnalyzer::analyze_call`] then reports
-/// no `Direct` evidence. A Bash-matched `PreToolUse` can also have no
-/// matching post-tool event: Claude Code runs it for shell commands the
-/// Monitor tool starts, whose results no Bash post-tool hook sees. Other
+/// `PostToolUse` and `PostToolUseFailure` after it. On all four, the `Bash`
+/// tool and a `Monitor` call that runs a `command` are shell calls, exactly
+/// as [`hookkit_shell::ShellToolCallExt`] matches them and as the typed
+/// [`hookkit_claude::protocol::PostToolUseInput`] is observed: a hook whose
+/// matcher includes `Monitor`, or that has no matcher, receives the Monitor
+/// call's own input. A Monitor WebSocket watch (`ws`, no `command`) runs no
+/// shell command and is analyzed as a structured tool.
+///
+/// Claude reports failed calls, such as a Bash command that exits non-zero
+/// after writing files, through `PostToolUseFailure`, but hooks from managed
+/// settings also see some failed calls on `PostToolUse`, with the error text
+/// as a string `tool_response`; [`crate::ToolAccessAnalyzer::analyze_call`]
+/// then reports no `Direct` evidence. A Bash-matched `PreToolUse` can also
+/// have no matching post-tool event: Claude Code runs it for shell commands
+/// the Monitor tool starts, whose results no Bash post-tool hook sees. Other
 /// events, including `PreSkillShellCommand`, yield
 /// [`ToolAccessGapReason::MissingToolCall`].
 impl ObservableToolCall for hookkit_claude::catalog::CatalogInput {
@@ -204,21 +215,8 @@ impl ObservableToolCall for hookkit_claude::catalog::CatalogInput {
             return ToolCallObservation::gap(ToolAccessGapReason::MissingToolInput);
         };
         let response = self.field("tool_response");
-        let event_id = EventId::builtin(HarnessId::CLAUDE_CODE, event);
-        let shell_call = if event == "PreToolUse" {
-            self.shell_tool_call()
-        } else {
-            CLAUDE_BASH_PROFILE.extract_from_value(
-                event_id.clone(),
-                phase,
-                tool_name,
-                tool_input,
-                Some(&self.cwd),
-                response,
-            )
-        };
         ToolCallObservation::Call(ToolCallRef {
-            event: event_id,
+            event: EventId::builtin(HarnessId::CLAUDE_CODE, event),
             phase,
             tool_name,
             tool_input: JsonRef::Value(tool_input),
@@ -227,7 +225,7 @@ impl ObservableToolCall for hookkit_claude::catalog::CatalogInput {
             workspace_roots: Cow::Owned(vec![self.cwd.clone()]),
             response: response.map(JsonRef::Value),
             tool_call_id: self.field("tool_use_id").and_then(Value::as_str),
-            shell_call,
+            shell_call: self.shell_tool_call(),
         })
     }
 }
@@ -294,7 +292,7 @@ impl ObservableToolCall for hookkit_antigravity::PreToolUseInput {
             cwd_base: PathBase::SessionCwd,
             workspace_roots: Cow::Borrowed(&self.workspace_paths),
             response: None,
-            tool_call_id: None,
+            tool_call_id: self.tool_call.id_str(),
             shell_call: self.shell_tool_call(),
         })
     }
@@ -314,7 +312,7 @@ impl ObservableToolCall for hookkit_antigravity::PostToolUseInput {
             cwd_base: PathBase::SessionCwd,
             workspace_roots: Cow::Borrowed(&self.workspace_paths),
             response: None,
-            tool_call_id: None,
+            tool_call_id: tool_call.id_str(),
             shell_call: self.shell_tool_call(),
         })
     }

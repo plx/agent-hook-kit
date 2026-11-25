@@ -328,9 +328,10 @@ wire_enum! {
     /// Who invoked the skill whose injected command a `PreSkillShellCommand`
     /// hook receives.
     ///
-    /// The Agent SDK closes the set, but the snapshot keeps it open, and the
-    /// hooks reference says to treat an unrecognized value as [`Self::Other`];
-    /// [`Self::is_other`] does.
+    /// The Agent SDK closes the set to these three values, and the hooks
+    /// reference defines `other` as anything else. The snapshot keeps the set
+    /// open so a future value does not reject the payload; HookKit treats an
+    /// undocumented value like [`Self::Other`], which [`Self::is_other`] does.
     pub enum SkillInvoker {
         /// The user typed the skill's name, or an Agent SDK app sent it.
         User = "user",
@@ -343,7 +344,7 @@ wire_enum! {
 
 impl SkillInvoker {
     /// Reports whether the value is `other` or a value the snapshot does not
-    /// document, which the hooks reference says to treat as `other`.
+    /// document, which HookKit treats like `other`.
     pub fn is_other(&self) -> bool {
         matches!(self, Self::Other | Self::Unknown(_))
     }

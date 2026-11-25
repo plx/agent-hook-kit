@@ -110,7 +110,15 @@ fn run_example(binary: &str, fixture: &[u8], extra_args: &[&str]) -> std::proces
         .spawn()
         .and_then(|mut child| {
             use std::io::Write;
-            child.stdin.take().unwrap().write_all(fixture).unwrap();
+            if let Err(error) = child.stdin.take().unwrap().write_all(fixture) {
+                // Argument errors can exit before reading stdin. Still collect
+                // the response so callers verify its status, stdout, and stderr.
+                assert_eq!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe,
+                    "writing example stdin: {error}"
+                );
+            }
             child.wait_with_output()
         })
         .unwrap_or_else(|e| panic!("failed to run {}: {e}", binary_path.display()))
@@ -1236,9 +1244,14 @@ fn codex_bash_guard_rejects_non_pretool() {
 
 // --- antigravity-pre-invocation ---
 
+/// The fixture is a multi-root workspace's first invocation, so the example
+/// injects its reminder; a later invocation must not repeat it, because an
+/// injected `systemMessage` stays in the conversation.
 #[test]
 fn antigravity_pre_invocation_runs_contract_fixture() {
     let fixture = fixture_bytes("antigravity", "pre_invocation.json");
+    let mut input: serde_json::Value = serde_json::from_slice(&fixture).unwrap();
+    assert_eq!(input["invocationNum"], 0);
     let output = run_example("antigravity-pre-invocation", &fixture, &[]);
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
@@ -1248,6 +1261,17 @@ fn antigravity_pre_invocation_runs_contract_fixture() {
             .as_str()
             .unwrap()
             .contains("workspace root")
+    );
+
+    input["invocationNum"] = serde_json::json!(3);
+    let later = serde_json::to_vec(&input).unwrap();
+    let output = run_example("antigravity-pre-invocation", &later, &[]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({}),
+        "a later invocation is a no-op"
     );
 }
 
@@ -1590,18 +1614,24 @@ fn file_activity_agent_hook_records_all_supported_posttool_paths() {
 fn session_modified_file_tracker_reports_usage_errors() {
     // A misconfigured command line must be visible, not a silent exit 1, and
     // must never use the harness-blocking exit 2.
-    let output = run_example(
-        "session-modified-file-tracker",
-        b"{}",
-        &["--harness=codex", "--no-such-flag"],
-    );
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--no-such-flag") && stderr.contains("file-activity-agent-hook"),
-        "{stderr}"
-    );
+    // A usage error exits before reading stdin, so writing the input can race
+    // the exit. The input larger than a pipe buffer makes that race certain:
+    // the run must still report the usage error, not a broken pipe.
+    let oversized = vec![b' '; 1 << 20];
+    for input in [&b"{}"[..], &oversized] {
+        let output = run_example(
+            "session-modified-file-tracker",
+            input,
+            &["--harness=codex", "--no-such-flag"],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--no-such-flag") && stderr.contains("file-activity-agent-hook"),
+            "{stderr}"
+        );
+    }
 }
 
 #[test]

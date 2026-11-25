@@ -59,3 +59,13 @@ sources:
     limitations:
       - The mutable Markdown page has no checked-in capture; the hash covers the decoded 94797-byte body that `curl --compressed` returned on 2026-11-25.
       - Cited for the exceptions to a PreToolUse allow, the plan-mode rule that updatedInput still applies, and the precedence among rules, hooks, and mods.
+  - id: claude-mcp
+    kind: official-documentation
+    authority: primary
+    url: https://code.claude.com/docs/en/mcp.md
+    retrieved: 2026-11-25
+    content_sha256: 785996c216e026b162e398212c49d72b27e11cda3893ef5abb18216fd1813681
+    reproducibility: content-hash-only
+    limitations:
+      - The mutable Markdown page has no checked-in capture; the hash covers the decoded 178384-byte body that `curl --compressed` returned on 2026-11-25, the same bytes the audit fetched for corroboration.
+      - Cited for skills that MCP servers provide (public beta), which reach UserPromptExpansion command_name as <server>:<skill>, with the prefix connector and plugin servers add (claude_ai_Docs:pdf, plugin_my-plugin_docs:pdf), and for their v2.1.331 requirement, which differs from the changelog's 2.1.332 entry; the page does not document the expansion_type or command_source such a skill produces.

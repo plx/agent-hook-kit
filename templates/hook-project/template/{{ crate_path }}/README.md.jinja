@@ -98,6 +98,20 @@ builds that predate `SessionStart` never send it; there the first observed
 `PostToolUse` sets a best-effort lower bound instead.
 {%- endif %}
 {% endif -%}
+{% if harness_mode == "single" and harness == "antigravity" and "file_activity" in state_capabilities %}
+{% if "session_start" in native_hooks -%}
+Register `session-start` for Antigravity's `SessionStart` event, so file
+activity is bounded by the exact start of the conversation, and keep
+`pre-invocation` registered: builds that predate `SessionStart` never send it,
+and there the first `PreInvocation` (invocation 0) sets an inferred lower
+bound instead.
+{%- else -%}
+This project does not handle Antigravity's `SessionStart` event, so file
+activity is bounded by the first `PreInvocation` (invocation 0), an inferred
+lower bound. Add the `session_start` hook to record the exact start of the
+conversation on builds that send it.
+{%- endif %}
+{% endif -%}
 {% if starter in ["immediate_quality", "deferred_quality"] or "file_activity" in state_capabilities %}
 The runner requires `pkl` {{ compatibility.pkl_version }}. The generated package
 owns this policy:

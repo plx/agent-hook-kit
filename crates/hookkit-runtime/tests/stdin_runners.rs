@@ -420,8 +420,9 @@ fn failures_after_resolution_are_lowered_for_the_resolved_event() {
         outcome.stderr
     );
 
-    // A tool-call payload is shaped like both PreToolUse and PostToolUse, so
-    // without a hint nothing resolves and the unknown event is denied.
+    // A tool-call payload is shaped like PreToolUse and PostToolUse, and fits
+    // SessionStart's common fields too, so without a hint nothing resolves
+    // and the unknown event is denied.
     let tool_call = serde_json::json!({
         "conversationId": "stdin-conversation",
         "workspacePaths": ["/tmp"],
@@ -444,6 +445,13 @@ fn failures_after_resolution_are_lowered_for_the_resolved_event() {
         "{:?}",
         outcome.stderr
     );
+    for event in ["SessionStart", "PreToolUse", "PostToolUse"] {
+        assert!(
+            outcome.stderr.contains(event),
+            "{event}: {:?}",
+            outcome.stderr
+        );
+    }
 }
 
 #[test]

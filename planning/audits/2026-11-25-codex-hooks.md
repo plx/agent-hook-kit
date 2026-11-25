@@ -128,11 +128,11 @@ changes are:
 | `SessionEnd` | none (reference now lists triggers) | trigger uncertainty; 30 min vs 60 s limitation | documentation-only |
 | `SubagentStart` | none | shared uncertainties only | none |
 | `PreToolUse` | stdin `cwd` = resolved local workdir (0.166.0); selector rule (0.165.0/0.170.0); Guardian direct review (0.167.0/0.168.0) | rewritten cwd uncertainty; selector, Guardian, and code-mode uncertainties; synthesized cwd positives | behavioral |
-| `PermissionRequest` | per-action stdin `cwd` (0.166.0); environment-scoped `allow` ignored (0.165.0) | rewritten cwd uncertainty; provenance uncertainty; `write_stdin` positive | behavioral |
+| `PermissionRequest` | per-action stdin `cwd` (0.166.0); environment-scoped `allow` ignored (0.165.0); a managed `prompt-user` checkpoint ignores a hook `allow` (0.167.0, `core/src/tools/approvals.rs@3d86e43:600-626`) | rewritten cwd uncertainty; provenance and checkpoint uncertainties; `write_stdin` positive | behavioral |
 | `PostToolUse` | stdin `cwd` = original execution cwd, even in a later turn (0.166.0) | rewritten cwd uncertainty; code-mode block uncertainty | behavioral |
 | `PreCompact` / `PostCompact` | none | shared uncertainties only | none |
-| `UserPromptSubmit` | none | shared uncertainties only | none |
-| `SubagentStop` | none (`agent_transcript_path` null for environment-scoped hooks) | shared uncertainties only | none |
+| `UserPromptSubmit` | none | exit-2 stderr role `user-message`, since core drops the block reason (`core/src/hook_runtime.rs@3d86e43:114-128`); blocked-prompt uncertainty | correction |
+| `SubagentStop` | none (`agent_transcript_path` null for environment-scoped hooks) | parent-thread `transcript_path` uncertainty (`core/src/hook_runtime.rs@3d86e43:384-420`) and `parent-transcript` positive | correction |
 | `Stop` | none (environment-scoped hooks join memory-consolidation Stop) | shared uncertainties only | none |
 | `Interrupt` | none | timeout uncertainty extended to `mcp_tool` | correction |
 

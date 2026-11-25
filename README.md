@@ -124,11 +124,17 @@ The command-process environment is recorded separately in supplement
   `additionalContext`.
 - `PreToolUseOutput::allow()` auto-approves the call and skips the permission
   prompt. A hook that only adds context or has no objection should return
-  `no_op()` or `with_context(..)`.
+  `no_op()` or `with_context(..)`. To stop a call, `deny(..)` is the only
+  decision that always holds: in auto mode `ask(..)` does not gate a
+  `SubagentHandback` call, which runs without a prompt, and `defer()` is
+  honored only in a `-p` run where Claude made a single tool call.
 - `PermissionRequest` ignores exit 2; only `PermissionRequestOutput::deny(..)`
-  denies. `Setup`, `InstructionsLoaded`, `Notification`, `StopFailure`,
-  `SessionEnd`, and `PostCompact` discard every JSON output field except
-  `terminalSequence`; builders for discarded fields are deprecated.
+  denies. `with_updated_permissions` rejects an entry that does not match the
+  documented permission-update shape, because Claude Code would drop the
+  whole response, allow included, over one malformed entry. `Setup`,
+  `InstructionsLoaded`, `Notification`, `StopFailure`, `SessionEnd`, and
+  `PostCompact` discard every JSON output field except `terminalSequence`;
+  builders for discarded fields are deprecated.
 - `WorktreeRemove` is decided by exit code alone, so a HookKit runtime error
   (exit 1) blocks the removal while the worktree still exists. A
   `UserPromptSubmit` block reason is shown only to the user, never to Claude,
@@ -141,6 +147,9 @@ The command-process environment is recorded separately in supplement
   `with_system_message`. There `continue: false` takes precedence over exit 2
   and ends the turn, so `into_blocking_error` rejects a response that sets it.
   `TaskCompleted` and `TeammateIdle` also accept a top-level `block(reason)`.
+  On `TeammateIdle`, too, `continue: false` takes precedence over exit 2 and
+  sends the teammate idle, so its `into_blocking_error` rejects it as well; on
+  `TaskCompleted` the task stays open either way.
 - Exit 2 with blank stdout and a stderr that says a file is missing or cannot
   be opened (such as a Rust `NotFound` error) is a non-blocking error on
   `Stop`, `SubagentStop`, `TaskCompleted`, and a plugin's `UserPromptSubmit`.
@@ -149,7 +158,10 @@ The command-process environment is recorded separately in supplement
 - `PreCompact` stdout becomes the compaction instructions, so its `no_op()`
   prints nothing rather than `{}`, and
   `PreCompactOutput::compaction_instructions(text)` writes instructions
-  (cut at 10,000 characters since v2.1.314).
+  (cut at 10,000 characters since v2.1.314). A JSON response printed at
+  exit 0 must therefore block: emitting one without a top-level
+  `decision: "block"`, such as `no_op().with_terminal_sequence(..)`, fails.
+  Pair a terminal sequence with `with_block(..)` or `into_blocking_error(..)`.
 - `PreSkillShellCommand` (v2.1.332 or later) runs before an injected command,
   a shell command that runs while a skill or a command such as
   `/security-review` loads; `PreToolUse` hooks do not fire for it.
@@ -159,10 +171,14 @@ The command-process environment is recorded separately in supplement
   policy on both `PreToolUse` and `PreSkillShellCommand` with the matcher
   `Bash|PowerShell`, in a settings file or plugin: in auto mode, Claude can
   run a command that needs approval afterward as an ordinary tool call,
-  which fires `PreToolUse` instead. The `hookkit-shell` adapters and
-  `hookkit-tool-access` treat this event as no tool call; analyze a `Bash`
-  command with `hookkit_shell::BashAnalyzer` directly (the analyzer does not
-  parse PowerShell).
+  which fires `PreToolUse` instead. `hookkit-shell`'s Claude adapter
+  (`ShellToolCallExt::shell_tool_call` on `CatalogInput`) returns the
+  injected command as a pre-phase call when `tool_name` is `Bash`, exactly as
+  for a `Bash` `PreToolUse`; `PowerShell` reports `ShellToolCallMatch::NotShell`
+  (the analyzer does not parse PowerShell). `hookkit-tool-access` does not
+  observe the event and reports a `MissingToolCall` gap, so for file-access
+  analysis treat the injected command as a custom `ToolCallRef` with
+  `CLAUDE_BASH_PROFILE` registered, as `examples/forbidden-file-guard` does.
 - A hook failure (exit 1, a crash, a timeout, a missing binary, or invalid
   JSON) lets the action proceed unless the hook entry sets
   `"onFailure": "block"` (v2.1.295 or later), which makes a failure do what
@@ -204,6 +220,15 @@ The command-process environment is recorded separately in supplement
 - A blank (after trimming) block reason or exit-2 stderr is an emission error,
   because Codex would treat it as a failed hook and not block. Text context
   that starts with `{` or `[` is sent as structured `additionalContext`.
+- A `UserPromptSubmit` block (exit 2, `decision: block`, or
+  `continue: false`) drops the prompt, and its reason never reaches the
+  model: Codex shows it only as the hook run's feedback entry, which the TUI
+  displays and `codex exec` does not print. Any `additionalContext` is still
+  recorded.
+- `PermissionRequestOutput::allow()` cannot approve a `Bash` command that a
+  managed `requirements.toml` `prompt-user` rule matches (Codex 0.167.0): a
+  person decides, or Codex rejects the command when no capable client is
+  connected, and stdin does not mark the case. A deny still applies.
 - A synchronous `continue: false` means different things per event. On
   `PostToolUse` it replaces the tool result the model sees and the turn goes
   on; on `PreCompact` and `PostCompact` it aborts the turn, for manual and
@@ -485,8 +510,10 @@ blocks a Claude Code compaction when it fails; see
 [Failure policy](#failure-policy));
 `PostCompactOutput::with_system_notice` is a documented no-op on Claude Code,
 which discards `PostCompact` `systemMessage` (see `system_notice_delivered`);
-and a `UserPromptSubmitOutput::block` reason is shown to the Claude Code user
-only. A pair-only marker, or any harness without an aligned adapter, fails
+and a `UserPromptSubmitOutput::block` reason never reaches the model on
+either harness, but Claude Code shows it to the user while Codex records it
+only as the hook run's feedback entry (shown in the TUI, not by `codex exec`).
+A pair-only marker, or any harness without an aligned adapter, fails
 with `HookkitError::UnsupportedHarness` before the payload is parsed.
 
 The aligned runners take canonical harness identities (`claude-code`, `codex`,
@@ -760,7 +787,8 @@ cat fixtures/codex/pre_tool_use.json \
   | cargo run -q -p codex-bash-guard
 ```
 
-Antigravity pre-invocation reminder:
+Antigravity pre-invocation reminder (the fixture is invocation 0 of a
+multi-root workspace; a later `invocationNum` prints `{}`):
 
 ```bash
 cat fixtures/antigravity/pre_invocation.json \
@@ -783,9 +811,11 @@ limitation notes:
 
 - [`codex-claude-rules`](examples/codex-claude-rules/README.md) lazily injects
   path-scoped files from Claude Code's user and project rules directories.
-- [`forbidden-file-guard`](examples/forbidden-file-guard/README.md) selects a
-  native pre-tool contract with `--harness=claude|codex|antigravity` and merges
-  home/project YAML policy.
+- [`forbidden-file-guard`](examples/forbidden-file-guard/README.md) guards
+  Claude Code `PreToolUse` and `PreSkillShellCommand` (`--harness=claude`,
+  selected-harness runner) and Codex/Antigravity `PreToolUse`
+  (`--harness=codex|antigravity`, aligned runner), and merges home/project
+  YAML policy.
 - [`session-modified-file-tracker`](examples/session-modified-file-tracker/README.md)
   demonstrates the shipped file-activity observer while retaining the former
   example command and flags as compatibility aliases.
@@ -976,14 +1006,17 @@ The start directory is the input's first workspace root: a Codex `Stop`'s
 `cwd` or Antigravity's first `workspacePaths` entry. A Codex `PostToolUse` has
 none, because its `cwd` is the tool command's working directory, so the
 post-tool runner starts from the hook's working directory (the step
-directory) when that contains every written file, and otherwise from the
-deepest directory containing them, as it does for an Antigravity conversation
-without a workspace. On Claude Code both runners start from the session's
-working root, `CLAUDE_PROJECT_DIR` or the linked worktree the session
-entered, never the `cwd` that follows `cd`. The home directory's own file is
-only the home layer, and the project root is the deepest directory holding a
-project or local config (never `$HOME`). Later files override earlier ones;
-`settings.fileActivity` and `settings.deferredReporting` merge field by field.
+directory) when that contains at least one written file, and otherwise from
+the deepest directory containing them, as it does for an Antigravity
+conversation without a workspace. A command that also writes a log or
+temporary file elsewhere therefore keeps the project's configuration, and
+patterns still match that file by its absolute path. On Claude Code both
+runners start from the session's working root, `CLAUDE_PROJECT_DIR` or the
+linked worktree the session entered, never the `cwd` that follows `cd`. The
+home directory's own file is only the home layer, and the project root is the
+deepest directory holding a project or local config (never `$HOME`). Later
+files override earlier ones; `settings.fileActivity` and
+`settings.deferredReporting` merge field by field.
 A file can opt out of earlier state with `merge { resetAll = true }`,
 `merge { reset = new Listing { "tools"; "run" } }`, or
 `merge { resetTools = new Listing { "ruff" } }`. All layers are evaluated by
@@ -1221,16 +1254,22 @@ Git-dirty reconciliation recover only best-effort candidates.
   - atomically claims each matched rule in session state before injecting its
     body as additional context.
 - `forbidden-file-guard`:
-  - uses one aligned handler for Claude, Codex, and Antigravity pre-tool events,
+  - handles Claude Code `PreToolUse` and `PreSkillShellCommand` through the
+    selected Claude Code harness API, reusing the aligned `PreToolUse`
+    handler for tool calls, and Codex/Antigravity `PreToolUse` through the
+    aligned API,
   - merges additive YAML glob policy from home and workspace configuration,
     resolved against the stable project root, the current `cwd`, and the
     checkout enclosing it,
   - applies inspect-known, deny-unresolved, and deny-all-shell postures (OR-ed
     across settings and layers) to bounded structured, patch, and shell access
-    evidence, treating Codex shell operands relative to an unreported
-    `workdir` as uncertain,
-  - answers non-matches with the aligned pass-through, never `allow`, and
-    fails closed, including on argument errors.
+    evidence, treating relative Codex shell operands as uncertain, because a
+    command in a remote execution environment reports the host's step
+    directory as `cwd` (a local command reports its resolved `workdir` since
+    Codex 0.166.0) and the payload does not say which case applies,
+  - answers non-matches with a pass-through (the aligned `pass_through`, or
+    `PreSkillShellCommandOutput::no_op` for an injected command), never
+    `allow`, and fails closed, including on argument errors.
 - `file-activity-agent-hook`:
   - uses the aligned post-tool API for Codex and Antigravity and the selected
     Claude Code harness API for Claude's `PostToolUse` and

@@ -627,6 +627,7 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
             )]))
         )?
     );
+    case!(PreToolUse, "command-defer", PreToolUseOutput::defer());
     case!(
         PreToolUse,
         "command-continue-false-without-deny",
@@ -822,6 +823,16 @@ fn execute_claude_cases() -> Result<Vec<ExecutedCase>, String> {
         TaskCompleted,
         "command-exit-2-block",
         built(TaskCompletedOutput::block("Tests not passing.").into_blocking_error(BLOCKED))?
+    );
+    case!(
+        TaskCompleted,
+        "command-exit-2-continue-false",
+        built(
+            TaskCompletedOutput::no_op()
+                .with_continue(false)
+                .and_then(|output| output.with_stop_reason("Done."))
+                .and_then(|output| output.into_blocking_error("keep going"))
+        )?
     );
     case!(
         TaskCompleted,

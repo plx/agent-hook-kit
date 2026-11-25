@@ -85,6 +85,17 @@ coverage must be derived from
 > registry and scaffold the three new events; the acceptance tests assert the
 > 33/12/5 split.
 
+> **Update (2026-11-25):** the registry now selects
+> `claude-code/docs-2026-11-25-r1` (34 events, adding `PreSkillShellCommand`),
+> `codex/commit-3d86e43-r1` (14 events, adding `PreModelRequest` and
+> `PostModelRequest`), and `antigravity/docs-2026-11-25-r1` (6 events, adding
+> `SessionStart`), 54 in all. The template catalogs were regenerated and
+> scaffold the four new events; the acceptance tests assert the 34/14/6
+> split. Antigravity `SessionStart` is a native exact session boundary on
+> builds that send it, but it is not a member of the aligned `session_start`
+> family, which stays Claude/Codex. The session-start passages below are
+> revised accordingly.
+
 All three are normal built-in choices, and cross-harness mode defaults to all
 three. There is no legacy fourth-harness compatibility mode, hidden choice, or
 feature to preserve. Capability and fidelity labels are computed from the
@@ -171,18 +182,20 @@ through `hookkit-tool-access`, `hookkit-file-activity`, and
 work needs three coordinated bindings that share one state root:
 
 ```text
-SessionStart -> exact metadata observer on Claude/Codex
+SessionStart -> exact metadata observer on each harness's native SessionStart
 PostToolUse  -> direct file-activity producer on all three
 Stop         -> deferred consumer on all three
 ```
 
 Antigravity's originating call and arguments now support structured and shell
-evidence at `PostToolUse`. It still has no exact `SessionStart`; its first lower
-bound must be inferred from `PreInvocation(invocation_num == 0)` or the first
-observed hook, so initial mtime reconciliation remains best effort. That is a
-session-boundary fidelity difference, not a reason to exclude Antigravity from
-file activity. The old `ModifiedFiles` projection should not be offered for new
-projects; `hookkit-file-activity` is the supported path.
+evidence at `PostToolUse`. Since the 2026-11-25 refresh it also has a native
+`SessionStart`, which gives an exact lower bound. Builds that predate it never
+send it; there the first lower bound must be inferred from
+`PreInvocation(invocation_num == 0)` or the first observed hook, so initial
+mtime reconciliation remains best effort. That is a session-boundary fidelity
+difference, not a reason to exclude Antigravity from file activity. The old
+`ModifiedFiles` projection should not be offered for new projects;
+`hookkit-file-activity` is the supported path.
 
 The runner and file-activity family names are currently fixed. Each generated
 tool must therefore use a package-specific default state root so two generated
@@ -361,8 +374,9 @@ Validation rules:
   implemented sealed runtime marker whose supported set contains every
   selected harness;
 - a state capability's required hooks cannot be deselected;
-- `file_activity` works for all three, but a selection that requires an exact
-  session-start lower bound excludes Antigravity;
+- `file_activity` works for all three; an exact session-start lower bound on
+  Antigravity depends on the build sending `SessionStart`, and older builds
+  fall back to an inferred bound;
 - an archetype must remain compatible with the chosen native output features;
 - strict message requirements are rejected when a selected harness cannot
   represent the requested audience; they are never silently downgraded;
@@ -485,7 +499,7 @@ Initial library:
 | `scoped_context_once` | Single harness, pre-tool, session metadata + claim set + tool-access | Discover/match content separately from atomic once-per-session claim |
 | `session_bootstrap` | Cross Claude+Codex, aligned session-start + session metadata | `build_context` returns the portable context floor; native extras stay in lowering arms |
 | `immediate_quality` | Cross all three, post-tool, Pkl runner | Analyze/fix on all three; Antigravity message output follows the chosen lowering policy |
-| `deferred_quality` | Cross all three, file observer + turn completion | Exact start on Claude/Codex; direct evidence and best-effort bootstrap on Antigravity |
+| `deferred_quality` | Cross all three, file observer + turn completion | Exact start on each native `SessionStart`; direct evidence on all three, with best-effort bootstrap on Antigravity builds that predate `SessionStart` |
 | `pre_tool_rewrite` | Cross Claude+Codex, pre-tool rewrite | Pure transform returns replacement input; generated native arms preserve each wire shape |
 
 <!-- markdownlint-enable MD013 -->
@@ -592,8 +606,10 @@ capability therefore does not change or overwrite a protected handler
 signature. When an archetype delegates all selected events to library-owned
 runners, custom state capabilities require selecting an additional event with
 a user-owned seam; the questionnaire enforces that composition. The exact
-session-start entrypoint is registered only for Claude and Codex; all three
-receive the post-tool producer and completion consumer.
+session-start entrypoint is registered for every selected harness's native
+`SessionStart`, and Antigravity builds that predate that event fall back to a
+best-effort first observation; all three receive the post-tool producer and
+completion consumer.
 
 ## 9. Generated project layout and ownership
 
@@ -698,9 +714,10 @@ That keeps the CLI stable when another hook is added later.
   `run_aligned_event::<AlignedMarker>(selected_harness, ...)`.
 - Pair-specific markers accept only Claude or Codex; the question resolver
   prevents an Antigravity-containing selection from reaching those dispatch
-  arms. The deferred-quality support command likewise invokes the precise
-  session-start observer only for Claude and Codex and records Antigravity's
-  first-observed boundary as best effort.
+  arms. The deferred-quality support command invokes the precise
+  session-start observer for each harness's native `SessionStart`, including
+  Antigravity's, and records a first-observed boundary as best effort on
+  Antigravity builds that predate that event.
 - Antigravity invocation and tool-use events lack an input discriminator.
   `PreInvocation`/`PostInvocation` remain exact-event dispatch, and explicit
   subcommands select every Antigravity pair without payload guessing.
@@ -1084,7 +1101,8 @@ the equivalent remote tag-to-tag smoke.
 - Add package-specific state roots.
 - Add file-activity compound selection and the six initial archetypes.
 - Exercise exact session start on Claude/Codex and direct post-tool evidence
-  with inferred bootstrap on Antigravity.
+  with inferred bootstrap on Antigravity (since the 2026-11-25 refresh,
+  Antigravity's native `SessionStart` is exercised as an exact start too).
 - Add generated Pkl config and non-skipping runner tests.
 
 ### Phase 5 — update hardening (local work complete; release tag pending)
@@ -1161,8 +1179,9 @@ The implementation uses these defaults:
 5. **Crate-mode safety:** do not mutate an existing root `Cargo.toml`; render
    the required member entry.
 6. **Copier security:** no tasks or migrations in v1, hence no `--trust`.
-7. **Session fidelity:** file activity supports all three; exact start is
-   Claude/Codex and Antigravity bootstrap is explicitly best effort.
+7. **Session fidelity:** file activity supports all three; exact start comes
+   from each harness's native `SessionStart`, and Antigravity bootstrap is
+   explicitly best effort on builds that predate that event.
 8. **Dependency bodge:** one exact Git revision now; crates.io becomes the
    public default only after the full 12-crate graph is published and smoked.
 9. **Initial archetypes:** policy guard, once-per-session scoped context,

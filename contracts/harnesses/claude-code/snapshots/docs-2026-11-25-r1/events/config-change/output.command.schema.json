@@ -4,6 +4,7 @@
   "additionalProperties": false,
   "properties": {
     "continue": {
+      "description": "Accepted but discarded on this event.",
       "type": "boolean"
     },
     "decision": {
@@ -14,7 +15,7 @@
       "type": "string"
     },
     "stopReason": {
-      "description": "Shown to the user when continue is false; it stays in the conversation, so Claude sees it if the conversation continues.",
+      "description": "Accepted but never shown: this event discards continue.",
       "type": "string"
     },
     "suppressOutput": {

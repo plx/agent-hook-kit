@@ -77,7 +77,39 @@
       "type": "string"
     },
     "permission_suggestions": {
-      "description": "Permission updates Claude Code suggests for this request; not an exact list of the options the dialog shows.",
+      "description": "Permission updates Claude Code suggests for this request, in the entry shape updatedPermissions uses; not an exact list of the options the dialog shows.",
+      "items": {
+        "additionalProperties": true,
+        "description": "Open-world: type and destination stay open strings whose examples are the documented values, and type selects the other fields.",
+        "properties": {
+          "destination": {
+            "examples": [
+              "session",
+              "localSettings",
+              "projectSettings",
+              "userSettings",
+              "cliArg"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "examples": [
+              "addRules",
+              "replaceRules",
+              "removeRules",
+              "setMode",
+              "addDirectories",
+              "removeDirectories"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "destination"
+        ],
+        "type": "object"
+      },
       "type": "array"
     },
     "prompt_id": {

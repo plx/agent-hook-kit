@@ -189,6 +189,14 @@ process:
   stdout_base64: eyJzeXN0ZW1NZXNzYWdlIjoiVGVhbW1hdGUga2VwdCB3b3JraW5nLiJ9
   stdout_sha256: 062f3365cc3aff7fae04b46513f9d9449e6a288e7c3c91d411af5a5f316b1f8a
 - binding: command
+  exit_code: 2
+  id: command-exit-2-continue-false
+  outcome: exit-2-continue-false
+  stderr_base64: a2VlcCBnb2luZw==
+  stderr_sha256: 6e7ecf10083ec035057bdce834a72bbe2bffae8df9383ed10eb06c78dd70944b
+  stdout_base64: eyJjb250aW51ZSI6ZmFsc2UsInN0b3BSZWFzb24iOiJEb25lLiJ9
+  stdout_sha256: 64ce5dcc2c7494b7d5eaa0017e88e7c237cc9f3ac94cbdb9208a096a6b3d08f3
+- binding: command
   exit_code: 1
   id: command-nonzero-structured
   outcome: nonzero-structured

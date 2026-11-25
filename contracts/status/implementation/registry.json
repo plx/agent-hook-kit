@@ -387,6 +387,7 @@
       "conformance_cases": [
         "command-structured",
         "command-updated-input-without-decision",
+        "command-defer",
         "command-continue-false-without-deny",
         "command-exit-2",
         "command-exit-2-missing-file",
@@ -520,6 +521,7 @@
         "command-exit-2-other-stderr",
         "command-exit-2-structured",
         "command-exit-2-block",
+        "command-exit-2-continue-false",
         "command-exit-2-missing-file-with-stdout",
         "command-nonzero-unstructured"
       ]

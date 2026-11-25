@@ -567,7 +567,7 @@ fn evaluate_report(
         .find(|expression| matches_floating_policy(policy, &expression.raw))
     {
         return Some(format!(
-            "Forbidden-file policy denies access to `{}`: the tool's working directory is not reported, so it may name a forbidden path",
+            "Forbidden-file policy denies access to `{}`: the command may run in a working directory the payload does not report, so it may name a forbidden path",
             expression.raw
         ));
     }
@@ -599,7 +599,7 @@ fn evaluate_report(
         && (!report.is_complete() || !resolution.is_complete() || !session_relative.is_empty())
     {
         return Some(format!(
-            "Forbidden-file policy denies unresolved access analysis ({} analysis gap(s), {} resolution gap(s), {} operand(s) relative to an unreported working directory)",
+            "Forbidden-file policy denies unresolved access analysis ({} analysis gap(s), {} resolution gap(s), {} operand(s) relative to a possibly unreported working directory)",
             report.gaps.len(),
             resolution.unresolved.len(),
             session_relative.len()
@@ -611,13 +611,16 @@ fn evaluate_report(
 /// Relative shell operands the analyzer could only resolve against the hook's
 /// session directory ([`PathBase::SessionCwd`]).
 ///
-/// The command may run elsewhere: a Codex shell call's `workdir` argument
-/// moves it, and the `Bash` hook payload omits it. `cat token.txt` run in
-/// `secrets/` then reads `secrets/token.txt` although the operand resolves to
-/// `<cwd>/token.txt`. `deny_unresolved` counts such operands as unresolved,
-/// and every posture matches them against root-relative patterns anchored
-/// anywhere (`**/secrets/**`), which catches a workdir above the forbidden
-/// path but not one inside it.
+/// The command may run elsewhere: since Codex 0.166.0 a local command's hook
+/// `cwd` is its resolved `workdir`, but a command in a remote execution
+/// environment reports the host directory instead, and the payload does not
+/// say which. A remote `cat token.txt` run in `secrets/` then reads
+/// `secrets/token.txt` although the operand resolves to `<cwd>/token.txt`.
+/// `deny_unresolved` counts such operands as unresolved, and every posture
+/// matches them against root-relative patterns anchored anywhere
+/// (`**/secrets/**`), which catches a remote workdir above the forbidden path
+/// but not one inside it. A local workdir inside it is the hook `cwd`, which
+/// the checkout's policy root covers.
 fn session_relative_operands(report: &ToolAccessReport) -> Vec<&PathExpression> {
     report
         .candidates
@@ -1326,6 +1329,23 @@ mod tests {
                 "{tool}: {reason}"
             );
         }
+        // Under inspect_known an unparsed PowerShell `Get-Content .env` goes
+        // through, but in a Monitor command the unknown command's literal
+        // operand is still checked; an operand the fallback cannot recover
+        // goes through there too.
+        let inspect = policy(&["**/.env"], AccessPolicy::InspectKnown);
+        let get_content = serde_json::json!({"command": "Get-Content .env"});
+        let powershell = claude_input_at_cwd("/repo", "PowerShell", get_content.clone());
+        assert!(evaluate_codex(&inspect, &powershell).is_none());
+        let monitor = claude_input_at_cwd("/repo", "Monitor", get_content);
+        let reason = evaluate_codex(&inspect, &monitor).unwrap();
+        assert!(reason.contains(".env"), "{reason}");
+        let variable = claude_input_at_cwd(
+            "/repo",
+            "Monitor",
+            serde_json::json!({"command": "Get-Content $p"}),
+        );
+        assert!(evaluate_codex(&inspect, &variable).is_none());
     }
 
     /// A Claude Code `PreSkillShellCommand` input for an injected command,
@@ -1529,16 +1549,17 @@ mod tests {
     }
 
     #[test]
-    fn codex_shell_operands_relative_to_an_unreported_workdir_are_uncertain() {
-        // Codex runs `exec_command` in its `workdir` argument, which the Bash
-        // hook payload omits: `cat token.txt` may read `secrets/token.txt`.
+    fn codex_shell_operands_relative_to_a_possibly_remote_workdir_are_uncertain() {
+        // A Codex command in a remote execution environment reports the host
+        // `cwd` rather than its `workdir`, and the payload does not say
+        // which applies: `cat token.txt` may read `secrets/token.txt`.
         let hidden = codex_input("Bash", serde_json::json!({"command": "cat token.txt"}));
         let inspect = policy(&["secrets/**"], AccessPolicy::InspectKnown);
         assert!(evaluate_codex(&inspect, &hidden).is_none());
         let strict = policy(&["secrets/**"], AccessPolicy::DenyUnresolved);
         let reason = evaluate_codex(&strict, &hidden).unwrap();
         assert!(
-            reason.contains("1 operand(s) relative to an unreported working directory"),
+            reason.contains("1 operand(s) relative to a possibly unreported working directory"),
             "{reason}"
         );
 
@@ -1548,7 +1569,7 @@ mod tests {
             let input = codex_input("Bash", serde_json::json!({"command": command}));
             let reason = evaluate_codex(&inspect, &input).unwrap_or_else(|| panic!("{command}"));
             assert!(
-                reason.contains("working directory is not reported"),
+                reason.contains("a working directory the payload does not report"),
                 "{reason}"
             );
         }
@@ -1603,6 +1624,18 @@ mod tests {
         assert_eq!(roots, [project.join("nested"), project.clone()]);
         let guard = policy(&["secrets/**"], AccessPolicy::InspectKnown);
         assert!(evaluate(&guard, &input, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+
+        // A local workdir inside the forbidden directory is the hook `cwd`
+        // too, so even `inspect_known` sees `cat token.txt` read
+        // `secrets/token.txt` through the enclosing checkout's root.
+        let inside = codex_input_at_cwd(
+            project.join("secrets").as_str(),
+            "Bash",
+            serde_json::json!({"command": "cat token.txt"}),
+        );
+        let roots = policy_roots(&inside, &environment);
+        assert_eq!(roots, [project.join("secrets"), project.clone()]);
+        assert!(evaluate(&guard, &inside, &roots, TARGET_RESOLUTION_BUDGET).is_some());
         std::fs::remove_dir_all(directory).unwrap();
     }
 

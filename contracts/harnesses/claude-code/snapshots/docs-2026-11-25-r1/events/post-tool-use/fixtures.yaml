@@ -128,6 +128,25 @@ input:
         - Bash
       tool_use_id: toolu_1
       transcript_path: /tmp/t.jsonl
+  - id: monitor-call
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PostToolUse
+      session_id: s1
+      tool_input:
+        command: tail -f app.log
+        description: watch app log
+        timeout_ms: 300000
+      tool_name: Monitor
+      tool_response:
+        taskId: b7k2m9
+        timeoutMs: 300000
+      tool_use_id: toolu_1
+      transcript_path: /tmp/t.jsonl
 output:
 - id: structured
   origin: synthesized

@@ -36,6 +36,7 @@
       "type": "string"
     },
     "globs": {
+      "description": "Path glob patterns from the file's paths: frontmatter; present only for path_glob_match loads.",
       "items": {
         "type": "string"
       },
@@ -62,6 +63,7 @@
       ]
     },
     "parent_file_path": {
+      "description": "The instruction file that included this one; sent for include loads.",
       "type": "string"
     },
     "permission_mode": {
@@ -90,6 +92,7 @@
       "type": "string"
     },
     "trigger_file_path": {
+      "description": "The file whose access triggered the load; sent for lazy loads (nested_traversal and path_glob_match).",
       "type": "string"
     }
   },

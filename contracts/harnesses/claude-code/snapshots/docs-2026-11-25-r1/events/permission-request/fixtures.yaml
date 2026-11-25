@@ -94,6 +94,33 @@ input:
       tool_kind: mcp_skill
       tool_name: Skill
       transcript_path: /tmp/t.jsonl
+  - id: monitor-call
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    - claude-agent-sdk-types
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      session_id: s1
+      tool_input:
+        command: tail -f app.log
+        description: watch app log
+        timeout_ms: 300000
+      tool_name: Monitor
+      transcript_path: /tmp/t.jsonl
+  - id: monitor-command-via-bash-matcher
+    origin: synthesized
+    sources:
+    - claude-hooks-reference
+    value:
+      cwd: /repo
+      hook_event_name: PermissionRequest
+      session_id: s1
+      tool_input:
+        command: tail -f app.log
+      tool_name: Bash
+      transcript_path: /tmp/t.jsonl
   - id: official-example
     origin: official
     sources:
@@ -153,6 +180,28 @@ output:
           mode: manual
           type: setMode
       hookEventName: PermissionRequest
+- id: add-rules-and-directories
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - behavior: allow
+          destination: localSettings
+          rules:
+          - ruleContent: npm test
+            toolName: Bash
+          - toolName: mcp__github__get_issue
+          type: addRules
+        - destination: session
+          directories:
+          - /repo/related
+          type: addDirectories
+      hookEventName: PermissionRequest
 output_negative:
 - expected_keyword: type
   expected_pointer: /hookSpecificOutput/decision/updatedInput
@@ -166,6 +215,71 @@ output_negative:
       decision:
         behavior: allow
         updatedInput: cargo test
+      hookEventName: PermissionRequest
+- expected_keyword: enum
+  expected_pointer: /hookSpecificOutput/decision/updatedPermissions/0/type
+  id: updated-permission-unknown-type
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - behavior: allow
+          destination: session
+          rules:
+          - toolName: Bash
+          type: addRule
+      hookEventName: PermissionRequest
+- expected_keyword: required
+  expected_pointer: /hookSpecificOutput/decision/updatedPermissions/0
+  id: updated-permission-without-destination
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - mode: manual
+          type: setMode
+      hookEventName: PermissionRequest
+- expected_keyword: type
+  expected_pointer: /hookSpecificOutput/decision/updatedPermissions/0
+  id: updated-permission-not-object
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - 1
+      hookEventName: PermissionRequest
+- expected_keyword: enum
+  expected_pointer: /hookSpecificOutput/decision/updatedPermissions/0/behavior
+  id: updated-permission-rule-behavior
+  origin: regression
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  value:
+    hookSpecificOutput:
+      decision:
+        behavior: allow
+        updatedPermissions:
+        - behavior: approve
+          destination: session
+          rules:
+          - toolName: Bash
+          type: addRules
       hookEventName: PermissionRequest
 process:
 - binding: command
@@ -336,6 +450,22 @@ process:
   stderr_sha256: 9fc20b5a3065ee46aec7e6b397fa9a496e075c0b1435acb735ce2efeed13eb97
   stdout_base64: ''
   stdout_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+- binding: command
+  exit_code: 0
+  id: command-malformed-permission-update
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlBlcm1pc3Npb25SZXF1ZXN0IiwiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJhbGxvdyIsInVwZGF0ZWRQZXJtaXNzaW9ucyI6W3sidHlwZSI6InNldE1vZGUiLCJtb2RlIjoibWFudWFsIn1dfX19
+  stdout_sha256: 76ba11c09837315bf15c722be28d30620147934b28d1cd2b485e33586bdce120
+- binding: command-on-failure-block
+  exit_code: 0
+  id: command-on-failure-block-malformed-permission-update
+  outcome: invalid-json
+  stderr_base64: ''
+  stderr_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  stdout_base64: eyJob29rU3BlY2lmaWNPdXRwdXQiOnsiaG9va0V2ZW50TmFtZSI6IlBlcm1pc3Npb25SZXF1ZXN0IiwiZGVjaXNpb24iOnsiYmVoYXZpb3IiOiJhbGxvdyIsInVwZGF0ZWRQZXJtaXNzaW9ucyI6W3sidHlwZSI6InNldE1vZGUiLCJtb2RlIjoibWFudWFsIn1dfX19
+  stdout_sha256: 76ba11c09837315bf15c722be28d30620147934b28d1cd2b485e33586bdce120
 - binding: command
   exit_code: 0
   id: command-set-mode-manual

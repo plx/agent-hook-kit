@@ -1,7 +1,7 @@
 # Forbidden file guard
 
-`forbidden-file-guard` is one aligned executable with three native pre-tool
-modes:
+`forbidden-file-guard` is one executable with three native pre-tool modes,
+which share one aligned `PreToolUse` handler:
 
 ```bash
 forbidden-file-guard --harness=claude
@@ -145,9 +145,9 @@ compilation.
 The policy roots are the stable project roots, then the native working
 directory, then the checkout enclosing it: Claude Code's `CLAUDE_PROJECT_DIR`,
 its current `cwd`, and the nearest ancestor of `cwd` with a `.git` directory
-or file; Codex's `cwd` and the checkout enclosing it, since from Codex 0.166.0
-a Bash command reports its `workdir` as `cwd`; and Antigravity's workspace
-paths. Claude Code's `cwd` follows `cd` and worktree switches, so after
+or file; Codex's `cwd` and the checkout enclosing it, since from Codex
+0.166.0 a local Bash command reports its `workdir` as `cwd`; and Antigravity's
+workspace paths. Claude Code's `cwd` follows `cd` and worktree switches, so after
 `cd src` or `cd /tmp` the guard still discovers the project policy and matches
 `secrets/**` relative to the project root. `CLAUDE_PROJECT_DIR` stays at the main checkout when Claude Code
 enters a git worktree, so the worktree's root (its `.git` file) is a root as
@@ -172,9 +172,10 @@ file with `deny_unresolved` and a project file with `deny_all_shell`, denies
 every shell call *and* every incomplete non-shell analysis. No layer can relax
 a stricter setting from another layer.
 
-Every native input is handled through aligned `PreToolUse` and
-`ToolAccessAnalyzer`. Structured fields, patch operations, exact native shell
-profiles, heuristic literal operands, and literal shell `apply_patch` heredocs
+Every `PreToolUse` input is handled through aligned `PreToolUse` and
+`ToolAccessAnalyzer`; an injected command is analyzed as a `ToolCallRef` (see
+below). Structured fields, patch operations, exact native shell profiles,
+heuristic literal operands, and literal shell `apply_patch` heredocs
 produce one provenance-bearing report. `resolve_targets` then materializes
 descendant, glob, and workspace scopes within a 100,000-entry budget while
 retaining nonexistent exact write targets. Thus `rm -rf secrets` can match a
@@ -242,11 +243,19 @@ Two shells are only partly visible. Claude Code's `PowerShell` commands,
 `PowerShell` injected commands included, are not parsed at all:
 `deny_all_shell` denies them and `deny_unresolved` denies them as unresolved,
 but under `inspect_known` a command such as `Get-Content .env` goes through.
-A `Monitor` command is parsed as Bash, so the same `Get-Content` there is an
-unknown command that only `deny_unresolved` and `deny_all_shell` deny. Codex runs a shell command in its `workdir` argument, which the
-`Bash` hook payload omits, so a relative operand such as `token.txt` may name
-`secrets/token.txt`. The guard resolves it against the hook's `cwd` anyway,
+A `Monitor` command is parsed as Bash. `Get-Content` is an unknown command
+there, but the guard still checks its literal path operands under every
+posture, so `Get-Content .env` is denied even under `inspect_known`. Operands
+that the fallback cannot recover, such as `$p` or the glued `-Path:.env`, go
+through under `inspect_known`, and only `deny_unresolved` and `deny_all_shell`
+deny them. Since Codex 0.166.0 a local `Bash` command's hook `cwd` is its
+resolved `workdir`, but a command in a remote execution environment still
+reports the host directory, and the payload does not say which case applies.
+A relative operand such as `token.txt` may therefore name `secrets/token.txt`
+on the remote side. The guard resolves it against the hook's `cwd` anyway,
 also matches it against every root-relative pattern anchored anywhere (so
 `app/secrets/token.txt` matches `secrets/**`), and counts it as unresolved:
-`deny_unresolved` denies such a call, while `inspect_known` cannot see a
-workdir inside the forbidden directory.
+`deny_unresolved` denies such a call. Under `inspect_known`, a local workdir
+inside the forbidden directory of a Git checkout is caught, because that
+checkout is a policy root; a remote workdir inside it is not, and neither is a
+local one outside any checkout.

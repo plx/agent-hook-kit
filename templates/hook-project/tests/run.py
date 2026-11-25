@@ -449,6 +449,15 @@ def build_cases() -> list[Case]:
                     state=ALL_STATE_CAPABILITIES,
                 ),
             ),
+            Case(
+                "state_antigravity_invocation_bound",
+                single_data(
+                    "state_antigravity_invocation_bound",
+                    "antigravity",
+                    ["pre_invocation", "post_tool_use", "stop"],
+                    state=("session_metadata", "file_activity"),
+                ),
+            ),
         ]
     )
     # Guard against a typo silently replacing one coverage cell with another.
@@ -748,6 +757,37 @@ def assert_render(case: Case, destination: Path, source: Path) -> None:
             raise AcceptanceFailure(
                 f"{case.name}: standalone file activity did not generate its Pkl configuration"
             )
+        # The manifest's lower bound must be the one the selected hooks can
+        # reach: a single-mode Antigravity project records the exact
+        # SessionStart epoch only when it handles SessionStart, and otherwise
+        # infers the start from PreInvocation (invocation 0).
+        for selected_harness in expected_harnesses:
+            if selected_harness != "antigravity":
+                expected_bound = "exact-session-start"
+            elif data["harness_mode"] == "cross":
+                expected_bound = "exact-session-start-or-inferred-first-observation"
+            elif "session_start" in data["native_hooks"]:
+                expected_bound = "exact-session-start-or-inferred-invocation-start"
+            else:
+                expected_bound = "inferred-invocation-start"
+            actual_bound = manifest["fidelity"][selected_harness]["file_activity_lower_bound"]
+            if actual_bound != expected_bound:
+                raise AcceptanceFailure(
+                    f"{case.name}: {selected_harness} file_activity_lower_bound is "
+                    f"{actual_bound!r}, expected {expected_bound!r}"
+                )
+        if data["harness_mode"] == "single" and data["harness"] == "antigravity":
+            readme = " ".join((crate / "README.md").read_text(encoding="utf-8").split())
+            expected_guidance = (
+                "Register `session-start` for Antigravity's `SessionStart` event"
+                if "session_start" in data["native_hooks"]
+                else "This project does not handle Antigravity's `SessionStart` event"
+            )
+            if expected_guidance not in readme:
+                raise AcceptanceFailure(
+                    f"{case.name}: README lacks the Antigravity session-start guidance "
+                    f"{expected_guidance!r}"
+                )
 
     if data["output_mode"] == "project":
         workspace = tomllib.loads((destination / "Cargo.toml").read_text(encoding="utf-8"))
@@ -1081,6 +1121,43 @@ def run_default_answers(source: Path, root: Path, validation: str, target: Path)
     assert_render(case, destination, source)
     validate_generated(destination, case, validation, target)
     print(f"PASS default_answers ({time.monotonic() - started:.1f}s)", flush=True)
+
+
+# Native hooks a single-mode Antigravity file-activity project selects by
+# default, besides the starter's own: SessionStart for the exact lower bound,
+# PreInvocation as the fallback on builds that predate SessionStart, and the
+# runner-owned pair.
+ANTIGRAVITY_FILE_ACTIVITY_DEFAULT_HOOKS = {
+    "session_start",
+    "pre_invocation",
+    "post_tool_use",
+    "stop",
+}
+
+
+def run_antigravity_file_activity_defaults(
+    source: Path, root: Path, validation: str, target: Path
+) -> None:
+    """Render single-mode Antigravity file activity with default native hooks."""
+    started = time.monotonic()
+    name = "antigravity_file_activity_defaults"
+    destination = root / "renders" / name
+    data = single_data(
+        name, "antigravity", [], state=("session_metadata", "file_activity")
+    )
+    del data["native_hooks"]
+    copy_case(source, destination, data)
+    answers = load_yaml(answers_path(destination, data))
+    missing = ANTIGRAVITY_FILE_ACTIVITY_DEFAULT_HOOKS - set(answers.get("native_hooks") or [])
+    if missing:
+        raise AcceptanceFailure(
+            f"{name}: default native_hooks={answers.get('native_hooks')!r} lack "
+            f"{sorted(missing)}"
+        )
+    case = Case(name, {**data, "native_hooks": answers["native_hooks"]})
+    assert_render(case, destination, source)
+    validate_generated(destination, case, validation, target)
+    print(f"PASS {name} ({time.monotonic() - started:.1f}s)", flush=True)
 
 
 def run_coexistence(source: Path, root: Path, validation: str, target: Path) -> None:
@@ -2118,6 +2195,9 @@ def main() -> int:
             run_render_case(case, source, root, arguments.validation, target)
         if run_special("defaults"):
             run_default_answers(source, root, arguments.validation, target)
+            run_antigravity_file_activity_defaults(
+                source, root, arguments.validation, target
+            )
         if run_special("coexistence"):
             run_coexistence(source, root, arguments.validation, target)
         if run_special("update"):

@@ -62,17 +62,27 @@ output:
   value:
     continue: true
     systemMessage: Dependencies installed.
+- id: discarded-hook-specific-output
+  origin: synthesized
+  schema: command-response
+  sources:
+  - claude-hooks-reference
+  - claude-agent-sdk-types
+  value:
+    hookSpecificOutput:
+      additionalContext: Dependencies installed.
+      hookEventName: Setup
 output_negative:
-- expected_keyword: additionalProperties
-  expected_pointer: ''
-  id: hook-specific-output-rejected
+- expected_keyword: type
+  expected_pointer: /hookSpecificOutput/additionalContext
+  id: additional-context-not-string
   origin: regression
   schema: command-response
   sources:
   - claude-hooks-reference
   value:
     hookSpecificOutput:
-      additionalContext: Dependencies installed.
+      additionalContext: 5
       hookEventName: Setup
 process:
 - binding: command

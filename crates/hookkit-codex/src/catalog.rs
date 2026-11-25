@@ -378,6 +378,11 @@ pub struct CatalogInput {
     /// Native session identifier.
     pub session_id: String,
     /// Transcript path; required by implemented parsers but allowed to be null.
+    ///
+    /// On a subagent thread this is the subagent's own transcript, except on
+    /// `SubagentStop`, where Codex sends the immediate parent thread's
+    /// transcript (null when it cannot look it up) and the subagent's own in
+    /// [`Self::agent_transcript_path`].
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
     /// Working directory reported by the event.
     ///
@@ -531,6 +536,9 @@ impl CatalogInput {
 
     /// Returns the `SubagentStop` subagent transcript path; `None` when the
     /// key is absent or JSON `null`.
+    ///
+    /// This is the path every other event on the subagent thread sends as
+    /// `transcript_path`; `SubagentStop` sends the parent thread's there.
     pub fn agent_transcript_path(&self) -> Option<&hookkit_core::Utf8Path> {
         self.str_field("agent_transcript_path")
             .map(hookkit_core::Utf8Path::new)
@@ -595,11 +603,12 @@ impl CatalogInput {
         self.str_field("response_id")
     }
 
-    /// Returns `PostModelRequest.token_usage`; `None` when the key is absent
-    /// or JSON `null`. An absent `cache_write_input_tokens` reads as 0.
+    /// Returns `PostModelRequest.token_usage`; `None` when the key is absent,
+    /// JSON `null`, or not a token usage object. An absent
+    /// `cache_write_input_tokens` reads as 0.
     pub fn token_usage(&self) -> Option<TokenUsage> {
         self.field("token_usage")
-            .filter(|value| !value.is_null())
+            .filter(|value| value.is_object())
             .and_then(|value| TokenUsage::deserialize(value).ok())
     }
 
@@ -653,8 +662,9 @@ fn parse(invocation: &RawInvocation, event: CatalogEvent) -> hookkit_core::Resul
                     .is_some_and(|number| u32::try_from(number).is_ok()),
                 "an unsigned 32-bit integer",
             ),
+            // Serde would also map an array onto the members by position.
             FieldKind::NullableTokenUsage => (
-                value.is_null() || TokenUsage::deserialize(value).is_ok(),
+                value.is_null() || (value.is_object() && TokenUsage::deserialize(value).is_ok()),
                 "a token usage object or null",
             ),
             FieldKind::Any => (true, "any value"),
@@ -983,6 +993,12 @@ impl PermissionRequestOutput {
     /// has no effect: the run completes without a decision and the request
     /// falls through to other hooks, Guardian review, or the user. Stdin does
     /// not say whether the hook is environment-scoped. A deny still applies.
+    ///
+    /// Since Codex 0.167.0 an `allow` also cannot approve a command, in any
+    /// execution environment, that a managed `requirements.toml` prefix rule
+    /// with `decision = "prompt-user"` matches: a person must decide, and
+    /// Codex rejects the command when no client that can ask is connected.
+    /// Stdin does not mark such a checkpoint either; a deny still applies.
     pub fn allow() -> Self {
         Self(CatalogOutput::json(
             CatalogEvent::PermissionRequest,
@@ -1223,6 +1239,10 @@ impl UserPromptSubmitOutput {
     /// Creates a structured `decision: "block"` response that rejects the
     /// prompt.
     ///
+    /// Codex drops the prompt without recording it and keeps the reason out
+    /// of the model's context: the reason appears only as the hook run's
+    /// feedback entry, which the TUI shows and `codex exec` does not print.
+    ///
     /// The reason must be non-empty after trimming unless `continue: false`
     /// is also set; this is checked during emission. Under `continue: false`
     /// a blank block is left out of the JSON, since the stop already applies.
@@ -1234,6 +1254,9 @@ impl UserPromptSubmitOutput {
     }
 
     /// Blocks the prompt while also appending context for the agent.
+    ///
+    /// Only the context reaches the model; the reason is shown as the hook
+    /// run's feedback entry, as for [`Self::block`].
     ///
     /// Codex drops the context together with a block whose reason is blank,
     /// so the reason must be non-empty after trimming; this is checked during
@@ -1249,6 +1272,9 @@ impl UserPromptSubmitOutput {
     }
 
     /// Creates a code-2 response that rejects the prompt with stderr text.
+    ///
+    /// Like a [`Self::block`] reason, the trimmed message is shown only as
+    /// the hook run's feedback entry and never reaches the model.
     ///
     /// The message must be non-empty after trimming; this is checked during
     /// emission.
@@ -1909,6 +1935,22 @@ mod tests {
     }
 
     #[test]
+    fn token_usage_reads_only_an_object() {
+        // Deserializing a CatalogInput skips the parser's member checks, so the
+        // accessor must not map an array onto the usage members by position.
+        let mut value = model_request("PostModelRequest");
+        value["status"] = "completed".into();
+        value["token_usage"] = serde_json::json!([1200, 800, 7, 150, 64, 1350]);
+        let input: CatalogInput = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(input.token_usage(), None);
+        assert_eq!(input.field("token_usage"), Some(&value["token_usage"]));
+        assert_eq!(
+            invalid_input_message(PostModelRequest::parse(&raw(value))),
+            "field token_usage must be a token usage object or null"
+        );
+    }
+
+    #[test]
     fn model_request_parsers_check_required_keys_and_member_types() {
         for field in ["request_id", "attempt_number", "thread_id", "kind", "model"] {
             let mut value = model_request("PreModelRequest");
@@ -1945,6 +1987,9 @@ mod tests {
                 "output_tokens": 1, "reasoning_output_tokens": 0}),
             serde_json::json!({"input_tokens": 1, "cached_input_tokens": 0,
                 "output_tokens": 1, "reasoning_output_tokens": 0, "total_tokens": "2"}),
+            // Regression: serde maps a six-element array onto the members by
+            // position, but the schema requires an object.
+            serde_json::json!([1200, 800, 7, 150, 64, 1350]),
         ] {
             let mut value = model_request("PostModelRequest");
             value["token_usage"] = usage;

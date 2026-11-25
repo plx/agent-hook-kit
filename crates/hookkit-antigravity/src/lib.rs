@@ -26,10 +26,11 @@
 //!   failing hook and continue the conversation. A failing or skipped
 //!   `PreToolUse` or `PreInvocation` hook therefore enforces nothing (before
 //!   CLI 1.5.8, Windows hook commands containing double quotes were silently
-//!   skipped). A guard that must block when it breaks has to answer at exit
-//!   0 with a blocking response, such as a `PreToolUse` `deny` or
-//!   [`PreInvocationOutput::block`]. Handlers time out after 30 seconds by
-//!   default.
+//!   skipped, and before Antigravity App v2.33.0 Windows command hooks with
+//!   quoted paths failed). A guard that must block when it breaks has to
+//!   answer at exit 0 with a blocking response, such as a `PreToolUse`
+//!   `deny` or [`PreInvocationOutput::block`]. Handlers time out after 30
+//!   seconds by default.
 //!
 //! # Forward compatibility
 //!
@@ -1030,8 +1031,9 @@ impl ToolDecision {
 pub struct PreToolUseOutput {
     /// Authorization decision for the pending tool call.
     pub decision: ToolDecision,
-    /// Optional explanation shown to the agent or user. CLI 1.1.28 and later
-    /// show it as a `Reason:` line in tool-approval prompts.
+    /// Optional explanation shown to the agent or user. From CLI 1.1.28,
+    /// tool-approval prompts can include a `Reason:` line when a hook flagged
+    /// the action; whether that line carries this text is undocumented.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Replacement arguments shallow-merged into `toolCall.args` before the

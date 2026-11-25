@@ -210,12 +210,14 @@ pub(crate) fn run_post_tool_input(
 /// command's working directory, possibly a subdirectory or a scratch
 /// directory. It starts from the hook's own working directory, the step
 /// directory where Codex starts every tool hook and which tool events
-/// reported as `cwd` before 0.166.0, when that holds every modified file, so
-/// the project root found without a project configuration (or with
-/// `--config`) stays where it was. Otherwise, and for an Antigravity
-/// conversation without a workspace, it starts from the deepest directory
-/// containing every modified file, so discovery still finds that project's
-/// configuration.
+/// reported as `cwd` before 0.166.0, when that holds at least one modified
+/// file, so the project root found without a project configuration (or with
+/// `--config`) stays where it was even when the same command also writes a
+/// log or temporary file elsewhere. Files outside that directory are not
+/// dropped: a tool's file patterns match them by absolute path, as before
+/// 0.166.0. Otherwise, and for an Antigravity conversation without a
+/// workspace, it starts from the deepest directory containing every modified
+/// file, so discovery still finds that project's configuration.
 fn discovery_start(
     environment: &PostToolUseCommandEnvironment,
     ctx: &RuntimeContext<'_>,
@@ -240,12 +242,13 @@ fn discovery_start(
     hook_directory.unwrap_or_else(|| common_parent(modified))
 }
 
-/// The hook process's working directory, when it contains every path.
+/// The hook process's working directory, when it contains at least one of
+/// `paths`.
 fn enclosing_hook_directory(paths: &[PathBuf]) -> Option<PathBuf> {
     let directory = normalize_path(&std::env::current_dir().ok()?);
     paths
         .iter()
-        .all(|path| path.starts_with(&directory))
+        .any(|path| path.starts_with(&directory))
         .then_some(directory)
 }
 

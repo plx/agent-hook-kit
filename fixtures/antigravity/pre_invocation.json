@@ -6,7 +6,7 @@
   ],
   "transcriptPath": "/tmp/transcript.jsonl",
   "artifactDirectoryPath": "/tmp/artifacts",
-  "invocationNum": 3,
+  "invocationNum": 0,
   "initialNumSteps": 10,
   "futureField": "retained"
 }

@@ -74,8 +74,10 @@ pub enum PathBase {
     /// The expression was resolved against the hook payload's session or turn
     /// working directory (or, for Antigravity structured tools, its first
     /// workspace root) because the tool's own working directory is not
-    /// observable. The tool may run elsewhere, for example when a Codex shell
-    /// call passes a `workdir` argument that its hook payload omits.
+    /// observable. The tool may run elsewhere, for example a Codex shell
+    /// command in a remote execution environment: since Codex 0.166.0 a local
+    /// command's hook `cwd` is its resolved `workdir`, but a remote one
+    /// reports the host directory, and the payload does not say which.
     SessionCwd,
     /// The expression begins with `~`, so its meaning depends on how the tool
     /// expands home directories; it is not lexically resolved.
