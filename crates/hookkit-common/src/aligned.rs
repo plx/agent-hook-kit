@@ -33,19 +33,27 @@
 //!   `cd` in the Bash tool and moves into a worktree when Claude enters one.
 //!   The stable project root where the session started is only available as
 //!   `CLAUDE_PROJECT_DIR` in the command environment.
-//! - Codex's input `cwd` is the turn's configured working directory.
+//! - Codex's input `cwd` is the turn's configured working directory on
+//!   turn-scoped events such as `Stop`. On the tool events it is, since
+//!   Codex 0.166.0, the tool command's working directory: a local Bash
+//!   command's resolved `workdir`, otherwise the step's environment
+//!   directory. Codex starts every tool hook in that step directory.
 //! - Antigravity sends `workspacePaths`, the mounted workspace roots (possibly
 //!   none). Its reference documents no working directory; CLI 1.5.4 and
 //!   later also send the agent's working directory as `cwd`, according to
 //!   their release notes, and `cwd()` returns it only when it is present.
 //!
 //! `workspace_roots()` reports what the native input carries: `[cwd]` for
-//! Claude Code and Codex, and `workspacePaths` for Antigravity. It matches
-//! [`hookkit_core::RuntimeContext::workspace_roots`]. `project_roots()` takes
-//! the command environment as well and returns the stable roots:
-//! `CLAUDE_PROJECT_DIR` for Claude Code, `cwd` for Codex, and `workspacePaths`
-//! for Antigravity. Use `project_roots()` for configuration discovery and
-//! project-relative matching, and `cwd()` to resolve relative operands.
+//! Claude Code and for Codex turn-scoped events, nothing for Codex tool
+//! events (whose `cwd` is a command directory), and `workspacePaths` for
+//! Antigravity. It matches [`hookkit_core::RuntimeContext::workspace_roots`].
+//! `project_roots()` takes the command environment as well and returns the
+//! stable roots: `CLAUDE_PROJECT_DIR` for Claude Code, `cwd` for Codex, and
+//! `workspacePaths` for Antigravity. Use `project_roots()` for configuration
+//! discovery and project-relative matching, and `cwd()` to resolve relative
+//! operands. On a Codex tool event `project_roots()` is the command
+//! directory, which can be a subdirectory of the project or lie outside it,
+//! so discover configuration upward from it or from the paths involved.
 //!
 //! `project_roots()` names the checkout the session started in, not
 //! necessarily the one the agent is working in. After Claude Code enters a
@@ -220,16 +228,19 @@ impl PreToolUseInput {
     }
 
     /// Returns the locations the native input carries: `[cwd]` for Claude
-    /// Code and Codex, and `workspacePaths` for Antigravity.
+    /// Code, nothing for Codex, and `workspacePaths` for Antigravity.
     ///
     /// Claude Code's `cwd` is the agent's current directory, which follows
-    /// `cd` and worktree switches, so it is not a stable root. Use
+    /// `cd` and worktree switches, so it is not a stable root. Since Codex
+    /// 0.166.0 Codex's `cwd` is the tool command's working directory, not a
+    /// workspace root, so the Codex arm is empty, as in
+    /// [`hookkit_core::RuntimeContext::workspace_roots`]. Use
     /// [`Self::project_roots`] for configuration discovery and
     /// project-relative matching. No arm allocates.
     pub fn workspace_roots(&self) -> Cow<'_, [Utf8PathBuf]> {
         match self {
             Self::Claude(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
-            Self::Codex(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
+            Self::Codex(_) => Cow::Borrowed(&[]),
             Self::Antigravity(input) => Cow::Borrowed(&input.workspace_paths),
         }
     }
@@ -237,13 +248,16 @@ impl PreToolUseInput {
     /// Returns the stable project roots for this invocation.
     ///
     /// Claude Code reports `CLAUDE_PROJECT_DIR` from `environment`, Codex its
-    /// configured `cwd`, and Antigravity its `workspacePaths` (possibly
-    /// empty). When `environment` belongs to another harness, which the
-    /// aligned runtime never produces, this falls back to
-    /// [`Self::workspace_roots`].
+    /// `cwd`, and Antigravity its `workspacePaths` (possibly empty). When
+    /// `environment` belongs to another harness, which the aligned runtime
+    /// never produces, this falls back to [`Self::workspace_roots`], except
+    /// that the Codex arm always reports `cwd`.
     ///
-    /// On Claude Code this stays at the session's original checkout after the
-    /// agent enters a git worktree; see the
+    /// Codex's `cwd` is the command's working directory: the step's
+    /// environment directory, or since Codex 0.166.0 a local Bash command's
+    /// resolved `workdir`, which can be a subdirectory of the project or lie
+    /// outside it. On Claude Code this stays at the session's original
+    /// checkout after the agent enters a git worktree; see the
     /// [module documentation](self#roots-and-working-directories).
     pub fn project_roots<'a>(
         &'a self,
@@ -253,6 +267,7 @@ impl PreToolUseInput {
             (Self::Claude(_), PreToolUseCommandEnvironment::Claude(environment)) => {
                 Cow::Borrowed(std::slice::from_ref(&environment.project_dir))
             }
+            (Self::Codex(input), _) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
             _ => self.workspace_roots(),
         }
     }
@@ -571,14 +586,15 @@ impl PostToolUseInput {
     }
 
     /// Returns the locations the native input carries: `[cwd]` for Claude
-    /// Code and Codex, and `workspacePaths` for Antigravity.
+    /// Code, nothing for Codex, and `workspacePaths` for Antigravity.
     ///
     /// See [`PreToolUseInput::workspace_roots`] for why Claude Code's entry
-    /// is not a stable root; prefer [`Self::project_roots`].
+    /// is not a stable root and the Codex arm is empty; prefer
+    /// [`Self::project_roots`].
     pub fn workspace_roots(&self) -> Cow<'_, [Utf8PathBuf]> {
         match self {
             Self::Claude(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
-            Self::Codex(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
+            Self::Codex(_) => Cow::Borrowed(&[]),
             Self::Antigravity(input) => Cow::Borrowed(&input.workspace_paths),
         }
     }
@@ -588,8 +604,10 @@ impl PostToolUseInput {
     ///
     /// These name the checkout the session started in. After Claude Code
     /// enters a git worktree, the file a tool just edited lies in the
-    /// worktree instead, so a post-edit formatter must not run here blindly;
-    /// see the [module documentation](self#roots-and-working-directories) and
+    /// worktree instead, so a post-edit formatter must not run here blindly.
+    /// Codex's `cwd` is the command's working directory, which since Codex
+    /// 0.166.0 is a local Bash command's resolved `workdir`; see the
+    /// [module documentation](self#roots-and-working-directories) and
     /// [`PreToolUseInput::project_roots`].
     pub fn project_roots<'a>(
         &'a self,
@@ -599,6 +617,7 @@ impl PostToolUseInput {
             (Self::Claude(_), PostToolUseCommandEnvironment::Claude(environment)) => {
                 Cow::Borrowed(std::slice::from_ref(&environment.project_dir))
             }
+            (Self::Codex(input), _) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
             _ => self.workspace_roots(),
         }
     }
@@ -996,19 +1015,22 @@ macro_rules! claude_codex_alignment {
                 }
             }
 
-            /// Returns the location the native input carries: its `cwd`.
+            /// Returns the location the native input carries: its `cwd`,
+            /// except on Codex `PermissionRequest`, whose `cwd` is a tool
+            /// action's working directory and which therefore carries none.
             ///
             /// Claude Code's `cwd` follows `cd`, so prefer
             /// `project_roots` for configuration discovery.
             pub fn workspace_roots(&self) -> Cow<'_, [Utf8PathBuf]> {
                 match self {
                     Self::Claude(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
-                    Self::Codex(input) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
+                    Self::Codex(input) => Cow::Borrowed(input.workspace_roots()),
                 }
             }
 
             /// Returns the stable project roots for this invocation: Claude
-            /// Code's `CLAUDE_PROJECT_DIR`, or Codex's `cwd`.
+            /// Code's `CLAUDE_PROJECT_DIR`, or Codex's `cwd` (on
+            /// `PermissionRequest` the action's working directory).
             pub fn project_roots<'a>(
                 &'a self,
                 environment: &'a $environment,
@@ -1017,6 +1039,7 @@ macro_rules! claude_codex_alignment {
                     (Self::Claude(_), $environment::Claude(environment)) => {
                         Cow::Borrowed(std::slice::from_ref(&environment.project_dir))
                     }
+                    (Self::Codex(input), _) => Cow::Borrowed(std::slice::from_ref(&input.cwd)),
                     _ => self.workspace_roots(),
                 }
             }

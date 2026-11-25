@@ -79,7 +79,7 @@ open_string_enum! {
 /// tools and remote-environment commands report the step's local-environment
 /// directory, falling back to the turn directory. The `Bash` `tool_input`
 /// carries only `command`, so `cwd` is the only place the workdir appears.
-/// Codex always starts the hook process in the step's local-environment
+/// Codex starts a locally executed hook in the step's local-environment
 /// directory, so `cwd` and the hook's own working directory can differ, and
 /// `cwd` is not a project root: [`PreToolUse::context`] leaves
 /// [`NativeContext::workspace_roots`] empty.
@@ -200,8 +200,9 @@ impl PreToolUseOutput {
     /// Since Codex 0.165.0 the replacement may omit or repeat, but not
     /// change, the call's target selectors: a tool's environment argument
     /// (such as `environment_id`), an MCP resource call's `server` and, since
-    /// 0.170.0, its `environment_id` (both compared after trimming), a
-    /// terminal session's `session_id`, and the `apply_patch` environment.
+    /// 0.170.0 when MCP servers are exposed per environment, its
+    /// `environment_id` (both compared after trimming), a terminal session's
+    /// `session_id`, and the `apply_patch` environment.
     /// Copy them from the original `tool_input` or leave them out; Codex
     /// restores an omitted selector. A changed selector fails the tool call
     /// with the model-visible error `PreToolUse hook cannot change the tool
@@ -849,9 +850,11 @@ impl AnyInput {
     /// command (and the working directory of a `write_stdin` or
     /// network-access approval), so it need not be a project root, and
     /// [`Codex::context`](HarnessSpec::context) leaves it out of
-    /// [`NativeContext::workspace_roots`]. Resolve the action's relative
-    /// operands against it. Other events return `None`; their `cwd` is the
-    /// turn or step directory that `workspace_roots` reports.
+    /// [`NativeContext::workspace_roots`]. It is the best base for the
+    /// action's relative operands, but a command run in a remote execution
+    /// environment still reports the host's step directory, and the payload
+    /// does not say so. Other events return `None`; their `cwd` is the turn
+    /// or step directory that `workspace_roots` reports.
     pub fn command_cwd(&self) -> Option<&hookkit_core::Utf8Path> {
         match self {
             Self::PreToolUse(input) => Some(&input.cwd),
@@ -1293,7 +1296,10 @@ mod tests {
             (Event::PreModelRequest, "PreModelRequest"),
             (Event::PostModelRequest, "PostModelRequest"),
         ] {
-            assert_eq!(selector.event_id(), EventId::builtin(HarnessId::CODEX, name));
+            assert_eq!(
+                selector.event_id(),
+                EventId::builtin(HarnessId::CODEX, name)
+            );
         }
     }
 
@@ -1339,7 +1345,10 @@ mod tests {
         )
         .unwrap();
         let input = Codex::decode(&PreToolUse::EVENT, &raw).unwrap();
-        assert_eq!(input.command_cwd(), Some(hookkit_core::Utf8Path::new("/tmp/scratch")));
+        assert_eq!(
+            input.command_cwd(),
+            Some(hookkit_core::Utf8Path::new("/tmp/scratch"))
+        );
         let context = Codex::context(&input);
         assert!(context.workspace_roots.is_empty());
         // A subagent's tool call is grouped under the root session.

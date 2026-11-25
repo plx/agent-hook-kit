@@ -660,15 +660,15 @@ mod tests {
 
     #[test]
     fn builtin_detector_covers_every_selected_event_with_a_native_parser() {
-        // 33 Claude Code, 12 Codex, and 6 Antigravity events.
+        // 33 Claude Code, 14 Codex, and 6 Antigravity events.
         let descriptors = builtin_descriptors();
-        assert_eq!(descriptors.len(), 51);
+        assert_eq!(descriptors.len(), 53);
         assert_eq!(
             descriptors
                 .iter()
                 .filter(|descriptor| descriptor.has_native_parser())
                 .count(),
-            51
+            53
         );
 
         let raw = RawInvocation::parse(

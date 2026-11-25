@@ -144,9 +144,11 @@ Relative paths carry the basis they were resolved against. `InvocationCwd`
 means the tool's own working directory, including a Codex `workdir` or an
 Antigravity `Cwd` argument (a relative one is joined onto the hook's
 directory). `SessionCwd` means only the hook's session directory was
-observable: Codex `Bash` payloads omit the `workdir` argument that can move the
-command elsewhere (`ShellCwdOrigin::UnverifiedFallback`), and Antigravity
-structured tools are resolved against the first workspace root. A shell path
+observable: Codex `Bash` payloads omit the `workdir` argument, and although a
+local command has reported its resolved workdir as `cwd` since Codex 0.166.0,
+a remote-environment command still reports the host's directory
+(`ShellCwdOrigin::UnverifiedFallback`). Antigravity structured tools are
+resolved against the first workspace root. A shell path
 beginning with `~` is kept as a `Home` candidate with its raw `~/...` text; it
 is resolved only when the analyzer is built with `with_home`, and its
 dependence on the shell's `$HOME` stays a gap either way. Without a working

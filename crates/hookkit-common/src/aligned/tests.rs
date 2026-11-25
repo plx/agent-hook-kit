@@ -393,6 +393,17 @@ fn claude_project_roots_come_from_the_environment_not_the_moving_cwd() {
         codex.project_roots(&codex_environment).as_ref(),
         [Utf8PathBuf::from("/repo")]
     );
+    // Since Codex 0.166.0 a tool event's cwd is the command's directory, not
+    // a workspace root, matching the empty RuntimeContext roots.
+    assert!(codex.workspace_roots().is_empty());
+    assert_eq!(codex.cwd(), Some(Utf8Path::new("/repo")));
+    // A mismatched environment arm still reports the Codex command cwd.
+    let claude_environment =
+        PreToolUseCommandEnvironment::Claude(claude_environment(&event, "/repo"));
+    assert_eq!(
+        codex.project_roots(&claude_environment).as_ref(),
+        [Utf8PathBuf::from("/repo")]
+    );
 
     let antigravity = antigravity_pre_tool();
     let antigravity_environment = PreToolUseCommandEnvironment::Antigravity(

@@ -381,17 +381,16 @@ pub struct CatalogInput {
     pub transcript_path: Option<hookkit_core::Utf8PathBuf>,
     /// Working directory reported by the event.
     ///
-    /// Turn-scoped events report the turn directory. `PreModelRequest`,
-    /// `PostModelRequest`, and the tool events report the step's
-    /// local-environment directory, falling back to the turn directory,
-    /// except that since Codex 0.166.0 a `PermissionRequest` for a local Bash
-    /// command, a `write_stdin` call, or network access reports that action's
-    /// working directory (a Bash command's resolved `workdir`), so it is not
-    /// a project root and is left out of
-    /// [`NativeContext::workspace_roots`](hookkit_core::NativeContext::workspace_roots)
-    /// for `PermissionRequest`. Environment-scoped managed hooks receive the
-    /// execution environment's directory instead, in its native path form
-    /// (for example `C:\repo`).
+    /// Turn-scoped events report the turn directory, and `PreModelRequest`
+    /// and `PostModelRequest` the step's local-environment directory, falling
+    /// back to the turn directory. `PermissionRequest` reports that step
+    /// directory too, except that since Codex 0.166.0 an approval for a local
+    /// Bash command, a `write_stdin` call, or network access reports the
+    /// action's working directory (a Bash command's resolved `workdir`).
+    /// Because that need not be a project root, [`Self::workspace_roots`]
+    /// leaves every `PermissionRequest` cwd out. Environment-scoped managed
+    /// hooks receive the execution environment's directory instead, in its
+    /// native path form (for example `C:\repo`).
     pub cwd: hookkit_core::Utf8PathBuf,
     /// Authoritative native event discriminator.
     pub hook_event_name: String,
@@ -454,6 +453,20 @@ impl CatalogInput {
     /// Returns the exact catalog event this input was parsed as.
     pub fn event_id(&self) -> EventId {
         self.event.event_id()
+    }
+
+    /// Returns the locations this event reports as its workspace: `[cwd]`,
+    /// or nothing on `PermissionRequest`, whose `cwd` is a tool action's
+    /// working directory (see [`Self::cwd`]).
+    ///
+    /// This is exactly what [`NativeContext::workspace_roots`] holds for the
+    /// input.
+    pub fn workspace_roots(&self) -> &[hookkit_core::Utf8PathBuf] {
+        if self.event.reports_command_cwd() {
+            &[]
+        } else {
+            std::slice::from_ref(&self.cwd)
+        }
     }
 
     /// Returns one event-specific or unknown top-level field.
@@ -606,14 +619,8 @@ impl CatalogInput {
                 })
             })
             .map(SessionBoundaryContext::observed);
-        // A tool action's working directory is not a workspace root.
-        let workspace_roots = if self.event.reports_command_cwd() {
-            Vec::new()
-        } else {
-            vec![self.cwd.clone()]
-        };
         NativeContext {
-            workspace_roots,
+            workspace_roots: self.workspace_roots().to_vec(),
             session_id: SessionId::new(&self.session_id).ok(),
             turn_id: self.turn_id.as_deref().and_then(|id| TurnId::new(id).ok()),
             transcript_path: self.transcript_path.clone(),
@@ -1154,9 +1161,9 @@ macro_rules! model_request_event {
              becomes an error entry at every exit code, including 0. A \
              synchronous handler's entries are shown on every model request \
              attempt; a background (`async: true`) handler's are never shown. \
-             A synchronous handler also delays every attempt for up to its \
-             timeout, which defaults to 600 seconds with no clamp, so \
-             register telemetry hooks with `async: true`."
+             A synchronous handler also holds up every attempt (see below) \
+             for up to its timeout, which defaults to 600 seconds with no \
+             clamp, so register telemetry hooks with `async: true`."
             $(, $doc)*
         );
 
@@ -1171,7 +1178,7 @@ macro_rules! model_request_event {
             ///
             /// The run completes, and Codex still records the trimmed message
             /// as an error entry, shown on every attempt for a synchronous
-            /// handler. A blank message emits nothing Codex records.
+            /// handler. Codex records nothing for a blank message.
             pub fn diagnostic(message: impl Into<String>) -> Self {
                 Self(CatalogOutput::diagnostic(CatalogEvent::$event, message))
             }
@@ -1799,7 +1806,10 @@ mod tests {
         assert_eq!(serde_json::to_value(&input).unwrap(), value);
 
         let context = PreModelRequest::context(&input);
-        assert_eq!(context.workspace_roots, [hookkit_core::Utf8PathBuf::from("/repo")]);
+        assert_eq!(
+            context.workspace_roots,
+            [hookkit_core::Utf8PathBuf::from("/repo")]
+        );
         assert_eq!(context.session_id.unwrap().as_str(), "session-1");
         assert_eq!(context.turn_id.unwrap().as_str(), "turn-1");
         assert_eq!(context.transcript_path, None);
@@ -1820,12 +1830,19 @@ mod tests {
             ),
             ("warmup", ModelRequestKind::Unknown("warmup".into())),
         ] {
-            let mut value = model_request("PreModelRequest");
-            value["kind"] = wire.into();
-            let input = PreModelRequest::parse(&raw(value.clone())).unwrap();
-            assert_eq!(input.kind().as_ref(), Some(&kind));
+            for event in ["PreModelRequest", "PostModelRequest"] {
+                let mut value = model_request(event);
+                value["kind"] = wire.into();
+                let input = decode(
+                    &EventId::builtin(HarnessId::CODEX, event),
+                    &raw(value.clone()),
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(input.kind().as_ref(), Some(&kind), "{event}");
+                assert_eq!(serde_json::to_value(&input).unwrap(), value);
+            }
             assert_eq!(kind.as_str(), wire);
-            assert_eq!(serde_json::to_value(&input).unwrap(), value);
         }
         for (wire, status) in [
             ("completed", ModelRequestStatus::Completed),
@@ -2022,6 +2039,7 @@ mod tests {
         assert_eq!(input.cwd, "/repo/nested");
         let context = PermissionRequest::context(&input);
         assert!(context.workspace_roots.is_empty());
+        assert!(input.workspace_roots().is_empty());
         assert_eq!(context.session_id.unwrap().as_str(), "session-1");
         assert_eq!(context.turn_id.unwrap().as_str(), "turn-1");
 

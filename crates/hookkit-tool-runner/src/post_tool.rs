@@ -204,9 +204,18 @@ pub(crate) fn run_post_tool_input(
 /// On Claude Code this is the session's working root (`CLAUDE_PROJECT_DIR`,
 /// or the linked Git worktree the session entered), exactly as for the Stop
 /// runner, never the `cwd` that follows `cd`. Elsewhere it is the input's
-/// first workspace root. An Antigravity conversation without a workspace
-/// starts from the deepest directory containing every modified file, so
-/// discovery still finds that project's configuration.
+/// first workspace root.
+///
+/// A Codex tool event has none: since Codex 0.166.0 its `cwd` is the
+/// command's working directory, possibly a subdirectory or a scratch
+/// directory. It starts from the hook's own working directory, the step
+/// directory where Codex starts every tool hook and which tool events
+/// reported as `cwd` before 0.166.0, when that holds every modified file, so
+/// the project root found without a project configuration (or with
+/// `--config`) stays where it was. Otherwise, and for an Antigravity
+/// conversation without a workspace, it starts from the deepest directory
+/// containing every modified file, so discovery still finds that project's
+/// configuration.
 fn discovery_start(
     environment: &PostToolUseCommandEnvironment,
     ctx: &RuntimeContext<'_>,
@@ -225,7 +234,19 @@ fn discovery_start(
     if let Some(root) = ctx.workspace_roots().first() {
         return PathBuf::from(root.as_str());
     }
-    common_parent(modified)
+    let hook_directory = matches!(environment, PostToolUseCommandEnvironment::Codex(_))
+        .then(|| enclosing_hook_directory(modified))
+        .flatten();
+    hook_directory.unwrap_or_else(|| common_parent(modified))
+}
+
+/// The hook process's working directory, when it contains every path.
+fn enclosing_hook_directory(paths: &[PathBuf]) -> Option<PathBuf> {
+    let directory = normalize_path(&std::env::current_dir().ok()?);
+    paths
+        .iter()
+        .all(|path| path.starts_with(&directory))
+        .then_some(directory)
 }
 
 /// Deepest directory containing every path; `modified` is never empty.

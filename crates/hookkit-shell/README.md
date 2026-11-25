@@ -263,8 +263,10 @@ relative value is joined onto an absolute fallback and exposed only through
 `ShellToolCallRef::effective_cwd`; an empty or `null` value falls back.
 `ShellToolCallRef::cwd_origin` records where the cwd came from. Codex's
 `exec_command` accepts a `workdir` argument that it joins onto the step's
-environment cwd, but its hook payload carries only `command`, so the hook
-`cwd` is only the default and the adapter reports
+environment cwd, and its hook payload carries only `command`. Since Codex
+0.166.0 the hook `cwd` of a local command is that resolved workdir, but a
+command in a remote execution environment still reports the host's step
+directory with no marker, so the adapter reports
 `ShellCwdOrigin::UnverifiedFallback`: relative paths resolved against it are
 best effort. `FileInferenceContext::for_call` does not carry the origin, so
 file-access candidates for such a call still report `PathBase::InvocationCwd`

@@ -1,29 +1,44 @@
 //! Codex command-hook environment contract.
 //!
-//! Since Codex 0.149.0 a command hook does not inherit Codex's live process
-//! environment. Codex starts every hook from an empty environment and replays
-//! a snapshot of its own environment, captured when the session's hook
-//! registry was created, then applies the handler's variables. Five
-//! credential variables are removed, compared case-insensitively, from both
-//! sources for every event: `CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN`,
-//! `NODE_REPL_AUTH_TOKEN`, `OPENAI_FEDERATION_RULE_ID`,
-//! `OPENAI_IDENTITY_TOKEN_FILE`, and `OPENAI_WORKLOAD_IDENTITY_CONTEXT`.
+//! Since Codex 0.149.0 a locally executed command hook does not inherit
+//! Codex's live process environment. Codex starts every such hook from an
+//! empty environment and replays a snapshot of its own environment, captured
+//! when the session's hook registry was created, then applies the handler's
+//! variables. Nine credential variables are removed, compared
+//! case-insensitively, from both sources for every event:
+//! `CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN`, `NODE_REPL_AUTH_TOKEN`,
+//! `CODEX_GUARDIAN_DECISIONS_API_KEY` (since 0.162.0),
+//! `OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`,
+//! `OPENAI_IDENTITY_TOKEN_SOURCE`, `OPENAI_SPIFFE_AUDIENCE`, and
+//! `OPENAI_SPIFFE_ID` (these three since 0.171.0), and
+//! `OPENAI_WORKLOAD_IDENTITY_CONTEXT`. `SPIFFE_ENDPOINT_SOCKET` is not
+//! removed.
 //!
 //! Codex hook configuration has no `env` setting; the only handler variables
 //! come from plugin discovery. Ordinary hooks therefore receive no
 //! Codex-specific variable. Hooks discovered from a plugin, on every event
-//! including `Interrupt`, additionally receive `PLUGIN_ROOT` and
-//! `PLUGIN_DATA` plus the Claude-compatible aliases `CLAUDE_PLUGIN_ROOT` and
-//! `CLAUDE_PLUGIN_DATA`, which Codex sets to the same values. Since Codex
-//! 0.154.0 plugin hooks are refreshed per turn, so these paths can change
-//! between turns of one session.
+//! including `Interrupt`, `PreModelRequest`, and `PostModelRequest`,
+//! additionally receive `PLUGIN_ROOT` and `PLUGIN_DATA` plus the
+//! Claude-compatible aliases `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA`,
+//! which Codex sets to the same values. Since Codex 0.154.0 plugin hooks are
+//! refreshed per turn, so these paths can change between turns of one
+//! session. Plugin hooks never run on memory-consolidation turns.
+//!
+//! The replay, the scrub, and the plugin variables describe locally executed
+//! hooks. Since Codex 0.165.0 an execution environment can also declare
+//! managed hooks (environment-scoped hooks), which run on that environment's
+//! executor under its `shell_environment_policy`, with no replay, the exec
+//! server's own scrub of the same names, and no plugin variables, so they
+//! always parse as an ordinary hook here.
 //!
 //! `CODEX_SESSION_ID` and `CODEX_THREAD_ID` are set for shell-tool and
-//! unified-exec processes, not for hooks. They reach a hook only ambiently,
-//! through the environment snapshot of a Codex that was itself launched from
-//! an outer Codex session, and then describe that outer session; they are not
-//! modeled and must not be used as hook identity. The native JSON
-//! `session_id` is the hook's session identity.
+//! unified-exec processes, not for hooks, and `CODEX_TOOL_CALL_ID` (since
+//! 0.163.0) labels a shell tool's command process with its outer tool call.
+//! They reach a hook only ambiently, through the environment snapshot of a
+//! Codex that was itself launched from an outer Codex session or tool call,
+//! and then describe that outer session or call; they are not modeled and
+//! must not be used as hook identity. The native JSON `session_id` is the
+//! hook's session identity, and `tool_use_id` its tool-call identity.
 
 use hookkit_core::{
     CommandEnvironmentSpec, EnvironmentVariables, EventId, HarnessId, HookkitError, Utf8PathBuf,
@@ -31,10 +46,19 @@ use hookkit_core::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Canonical paths injected for a hook discovered from a Codex plugin.
+///
+/// Since Codex 0.164.0 the approval of a plugin hook is bound to the plugin
+/// bundle's contents: before every run Codex hashes the whole plugin root,
+/// and a changed or unreadable bundle, or one with a symlink or special
+/// entry, fails the run without launching the hook. Keep mutable state, logs,
+/// and build output in [`Self::data`], never under [`Self::root`], and do not
+/// ship symlinks in the bundle. The scan counts against the hook's timeout.
 pub struct CodexPluginEnvironment {
-    /// Root directory containing the installed plugin.
+    /// Root directory containing the installed plugin. Treat it as
+    /// read-only: writing under it invalidates the hook's approval.
     pub root: Utf8PathBuf,
-    /// Plugin-specific persistent data directory.
+    /// Plugin-specific persistent data directory, the only plugin location
+    /// a hook should write to.
     pub data: Utf8PathBuf,
 }
 
@@ -149,6 +173,21 @@ mod tests {
         "SubagentStop",
         "Stop",
         "Interrupt",
+        "PreModelRequest",
+        "PostModelRequest",
+    ];
+
+    /// The credential variables Codex scrubs from every hook environment.
+    const SCRUBBED: &[&str] = &[
+        "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+        "NODE_REPL_AUTH_TOKEN",
+        "CODEX_GUARDIAN_DECISIONS_API_KEY",
+        "OPENAI_FEDERATION_RULE_ID",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+        "OPENAI_IDENTITY_TOKEN_SOURCE",
+        "OPENAI_SPIFFE_AUDIENCE",
+        "OPENAI_SPIFFE_ID",
+        "OPENAI_WORKLOAD_IDENTITY_CONTEXT",
     ];
 
     fn event(name: &'static str) -> EventId {
@@ -186,17 +225,36 @@ mod tests {
 
     #[test]
     fn shell_tool_session_variables_are_not_hook_state() {
-        for name in ["CODEX_SESSION_ID", "CODEX_THREAD_ID"] {
+        for name in ["CODEX_SESSION_ID", "CODEX_THREAD_ID", "CODEX_TOOL_CALL_ID"] {
             assert!(!CodexCommandEnvironment::VARIABLE_NAMES.contains(&name));
         }
         let ambient = EnvironmentVariables::from_pairs([
             ("CODEX_SESSION_ID", "outer-session"),
             ("CODEX_THREAD_ID", "outer-thread"),
+            ("CODEX_TOOL_CALL_ID", "outer-call"),
         ]);
-        assert_eq!(
-            CodexCommandEnvironment::from_map(&event("Stop"), &ambient).unwrap(),
-            CodexCommandEnvironment::default()
-        );
+        for name in EVENTS {
+            assert_eq!(
+                CodexCommandEnvironment::from_map(&event(name), &ambient).unwrap(),
+                CodexCommandEnvironment::default()
+            );
+        }
+    }
+
+    #[test]
+    fn credential_scrub_names_are_never_modeled() {
+        let mut names = SCRUBBED.to_vec();
+        names.push("SPIFFE_ENDPOINT_SOCKET");
+        for name in &names {
+            assert!(!CodexCommandEnvironment::VARIABLE_NAMES.contains(name));
+        }
+        let ambient = EnvironmentVariables::from_pairs(names.iter().map(|name| (*name, "secret")));
+        for name in EVENTS {
+            assert_eq!(
+                CodexCommandEnvironment::from_map(&event(name), &ambient).unwrap(),
+                CodexCommandEnvironment::default()
+            );
+        }
     }
 
     #[test]

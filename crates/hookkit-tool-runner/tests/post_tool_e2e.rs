@@ -582,3 +582,161 @@ fn file_activity_journal_keys_do_not_embed_the_raw_hook_input() {
         "tool input must not be copied into journal keys"
     );
 }
+
+fn codex_bash_post_tool(cwd: &Path, command: &str) -> Value {
+    json!({
+        "session_id": "post-e2e-codex",
+        "transcript_path": null,
+        "cwd": cwd.to_string_lossy(),
+        "hook_event_name": "PostToolUse",
+        "model": "gpt-test",
+        "turn_id": "post-e2e-turn",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_use_id": "post-e2e-codex-tool",
+        "tool_input": {"command": command},
+        "tool_response": ""
+    })
+}
+
+/// Since Codex 0.166.0 a Bash command's `cwd` is its resolved `workdir`,
+/// which can be a project subdirectory or a scratch directory elsewhere.
+/// Discovery must still find the configuration of the project whose file the
+/// command wrote.
+#[test]
+fn codex_workdir_commands_find_the_written_file_s_project() {
+    require_pkl!();
+    let project = TempProject::new("codex-workdir");
+    let elsewhere = TempProject::new("codex-workdir-scratch");
+    configure_txt_tool(
+        project.path(),
+        &project.path().join("bin/ghost"),
+        "  runTimeoutSeconds = 30",
+    );
+    let subdir = project.path().join("packages/foo");
+    std::fs::create_dir_all(&subdir).unwrap();
+    let file = project.path().join("a.txt");
+
+    for workdir in [subdir.as_path(), elsewhere.path()] {
+        std::fs::write(&file, "x\n").unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_post-tool-use-agent-hook"));
+        command
+            .arg("--codex")
+            // Codex starts the hook in the step directory, not the workdir;
+            // the scratch directory keeps the process directory uninformative.
+            .current_dir(elsewhere.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = run_with_input(
+            command,
+            &codex_bash_post_tool(workdir, &format!("printf x > {}", file.display())),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}: {}",
+            workdir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let message = stdout["systemMessage"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("Ghost") && message.contains("install ghost"),
+            "{}: the project's configuration ran: {stdout}",
+            workdir.display()
+        );
+    }
+}
+
+/// Without a project configuration, as with `--config`, the project root is
+/// the directory discovery starts from. A Codex tool event names no workspace
+/// root, so for files written under the hook's own directory (the step
+/// directory Codex starts every tool hook in, which tool events reported as
+/// `cwd` before Codex 0.166.0) that directory stays the project root,
+/// whatever the command's `workdir`: project-relative globs keep matching.
+#[test]
+fn codex_explicit_config_keeps_the_hook_directory_as_project_root() {
+    require_pkl!();
+    let project = TempProject::new("codex-explicit-config");
+    configure_txt_tool(project.path(), &project.path().join("bin/ghost"), "");
+    let discovered = project.path().join(".agent-hook-kit/post-tool-use.pkl");
+    let config = project.path().join("hooks.pkl");
+    std::fs::write(
+        &config,
+        std::fs::read_to_string(&discovered)
+            .unwrap()
+            .replace(r#""**/*.txt""#, r#""src/**/*.txt""#),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(discovered.parent().unwrap()).unwrap();
+    let file = project.path().join("src/nested/a.txt");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+
+    for workdir in [
+        project.path().to_path_buf(),
+        project.path().join("src/nested"),
+    ] {
+        std::fs::write(&file, "x\n").unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_post-tool-use-agent-hook"));
+        command
+            .args(["--codex", "--config"])
+            .arg(&config)
+            .current_dir(project.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = run_with_input(
+            command,
+            &codex_bash_post_tool(&workdir, &format!("printf x > {}", file.display())),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}: {}",
+            workdir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout: Value = serde_json::from_slice(&output.stdout).unwrap_or_default();
+        let message = stdout["systemMessage"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("Ghost"),
+            "{}: `src/**/*.txt` must match from the hook directory: {stdout}",
+            workdir.display()
+        );
+    }
+}
+
+/// A relative `--state-dir` must not follow a Codex Bash `workdir`: it
+/// resolves against the hook's own directory, which Codex sets to the step
+/// directory that a Codex `Stop` also reports, so the turn-completion runner
+/// finds the same journal.
+#[test]
+fn codex_relative_state_dirs_ignore_the_command_workdir() {
+    let project = TempProject::new("codex-state-root");
+    let workdir = project.path().join("packages/foo");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_file-activity-agent-hook"));
+    command
+        .args(["--codex", "--state-dir", ".context/hookkit-state"])
+        .current_dir(project.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_with_input(
+        command,
+        &codex_bash_post_tool(&workdir, "printf x > notes.txt"),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "Codex no-op is empty stdout");
+    assert!(project.path().join(".context/hookkit-state").is_dir());
+    assert!(
+        !workdir.join(".context").exists(),
+        "state must not split into the command's workdir"
+    );
+}

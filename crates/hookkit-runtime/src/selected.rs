@@ -625,20 +625,22 @@ mod tests {
                 };
                 assert_eq!(input.tool_name, "shell");
                 assert_eq!(context.harness(), &HarnessId::CODEX);
-                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-ff6aec9-r2"));
+                assert_eq!(context.snapshot(), SnapshotId::builtin("commit-3d86e43-r1"));
                 assert_eq!(
                     context.event(),
                     &EventId::builtin(HarnessId::CODEX, "PreToolUse")
                 );
                 assert_eq!(
                     context.contract(),
-                    ContractId::builtin("codex/commit-ff6aec9-r2/PreToolUse")
+                    ContractId::builtin("codex/commit-3d86e43-r1/PreToolUse")
                 );
                 assert_eq!(
                     context.provenance(),
                     ResolutionProvenance::DefinitiveDiscriminator
                 );
-                assert_eq!(context.workspace_roots(), [Utf8Path::new("/workspace")]);
+                // A Codex tool event's cwd is the command's directory, not a
+                // workspace root.
+                assert!(context.workspace_roots().is_empty());
                 assert_eq!(context.session_id().unwrap().as_str(), "session-123");
                 assert_eq!(context.turn_id().unwrap().as_str(), "turn-456");
                 assert_eq!(context.tool_call_id().unwrap().as_str(), "call-789");

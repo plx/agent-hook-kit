@@ -75,10 +75,11 @@ compilation.
 The policy roots are the stable project roots, then the native working
 directory, then the checkout enclosing it: Claude Code's `CLAUDE_PROJECT_DIR`,
 its current `cwd`, and the nearest ancestor of `cwd` with a `.git` directory
-or file; Codex's `cwd`; and Antigravity's workspace paths. Claude Code's `cwd`
-follows `cd` and worktree switches, so after `cd src` or `cd /tmp` the guard
-still discovers the project policy and matches `secrets/**` relative to the
-project root. `CLAUDE_PROJECT_DIR` stays at the main checkout when Claude Code
+or file; Codex's `cwd` and the checkout enclosing it, since from Codex 0.166.0
+a Bash command reports its `workdir` as `cwd`; and Antigravity's workspace
+paths. Claude Code's `cwd` follows `cd` and worktree switches, so after
+`cd src` or `cd /tmp` the guard still discovers the project policy and matches
+`secrets/**` relative to the project root. `CLAUDE_PROJECT_DIR` stays at the main checkout when Claude Code
 enters a git worktree, so the worktree's root (its `.git` file) is a root as
 well, and `secrets/**` still covers the worktree's `secrets/` after a `cd src`
 inside it.

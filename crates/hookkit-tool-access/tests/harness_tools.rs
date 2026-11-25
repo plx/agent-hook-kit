@@ -113,7 +113,7 @@ fn assert_targets(report: &ToolAccessReport, expected: &[(&str, AccessIntent, Ac
 #[test]
 fn codex_contract_apply_patch_fixture_reads_the_command_payload() {
     let value = contract_fixture(
-        "codex/snapshots/commit-ff6aec9-r2/events/pre-tool-use",
+        "codex/snapshots/commit-3d86e43-r1/events/pre-tool-use",
         "representative",
     );
     assert_eq!(value["tool_name"], "apply_patch");

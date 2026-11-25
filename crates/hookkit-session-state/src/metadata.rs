@@ -228,6 +228,10 @@ pub struct SessionEpochMetadata {
 pub struct ProjectMetadata {
     /// Deduplicated union of every workspace root observed across all
     /// observations (sorted), not just the most recent observation.
+    ///
+    /// Codex tool events contribute none: since Codex 0.166.0 their `cwd`
+    /// is the command's working directory (a Bash `workdir`), so only Codex's
+    /// turn-scoped events name roots here.
     pub workspace_roots: Vec<Utf8PathBuf>,
     /// Most recently observed native transcript path, when any was supplied.
     pub transcript_path: Option<Utf8PathBuf>,

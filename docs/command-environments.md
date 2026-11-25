@@ -127,10 +127,12 @@ directory, or the system temporary directory that still exists.
 
 ### Codex
 
-`CodexCommandEnvironment` covers all 12 Codex events: `SessionStart`,
+`CodexCommandEnvironment` covers all 14 Codex events that `hookkit-codex`
+implements (snapshot `commit-3d86e43-r1`, `rust-v0.172.0`): `SessionStart`,
 `SessionEnd`, `SubagentStart`, `PreToolUse`, `PermissionRequest`,
 `PostToolUse`, `PreCompact`, `PostCompact`, `UserPromptSubmit`,
-`SubagentStop`, `Stop`, and `Interrupt`.
+`SubagentStop`, `Stop`, `Interrupt`, `PreModelRequest`, and
+`PostModelRequest`.
 
 Ordinary hooks have no modeled Codex variable. Hooks discovered from a plugin,
 on every event, receive `PLUGIN_ROOT`, `PLUGIN_DATA`, and the
@@ -138,18 +140,33 @@ Claude-compatible aliases `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` together
 A complete set must have non-empty canonical paths and aliases equal to them;
 an incomplete set is ambient state and yields no plugin. Since Codex 0.154.0
 plugin hook sources are refreshed per turn, so the paths can change between
-turns of one session.
+turns of one session. Plugin hooks never run on memory-consolidation turns.
+Since Codex 0.164.0 Codex hashes the whole plugin root before every plugin
+hook run and fails the run, without launching the hook, when the bundle
+changed since it was approved or contains a symlink or special file; keep
+mutable state, logs, and build output in `PLUGIN_DATA`, never under
+`PLUGIN_ROOT`.
 
-Since Codex 0.149.0 a hook does not inherit Codex's live environment. Codex
-starts it from an empty environment and replays the snapshot it took when the
-session's hook registry was created, which reconfiguration keeps and does not
-refresh, then applies the plugin variables. Codex hook configuration has no
-`env` setting, so plugin discovery is the only source of hook-specific
-variables. For every event, Codex removes five credential variables,
-compared case-insensitively, from both sources:
+Since Codex 0.149.0 a locally executed hook does not inherit Codex's live
+environment. Codex starts it from an empty environment and replays the
+snapshot it took when the session's hook registry was created, which
+reconfiguration keeps and does not refresh, then applies the plugin
+variables. Codex hook configuration has no `env` setting, so plugin discovery
+is the only source of hook-specific variables. For every event, Codex removes
+nine credential variables, compared case-insensitively, from both sources:
 `CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN`, `NODE_REPL_AUTH_TOKEN`,
-`OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`, and
-`OPENAI_WORKLOAD_IDENTITY_CONTEXT`.
+`CODEX_GUARDIAN_DECISIONS_API_KEY` (since 0.162.0),
+`OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`,
+`OPENAI_IDENTITY_TOKEN_SOURCE`, `OPENAI_SPIFFE_AUDIENCE`, `OPENAI_SPIFFE_ID`
+(these three since 0.171.0), and `OPENAI_WORKLOAD_IDENTITY_CONTEXT`.
+`SPIFFE_ENDPOINT_SOCKET` is not removed.
+
+Since Codex 0.165.0 an execution environment can also declare managed hooks
+(environment-scoped hooks). They run on that environment's executor under its
+`shell_environment_policy`, with no environment replay, the exec server's own
+scrub of the same names, and no plugin variables, so they always parse as an
+ordinary hook. Their stdin `cwd` is the environment's directory and their
+transcript paths are null.
 
 ### Antigravity
 
@@ -179,7 +196,10 @@ runner state, not hook variables. Codex sets `CODEX_THREAD_ID` and
 `CODEX_SESSION_ID` for shell-tool and unified-exec processes, not hooks; a hook
 sees them only when its Codex was itself launched from an outer Codex session,
 and then they describe that outer session, so they must not be used as hook
-identity. Antigravity's public hook reference does not promise an
+identity. Likewise, since Codex 0.163.0 `CODEX_TOOL_CALL_ID` labels a shell
+tool's command process with its tool call; a hook sees it only ambiently,
+naming an outer call, and its own tool call is the JSON `tool_use_id`.
+Antigravity's public hook reference does not promise an
 `ANTIGRAVITY_CONVERSATION_ID` variable, so the typed contract continues to use
 the JSON `conversationId` even if a particular binary exposes an incidental
 environment value.

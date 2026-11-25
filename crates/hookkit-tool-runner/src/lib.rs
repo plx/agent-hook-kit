@@ -248,6 +248,12 @@ fn ensure_session_metadata(
 
 /// Stable project root for a PostToolUse invocation: `CLAUDE_PROJECT_DIR` on
 /// Claude Code, otherwise the first workspace root from the native input.
+///
+/// A Codex tool event has none, because its `cwd` is the command's working
+/// directory, so a relative path then resolves against the hook's working
+/// directory: the step's environment directory, where Codex starts every
+/// tool hook and the same directory a Codex `Stop` reports as its `cwd`
+/// unless the step selected another local environment.
 fn post_tool_project_root(
     environment: &PostToolUseCommandEnvironment,
     ctx: &RuntimeContext<'_>,

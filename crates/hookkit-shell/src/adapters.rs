@@ -19,12 +19,16 @@ pub const CLAUDE_BASH_PROFILE: ShellToolProfile =
 /// Exact Codex `Bash` tool profile.
 ///
 /// Codex's `exec_command` accepts a `workdir` argument that it joins onto the
-/// step's environment cwd, but its hook payloads carry only `command`, so the
-/// hook `cwd` is only the default working directory and matched calls report
+/// step's environment cwd, and its hook payloads carry only `command`. Since
+/// Codex 0.166.0 the hook `cwd` of a local command is that resolved workdir,
+/// but a command in a remote execution environment still reports the host's
+/// step directory, and the payload does not say which case applies, so
+/// matched calls report
 /// [`ShellCwdOrigin::UnverifiedFallback`](crate::ShellCwdOrigin::UnverifiedFallback).
-/// A `/workdir` value, if a payload ever carries one, is resolved against the
-/// hook `cwd`. The dialect is unknown: Codex runs the user's shell, which is
-/// zsh by default on macOS and PowerShell on Windows.
+/// A `/workdir` value is resolved against the hook `cwd`; real Codex payloads
+/// never carry one, and if one appeared alongside a 0.166.0 workdir `cwd` it
+/// would be applied twice. The dialect is unknown: Codex runs the user's
+/// shell, which is zsh by default on macOS and PowerShell on Windows.
 pub const CODEX_BASH_PROFILE: ShellToolProfile =
     ShellToolProfile::builtin("Bash", "/command", Some("/workdir"), false);
 #[cfg(feature = "antigravity")]
@@ -243,7 +247,7 @@ mod tests {
         let ShellToolCallMatch::Matched(call) = input.shell_tool_call() else {
             panic!("expected a shell call");
         };
-        // Codex may run the command in an unexposed `workdir`.
+        // A remote-environment command runs elsewhere than the reported cwd.
         assert_eq!(call.cwd, Some(hookkit_core::Utf8Path::new("/repo")));
         assert_eq!(call.cwd_origin, ShellCwdOrigin::UnverifiedFallback);
         input.tool_name = "Read".into();
@@ -251,6 +255,34 @@ mod tests {
             input.shell_tool_call(),
             ShellToolCallMatch::NotShell
         ));
+    }
+
+    #[cfg(feature = "codex")]
+    #[test]
+    fn codex_resolved_workdir_cwd_anchors_relative_operands() {
+        // Since Codex 0.166.0 a local command run with `workdir` reports the
+        // resolved directory as the hook cwd.
+        let mut input = codex_pre_tool_use(serde_json::json!({"command": "cat a.txt"}));
+        input.cwd = "/repo/sub".into();
+        let ShellToolCallMatch::Matched(call) = input.shell_tool_call() else {
+            panic!("expected a shell call");
+        };
+        assert_eq!(call.cwd, Some(hookkit_core::Utf8Path::new("/repo/sub")));
+        // Remote commands still report the host cwd with no marker.
+        assert_eq!(call.cwd_origin, ShellCwdOrigin::UnverifiedFallback);
+        let report = crate::FileAccessAnalyzer::default().infer(
+            &crate::BashAnalyzer::default().analyze(call.command),
+            crate::FileInferenceContext::for_call(&call),
+        );
+        assert!(
+            matches!(
+                &report.candidates[0].target,
+                crate::FileTarget::Path { expression, .. }
+                    if expression.resolved.as_deref()
+                        == Some(hookkit_core::Utf8Path::new("/repo/sub/a.txt"))
+            ),
+            "{report:?}"
+        );
     }
 
     #[cfg(feature = "codex")]

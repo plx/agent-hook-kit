@@ -227,12 +227,20 @@ fn usage_diagnostic(event: Option<&EventId>, error: &clap::Error) -> String {
 /// a worktree the agent entered, whose root `CLAUDE_PROJECT_DIR` does not
 /// name, and the enclosing checkout (the nearest ancestor with a `.git`
 /// directory or file) keeps covering that worktree after a `cd src` inside it.
+///
+/// Codex tool events report no workspace root: since Codex 0.166.0 their
+/// `cwd` is the command's working directory, a Bash `workdir` that can be a
+/// repository subdirectory, so its enclosing checkout is added the same way.
 fn policy_roots(
     input: &PreToolUseInput,
     environment: &PreToolUseCommandEnvironment,
 ) -> Vec<Utf8PathBuf> {
     let mut roots = input.project_roots(environment).into_owned();
-    for directory in input.workspace_roots().iter() {
+    let directories = match input {
+        PreToolUseInput::Codex(native) => vec![native.cwd.clone()],
+        _ => input.workspace_roots().into_owned(),
+    };
+    for directory in &directories {
         let checkout = enclosing_checkout(directory);
         for root in std::iter::once(directory.as_path()).chain(checkout) {
             if !roots.iter().any(|known| known == root) {
@@ -1172,6 +1180,45 @@ mod tests {
         assert!(evaluate_codex(&strict, &claude).is_none());
         let patch = codex_patch("*** Update File: app/secrets.txt\n@@\n-a\n+b\n");
         assert!(evaluate_codex(&strict, &patch).is_none());
+    }
+
+    #[test]
+    fn a_codex_workdir_keeps_its_checkout_as_a_policy_root() {
+        // Since Codex 0.166.0 a Bash command run with `workdir` reports that
+        // directory as `cwd`; root-anchored patterns must still cover the
+        // repository around it.
+        let directory = test_dir("forbidden-codex-workdir");
+        let project = Utf8PathBuf::from_path_buf(directory.clone()).unwrap();
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(project.join("nested")).unwrap();
+        std::fs::create_dir_all(project.join("secrets")).unwrap();
+        std::fs::write(project.join("secrets/token.txt"), "token").unwrap();
+
+        let input = codex_input_at_cwd(
+            project.join("nested").as_str(),
+            "Bash",
+            serde_json::json!({"command": "cat ../secrets/token.txt"}),
+        );
+        // The Codex arm reports its cwd whatever the environment arm, and
+        // this example has no direct Codex dependency to build one.
+        let environment = PreToolUseCommandEnvironment::Claude(
+            <hookkit_claude::ClaudeCommandEnvironment as hookkit_core::CommandEnvironmentSpec>::from_variables(
+                &EventId::builtin(HarnessId::CLAUDE_CODE, "PreToolUse"),
+                &hookkit_core::EnvironmentVariables::from_pairs([
+                    ("CLAUDECODE", "1"),
+                    ("CLAUDE_CODE_CHILD_SESSION", "1"),
+                    ("CLAUDE_CODE_SESSION_ID", "session"),
+                    ("CLAUDE_PROJECT_DIR", "/elsewhere"),
+                ]),
+            )
+            .unwrap(),
+        );
+        assert!(input.workspace_roots().is_empty());
+        let roots = policy_roots(&input, &environment);
+        assert_eq!(roots, [project.join("nested"), project.clone()]);
+        let guard = policy(&["secrets/**"], AccessPolicy::InspectKnown);
+        assert!(evaluate(&guard, &input, &roots, TARGET_RESOLUTION_BUDGET).is_some());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

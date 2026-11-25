@@ -314,9 +314,11 @@ impl ObservableToolCall for hookkit_antigravity::PostToolUseInput {
     }
 }
 
-/// Codex hook payloads report the turn working directory. `apply_patch` and
-/// structured tools resolve against it, but shell tools may override it with
-/// a `workdir` argument that the `Bash` hook payload omits.
+/// Codex tool payloads report the step's working directory, against which
+/// `apply_patch` and structured tools resolve. Since Codex 0.166.0 a local
+/// `Bash` command reports its resolved `workdir` instead, but a command in a
+/// remote execution environment still reports the host directory, and the
+/// payload does not say which, so `Bash` stays a session-cwd base.
 fn codex_cwd_base(tool_name: &str) -> PathBase {
     if tool_name == CODEX_BASH_PROFILE.tool_name() {
         PathBase::SessionCwd
